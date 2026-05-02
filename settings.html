@@ -1,0 +1,162 @@
+<div class="smart-memory-settings" id="smart_memory_settings_root">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>Smart Memory</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+
+            <!-- Status -->
+            <div id="smart_memory_status" class="smart-memory-status smart-memory-status--idle">
+                <span class="smart-memory-status-dot"></span>
+                <span class="smart-memory-status-text">Idle</span>
+            </div>
+
+            <hr>
+
+            <!-- ═══ API Configuration ═══ -->
+            <h4 class="smart-memory-section-title">API Configuration</h4>
+
+            <label for="smart_memory_api_url">
+                API URL
+                <small class="smart-memory-hint">OpenAI-compatible endpoint (e.g. https://api.openai.com/v1/chat/completions)</small>
+            </label>
+            <input id="smart_memory_api_url" type="text" class="text_pole" placeholder="https://..." />
+
+            <label for="smart_memory_api_key">API Key</label>
+            <input id="smart_memory_api_key" type="password" class="text_pole" placeholder="sk-..." />
+
+            <label for="smart_memory_model">Model</label>
+            <input id="smart_memory_model" type="text" class="text_pole" placeholder="gpt-4o-mini" />
+
+            <div class="smart-memory-row">
+                <div class="smart-memory-col">
+                    <label for="smart_memory_temperature">Temperature</label>
+                    <input id="smart_memory_temperature" type="number" class="text_pole" min="0" max="2" step="0.1" value="0.3" />
+                </div>
+                <div class="smart-memory-col">
+                    <label for="smart_memory_max_tokens">Max Tokens</label>
+                    <input id="smart_memory_max_tokens" type="number" class="text_pole" min="64" max="4096" step="64" value="512" />
+                </div>
+            </div>
+
+            <button id="smart_memory_test_btn" class="menu_button">Test Connection</button>
+
+            <hr>
+
+            <!-- ═══ Summarization Settings ═══ -->
+            <h4 class="smart-memory-section-title">Summarization</h4>
+
+            <label class="checkbox_label">
+                <input id="smart_memory_enabled" type="checkbox" checked />
+                <span>Enable Smart Memory</span>
+            </label>
+
+            <label class="checkbox_label">
+                <input id="smart_memory_auto_summarize" type="checkbox" checked />
+                <span>Auto-summarize new messages</span>
+            </label>
+
+            <label class="checkbox_label">
+                <input id="smart_memory_summarize_user" type="checkbox" />
+                <span>Summarize user messages</span>
+            </label>
+
+            <label class="checkbox_label">
+                <input id="smart_memory_summarize_assistant" type="checkbox" checked />
+                <span>Summarize assistant messages</span>
+            </label>
+
+            <label for="smart_memory_min_length">
+                Minimum message length (chars)
+                <small class="smart-memory-hint">Messages shorter than this will be skipped</small>
+            </label>
+            <input id="smart_memory_min_length" type="number" class="text_pole" min="0" max="1000" step="10" value="50" />
+
+            <label for="smart_memory_custom_prompt">
+                Custom summarization prompt
+                <small class="smart-memory-hint">Leave empty to use default. Replaces the system prompt for summarization.</small>
+            </label>
+            <textarea id="smart_memory_custom_prompt" class="text_pole textarea_compact" rows="3" placeholder="(default prompt)"></textarea>
+
+            <button id="smart_memory_summarize_all" class="menu_button">
+                <i class="fa-solid fa-bolt"></i> Summarize All Unsummarized
+            </button>
+
+            <hr>
+
+            <!-- ═══ Retrieval Settings ═══ -->
+            <h4 class="smart-memory-section-title">Retrieval</h4>
+
+            <label for="smart_memory_max_results">Max retrieved memories</label>
+            <input id="smart_memory_max_results" type="number" class="text_pole" min="1" max="20" value="5" />
+
+            <label class="checkbox_label">
+                <input id="smart_memory_apply_decay" type="checkbox" />
+                <span>Enable time-based memory decay</span>
+            </label>
+
+            <label for="smart_memory_decay_halflife">
+                Decay half-life (days)
+                <small class="smart-memory-hint">After this many days without access, memory weight halves</small>
+            </label>
+            <input id="smart_memory_decay_halflife" type="number" class="text_pole" min="1" max="365" value="30" />
+
+            <label for="smart_memory_injection_depth">
+                Injection depth
+                <small class="smart-memory-hint">How deep in chat history to inject (0 = after last message)</small>
+            </label>
+            <input id="smart_memory_injection_depth" type="number" class="text_pole" min="0" max="100" value="4" />
+
+            <label for="smart_memory_injection_template">
+                Injection template
+                <small class="smart-memory-hint">Use {{memories}} as placeholder for memory content</small>
+            </label>
+            <textarea id="smart_memory_injection_template" class="text_pole textarea_compact" rows="3">[Recalled Memories]
+{{memories}}</textarea>
+
+            <hr>
+
+            <!-- ═══ Save Slots ═══ -->
+            <h4 class="smart-memory-section-title">Save Slots (IF Lines)</h4>
+
+            <div class="smart-memory-row">
+                <select id="smart_memory_slot_select" class="text_pole smart-memory-slot-select"></select>
+            </div>
+
+            <div class="smart-memory-slot-buttons">
+                <button id="smart_memory_new_slot" class="menu_button" title="Create new slot">
+                    <i class="fa-solid fa-plus"></i> New
+                </button>
+                <button id="smart_memory_dup_slot" class="menu_button" title="Duplicate current slot (branch)">
+                    <i class="fa-solid fa-code-branch"></i> Branch
+                </button>
+                <button id="smart_memory_rename_slot" class="menu_button" title="Rename current slot">
+                    <i class="fa-solid fa-pen"></i> Rename
+                </button>
+                <button id="smart_memory_delete_slot" class="menu_button menu_button_danger" title="Delete current slot">
+                    <i class="fa-solid fa-trash"></i> Delete
+                </button>
+            </div>
+
+            <div class="smart-memory-slot-buttons">
+                <button id="smart_memory_export_slot" class="menu_button" title="Export memories">
+                    <i class="fa-solid fa-download"></i> Export
+                </button>
+                <button id="smart_memory_import_slot" class="menu_button" title="Import memories">
+                    <i class="fa-solid fa-upload"></i> Import
+                </button>
+            </div>
+
+            <hr>
+
+            <!-- ═══ Memory List ═══ -->
+            <h4 class="smart-memory-section-title">Stored Memories</h4>
+            <div id="smart_memory_stats" class="smart-memory-stats"></div>
+            <div id="smart_memory_list" class="smart-memory-list">
+                <div class="smart-memory-empty">No memories yet.</div>
+            </div>
+
+        </div>
+    </div>
+</div>
