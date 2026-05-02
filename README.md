@@ -1,60 +1,166 @@
-# Smart Memory – SillyTavern Extension
+# Smart Memory — SillyTavern 智能记忆扩展
 
-Intelligent memory system with per-message summarization, structured tagging, and retrieval-augmented context injection for RP scenarios.
+为 SillyTavern（酒馆）打造的智能记忆系统。模仿人类记忆的短期/长期分层架构，支持联想激活检索、自动摘要、结构化标签，以及高度个性化的提示词配置。
 
-## Features
+## 功能特性
 
-- **Per-message summarization** via a secondary API (OpenAI-compatible)
-- **Structured tagging** – keywords, emotions, RP categories (promise, daily, event, relationship, secret, preference, lore)
-- **Importance scoring** – 1-10 scale, automatically assigned by the summarizer
-- **Time-based decay** – memories fade over time unless pinned or accessed (configurable)
-- **Keyword-based retrieval** with fuzzy matching (Fuse.js)
-- **Automatic context injection** – relevant memories are injected before each generation
-- **Save slots** – branch and manage multiple memory timelines (IF lines)
-- **Import/Export** – back up or share memory sets as JSON
+### 核心记忆系统
+- **仿人类记忆架构** — 记忆分为短期记忆 (STM) 和长期记忆 (LTM)
+- **自动记忆巩固** — 重要的、被频繁回忆的、或情感强烈的短期记忆会自动晋升为长期记忆
+- **联想激活检索** — 当一条记忆被唤醒时，与之关联的记忆也会被联想激活，就像人类的联想回忆一样
+- **记忆衰减机制** — 短期记忆快速衰减（默认 2 天半衰期），长期记忆极慢衰减（默认 90 天半衰期）
+- **固定记忆 (Pin)** — 固定的记忆永不衰减，始终视为长期记忆
 
-## Installation
+### 智能摘要与标签
+- **自动逐条摘要** — 通过副 API（OpenAI 兼容）自动为每条消息生成简洁摘要
+- **结构化标签系统** — 自动提取关键词、情感标签、RP 分类标签
+- **重要性评分** — 1-10 分自动评估记忆重要性
+- **情感强度评估** — 0-1 自动评估记忆的情感强烈程度
 
-1. Open SillyTavern
-2. Go to **Extensions** → **Install Extension**
-3. Paste this repository's URL and click Install
+### 个性化设置
+- **全局摘要提示词** — 追加到默认摘要提示词之后（不替换），指导摘要风格和语言偏好
+- **自定义摘要提示词** — 完全替换默认摘要提示词
+- **全局标签提示词** — 追加到标签生成提示词之后，自定义标签偏好
+- **自定义重要性标准** — 指导 AI 如何评判记忆的重要性
+- **注入模板自定义** — 控制记忆注入到上下文中的格式
 
-Or manually:
-1. Copy the `smart-memory` folder into `SillyTavern/public/scripts/extensions/third-party/`
-2. Restart SillyTavern
+### 管理面板
+- **独立弹窗管理面板** — 标签页式布局，不再局限于侧边栏小窗
+- **总览页** — 快速查看记忆统计、存档管理、手动巩固/重建链接
+- **记忆浏览页** — 长期/短期记忆分区展示、搜索/筛选、编辑/删除/晋升/降级
+- **设置页** — 所有摘要、检索、巩固、注入参数一览
+- **API 配置页** — 副 API 地址/密钥/模型配置、连接测试
+- **个性化提示词页** — 所有自定义提示词集中管理
 
-## Setup
+### 存档系统
+- **多存档槽位** — 为同一对话维护多条记忆时间线（IF 线支持）
+- **存档分支** — 从当前存档创建分支，探索不同记忆走向
+- **导入/导出** — 将记忆存档导出为 JSON 文件，或从文件导入
 
-1. Open the **Extensions** panel (stacked cubes icon)
-2. Find **Smart Memory** and expand it
-3. Enter your secondary API URL, key, and model name
-4. Click **Test Connection** to verify
-5. Enable auto-summarization and start chatting
+## 安装方法
 
-## Architecture
+### 方式一：通过 SillyTavern 安装
+1. 打开 SillyTavern
+2. 进入 **扩展** → **安装扩展**
+3. 粘贴本仓库的 URL，点击安装
+
+### 方式二：手动安装
+1. 将 `smart-memory` 文件夹复制到 `SillyTavern/public/scripts/extensions/third-party/`
+2. 重启 SillyTavern
+
+## 使用指南
+
+### 初始配置
+1. 打开 SillyTavern 的 **扩展面板**（堆叠方块图标）
+2. 找到 **Smart Memory**，展开面板
+3. 点击 **打开管理面板** 按钮
+4. 在 **API 配置** 标签页中填入副 API 的地址、密钥和模型名
+5. 点击 **测试连接** 验证配置是否正确
+6. 回到 **设置** 标签页，确认自动总结已开启
+7. 开始聊天，记忆系统将自动工作
+
+### 个性化提示词
+在管理面板的 **个性化提示词** 标签页中：
+
+- **全局摘要提示词**：追加到默认提示词之后。例如填入"请用中文总结"，所有摘要就会使用中文。
+- **全局标签提示词**：追加到标签提示词之后。例如填入"如果涉及战斗场景，请添加 combat 标签"。
+- **重要性评判标准**：自定义打分规则。例如"涉及角色死亡的事件重要性为 10；日常闲聊为 1-2"。
+
+### 记忆管理
+在管理面板的 **记忆浏览** 标签页中：
+
+- 记忆按长期/短期分区展示
+- 使用搜索框按关键词或摘要内容搜索
+- 使用下拉菜单筛选记忆类型
+- 每条记忆可以：编辑摘要、固定/取消固定、手动晋升/降级、删除
+- 查看每条记忆的激活水平、情感强度、检索次数、关联记忆数
+
+### 记忆巩固
+系统会在每次新记忆产生后自动执行巩固检查。你也可以在总览页手动执行：
+
+- **手动执行记忆巩固** — 检查所有短期记忆，将符合条件的晋升为长期记忆
+- **重建联想链接** — 根据共享标签重新建立记忆之间的关联
+
+巩固条件（可在设置中调整）：
+- 重要性 >= 阈值（默认 7）
+- 被检索次数 >= 阈值（默认 3 次）
+- 情感强度 >= 0.7
+- 被固定的记忆自动视为长期记忆
+
+## 记忆系统原理
+
+### 短期记忆 (STM)
+- 新产生的记忆默认进入短期记忆
+- 短期记忆衰减速度快（默认 2 天半衰期）
+- 短期记忆容量有上限（默认 50 条），超出时低激活的记忆会被淘汰
+- 在检索时需要更强的关键词匹配才能被唤醒
+
+### 长期记忆 (LTM)
+- 通过巩固机制从短期记忆晋升而来
+- 长期记忆衰减极慢（默认 90 天半衰期）
+- 在检索时有基础分数加成，更容易被回忆起
+- 更容易通过联想激活被其他记忆唤醒
+
+### 联想激活
+当检索命中某条记忆时，系统会查找与该记忆共享标签的其他记忆，并给予它们一定的激活分数加成。这模仿了人类"想到 A 就联想到 B"的记忆机制。
+
+- 共享标签越多，联想激活分数越高
+- 长期记忆的联想激活基础分更高
+- 可配置联想跳数（默认 1 跳，即只查找直接关联的记忆）
+
+### 检索流程
+1. 用户发送消息
+2. 系统提取用户消息的关键词
+3. 用关键词在所有活跃记忆中搜索（支持关键词/Fuse 模糊匹配）
+4. 计算每条记忆的综合得分（匹配度 × 重要性 × 衰减 × 激活水平 × 记忆类型加成）
+5. 对命中的记忆执行联想激活，扩展检索范围
+6. 取得分最高的 N 条记忆，注入到生成上下文中
+
+## 文件结构
 
 ```
 smart-memory/
-├── manifest.json      # Plugin metadata
-├── index.js           # Main entry, events, interceptor
-├── api.js             # Secondary API communication
-├── summarizer.js      # Summarization + tag generation
-├── memory-entry.js    # Data model with decay/importance
-├── memory-store.js    # Storage engine with save slots
-├── retriever.js       # Retrieval engine (keyword/fuse/vector)
-├── settings.html      # Settings panel UI
-└── style.css          # Styles
+├── manifest.json       # 扩展清单
+├── index.js            # 主入口：生命周期、事件、拦截器、弹窗
+├── api.js              # 副 API 通信（OpenAI 兼容）
+├── summarizer.js       # 摘要生成 + 标签提取 + 关键词提取
+├── memory-entry.js     # 记忆数据模型（含衰减、激活、关联）
+├── memory-store.js     # 存储引擎（含存档槽位、巩固操作）
+├── consolidation.js    # 记忆巩固逻辑（STM → LTM）
+├── retriever.js        # 检索引擎（关键词/Fuse/联想激活）
+├── settings.html       # 侧边栏简化面板
+├── popup.html          # 弹窗管理面板
+└── style.css           # 样式
 ```
 
-## Future Roadmap
+## 配置参数说明
 
-- [ ] Vector embedding retrieval (cosine similarity)
-- [ ] Hybrid retrieval (keyword + vector)
-- [ ] Emotion-based memory filtering
-- [ ] Category-based memory filtering
-- [ ] Memory consolidation (merge similar memories)
-- [ ] Visual memory timeline
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `apiUrl` | — | 副 API 地址（OpenAI 兼容） |
+| `apiKey` | — | API 密钥 |
+| `model` | — | 模型名称 |
+| `temperature` | 0.3 | 生成温度 |
+| `maxTokens` | 512 | 最大 Token 数 |
+| `autoSummarize` | true | 自动总结新消息 |
+| `summarizeUser` | false | 总结用户消息 |
+| `summarizeAssistant` | true | 总结助手消息 |
+| `minMessageLength` | 50 | 最短消息长度 |
+| `maxRetrievedMemories` | 5 | 最大检索记忆数 |
+| `retrieverStrategy` | keyword | 检索策略（keyword / fuse） |
+| `applyDecay` | false | 启用时间衰减 |
+| `injectionDepth` | 4 | 注入深度 |
+| `consolidationImportanceThreshold` | 7 | 重要性巩固阈值 |
+| `consolidationRetrievalThreshold` | 3 | 检索次数巩固阈值 |
+| `stmCapacity` | 50 | 短期记忆容量 |
+| `stmDecayHalfLifeDays` | 2 | 短期记忆半衰期（天） |
+| `ltmDecayHalfLifeDays` | 90 | 长期记忆半衰期（天） |
+| `enableAssociativeRetrieval` | true | 联想激活检索 |
+| `associativeBoostFactor` | 0.3 | 联想激活强度 |
+| `matchWeight` | 0.5 | 匹配度评分权重 |
+| `importanceWeight` | 0.3 | 重要性评分权重 |
+| `decayWeight` | 0.2 | 衰减评分权重 |
 
-## License
+## 许可证
 
 AGPLv3

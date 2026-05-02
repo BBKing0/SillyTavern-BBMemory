@@ -1,0 +1,312 @@
+<div class="sm-popup" id="sm_popup_root">
+
+    <!-- ═══ Tab Bar ═══ -->
+    <div class="sm-popup-tabs">
+        <button class="sm-tab-btn active" data-tab="overview">总览</button>
+        <button class="sm-tab-btn" data-tab="memories">记忆浏览</button>
+        <button class="sm-tab-btn" data-tab="settings">设置</button>
+        <button class="sm-tab-btn" data-tab="api">API 配置</button>
+        <button class="sm-tab-btn" data-tab="prompts">个性化提示词</button>
+    </div>
+
+    <!-- ═══ Tab: Overview ═══ -->
+    <div class="sm-tab-content active" data-tab="overview">
+
+        <div class="sm-popup-row">
+            <label class="checkbox_label">
+                <input id="sm_pop_enabled" type="checkbox" checked />
+                <span>启用 Smart Memory</span>
+            </label>
+        </div>
+
+        <div id="sm_pop_status" class="smart-memory-status smart-memory-status--idle">
+            <span class="smart-memory-status-dot"></span>
+            <span class="smart-memory-status-text">空闲</span>
+        </div>
+
+        <div id="sm_pop_stats" class="sm-stats-grid">
+            <div class="sm-stat-card">
+                <div class="sm-stat-value" id="sm_stat_total">0</div>
+                <div class="sm-stat-label">总记忆数</div>
+            </div>
+            <div class="sm-stat-card">
+                <div class="sm-stat-value" id="sm_stat_ltm">0</div>
+                <div class="sm-stat-label">长期记忆</div>
+            </div>
+            <div class="sm-stat-card">
+                <div class="sm-stat-value" id="sm_stat_stm">0</div>
+                <div class="sm-stat-label">短期记忆</div>
+            </div>
+            <div class="sm-stat-card">
+                <div class="sm-stat-value" id="sm_stat_pinned">0</div>
+                <div class="sm-stat-label">已固定</div>
+            </div>
+        </div>
+
+        <h4 class="sm-section-title">存档管理</h4>
+
+        <div class="sm-popup-row">
+            <select id="sm_pop_slot_select" class="text_pole sm-slot-select"></select>
+        </div>
+
+        <div class="sm-slot-actions">
+            <button id="sm_pop_new_slot" class="menu_button" title="新建存档">
+                <i class="fa-solid fa-plus"></i> 新建
+            </button>
+            <button id="sm_pop_dup_slot" class="menu_button" title="分支（复制当前存档）">
+                <i class="fa-solid fa-code-branch"></i> 分支
+            </button>
+            <button id="sm_pop_rename_slot" class="menu_button" title="重命名">
+                <i class="fa-solid fa-pen"></i> 重命名
+            </button>
+            <button id="sm_pop_delete_slot" class="menu_button menu_button_danger" title="删除存档">
+                <i class="fa-solid fa-trash"></i> 删除
+            </button>
+        </div>
+        <div class="sm-slot-actions">
+            <button id="sm_pop_export_slot" class="menu_button" title="导出记忆">
+                <i class="fa-solid fa-download"></i> 导出
+            </button>
+            <button id="sm_pop_import_slot" class="menu_button" title="导入记忆">
+                <i class="fa-solid fa-upload"></i> 导入
+            </button>
+        </div>
+
+        <hr>
+
+        <div class="sm-popup-row">
+            <button id="sm_pop_consolidate" class="menu_button">
+                <i class="fa-solid fa-brain"></i> 手动执行记忆巩固
+            </button>
+            <button id="sm_pop_rebuild_links" class="menu_button">
+                <i class="fa-solid fa-link"></i> 重建联想链接
+            </button>
+        </div>
+    </div>
+
+    <!-- ═══ Tab: Memories ═══ -->
+    <div class="sm-tab-content" data-tab="memories">
+
+        <div class="sm-memory-toolbar">
+            <input id="sm_pop_search" type="text" class="text_pole" placeholder="搜索记忆（关键词/摘要）..." />
+            <select id="sm_pop_filter_type" class="text_pole sm-filter-select">
+                <option value="all">全部</option>
+                <option value="long_term">长期记忆</option>
+                <option value="short_term">短期记忆</option>
+                <option value="pinned">已固定</option>
+            </select>
+        </div>
+
+        <div class="sm-memory-sections">
+            <div class="sm-memory-section" id="sm_pop_ltm_section">
+                <h4 class="sm-section-title sm-ltm-title">
+                    <i class="fa-solid fa-brain"></i> 长期记忆
+                    <span class="sm-section-count" id="sm_pop_ltm_count">0</span>
+                </h4>
+                <div id="sm_pop_ltm_list" class="sm-memory-list"></div>
+            </div>
+
+            <div class="sm-memory-section" id="sm_pop_stm_section">
+                <h4 class="sm-section-title sm-stm-title">
+                    <i class="fa-solid fa-clock"></i> 短期记忆
+                    <span class="sm-section-count" id="sm_pop_stm_count">0</span>
+                </h4>
+                <div id="sm_pop_stm_list" class="sm-memory-list"></div>
+            </div>
+        </div>
+
+        <hr>
+
+        <button id="sm_pop_summarize_all" class="menu_button">
+            <i class="fa-solid fa-bolt"></i> 总结所有未总结的消息
+        </button>
+    </div>
+
+    <!-- ═══ Tab: Settings ═══ -->
+    <div class="sm-tab-content" data-tab="settings">
+
+        <h4 class="sm-section-title">摘要设置</h4>
+
+        <label class="checkbox_label">
+            <input id="sm_pop_auto_summarize" type="checkbox" checked />
+            <span>自动总结新消息</span>
+        </label>
+        <label class="checkbox_label">
+            <input id="sm_pop_summarize_user" type="checkbox" />
+            <span>总结用户消息</span>
+        </label>
+        <label class="checkbox_label">
+            <input id="sm_pop_summarize_assistant" type="checkbox" checked />
+            <span>总结助手消息</span>
+        </label>
+
+        <label for="sm_pop_min_length">
+            最短消息长度（字符）
+            <small class="smart-memory-hint">低于此长度的消息将被跳过</small>
+        </label>
+        <input id="sm_pop_min_length" type="number" class="text_pole" min="0" max="1000" step="10" value="50" />
+
+        <hr>
+
+        <h4 class="sm-section-title">检索设置</h4>
+
+        <label for="sm_pop_max_results">最大检索记忆数</label>
+        <input id="sm_pop_max_results" type="number" class="text_pole" min="1" max="20" value="5" />
+
+        <label for="sm_pop_retriever_strategy">检索策略</label>
+        <select id="sm_pop_retriever_strategy" class="text_pole">
+            <option value="keyword">关键词匹配</option>
+            <option value="fuse">Fuse 模糊匹配</option>
+        </select>
+
+        <label class="checkbox_label">
+            <input id="sm_pop_apply_decay" type="checkbox" />
+            <span>启用基于时间的记忆衰减</span>
+        </label>
+
+        <label class="checkbox_label">
+            <input id="sm_pop_enable_associative" type="checkbox" checked />
+            <span>启用联想激活检索</span>
+        </label>
+
+        <label for="sm_pop_associative_boost">联想激活强度</label>
+        <input id="sm_pop_associative_boost" type="number" class="text_pole" min="0" max="1" step="0.05" value="0.3" />
+
+        <hr>
+
+        <h4 class="sm-section-title">记忆巩固（STM → LTM）</h4>
+
+        <label for="sm_pop_consolidation_importance">
+            重要性巩固阈值
+            <small class="smart-memory-hint">重要性 >= 此值的记忆将自动晋升为长期记忆</small>
+        </label>
+        <input id="sm_pop_consolidation_importance" type="number" class="text_pole" min="1" max="10" value="7" />
+
+        <label for="sm_pop_consolidation_retrieval">
+            检索次数巩固阈值
+            <small class="smart-memory-hint">被检索次数 >= 此值的记忆将自动晋升</small>
+        </label>
+        <input id="sm_pop_consolidation_retrieval" type="number" class="text_pole" min="1" max="20" value="3" />
+
+        <label for="sm_pop_stm_capacity">
+            短期记忆容量
+            <small class="smart-memory-hint">超出此数量的低激活短期记忆将被淘汰</small>
+        </label>
+        <input id="sm_pop_stm_capacity" type="number" class="text_pole" min="10" max="200" value="50" />
+
+        <div class="sm-popup-row">
+            <div class="smart-memory-col">
+                <label for="sm_pop_stm_decay">短期记忆半衰期（天）</label>
+                <input id="sm_pop_stm_decay" type="number" class="text_pole" min="0.5" max="30" step="0.5" value="2" />
+            </div>
+            <div class="smart-memory-col">
+                <label for="sm_pop_ltm_decay">长期记忆半衰期（天）</label>
+                <input id="sm_pop_ltm_decay" type="number" class="text_pole" min="7" max="3650" step="1" value="90" />
+            </div>
+        </div>
+
+        <hr>
+
+        <h4 class="sm-section-title">注入设置</h4>
+
+        <label for="sm_pop_injection_depth">
+            注入深度
+            <small class="smart-memory-hint">在聊天历史中的插入位置（0 = 最后一条消息之后）</small>
+        </label>
+        <input id="sm_pop_injection_depth" type="number" class="text_pole" min="0" max="100" value="4" />
+
+        <label for="sm_pop_injection_template">
+            注入模板
+            <small class="smart-memory-hint">使用 {{memories}} 作为记忆内容的占位符</small>
+        </label>
+        <textarea id="sm_pop_injection_template" class="text_pole textarea_compact" rows="3">[Recalled Memories]
+{{memories}}</textarea>
+
+        <hr>
+
+        <h4 class="sm-section-title">评分权重</h4>
+        <div class="sm-popup-row">
+            <div class="smart-memory-col">
+                <label for="sm_pop_match_weight">匹配权重</label>
+                <input id="sm_pop_match_weight" type="number" class="text_pole" min="0" max="1" step="0.05" value="0.5" />
+            </div>
+            <div class="smart-memory-col">
+                <label for="sm_pop_importance_weight">重要性权重</label>
+                <input id="sm_pop_importance_weight" type="number" class="text_pole" min="0" max="1" step="0.05" value="0.3" />
+            </div>
+            <div class="smart-memory-col">
+                <label for="sm_pop_decay_weight">衰减权重</label>
+                <input id="sm_pop_decay_weight" type="number" class="text_pole" min="0" max="1" step="0.05" value="0.2" />
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ Tab: API ═══ -->
+    <div class="sm-tab-content" data-tab="api">
+
+        <h4 class="sm-section-title">副 API 配置</h4>
+
+        <label for="sm_pop_api_url">
+            API URL
+            <small class="smart-memory-hint">OpenAI 兼容的端点地址（例如 https://api.openai.com/v1/chat/completions）</small>
+        </label>
+        <input id="sm_pop_api_url" type="text" class="text_pole" placeholder="https://..." />
+
+        <label for="sm_pop_api_key">API Key</label>
+        <input id="sm_pop_api_key" type="password" class="text_pole" placeholder="sk-..." />
+
+        <label for="sm_pop_model">模型名称</label>
+        <input id="sm_pop_model" type="text" class="text_pole" placeholder="gpt-4o-mini" />
+
+        <div class="sm-popup-row">
+            <div class="smart-memory-col">
+                <label for="sm_pop_temperature">温度</label>
+                <input id="sm_pop_temperature" type="number" class="text_pole" min="0" max="2" step="0.1" value="0.3" />
+            </div>
+            <div class="smart-memory-col">
+                <label for="sm_pop_max_tokens">最大 Token 数</label>
+                <input id="sm_pop_max_tokens" type="number" class="text_pole" min="64" max="4096" step="64" value="512" />
+            </div>
+        </div>
+
+        <button id="sm_pop_test_btn" class="menu_button">
+            <i class="fa-solid fa-plug"></i> 测试连接
+        </button>
+
+        <div id="sm_pop_test_result" class="sm-test-result"></div>
+    </div>
+
+    <!-- ═══ Tab: Prompts ═══ -->
+    <div class="sm-tab-content" data-tab="prompts">
+
+        <h4 class="sm-section-title">全局摘要提示词</h4>
+        <p class="smart-memory-hint">此指令会追加到默认摘要提示词之后，不会替换默认提示词。可以用来指定摘要风格、语言偏好等。</p>
+        <textarea id="sm_pop_global_summarize" class="text_pole textarea_compact" rows="4" placeholder="例如：请用中文总结。重点关注角色之间的情感变化和承诺。"></textarea>
+
+        <hr>
+
+        <h4 class="sm-section-title">自定义摘要提示词（完整替换）</h4>
+        <p class="smart-memory-hint">如果填写，将完全替换默认的摘要系统提示词。留空则使用默认提示词 + 上方的全局指令。</p>
+        <textarea id="sm_pop_custom_prompt" class="text_pole textarea_compact" rows="4" placeholder="（留空使用默认提示词）"></textarea>
+
+        <hr>
+
+        <h4 class="sm-section-title">全局标签提示词</h4>
+        <p class="smart-memory-hint">追加到标签生成提示词之后。可以用来自定义标签偏好、新增自定义分类等。</p>
+        <textarea id="sm_pop_global_tag" class="text_pole textarea_compact" rows="4" placeholder="例如：如果涉及战斗场景，请添加 'combat' 标签。"></textarea>
+
+        <hr>
+
+        <h4 class="sm-section-title">重要性评判标准</h4>
+        <p class="smart-memory-hint">自定义重要性打分的规则。追加到标签提示词中，指导 AI 如何评判记忆的重要性。</p>
+        <textarea id="sm_pop_importance_criteria" class="text_pole textarea_compact" rows="4" placeholder="例如：涉及角色死亡或复活的事件重要性为10；日常闲聊重要性为1-2。"></textarea>
+
+        <hr>
+
+        <h4 class="sm-section-title">注入模板</h4>
+        <p class="smart-memory-hint">控制记忆注入到上下文中的格式。使用 {{memories}} 作为记忆内容的占位符。</p>
+        <textarea id="sm_pop_injection_tpl" class="text_pole textarea_compact" rows="3">[Recalled Memories]
+{{memories}}</textarea>
+    </div>
+
+</div>

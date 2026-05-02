@@ -19,6 +19,7 @@
  */
 
 import { createMemoryEntry } from './memory-entry.js';
+import { runConsolidation, consolidateEntry, buildAssociativeLinks } from './consolidation.js';
 
 const MODULE_NAME = 'smart_memory';
 
@@ -241,6 +242,106 @@ export function replaceMemories(chatId, memories) {
     if (!slot) return;
     slot.memories = memories;
     _save();
+}
+
+// ─── consolidation & associative links ────────────────────
+
+/**
+ * Run the consolidation pass: promote qualifying STM→LTM, prune excess STM.
+ * @param {string} chatId
+ * @param {import('./consolidation.js').ConsolidationConfig} config
+ * @returns {{ promoted: string[], deactivated: string[] }}
+ */
+export function runMemoryConsolidation(chatId, config = {}) {
+    const slot = getActiveSlot(chatId);
+    if (!slot) return { promoted: [], deactivated: [] };
+
+    const { promoted, deactivated } = runConsolidation(slot.memories, config);
+
+    for (const id of promoted) {
+        const idx = slot.memories.findIndex(m => m.id === id);
+        if (idx === -1) continue;
+        const updates = consolidateEntry(slot.memories[idx], config);
+        slot.memories[idx] = { ...slot.memories[idx], ...updates };
+    }
+
+    for (const id of deactivated) {
+        const idx = slot.memories.findIndex(m => m.id === id);
+        if (idx !== -1) {
+            slot.memories[idx].isActive = false;
+        }
+    }
+
+    _save();
+    return { promoted, deactivated };
+}
+
+/**
+ * Rebuild associative links for all active memories in the current slot.
+ * @param {string} chatId
+ * @param {number} [minStrength=0.15]
+ */
+export function refreshAssociativeLinks(chatId, minStrength = 0.15) {
+    const slot = getActiveSlot(chatId);
+    if (!slot) return;
+
+    const linkMap = buildAssociativeLinks(slot.memories, minStrength);
+
+    for (const entry of slot.memories) {
+        entry.associativeLinks = linkMap.get(entry.id) || [];
+    }
+
+    _save();
+}
+
+/**
+ * Get memories filtered by type.
+ * @param {string} chatId
+ * @param {'short_term'|'long_term'} memoryType
+ * @returns {import('./memory-entry.js').MemoryEntry[]}
+ */
+export function getMemoriesByType(chatId, memoryType) {
+    return getMemories(chatId).filter(m =>
+        m.isActive && (m.memoryType || 'short_term') === memoryType,
+    );
+}
+
+/**
+ * Manually promote a specific memory to long-term.
+ * @param {string} chatId
+ * @param {string} entryId
+ * @param {object} [config]
+ */
+export function promoteToLongTerm(chatId, entryId, config = {}) {
+    const slot = getActiveSlot(chatId);
+    if (!slot) return null;
+    const idx = slot.memories.findIndex(m => m.id === entryId);
+    if (idx === -1) return null;
+
+    const updates = consolidateEntry(slot.memories[idx], config);
+    slot.memories[idx] = { ...slot.memories[idx], ...updates };
+    _save();
+    return slot.memories[idx];
+}
+
+/**
+ * Demote a long-term memory back to short-term.
+ * @param {string} chatId
+ * @param {string} entryId
+ */
+export function demoteToShortTerm(chatId, entryId) {
+    const slot = getActiveSlot(chatId);
+    if (!slot) return null;
+    const idx = slot.memories.findIndex(m => m.id === entryId);
+    if (idx === -1) return null;
+
+    slot.memories[idx] = {
+        ...slot.memories[idx],
+        memoryType: 'short_term',
+        consolidatedAt: null,
+    };
+    _save();
+    return slot.memories[idx];
 }
 
 // ─── import / export ──────────────────────────────────────

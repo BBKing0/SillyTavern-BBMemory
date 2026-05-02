@@ -214,3 +214,288 @@
     min-height: 50px;
     resize: vertical;
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Popup Management Panel
+   ═══════════════════════════════════════════════════════════ */
+
+.sm-popup {
+    font-size: 0.95em;
+    max-height: 75vh;
+    overflow-y: auto;
+    min-width: 500px;
+}
+
+/* ─── Tab Bar ─── */
+
+.sm-popup-tabs {
+    display: flex;
+    gap: 2px;
+    border-bottom: 2px solid var(--SmartThemeBorderColor);
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.sm-tab-btn {
+    background: transparent;
+    border: none;
+    padding: 8px 16px;
+    cursor: pointer;
+    color: var(--SmartThemeBodyColor);
+    font-size: 0.9em;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    transition: border-color 0.2s, opacity 0.2s;
+    opacity: 0.6;
+}
+
+.sm-tab-btn:hover {
+    opacity: 0.9;
+}
+
+.sm-tab-btn.active {
+    border-bottom-color: var(--SmartThemeQuoteColor);
+    opacity: 1;
+    font-weight: 600;
+}
+
+.sm-tab-content {
+    display: none;
+}
+
+.sm-tab-content.active {
+    display: block;
+}
+
+/* ─── Stats Grid ─── */
+
+.sm-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin: 10px 0;
+}
+
+.sm-stat-card {
+    text-align: center;
+    padding: 10px 6px;
+    border-radius: 8px;
+    background: var(--SmartThemeBlurTintColor);
+    border: 1px solid var(--SmartThemeBorderColor);
+}
+
+.sm-stat-value {
+    font-size: 1.5em;
+    font-weight: 700;
+    color: var(--SmartThemeQuoteColor);
+}
+
+.sm-stat-label {
+    font-size: 0.75em;
+    opacity: 0.7;
+    margin-top: 2px;
+}
+
+/* ─── Section Title ─── */
+
+.sm-section-title {
+    margin: 10px 0 6px;
+    color: var(--SmartThemeBodyColor);
+    font-size: 1em;
+}
+
+/* ─── Popup Rows ─── */
+
+.sm-popup-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+}
+
+/* ─── Slot Actions ─── */
+
+.sm-slot-actions {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+}
+
+.sm-slot-actions .menu_button {
+    flex: 1;
+    min-width: 70px;
+    font-size: 0.85em;
+    padding: 4px 8px;
+}
+
+.sm-slot-select {
+    flex: 1;
+}
+
+/* ─── Memory Browser Toolbar ─── */
+
+.sm-memory-toolbar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.sm-memory-toolbar .text_pole {
+    flex: 1;
+}
+
+.sm-filter-select {
+    max-width: 140px;
+}
+
+/* ─── Memory Sections (LTM / STM) ─── */
+
+.sm-memory-sections {
+    max-height: 50vh;
+    overflow-y: auto;
+}
+
+.sm-memory-section {
+    margin-bottom: 12px;
+}
+
+.sm-ltm-title {
+    color: #ab47bc;
+}
+
+.sm-ltm-title i {
+    margin-right: 4px;
+}
+
+.sm-stm-title {
+    color: #42a5f5;
+}
+
+.sm-stm-title i {
+    margin-right: 4px;
+}
+
+.sm-section-count {
+    font-size: 0.8em;
+    opacity: 0.6;
+    margin-left: 6px;
+}
+
+/* ─── Memory Items in Popup ─── */
+
+.sm-memory-list {
+    max-height: none;
+    border: none;
+    padding: 0;
+}
+
+.sm-popup .smart-memory-item {
+    position: relative;
+}
+
+.sm-popup .smart-memory-item.ltm-item {
+    border-left: 3px solid #ab47bc;
+}
+
+.sm-popup .smart-memory-item.stm-item {
+    border-left: 3px solid #42a5f5;
+}
+
+.sm-popup .smart-memory-item.pinned {
+    border-left: 3px solid #ff9800;
+}
+
+.sm-memory-type-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-size: 0.7em;
+    font-weight: 600;
+}
+
+.badge-ltm {
+    background: rgba(171, 71, 188, 0.2);
+    color: #ce93d8;
+    border: 1px solid rgba(171, 71, 188, 0.3);
+}
+
+.badge-stm {
+    background: rgba(66, 165, 245, 0.2);
+    color: #90caf9;
+    border: 1px solid rgba(66, 165, 245, 0.3);
+}
+
+.sm-memory-detail-row {
+    display: flex;
+    gap: 8px;
+    font-size: 0.75em;
+    opacity: 0.6;
+    margin-top: 4px;
+}
+
+/* ─── Memory Edit Dialog ─── */
+
+.sm-edit-summary {
+    width: 100%;
+    min-height: 60px;
+    resize: vertical;
+}
+
+/* ─── Test Result ─── */
+
+.sm-test-result {
+    margin-top: 8px;
+    font-size: 0.85em;
+    padding: 6px 10px;
+    border-radius: 6px;
+    display: none;
+}
+
+.sm-test-result.success {
+    display: block;
+    background: rgba(76, 175, 80, 0.15);
+    color: #81c784;
+    border: 1px solid rgba(76, 175, 80, 0.3);
+}
+
+.sm-test-result.error {
+    display: block;
+    background: rgba(244, 67, 54, 0.15);
+    color: #ef9a9a;
+    border: 1px solid rgba(244, 67, 54, 0.3);
+}
+
+/* ─── Sidebar Simplified Card ─── */
+
+.sm-sidebar-card {
+    padding: 8px;
+    border-radius: 8px;
+    background: var(--SmartThemeBlurTintColor);
+    border: 1px solid var(--SmartThemeBorderColor);
+    margin-bottom: 8px;
+}
+
+.sm-sidebar-stats {
+    display: flex;
+    gap: 12px;
+    font-size: 0.85em;
+    margin: 6px 0;
+}
+
+.sm-sidebar-stat {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.sm-sidebar-stat-value {
+    font-weight: 700;
+    color: var(--SmartThemeQuoteColor);
+}
+
+.sm-open-popup-btn {
+    width: 100%;
+    margin-top: 6px;
+}

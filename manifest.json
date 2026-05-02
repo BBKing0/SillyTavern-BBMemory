@@ -4,7 +4,7 @@
     "js": "index.js",
     "css": "style.css",
     "author": "SmartMemory Dev",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "generate_interceptor": "smartMemoryInterceptor",
     "homePage": "",
     "description": "Intelligent memory system with summarization, tagging, and retrieval for RP scenarios."

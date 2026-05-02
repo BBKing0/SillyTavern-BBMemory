@@ -19,7 +19,8 @@ Given a message summary, output a JSON object with exactly these fields:
   "keywords": ["keyword1", "keyword2", ...],
   "emotions": ["emotion1"],
   "categories": ["category1"],
-  "importance": 5
+  "importance": 5,
+  "emotionalIntensity": 0.5
 }
 
 Rules:
@@ -27,6 +28,7 @@ Rules:
 - "emotions": Pick the most prominent emotion from: ${EMOTION_LABELS.join(', ')}. Can be empty array if truly neutral.
 - "categories": Pick 1-2 from: ${RP_CATEGORIES.join(', ')}. Pick what fits best.
 - "importance": Integer 1-10. 1=trivial small talk, 5=normal, 8=significant event, 10=critical turning point.
+- "emotionalIntensity": Float 0.0-1.0. How emotionally charged is this memory? 0=neutral/factual, 0.5=moderate, 1.0=extremely intense.
 
 Output ONLY the JSON object, no markdown fences, no explanation.`;
 
@@ -40,11 +42,21 @@ Output ONLY the keywords as a comma-separated list, nothing else.`;
  * Summarize a single message.
  * @param {string} messageText
  * @param {import('./api.js').ApiSettings} apiSettings
- * @param {string} [customPrompt] - Override the system prompt
+ * @param {Object} [promptConfig]
+ * @param {string} [promptConfig.customPrompt]        - Full override (replaces default)
+ * @param {string} [promptConfig.globalDirective]      - Appended to default prompt
  * @returns {Promise<string>}
  */
-export async function summarizeMessage(messageText, apiSettings, customPrompt) {
-    const systemPrompt = customPrompt || SUMMARIZE_SYSTEM;
+export async function summarizeMessage(messageText, apiSettings, promptConfig = {}) {
+    let systemPrompt;
+    if (typeof promptConfig === 'string') {
+        systemPrompt = promptConfig || SUMMARIZE_SYSTEM;
+    } else {
+        systemPrompt = promptConfig.customPrompt || SUMMARIZE_SYSTEM;
+        if (promptConfig.globalDirective) {
+            systemPrompt += '\n\nAdditional instructions:\n' + promptConfig.globalDirective;
+        }
+    }
     return callSecondaryAPI(
         [
             { role: 'system', content: systemPrompt },
@@ -58,12 +70,23 @@ export async function summarizeMessage(messageText, apiSettings, customPrompt) {
  * Generate structured tags from a summary.
  * @param {string} summary
  * @param {import('./api.js').ApiSettings} apiSettings
- * @returns {Promise<{keywords:string[], emotions:string[], categories:string[], importance:number}>}
+ * @param {Object} [promptConfig]
+ * @param {string} [promptConfig.globalTagDirective]   - Extra rules appended to tag prompt
+ * @param {string} [promptConfig.importanceCriteria]   - Custom importance scoring guidance
+ * @returns {Promise<{keywords:string[], emotions:string[], categories:string[], importance:number, emotionalIntensity:number}>}
  */
-export async function generateTags(summary, apiSettings) {
+export async function generateTags(summary, apiSettings, promptConfig = {}) {
+    let tagPrompt = TAG_SYSTEM;
+    if (promptConfig.globalTagDirective) {
+        tagPrompt += '\n\nAdditional tagging rules:\n' + promptConfig.globalTagDirective;
+    }
+    if (promptConfig.importanceCriteria) {
+        tagPrompt += '\n\nImportance scoring criteria:\n' + promptConfig.importanceCriteria;
+    }
+
     const raw = await callSecondaryAPI(
         [
-            { role: 'system', content: TAG_SYSTEM },
+            { role: 'system', content: tagPrompt },
             { role: 'user', content: summary },
         ],
         apiSettings,
@@ -77,11 +100,12 @@ export async function generateTags(summary, apiSettings) {
             emotions: Array.isArray(parsed.emotions) ? parsed.emotions.map(String) : [],
             categories: Array.isArray(parsed.categories) ? parsed.categories.map(String) : [],
             importance: Math.max(1, Math.min(10, parseInt(parsed.importance, 10) || 5)),
+            emotionalIntensity: Math.max(0, Math.min(1, parseFloat(parsed.emotionalIntensity) || 0)),
         };
     } catch {
         console.warn('[SmartMemory] Failed to parse tag response, extracting keywords from raw text:', raw);
         const keywords = raw.split(/[,，\n]/).map(s => s.trim()).filter(Boolean).slice(0, 6);
-        return { keywords, emotions: [], categories: [], importance: 5 };
+        return { keywords, emotions: [], categories: [], importance: 5, emotionalIntensity: 0 };
     }
 }
 
@@ -111,7 +135,10 @@ export async function extractQueryKeywords(userMessage, apiSettings) {
  * @param {string} params.chatId
  * @param {'user'|'assistant'} params.source
  * @param {import('./api.js').ApiSettings} params.apiSettings
- * @param {string} [params.customSummarizePrompt]
+ * @param {string} [params.customSummarizePrompt]   - Full override for summarization prompt
+ * @param {string} [params.globalSummarizeDirective] - Appended directive for summarization
+ * @param {string} [params.globalTagDirective]       - Appended directive for tagging
+ * @param {string} [params.importanceCriteria]       - Custom importance scoring guidance
  * @returns {Promise<MemoryEntry>}
  */
 export async function processMessage({
@@ -121,9 +148,18 @@ export async function processMessage({
     source,
     apiSettings,
     customSummarizePrompt,
+    globalSummarizeDirective,
+    globalTagDirective,
+    importanceCriteria,
 }) {
-    const summary = await summarizeMessage(messageText, apiSettings, customSummarizePrompt);
-    const tags = await generateTags(summary, apiSettings);
+    const summary = await summarizeMessage(messageText, apiSettings, {
+        customPrompt: customSummarizePrompt,
+        globalDirective: globalSummarizeDirective,
+    });
+    const tags = await generateTags(summary, apiSettings, {
+        globalTagDirective,
+        importanceCriteria,
+    });
 
     return createMemoryEntry({
         messageIndex,
@@ -132,6 +168,7 @@ export async function processMessage({
         originalExcerpt: makeExcerpt(messageText),
         tags,
         importance: tags.importance,
+        emotionalIntensity: tags.emotionalIntensity ?? 0,
         source,
     });
 }
