@@ -279,7 +279,7 @@ export function chooseInjectionLevel(memory, score) {
  */
 export function getResidentMemories(memories) {
     return memories
-        .filter(m => m.resident === true && m.status !== 'archived')
+        .filter(m => m.resident === true && m.status !== 'archived' && m.status !== 'deleted')
         .sort((a, b) => (b.importance || 0) - (a.importance || 0));
 }
 
@@ -307,7 +307,7 @@ export function getRelevantMemories(memories, queryText, options = {}) {
     // 过滤
     let candidates = memories.filter(m => {
         if (m.resident) return false;       // 常驻记忆单独处理
-        if (m.status === 'archived') return false;
+        if (m.status === 'archived' || m.status === 'deleted') return false;
         if (typeFilter && (m.cognitiveType || m.type) !== typeFilter) return false;
         if (minStrength > 0 && (m.strength ?? 1.0) < minStrength) return false;
         if (enabledTypes) {

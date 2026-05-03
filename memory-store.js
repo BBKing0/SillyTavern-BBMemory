@@ -43,6 +43,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // v2.4: 注入 token 预算与检索
     tokenBudget: 800,
     maxResults: 10,
+    // v2.5: 维护阈值
+    maintenanceThreshold: 50,
     // 统计
     messageCountSinceDecay: 0,
 });
@@ -458,8 +460,8 @@ export async function decayMemories(chatId) {
     const { decayRate, minStrength } = settings;
 
     for (const memory of memories) {
-        // 已固定的记忆不衰减
         if (memory.pinned) continue;
+        if (memory.status === 'archived' || memory.status === 'deleted') continue;
         if (memory.strength > minStrength) {
             const importanceFactor = 1 - (memory.importance || 0.5) * 0.5;
             const decay = decayRate * importanceFactor;

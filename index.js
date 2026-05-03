@@ -62,6 +62,16 @@ import {
 } from './memory-types.js';
 import { initAutoGenerator, stopAutoGenerator } from './auto-generator.js';
 import { syncMessageVisibility } from './message-state.js';
+import {
+    MEMORY_STATUS,
+    checkMaintenanceNeeded,
+    dismissMaintenanceRemind,
+    autoMaintain,
+    fuzzyMemory,
+    archiveMemory,
+    restoreMemory,
+    buildMaintenanceHTML,
+} from './memory-maintainer.js';
 
 // ═══════════════════════════════════════════════════════════
 //  常量
@@ -248,6 +258,9 @@ async function refreshSidebar() {
     const tokenBudgetEl = document.getElementById('bb_memory_token_budget');
     if (tokenBudgetEl) tokenBudgetEl.value = String(getSettings().tokenBudget ?? DEFAULT_SETTINGS.tokenBudget);
 
+    const maintThresholdEl = document.getElementById('bb_memory_maint_threshold');
+    if (maintThresholdEl) maintThresholdEl.value = String(getSettings().maintenanceThreshold ?? DEFAULT_SETTINGS.maintenanceThreshold);
+
     const autoGenEl = document.getElementById('bb_memory_auto_gen');
     if (autoGenEl) autoGenEl.checked = getSettings().autoGenEnabled;
 }
@@ -271,6 +284,11 @@ function bindSidebarEvents() {
     document.getElementById('bb_memory_token_budget')?.addEventListener('change', (e) => {
         const val = parseInt(e.target.value, 10);
         if (!isNaN(val) && val >= 100) updateSettings({ tokenBudget: val });
+    });
+
+    document.getElementById('bb_memory_maint_threshold')?.addEventListener('change', (e) => {
+        const val = parseInt(e.target.value, 10);
+        if (!isNaN(val) && val >= 10) updateSettings({ maintenanceThreshold: val });
     });
 
     document.getElementById('bb_memory_template')?.addEventListener('change', (e) => {
@@ -484,6 +502,12 @@ function buildMemoryItemHTML(m) {
         ? `<span class="bb-truth-badge" style="background: ${tsDef.color}" title="${tsDef.label}">${tsDef.label}</span>`
         : '';
 
+    // status badge (v2.5)
+    const statusDef = MEMORY_STATUS[m.status] || MEMORY_STATUS.active;
+    const statusBadge = m.status && m.status !== 'active'
+        ? `<span class="bb-status-badge" style="background: ${statusDef.color}" title="${statusDef.label}"><i class="fa-solid ${statusDef.icon}"></i> ${statusDef.label}</span>`
+        : '';
+
     // hiddenNotes 面板
     const notes = Array.isArray(m.hiddenNotes) ? m.hiddenNotes : [];
     const hasNotes = notes.length > 0;
@@ -522,6 +546,7 @@ function buildMemoryItemHTML(m) {
                     <i class="${typeDef.icon}"></i> ${typeDef.label}
                 </span>
                 ${truthBadge}
+                ${statusBadge}
                 ${strengthBar}
             </div>
             <div class="bb-mem-item-content">${escapeHtml(m.content)}</div>
@@ -546,6 +571,16 @@ function buildMemoryItemHTML(m) {
                         data-id="${m.id}" title="${m.resident ? '取消常驻' : '设为常驻记忆'}">
                     <i class="fa-solid fa-thumbtack"></i>
                 </button>
+                ${m.status === 'archived' || m.status === 'fuzzy'
+                    ? `<button class="menu_button bb-mem-btn-sm bb-mem-restore" data-id="${m.id}" title="恢复为活跃">
+                        <i class="fa-solid fa-rotate-left"></i>
+                    </button>`
+                    : `<button class="menu_button bb-mem-btn-sm bb-mem-fuzzy" data-id="${m.id}" title="模糊化（压缩保留）">
+                        <i class="fa-solid fa-cloud"></i>
+                    </button>
+                    <button class="menu_button bb-mem-btn-sm bb-mem-archive" data-id="${m.id}" title="归档">
+                        <i class="fa-solid fa-box-archive"></i>
+                    </button>`}
                 <button class="menu_button bb-mem-btn-sm bb-mem-edit" data-id="${m.id}" title="快速编辑">
                     <i class="fa-solid fa-pen"></i>
                 </button>
@@ -875,6 +910,39 @@ function rebindItemActions(overlay, chatId) {
             await rerenderManagerList(overlay, chatId);
         });
     });
+
+    // ☁️ 模糊化
+    overlay.querySelectorAll('.bb-mem-fuzzy').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            await fuzzyMemory(chatId, id);
+            toastr.success('记忆已模糊化（原文保留在 compressed 字段）', DISPLAY_NAME);
+            await rerenderManagerList(overlay, chatId);
+        });
+    });
+
+    // 📦 归档
+    overlay.querySelectorAll('.bb-mem-archive').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            await archiveMemory(chatId, id);
+            toastr.success('记忆已归档（可随时恢复）', DISPLAY_NAME);
+            await rerenderManagerList(overlay, chatId);
+        });
+    });
+
+    // 🔄 恢复
+    overlay.querySelectorAll('.bb-mem-restore').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            await restoreMemory(chatId, id);
+            toastr.success('记忆已恢复为活跃状态', DISPLAY_NAME);
+            await rerenderManagerList(overlay, chatId);
+        });
+    });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -940,6 +1008,9 @@ function onChatChanged() {
         syncMessageVisibility().catch(e => {
             console.warn(`[${DISPLAY_NAME}] 聊天切换时消息同步失败:`, e);
         });
+
+        // 延迟检查维护需求，避免阻塞聊天切换
+        setTimeout(() => triggerMaintenanceCheck(), 3000);
     }
 }
 
@@ -951,6 +1022,68 @@ async function onNewMessage() {
     } catch (e) {
         console.warn(`[${DISPLAY_NAME}] 消息可见性同步失败:`, e);
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  维护检查与弹窗
+// ═══════════════════════════════════════════════════════════
+
+async function triggerMaintenanceCheck() {
+    const chatId = getChatId();
+    if (!chatId) return;
+
+    try {
+        const result = await checkMaintenanceNeeded(chatId);
+        if (!result) return;
+        showMaintenancePopup(chatId, result);
+    } catch (e) {
+        console.warn(`[${DISPLAY_NAME}] 维护检查失败:`, e);
+    }
+}
+
+function showMaintenancePopup(chatId, result) {
+    // 避免重复弹窗
+    if (document.querySelector('.bb-maint-overlay')) return;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'bb-maint-overlay';
+    overlay.innerHTML = buildMaintenanceHTML(result);
+    document.body.appendChild(overlay);
+
+    // 点背景关闭
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) overlay.remove();
+    });
+
+    // 自动整理
+    overlay.querySelector('.bb-maint-btn-auto')?.addEventListener('click', async () => {
+        const checkedIds = new Set();
+        overlay.querySelectorAll('.bb-maint-checkbox:checked').forEach(cb => checkedIds.add(cb.dataset.id));
+        const selectedIssues = result.issues.filter(i => checkedIds.has(i.memory.id));
+
+        if (!selectedIssues.length) {
+            toastr.info('没有勾选任何记忆', DISPLAY_NAME);
+            return;
+        }
+
+        const count = await autoMaintain(chatId, selectedIssues);
+        toastr.success(`已自动整理 ${count} 条记忆（模糊化/归档）`, DISPLAY_NAME);
+        overlay.remove();
+        refreshSidebar();
+    });
+
+    // 手动查看
+    overlay.querySelector('.bb-maint-btn-manual')?.addEventListener('click', () => {
+        overlay.remove();
+        openMemoryManager();
+    });
+
+    // 稍后提醒
+    overlay.querySelector('.bb-maint-btn-later')?.addEventListener('click', () => {
+        dismissMaintenanceRemind();
+        toastr.info('24 小时内不再提醒', DISPLAY_NAME);
+        overlay.remove();
+    });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1023,7 +1156,7 @@ async function init() {
     // 首次刷新侧边栏
     refreshSidebar();
 
-    console.log(`[${DISPLAY_NAME}] v2.3 初始化完成`);
+    console.log(`[${DISPLAY_NAME}] v2.5 初始化完成`);
 }
 
 // ═══ 启动 ═══

@@ -133,6 +133,7 @@ bb-memory/
 ├── manifest.json          ← 扩展清单，告诉 ST 这是什么扩展
 ├── index.js               ← 总指挥，协调所有模块
 ├── memory-store.js        ← 数据存储层，记忆的增删改查
+├── memory-maintainer.js   ← 记忆维护巡检员（v2.5 新增）
 ├── message-state.js       ← 消息管理员，自动隐藏 & exchange 去重（v2.1 新增）
 ├── retriever.js           ← 搜索引擎，智能检索相关记忆
 ├── memory-types.js        ← 类型定义，6种记忆的规格说明
@@ -321,6 +322,35 @@ bb-memory/
 - `emotionalValence` 自动转换为 `emotionalWeight`（取绝对值）
 - 旧版 metadata 中的结构化信息会被提取到新字段（如 `metadata.npcName` → `subject`）
 - `typeEnabled` 设置自动补充新认知类型键
+
+---
+
+### v2.5.0（2026-05-03）— 记忆维护机制
+
+**新增功能：**
+- 维护阈值提醒：活跃记忆超过阈值（默认 50）时，弹出维护建议弹窗
+- 多维度问题诊断：弱记忆、重复记忆、过期事实、闲置 NPC、可归档物品、久未使用
+- 三种用户操作：自动整理（一键处理）、手动查看（跳转管理面板）、稍后提醒（24 小时免打扰）
+- 记忆状态系统：`active`（活跃）、`fuzzy`（模糊）、`archived`（归档）、`pinned`（珍藏）、`deleted`（已删除）
+- 模糊化（fuzzy）：将完整内容压缩为摘要版本，原文保留在 `compressed` 字段，可随时恢复
+- 归档（archived）：移出检索范围但保留数据，可恢复
+- 珍藏保护：`pinned` 记忆不会被自动压缩或归档
+- 状态徽章：管理面板中每条记忆显示当前状态（模糊/归档）
+- 记忆管理器新增按钮：☁️ 模糊化、📦 归档、🔄 恢复
+
+**新增文件：**
+- `memory-maintainer.js` — 维护巡检员：诊断引擎 + 自动整理 + 弹窗 UI 构建
+
+**修改文件：**
+- `index.js` — 集成维护触发器、弹窗事件、模糊化/归档/恢复按钮、状态徽章
+- `memory-store.js` — 新增 `maintenanceThreshold` 设置、衰减跳过归档记忆
+- `settings.html` — 新增维护阈值输入框
+- `style.css` — 维护弹窗样式、状态徽章、操作按钮悬停样式
+
+**向后兼容：**
+- 旧记忆默认 `status: 'active'`，无需迁移
+- 衰减/检索逻辑自动跳过 `archived` / `deleted` 状态的记忆
+- 维护提醒为被动式，不会自动修改数据
 
 ---
 
