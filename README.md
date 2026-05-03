@@ -266,6 +266,30 @@ bb-memory/
 
 ## 版本记录
 
+### v2.3.0（2026-05-03）— 事实更新与隐藏备注机制
+
+**新增功能：**
+- 事实更新机制：记忆内容可随剧情推进更新，旧版本自动保存到 `history` 数组，支持查看完整变更历史
+- 隐藏备注（hiddenNotes）：每条记忆可附加结构化隐藏备注，包含 7 种类型（通用/角色内心/伏笔/隐藏真相/内心动机/压抑情感/剧情备注）
+- 真假状态系统（truthStatus）：支持 6 种状态标记（已确认/已否定/未知/传闻/误导/隐藏真相），在记忆管理器中以彩色标签显示
+- AI 隐藏注入：hiddenNotes 自动注入到 prompt 中（标记为 `[隐]`），AI 可用于行为塑造但不会直接透露给用户
+- 小眼睛按钮（👁）：记忆管理器中每条记忆旁的眼睛图标，点击展开/折叠隐藏备注面板
+- 版本历史按钮（📜）：点击查看该条记忆的所有历史版本，含变更时间、原因和旧内容
+
+**新增/修改文件：**
+- `memory-types.js` — 新增 `TRUTH_STATUS`、`HIDDEN_NOTE_TYPES` 常量；注入格式支持 hiddenNotes 和 truthStatus
+- `memory-store.js` — 新增 `updateFactContent()`、`addHiddenNote()`、`removeHiddenNote()`；hiddenNotes 从 string 迁移为 array；truthStatus 从 `confirmed` 迁移为 `true`
+- `index.js` — 小眼睛 UI、隐藏备注面板、事实更新对话框（含 truthStatus 选择和变更原因）、版本历史面板
+- `memory-assistant.js` — 浏览视图显示 truthStatus badge 和 hiddenNotes 数量指示
+- `style.css` — 新增 hiddenNotes 面板、truthStatus badge、历史面板、小眼睛高亮样式
+
+**向后兼容：**
+- `hiddenNotes` 字段自动从旧版空字符串迁移为数组格式
+- `truthStatus` 值 `confirmed` 自动迁移为 `true`
+- 旧版记忆首次读取时自动完成迁移，无需手动操作
+
+---
+
 ### v2.2.0（2026-05-03）— 认知记忆数据结构重构
 
 **核心变更：**

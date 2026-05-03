@@ -34,6 +34,9 @@ import {
     addMemory,
     removeMemory,
     updateMemory,
+    updateFactContent,
+    addHiddenNote,
+    removeHiddenNote,
     clearMemories,
     exportMemories,
     importMemories,
@@ -44,7 +47,13 @@ import {
 } from './memory-store.js';
 
 import { searchMemories, simpleSearch } from './retriever.js';
-import { MEMORY_TYPES, formatMemoriesForInjection, getTypeDefinition } from './memory-types.js';
+import {
+    MEMORY_TYPES,
+    TRUTH_STATUS,
+    HIDDEN_NOTE_TYPES,
+    formatMemoriesForInjection,
+    getTypeDefinition,
+} from './memory-types.js';
 import { initAutoGenerator, stopAutoGenerator } from './auto-generator.js';
 import { syncMessageVisibility } from './message-state.js';
 
@@ -418,12 +427,50 @@ function buildMemoryItemHTML(m) {
         <div class="bb-mem-strength-fill" style="width: ${((m.strength || 1) * 100).toFixed(0)}%"></div>
     </div>`;
 
+    // truthStatus badge
+    const tsDef = TRUTH_STATUS[m.truthStatus];
+    const truthBadge = m.truthStatus && m.truthStatus !== 'true' && tsDef
+        ? `<span class="bb-truth-badge" style="background: ${tsDef.color}" title="${tsDef.label}">${tsDef.label}</span>`
+        : '';
+
+    // hiddenNotes 面板
+    const notes = Array.isArray(m.hiddenNotes) ? m.hiddenNotes : [];
+    const hasNotes = notes.length > 0;
+    const notesListHTML = hasNotes
+        ? notes.map(n => {
+            const ntDef = HIDDEN_NOTE_TYPES[n.type] || HIDDEN_NOTE_TYPES.note;
+            const injIcon = n.allowInjection !== false ? '💉' : '🚫';
+            return `<div class="bb-hn-item">
+                <span class="bb-hn-type">[${ntDef.label}]</span>
+                <span class="bb-hn-content">${escapeHtml(n.content)}</span>
+                <span class="bb-hn-inj" title="${n.allowInjection !== false ? '允许注入' : '禁止注入'}">${injIcon}</span>
+                <button class="bb-hn-remove" data-mem-id="${m.id}" data-note-id="${n.id}" title="删除备注">&times;</button>
+            </div>`;
+        }).join('')
+        : '<div class="bb-mem-empty" style="font-size:0.8em;">暂无隐藏备注</div>';
+
+    // history 面板
+    const history = Array.isArray(m.history) ? m.history : [];
+    const hasHistory = history.length > 0;
+    const historyHTML = hasHistory
+        ? history.slice().reverse().map(h => {
+            const ts = TRUTH_STATUS[h.truthStatus];
+            const tsLabel = ts ? ` [${ts.label}]` : '';
+            return `<div class="bb-hist-item">
+                <div class="bb-hist-date">${new Date(h.changedAt).toLocaleString('zh-CN')}${tsLabel}</div>
+                <div class="bb-hist-content">${escapeHtml(h.content)}</div>
+                ${h.reason ? `<div class="bb-hist-reason">原因: ${escapeHtml(h.reason)}</div>` : ''}
+            </div>`;
+        }).join('')
+        : '';
+
     return `
         <div class="bb-mem-item" data-id="${m.id}" data-type="${m.cognitiveType || m.type || 'fact'}">
             <div class="bb-mem-item-header">
                 <span class="bb-mem-item-type" style="color: ${typeDef.color}">
                     <i class="${typeDef.icon}"></i> ${typeDef.label}
                 </span>
+                ${truthBadge}
                 ${strengthBar}
             </div>
             <div class="bb-mem-item-content">${escapeHtml(m.content)}</div>
@@ -433,7 +480,18 @@ function buildMemoryItemHTML(m) {
                 ${tagsHTML}
             </div>
             <div class="bb-mem-item-actions">
-                <button class="menu_button bb-mem-btn-sm bb-mem-edit" data-id="${m.id}" title="编辑">
+                <button class="menu_button bb-mem-btn-sm bb-mem-eye ${hasNotes ? 'has-notes' : ''}"
+                        data-id="${m.id}" title="隐藏备注 (${notes.length})">
+                    <i class="fa-solid fa-eye"></i>
+                </button>
+                ${hasHistory ? `<button class="menu_button bb-mem-btn-sm bb-mem-history"
+                    data-id="${m.id}" title="版本历史 (${history.length})">
+                    <i class="fa-solid fa-clock-rotate-left"></i>
+                </button>` : ''}
+                <button class="menu_button bb-mem-btn-sm bb-mem-fact-update" data-id="${m.id}" title="更新内容（保留历史）">
+                    <i class="fa-solid fa-pen-to-square"></i>
+                </button>
+                <button class="menu_button bb-mem-btn-sm bb-mem-edit" data-id="${m.id}" title="快速编辑">
                     <i class="fa-solid fa-pen"></i>
                 </button>
                 <button class="menu_button bb-mem-btn-sm bb-mem-delete menu_button_danger"
@@ -441,6 +499,21 @@ function buildMemoryItemHTML(m) {
                     <i class="fa-solid fa-trash"></i>
                 </button>
             </div>
+
+            <div class="bb-hn-panel" style="display:none;" data-panel-for="${m.id}">
+                <div class="bb-hn-header">
+                    <span>隐藏备注</span>
+                    <button class="menu_button bb-mem-btn-sm bb-hn-add" data-id="${m.id}">
+                        <i class="fa-solid fa-plus"></i> 添加
+                    </button>
+                </div>
+                <div class="bb-hn-list">${notesListHTML}</div>
+            </div>
+
+            ${hasHistory ? `<div class="bb-hist-panel" style="display:none;" data-hist-for="${m.id}">
+                <div class="bb-hn-header"><span>版本历史</span></div>
+                ${historyHTML}
+            </div>` : ''}
         </div>
     `;
 }
@@ -586,6 +659,7 @@ async function rerenderManagerList(overlay, chatId) {
 }
 
 function rebindItemActions(overlay, chatId) {
+    // 删除
     overlay.querySelectorAll('.bb-mem-delete').forEach(btn => {
         btn.addEventListener('click', async (e) => {
             e.stopPropagation();
@@ -599,6 +673,7 @@ function rebindItemActions(overlay, chatId) {
         });
     });
 
+    // 快速编辑
     overlay.querySelectorAll('.bb-mem-edit').forEach(btn => {
         btn.addEventListener('click', async (e) => {
             e.stopPropagation();
@@ -613,6 +688,120 @@ function rebindItemActions(overlay, chatId) {
 
             await updateMemory(chatId, id, newContent);
             toastr.success('记忆已更新', DISPLAY_NAME);
+            await rerenderManagerList(overlay, chatId);
+        });
+    });
+
+    // 👁 小眼睛：切换隐藏备注面板
+    overlay.querySelectorAll('.bb-mem-eye').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            const panel = overlay.querySelector(`.bb-hn-panel[data-panel-for="${id}"]`);
+            if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        });
+    });
+
+    // 📜 版本历史面板切换
+    overlay.querySelectorAll('.bb-mem-history').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            const panel = overlay.querySelector(`.bb-hist-panel[data-hist-for="${id}"]`);
+            if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        });
+    });
+
+    // ➕ 添加隐藏备注
+    overlay.querySelectorAll('.bb-hn-add').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const memId = btn.dataset.id;
+            const ctx = SillyTavern.getContext();
+
+            const noteTypesHTML = Object.values(HIDDEN_NOTE_TYPES).map(t =>
+                `<option value="${t.id}">${t.label}</option>`
+            ).join('');
+
+            const content = await ctx.Popup.show.input(
+                '添加隐藏备注',
+                `<div style="margin-bottom:8px;">
+                    <label>备注类型：</label>
+                    <select id="bb_hn_type_select" class="text_pole" style="width:100%;margin-top:4px;">
+                        ${noteTypesHTML}
+                    </select>
+                </div>
+                <label>备注内容：</label>`,
+            );
+            if (!content) return;
+
+            const typeSelect = document.getElementById('bb_hn_type_select');
+            const noteType = typeSelect?.value || 'note';
+
+            await addHiddenNote(chatId, memId, {
+                type: noteType,
+                content,
+                allowInjection: true,
+                revealPolicy: 'never',
+            });
+            toastr.success('隐藏备注已添加', DISPLAY_NAME);
+            await rerenderManagerList(overlay, chatId);
+        });
+    });
+
+    // ✖ 删除隐藏备注
+    overlay.querySelectorAll('.bb-hn-remove').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const memId = btn.dataset.memId;
+            const noteId = btn.dataset.noteId;
+            await removeHiddenNote(chatId, memId, noteId);
+            toastr.info('备注已删除', DISPLAY_NAME);
+            await rerenderManagerList(overlay, chatId);
+        });
+    });
+
+    // 📝 事实更新（保留历史版本）
+    overlay.querySelectorAll('.bb-mem-fact-update').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            const memories = await getMemories(chatId);
+            const memory = memories.find(m => m.id === id);
+            if (!memory) return;
+
+            const ctx = SillyTavern.getContext();
+
+            const truthOptions = Object.values(TRUTH_STATUS).map(t =>
+                `<option value="${t.id}" ${memory.truthStatus === t.id ? 'selected' : ''}>${t.label}</option>`
+            ).join('');
+
+            const newContent = await ctx.Popup.show.input(
+                '更新记忆（旧版本将保存到历史）',
+                `<div style="margin-bottom:8px;">
+                    <label>真假状态：</label>
+                    <select id="bb_fact_truth_select" class="text_pole" style="width:100%;margin-top:4px;">
+                        ${truthOptions}
+                    </select>
+                </div>
+                <div style="margin-bottom:8px;">
+                    <label>变更原因（可选）：</label>
+                    <input id="bb_fact_reason" class="text_pole" style="width:100%;margin-top:4px;"
+                           placeholder="例如：剧情推进 / 新线索" />
+                </div>
+                <label>新内容：</label>`,
+                memory.content,
+            );
+            if (!newContent) return;
+
+            const truthSelect = document.getElementById('bb_fact_truth_select');
+            const reasonInput = document.getElementById('bb_fact_reason');
+
+            await updateFactContent(chatId, id, newContent, {
+                truthStatus: truthSelect?.value || memory.truthStatus,
+                reason: reasonInput?.value || '',
+            });
+            toastr.success('记忆已更新，旧版本已保存到历史', DISPLAY_NAME);
             await rerenderManagerList(overlay, chatId);
         });
     });
@@ -764,7 +953,7 @@ async function init() {
     // 首次刷新侧边栏
     refreshSidebar();
 
-    console.log(`[${DISPLAY_NAME}] v2.2 初始化完成`);
+    console.log(`[${DISPLAY_NAME}] v2.3 初始化完成`);
 }
 
 // ═══ 启动 ═══

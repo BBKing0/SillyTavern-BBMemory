@@ -2,11 +2,7 @@
  * memory-types.js —— BB-Memory 的"认知分类系统"
  *
  * v2.2 重构：从 6 种物品分类升级为 4 种认知类型 + 树状分类路径。
- * 灵感来自认知心理学的记忆分类：
- *   - fact    (陈述性记忆) — 确定的事实
- *   - episode (情景记忆)   — 经历过的事件
- *   - emotion (情感记忆)   — 情感和态度
- *   - habit   (程序性记忆) — 行为模式和偏好
+ * v2.3 新增：TRUTH_STATUS（真假标记）、HIDDEN_NOTE_TYPES（隐藏备注类型）
  */
 
 // ═══════════════════════════════════════════════════════════
@@ -101,6 +97,33 @@ export const LEGACY_TYPE_MAP = Object.freeze({
 export const MEMORY_TYPES = COGNITIVE_TYPES;
 
 // ═══════════════════════════════════════════════════════════
+//  真假状态标记
+// ═══════════════════════════════════════════════════════════
+
+export const TRUTH_STATUS = Object.freeze({
+    'true':        { id: 'true',        label: '已确认',   color: '#4caf50' },
+    'false':       { id: 'false',       label: '已否定',   color: '#f44336' },
+    'unknown':     { id: 'unknown',     label: '未知',     color: '#9e9e9e' },
+    'rumor':       { id: 'rumor',       label: '传闻',     color: '#ff9800' },
+    'misleading':  { id: 'misleading',  label: '误导',     color: '#e91e63' },
+    'secret_true': { id: 'secret_true', label: '隐藏真相', color: '#7c4dff' },
+});
+
+// ═══════════════════════════════════════════════════════════
+//  隐藏备注类型
+// ═══════════════════════════════════════════════════════════
+
+export const HIDDEN_NOTE_TYPES = Object.freeze({
+    note:          { id: 'note',          label: '通用备注' },
+    inner_thought: { id: 'inner_thought', label: '角色内心' },
+    foreshadow:    { id: 'foreshadow',    label: '伏笔' },
+    hidden_truth:  { id: 'hidden_truth',  label: '隐藏真相' },
+    motivation:    { id: 'motivation',    label: '内心动机' },
+    emotion:       { id: 'emotion',       label: '压抑情感' },
+    plot:          { id: 'plot',          label: '剧情备注' },
+});
+
+// ═══════════════════════════════════════════════════════════
 //  工具函数
 // ═══════════════════════════════════════════════════════════
 
@@ -158,20 +181,27 @@ export function resolveMemoryType(memory) {
 // ═══════════════════════════════════════════════════════════
 
 /**
- * 将记忆列表按认知类型分组，格式化为注入文本
+ * 将记忆列表按认知类型分组，格式化为注入文本。
+ * 如果记忆包含 allowInjection 的 hiddenNotes，会附加在对应记忆行下方。
  */
 export function formatMemoriesForInjection(memories, enabledTypes) {
     const grouped = {};
+    let hasHiddenNotes = false;
 
     for (const memory of memories) {
         const cogType = resolveMemoryType(memory);
         if (enabledTypes && !enabledTypes[cogType]) continue;
         if (!grouped[cogType]) grouped[cogType] = [];
         grouped[cogType].push(memory);
+        if (getInjectableNotes(memory).length) hasHiddenNotes = true;
     }
 
     const sections = [];
     const typeOrder = ['fact', 'episode', 'emotion', 'habit'];
+
+    if (hasHiddenNotes) {
+        sections.push('（标记为[隐]的信息仅供你塑造角色行为和推进剧情，绝不要在对话中直接透露。）');
+    }
 
     for (const typeId of typeOrder) {
         const mems = grouped[typeId];
@@ -180,13 +210,28 @@ export function formatMemoriesForInjection(memories, enabledTypes) {
         const typeDef = COGNITIVE_TYPES[typeId];
         const header = `== ${typeDef.label} ==`;
         const lines = mems.map((m, i) => {
-            return `${i + 1}. ${formatSingleMemory(m)}`;
+            const mainLine = `${i + 1}. ${formatSingleMemory(m)}`;
+            const notes = getInjectableNotes(m);
+            if (!notes.length) return mainLine;
+            const noteLines = notes.map(n => {
+                const typeLabel = HIDDEN_NOTE_TYPES[n.type]?.label || '备注';
+                return `   [隐·${typeLabel}] ${n.content}`;
+            });
+            return mainLine + '\n' + noteLines.join('\n');
         });
 
         sections.push(`${header}\n${lines.join('\n')}`);
     }
 
     return sections.join('\n\n');
+}
+
+/**
+ * 从记忆条目中提取允许注入的 hiddenNotes
+ */
+function getInjectableNotes(memory) {
+    if (!Array.isArray(memory.hiddenNotes)) return [];
+    return memory.hiddenNotes.filter(n => n.allowInjection !== false);
 }
 
 /**
@@ -199,6 +244,12 @@ function formatSingleMemory(m) {
 
     const catLabel = getCategoryLabel(m.categoryPath);
     if (catLabel) parts.push(`(${catLabel})`);
+
+    // 非默认 truthStatus 时标记
+    if (m.truthStatus && m.truthStatus !== 'true') {
+        const ts = TRUTH_STATUS[m.truthStatus];
+        if (ts) parts.push(`{${ts.label}}`);
+    }
 
     parts.push(m.summary || m.content);
 

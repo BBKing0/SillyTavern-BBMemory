@@ -28,7 +28,7 @@
  */
 
 import { getMemories, removeMemory, getMemoryStats, updateMemory } from './memory-store.js';
-import { MEMORY_TYPES, getTypeDefinition } from './memory-types.js';
+import { MEMORY_TYPES, TRUTH_STATUS, HIDDEN_NOTE_TYPES, getTypeDefinition } from './memory-types.js';
 import { simpleSearch } from './retriever.js';
 
 // ═══ 状态 ═══
@@ -410,10 +410,22 @@ function buildBrowseItemHTML(m) {
         .map(t => `<span class="bb-mem-tag">${escapeHtml(typeof t === 'string' ? t : t.name)}</span>`)
         .join('');
 
+    const tsDef = TRUTH_STATUS[m.truthStatus];
+    const truthBadge = m.truthStatus && m.truthStatus !== 'true' && tsDef
+        ? `<span class="bb-truth-badge" style="background: ${tsDef.color}">${tsDef.label}</span>`
+        : '';
+
+    const noteCount = Array.isArray(m.hiddenNotes) ? m.hiddenNotes.length : 0;
+    const noteIcon = noteCount > 0
+        ? `<span class="bb-browse-note-icon" title="${noteCount} 条隐藏备注"><i class="fa-solid fa-eye"></i> ${noteCount}</span>`
+        : '';
+
     return `
         <div class="bb-browse-item">
             <div class="bb-browse-item-header">
                 <span style="color: ${typeDef.color}"><i class="${typeDef.icon}"></i> ${typeDef.label}</span>
+                ${truthBadge}
+                ${noteIcon}
                 <span class="bb-browse-item-date">${date}</span>
             </div>
             <div class="bb-browse-item-content">${escapeHtml(m.content)}</div>

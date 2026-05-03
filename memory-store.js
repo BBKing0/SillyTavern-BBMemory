@@ -1,11 +1,8 @@
 /**
  * memory-store.js —— BB-Memory 的"笔记本"（数据持久化层）
  *
- * v2.2 变更：
- *   - 记忆条目升级为 27+ 字段的认知记忆结构
- *   - 惰性迁移：首次读取旧数据时自动转换为新格式
- *   - addMemory 支持新旧类型名（自动映射）
- *   - updateMemory 支持任意字段更新
+ * v2.2 变更：认知记忆结构 + 惰性迁移 + 通用 CRUD
+ * v2.3 变更：事实更新（带历史）+ hiddenNotes 结构化 + truthStatus 扩展
  */
 
 import { LEGACY_TYPE_MAP } from './memory-types.js';
@@ -147,7 +144,7 @@ function migrateMemoryEntry(entry) {
         actors: meta.participants || [],
         location: meta.location || meta.locationName || '',
         // ── 状态与可信度 ──
-        truthStatus: 'confirmed',
+        truthStatus: 'true',
         visibility: 'public',
         confidence: 1.0,
         emotionalWeight: Math.abs(entry.emotionalValence || 0),
@@ -160,8 +157,38 @@ function migrateMemoryEntry(entry) {
         updatedAt: entry.createdAt || Date.now(),
         // ── 变更历史 & 隐藏备注 ──
         history: [],
-        hiddenNotes: '',
+        hiddenNotes: [],
     };
+}
+
+/**
+ * v2.2 → v2.3 微迁移：修正 hiddenNotes 和 truthStatus 格式
+ */
+function migrateToV23(entry) {
+    let changed = false;
+
+    // hiddenNotes: string → array
+    if (typeof entry.hiddenNotes === 'string') {
+        entry.hiddenNotes = entry.hiddenNotes
+            ? [{ id: generateId(), type: 'note', content: entry.hiddenNotes,
+                 allowInjection: true, revealPolicy: 'never', revealCondition: '',
+                 createdAt: entry.createdAt || Date.now() }]
+            : [];
+        changed = true;
+    }
+
+    // truthStatus: 'confirmed' → 'true'
+    if (entry.truthStatus === 'confirmed') {
+        entry.truthStatus = 'true';
+        changed = true;
+    }
+
+    if (!Array.isArray(entry.history)) {
+        entry.history = [];
+        changed = true;
+    }
+
+    return changed;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -184,12 +211,16 @@ export async function getMemories(chatId) {
             needsMigration = true;
             return migrateMemoryEntry(entry);
         }
+        // v2.2 → v2.3 微迁移
+        if (migrateToV23(entry)) {
+            needsMigration = true;
+        }
         return entry;
     });
 
     if (needsMigration) {
         await saveMemories(chatId, memories);
-        console.log(`[BB-Memory] 已将 ${chatId} 的记忆迁移到 v2.2 认知格式`);
+        console.log(`[BB-Memory] 已将 ${chatId} 的记忆迁移到 v2.3 格式`);
     }
 
     return memories;
@@ -245,7 +276,7 @@ export async function addMemory(chatId, content, cognitiveType = 'episode', sour
         actors: options.actors || [],
         location: options.location || '',
         // ── 状态 ──
-        truthStatus: options.truthStatus || 'confirmed',
+        truthStatus: options.truthStatus || 'true',
         visibility: options.visibility || 'public',
         confidence: options.confidence ?? 1.0,
         importance: options.importance ?? 0.5,
@@ -264,7 +295,7 @@ export async function addMemory(chatId, content, cognitiveType = 'episode', sour
         accessCount: 0,
         // ── 变更历史 & 隐藏备注 ──
         history: [],
-        hiddenNotes: options.hiddenNotes || '',
+        hiddenNotes: Array.isArray(options.hiddenNotes) ? options.hiddenNotes : [],
     };
 
     memories.push(entry);
@@ -311,6 +342,89 @@ export async function updateMemory(chatId, memoryId, updates) {
     entry.updatedAt = Date.now();
     await saveMemories(chatId, memories);
     return entry;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  事实更新（带历史版本保留）
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 更新记忆内容并将旧版本存入 history 数组。
+ * 适用于事实随剧情推进需要修正的场景。
+ */
+export async function updateFactContent(chatId, memoryId, newContent, options = {}) {
+    const memories = await getMemories(chatId);
+    const entry = memories.find(m => m.id === memoryId);
+    if (!entry) return null;
+
+    if (!Array.isArray(entry.history)) entry.history = [];
+
+    entry.history.push({
+        content: entry.content,
+        summary: entry.summary || '',
+        truthStatus: entry.truthStatus || 'true',
+        changedAt: Date.now(),
+        reason: options.reason || '',
+    });
+
+    entry.content = newContent.trim();
+    entry.keywords = extractKeywords(newContent);
+    if (options.summary !== undefined) entry.summary = options.summary;
+    if (options.truthStatus !== undefined) entry.truthStatus = options.truthStatus;
+    if (options.verbatim !== undefined) entry.verbatim = options.verbatim;
+    entry.updatedAt = Date.now();
+
+    await saveMemories(chatId, memories);
+    return entry;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  hiddenNotes CRUD
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 向一条记忆添加隐藏备注
+ */
+export async function addHiddenNote(chatId, memoryId, note) {
+    const memories = await getMemories(chatId);
+    const entry = memories.find(m => m.id === memoryId);
+    if (!entry) return null;
+
+    if (!Array.isArray(entry.hiddenNotes)) entry.hiddenNotes = [];
+
+    const noteEntry = {
+        id: generateId(),
+        type: note.type || 'note',
+        content: (note.content || '').trim(),
+        allowInjection: note.allowInjection ?? true,
+        revealPolicy: note.revealPolicy || 'never',
+        revealCondition: note.revealCondition || '',
+        createdAt: Date.now(),
+    };
+
+    entry.hiddenNotes.push(noteEntry);
+    entry.updatedAt = Date.now();
+    await saveMemories(chatId, memories);
+    return noteEntry;
+}
+
+/**
+ * 从一条记忆中删除指定隐藏备注
+ */
+export async function removeHiddenNote(chatId, memoryId, noteId) {
+    const memories = await getMemories(chatId);
+    const entry = memories.find(m => m.id === memoryId);
+    if (!entry || !Array.isArray(entry.hiddenNotes)) return false;
+
+    const before = entry.hiddenNotes.length;
+    entry.hiddenNotes = entry.hiddenNotes.filter(n => n.id !== noteId);
+
+    if (entry.hiddenNotes.length < before) {
+        entry.updatedAt = Date.now();
+        await saveMemories(chatId, memories);
+        return true;
+    }
+    return false;
 }
 
 /**

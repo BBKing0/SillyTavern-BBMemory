@@ -703,3 +703,132 @@
     opacity: 0.5;
     white-space: nowrap;
 }
+
+/* ═══════════════════════════════════════
+   v2.3: Truth Badge
+   ═══════════════════════════════════════ */
+
+.bb-truth-badge {
+    display: inline-block;
+    font-size: 0.7em;
+    padding: 1px 6px;
+    border-radius: 8px;
+    color: #fff;
+    font-weight: bold;
+    margin-left: 6px;
+    vertical-align: middle;
+    line-height: 1.4;
+}
+
+/* ═══════════════════════════════════════
+   v2.3: Hidden Notes Panel
+   ═══════════════════════════════════════ */
+
+.bb-hn-panel,
+.bb-hist-panel {
+    border-top: 1px dashed var(--SmartThemeBorderColor, #555);
+    margin-top: 8px;
+    padding-top: 8px;
+}
+
+.bb-hn-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.85em;
+    font-weight: bold;
+    margin-bottom: 6px;
+    opacity: 0.8;
+}
+
+.bb-hn-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 4px 6px;
+    margin-bottom: 4px;
+    border-radius: 4px;
+    background: rgba(124, 77, 255, 0.08);
+    font-size: 0.85em;
+    line-height: 1.4;
+}
+
+.bb-hn-type {
+    color: #7c4dff;
+    font-weight: bold;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.bb-hn-content {
+    flex: 1;
+    word-break: break-word;
+}
+
+.bb-hn-inj {
+    flex-shrink: 0;
+    font-size: 0.85em;
+    opacity: 0.7;
+}
+
+.bb-hn-remove {
+    background: none;
+    border: none;
+    color: #f44336;
+    cursor: pointer;
+    font-size: 1.1em;
+    padding: 0 2px;
+    opacity: 0.5;
+    flex-shrink: 0;
+    line-height: 1;
+}
+
+.bb-hn-remove:hover {
+    opacity: 1;
+}
+
+/* 小眼睛按钮有备注时高亮 */
+.bb-mem-eye.has-notes {
+    color: #7c4dff !important;
+    opacity: 1 !important;
+}
+
+/* ═══════════════════════════════════════
+   v2.3: History Panel
+   ═══════════════════════════════════════ */
+
+.bb-hist-item {
+    padding: 6px 8px;
+    margin-bottom: 4px;
+    border-radius: 4px;
+    background: rgba(255, 152, 0, 0.08);
+    font-size: 0.85em;
+}
+
+.bb-hist-date {
+    font-size: 0.8em;
+    opacity: 0.6;
+    margin-bottom: 2px;
+}
+
+.bb-hist-content {
+    line-height: 1.4;
+}
+
+.bb-hist-reason {
+    font-size: 0.8em;
+    opacity: 0.5;
+    font-style: italic;
+    margin-top: 2px;
+}
+
+/* ═══════════════════════════════════════
+   v2.3: Browse view note icon
+   ═══════════════════════════════════════ */
+
+.bb-browse-note-icon {
+    font-size: 0.8em;
+    color: #7c4dff;
+    margin-left: 6px;
+    opacity: 0.8;
+}
