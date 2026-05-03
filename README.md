@@ -123,6 +123,11 @@
 | `truthStatus` | string | 可信度：true/false/unknown/rumor/misleading/secret_true |
 | `pinned` | boolean | 是否固定（固定的记忆不会衰减） |
 | `resident` | boolean | 是否常驻（v2.4，每轮以索引卡形式注入） |
+| `npcTier` | string | NPC 分级：`core` / `important` / `minor` / `background`（v2.6） |
+| `itemTier` | string | 物品分级：`key` / `equipped` / `clue` / `consumable` / `background`（v2.6） |
+| `indexCard` | string | 常驻索引卡短句（状态/关系摘要，不含完整史）（v2.6） |
+| `relatedMemoryIds` | string[] | 关联记忆 id，按需展开时可连带拉出（v2.6） |
+| `standaloneArchive` | boolean | 是否单独建档；路人 NPC 应 `false`（v2.6） |
 
 ---
 
@@ -133,7 +138,8 @@ bb-memory/
 ├── manifest.json          ← 扩展清单，告诉 ST 这是什么扩展
 ├── index.js               ← 总指挥，协调所有模块
 ├── memory-store.js        ← 数据存储层，记忆的增删改查
-├── memory-maintainer.js   ← 记忆维护巡检员（v2.5 新增）
+├── memory-maintainer.js   ← 记忆维护巡检员（v2.5）
+├── entity-tiers.js        ← NPC/物品分级与按需展开（v2.6）
 ├── message-state.js       ← 消息管理员，自动隐藏 & exchange 去重（v2.1 新增）
 ├── retriever.js           ← 搜索引擎，智能检索相关记忆
 ├── memory-types.js        ← 类型定义，6种记忆的规格说明
@@ -322,6 +328,29 @@ bb-memory/
 - `emotionalValence` 自动转换为 `emotionalWeight`（取绝对值）
 - 旧版 metadata 中的结构化信息会被提取到新字段（如 `metadata.npcName` → `subject`）
 - `typeEnabled` 设置自动补充新认知类型键
+
+---
+
+### v2.6.0（2026-05-03）— NPC / 物品实体分级与按需展开
+
+**新增功能：**
+- NPC 四级：`core`（核心）／`important`（重要）／`minor`（配角）／`background`（路人），影响检索分与注入档位（未命中对话实体时路人大幅下降占位）。
+- 物品五级：`key`／`equipped`／`clue`／`consumable`／`background`，同样参与检索乘数与档位封顶逻辑。
+- 自动提取：`standaloneArchive=false` + `npc.profile` → 自动改为情景记忆 `episode.event`，避免路人落成完整档案；物品可走 `background` 分级减负。
+- 常驻索引卡：字段 `indexCard` + `buildDefaultIndexCard()`，常驻注入仅用短卡片（不写全长列传）。
+- 按需展开：`mergeExpandedRelevantResults()` 在用户消息命中实体名时，合并关联记忆并拉高档位；支持 `relatedMemoryIds` 链式展开。
+- 分类扩展：`npc.emotion`、`npc.secret`、`npc.goal`、`item.key`、`item.clue`。
+- 控制台接口：`globalThis.bbMemoryExpandEntityKeyword(keyword, limit)` 返回关键词关联记忆数组。
+
+**新增/修改文件：**
+- `entity-tiers.js` — 分级常量、实体_hint、检索乘数、展开、`applyStandaloneArchivePolicy`
+- `retriever.js` — 档位封顶、`tierScoreMultiplier`、`mergeExpandedRelevantResults`、`getResidentMemories` 按 NPC 核心度排序、L4 使用索引卡
+- `memory-store.js` — `migrateToV26`、`npcTier`/`itemTier`/`indexCard`/`relatedMemoryIds`/`standaloneArchive`
+- `auto-generator.js` — 提取 prompt 与解析字段、路人建档策略
+- `memory-types.js` — 新分类路径
+- `index.js` — 合并按需展开、管理面板分级/索引卡编辑、`bbMemoryExpandEntityKeyword`
+- `style.css` — `.bb-entity-meta-row`
+- `manifest.json` — 2.6.0
 
 ---
 

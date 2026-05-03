@@ -7,15 +7,26 @@
  *   - 常驻记忆 getResidentMemories()
  *   - token 预算控制
  *   - buildMemoryInjectionPrompt() 统一输出
+ * v2.6：NPC/物品分级 + 按需展开 mergeExpandedRelevantResults()
  */
 
 import {
-    COGNITIVE_TYPES,
     TRUTH_STATUS,
     HIDDEN_NOTE_TYPES,
     resolveMemoryType,
     getCategoryLabel,
 } from './memory-types.js';
+
+import {
+    tierScoreMultiplier,
+    memoryMatchesQueryEntities,
+    expandEntityMemories,
+    buildDefaultIndexCard,
+    normalizeNpcTier,
+    normalizeItemTier,
+} from './entity-tiers.js';
+
+const NPC_RESIDENT_ORDER = { core: 4, important: 3, minor: 2, background: 1 };
 
 // ═══════════════════════════════════════════════════════════
 //  评分权重（可调参，总和不强制为 1，最终会归一化）
@@ -256,17 +267,36 @@ function computeRecency(createdAt, now) {
 // ═══════════════════════════════════════════════════════════
 
 /**
- * 根据记忆属性和评分决定注入等级。
+ * 根据记忆属性、评分与「本轮是否命中实体」决定注入等级。
  *   L4 = 常驻（resident === true）
- *   L3 = 高分或有 verbatim
- *   L2 = 中等分数
- *   L1 = 低分但仍在阈值内
+ *   L3 = 高分或（命中实体时的原话）
+ *   路人/背景物在未命中时降级，避免占满 token
  */
-export function chooseInjectionLevel(memory, score) {
+export function chooseInjectionLevel(memory, score, queryMatched = false) {
     if (memory.resident) return 'L4';
-    if (score >= 0.55 || memory.verbatim) return 'L3';
-    if (score >= 0.30) return 'L2';
-    return 'L1';
+
+    const nt = normalizeNpcTier(memory.npcTier);
+    const it = normalizeItemTier(memory.itemTier);
+    const verbatimStrong = memory.verbatim && (
+        queryMatched || nt === 'core' || it === 'key'
+    );
+
+    let level;
+    if (score >= 0.55 || verbatimStrong) level = 'L3';
+    else if (score >= 0.30) level = 'L2';
+    else level = 'L1';
+
+    if (!queryMatched) {
+        if (nt === 'background' || it === 'background') {
+            if (level === 'L3') level = 'L2';
+            if (score < 0.42) level = 'L1';
+        }
+        if ((nt === 'minor' || it === 'consumable') && level === 'L3' && score < 0.62) {
+            level = 'L2';
+        }
+    }
+
+    return level;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -280,7 +310,12 @@ export function chooseInjectionLevel(memory, score) {
 export function getResidentMemories(memories) {
     return memories
         .filter(m => m.resident === true && m.status !== 'archived' && m.status !== 'deleted')
-        .sort((a, b) => (b.importance || 0) - (a.importance || 0));
+        .sort((a, b) => {
+            const na = NPC_RESIDENT_ORDER[normalizeNpcTier(a.npcTier)] ?? 2;
+            const nb = NPC_RESIDENT_ORDER[normalizeNpcTier(b.npcTier)] ?? 2;
+            if (nb !== na) return nb - na;
+            return (b.importance || 0) - (a.importance || 0);
+        });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -340,22 +375,51 @@ export function getRelevantMemories(memories, queryText, options = {}) {
     // 评分
     const scored = [];
     for (const memory of candidates) {
+        const queryMatched = memoryMatchesQueryEntities(memory, queryText);
         const { total, breakdown } = calculateMemoryScore(memory, queryText, context);
         const fuseBoost = fuseBoostMap.get(memory.id) || 0;
-        const finalScore = Math.min(1.0, total + fuseBoost);
+        let finalScore = Math.min(1.0, total + fuseBoost);
+        finalScore = Math.min(1.0, finalScore * tierScoreMultiplier(memory, queryMatched));
 
         if (finalScore >= minScore) {
             scored.push({
                 memory,
                 score: finalScore,
                 breakdown,
-                level: chooseInjectionLevel(memory, finalScore),
+                level: chooseInjectionLevel(memory, finalScore, queryMatched),
             });
         }
     }
 
     scored.sort((a, b) => b.score - a.score);
     return scored.slice(0, maxResults);
+}
+
+/**
+ * 在本轮检索结果基础上，合并「用户提到的实体」的关联记忆（按需展开），便于拉高注入档位。
+ */
+export function mergeExpandedRelevantResults(memories, queryText, relevantResults, residentMemories, context = {}, expandLimit = 12) {
+    const excludeIds = new Set(residentMemories.map(m => m.id));
+    for (const r of relevantResults) excludeIds.add(r.memory.id);
+
+    const expanded = expandEntityMemories(memories, queryText, excludeIds, expandLimit);
+    const merged = [...relevantResults];
+
+    for (const m of expanded) {
+        const queryMatched = true;
+        const { total, breakdown } = calculateMemoryScore(m, queryText, context);
+        let score = Math.min(1.0, Math.max(total, 0.55));
+        score = Math.min(1.0, score * tierScoreMultiplier(m, queryMatched));
+        merged.push({
+            memory: m,
+            score,
+            breakdown,
+            level: chooseInjectionLevel(m, score, queryMatched),
+        });
+    }
+
+    merged.sort((a, b) => b.score - a.score);
+    return merged;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -383,10 +447,9 @@ function formatByLevel(memory, level) {
 
     switch (level) {
         case 'L4': {
-            // 常驻索引卡：极简
+            const card = buildDefaultIndexCard(memory);
             const tagStr = (memory.tags || []).slice(0, 3).map(t => t.name || t).join('/');
-            const label = memory.title || memory.summary || memory.content.slice(0, 20);
-            return `◆ ${label}${tagStr ? ` [${tagStr}]` : ''}`;
+            return `◆ ${card}${tagStr ? ` [${tagStr}]` : ''}`;
         }
         case 'L1': {
             const tagStr = (memory.tags || []).slice(0, 4).map(t => t.name || t).join(', ');
@@ -537,6 +600,9 @@ export function searchMemories(memories, queryText, options = {}) {
 /**
  * 简单文本搜索（管理面板搜索框用）
  */
+/** 按需展开 API（再导出，便于外部统一从 retriever 引用） */
+export { expandEntityMemories, expandMemoriesForEntityKeyword } from './entity-tiers.js';
+
 export function simpleSearch(memories, queryText, maxResults = 100) {
     if (!memories.length || !queryText.trim()) return memories.slice(0, maxResults);
 

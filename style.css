@@ -1049,3 +1049,35 @@
 .bb-mem-restore:hover {
     color: #4caf50;
 }
+
+/* ═══════════════════════════════════════
+   v2.6: NPC / 物品分级与索引卡
+   ═══════════════════════════════════════ */
+
+.bb-entity-meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    padding: 6px 8px;
+    background: rgba(127, 127, 127, 0.08);
+    border-radius: 6px;
+    font-size: 0.88em;
+}
+
+.bb-tier-label {
+    opacity: 0.75;
+    white-space: nowrap;
+}
+
+.bb-entity-meta-row .bb-tier-select {
+    max-width: 110px;
+    font-size: 0.9em;
+}
+
+.bb-entity-meta-row .bb-index-card-input {
+    flex: 1;
+    min-width: 140px;
+    font-size: 0.9em;
+}

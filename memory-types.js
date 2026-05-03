@@ -50,12 +50,17 @@ export const CATEGORY_PATHS = Object.freeze({
     'world.lore':      { label: '世界·背景', cognitiveType: 'fact' },
     'world.rules':     { label: '世界·规则', cognitiveType: 'fact' },
     // ── NPC ──
-    'npc.profile':     { label: 'NPC·档案', cognitiveType: 'fact' },
-    'npc.relationship':{ label: 'NPC·关系', cognitiveType: 'fact' },
-    'npc.attitude':    { label: 'NPC·态度', cognitiveType: 'emotion' },
+    'npc.profile':      { label: 'NPC·档案', cognitiveType: 'fact' },
+    'npc.relationship': { label: 'NPC·关系', cognitiveType: 'fact' },
+    'npc.emotion':      { label: 'NPC·情感线', cognitiveType: 'emotion' },
+    'npc.secret':       { label: 'NPC·秘密', cognitiveType: 'episode' },
+    'npc.goal':         { label: 'NPC·目标', cognitiveType: 'fact' },
+    'npc.attitude':     { label: 'NPC·态度', cognitiveType: 'emotion' },
     // ── 物品 ──
     'item.ownership':  { label: '物品·持有', cognitiveType: 'fact' },
     'item.quest':      { label: '物品·任务', cognitiveType: 'fact' },
+    'item.key':        { label: '物品·关键', cognitiveType: 'fact' },
+    'item.clue':       { label: '物品·线索', cognitiveType: 'fact' },
     // ── 地点 ──
     'location.state':  { label: '地点·状态', cognitiveType: 'fact' },
     'location.map':    { label: '地点·地图', cognitiveType: 'fact' },

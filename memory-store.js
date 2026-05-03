@@ -16,7 +16,6 @@ const STORAGE_PREFIX = 'bb_memory_chat_';
 // ═══ 默认设置 ═══
 export const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
-    maxResults: 5,
     injectionDepth: 4,
     injectionTemplate: '[角色长期记忆]\n{{memories}}',
     // 记忆衰减
@@ -202,6 +201,36 @@ function migrateToV23(entry) {
     return changed;
 }
 
+/**
+ * v2.6：NPC/物品分级、索引卡、关联记忆 ID
+ */
+function migrateToV26(entry) {
+    let changed = false;
+
+    if (entry.npcTier === undefined) {
+        entry.npcTier = '';
+        changed = true;
+    }
+    if (entry.itemTier === undefined) {
+        entry.itemTier = '';
+        changed = true;
+    }
+    if (entry.indexCard === undefined) {
+        entry.indexCard = '';
+        changed = true;
+    }
+    if (!Array.isArray(entry.relatedMemoryIds)) {
+        entry.relatedMemoryIds = [];
+        changed = true;
+    }
+    if (entry.standaloneArchive === undefined) {
+        entry.standaloneArchive = true;
+        changed = true;
+    }
+
+    return changed;
+}
+
 // ═══════════════════════════════════════════════════════════
 //  记忆读取（含惰性迁移）
 // ═══════════════════════════════════════════════════════════
@@ -226,12 +255,15 @@ export async function getMemories(chatId) {
         if (migrateToV23(entry)) {
             needsMigration = true;
         }
+        if (migrateToV26(entry)) {
+            needsMigration = true;
+        }
         return entry;
     });
 
     if (needsMigration) {
         await saveMemories(chatId, memories);
-        console.log(`[BB-Memory] 已将 ${chatId} 的记忆迁移到 v2.3 格式`);
+        console.log(`[BB-Memory] 已将 ${chatId} 的记忆迁移到新格式`);
     }
 
     return memories;
@@ -296,6 +328,12 @@ export async function addMemory(chatId, content, cognitiveType = 'episode', sour
         status: options.status || 'active',
         pinned: options.pinned || false,
         resident: options.resident || false,
+        // ── v2.6 实体分级（路人少占 token）──
+        npcTier: options.npcTier ?? '',
+        itemTier: options.itemTier ?? '',
+        indexCard: options.indexCard || '',
+        relatedMemoryIds: Array.isArray(options.relatedMemoryIds) ? options.relatedMemoryIds : [],
+        standaloneArchive: options.standaloneArchive !== undefined ? options.standaloneArchive : true,
         // ── 来源 ──
         source,
         sourceMessageIds: options.sourceMessageIds || [],

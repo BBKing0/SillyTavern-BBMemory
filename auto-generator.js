@@ -29,6 +29,12 @@
 
 import { getSettings, addMemory } from './memory-store.js';
 import { getExtractableExchanges, markExchangeExtracted } from './message-state.js';
+import {
+    normalizeNpcTier,
+    normalizeItemTier,
+    applyStandaloneArchivePolicy,
+    inferStandaloneArchive,
+} from './entity-tiers.js';
 
 // ═══ 默认提示词模板 ═══
 
@@ -39,19 +45,35 @@ const DEFAULT_EXTRACTION_PROMPT = `你是一个记忆提取助手。请根据以
 2. 每条记忆应有简短标题和清晰内容
 3. 如果对话中有重要原话（承诺、告白、威胁等），保留在 verbatim 字段
 4. 正确选择认知类型和分类路径
-5. 如果没有值得记忆的内容，返回空数组 []
+5. **一次性出场的路人**不要建 npc.profile 独立档案：设 standaloneArchive=false，分类用 episode.event，npcTier=background
+6. **核心/长线 NPC** 才用 npc.profile / npc.relationship 等，并标注 npcTier
+7. **消耗品、随手道具** 用 itemTier=consumable 或 background；任务关键物用 key / clue
+8. 如果没有值得记忆的内容，返回空数组 []
 
 认知类型：
-- fact: 确定的事实（NPC信息、物品、地点、世界设定）
+- fact: 确定的事实（NPC档案、物品、地点、世界设定）
 - episode: 发生的事件或经历（事件、承诺、秘密、战斗）
 - emotion: 情感状态（好感变化、情绪波动、羁绊）
 - habit: 行为模式（习惯、偏好、口头禅）
 
-分类路径（选择最匹配的一个）：
-world.politics | world.lore | npc.profile | npc.relationship | npc.attitude |
-item.ownership | location.state | episode.event | episode.promise |
-episode.secret | episode.dialogue | episode.combat | emotion.bond |
-emotion.trauma | emotion.desire | habit.routine | habit.preference | habit.speech
+分类路径（NPC 子类可归在对应路径下）：
+world.politics | world.lore | npc.profile | npc.relationship | npc.emotion | npc.secret | npc.goal | npc.attitude |
+item.ownership | item.key | item.clue | item.quest | location.state | episode.event | episode.promise |
+episode.secret | episode.dialogue | episode.combat | emotion.bond | emotion.trauma | emotion.desire |
+habit.routine | habit.preference | habit.speech
+
+NPC 分级 npcTier（事实类/档案类条目填写，路人片段填 background）：
+- core: 核心角色（长跑剧情）
+- important: 重要配角
+- minor: 普通配角
+- background: 路人（尽量不单独建档）
+
+物品分级 itemTier（物品相关条目填写）：
+- key: 关键剧情物品
+- equipped: 当前持有/装备
+- clue: 线索物
+- consumable: 消耗品
+- background: 背景道具
 
 以纯JSON数组格式返回（不要包含markdown代码块标记），每条包含：
 - cognitiveType: "fact"|"episode"|"emotion"|"habit"
@@ -59,10 +81,17 @@ emotion.trauma | emotion.desire | habit.routine | habit.preference | habit.speec
 - title: 简短标题（3-8字）
 - content: 完整记忆内容
 - summary: 一句话摘要（10-20字）
-- verbatim: 重要原话（承诺/告白/威胁等，无则留空字符串""）
+- verbatim: 重要原话（无则 ""）
 - tags: 标签数组（2-5个关键词）
+- subject: 主要实体名（NPC或物品名，无则 ""）
+- target: 关联对象名（无则 ""）
 - importance: 重要性(0-1)
-- emotionalWeight: 情感强度(0-1，0为中性，1为强烈)
+- emotionalWeight: 情感强度(0-1)
+- npcTier: "core"|"important"|"minor"|"background"|"" （非 NPC 可 ""）
+- itemTier: "key"|"equipped"|"clue"|"consumable"|"background"|"" （非物品可 ""）
+- standaloneArchive: true/false —— false 表示「不要单独 NPC 档案」（路人），插件会改为情景记忆
+- indexCard: 可选，一行常驻索引卡（短摘要+状态，不要写完整生平；无则 ""）
+- relatedMemoryIds: 可选，关联的其它记忆 id 数组（通常留 []）
 
 [当前对话]
 用户: {{userMessage}}
@@ -205,6 +234,17 @@ function parseAiResponse(responseText) {
                 emotionalWeight: typeof item.emotionalWeight === 'number'
                     ? Math.max(0, Math.min(1, item.emotionalWeight))
                     : 0.0,
+                subject: typeof item.subject === 'string' ? item.subject.trim() : '',
+                target: typeof item.target === 'string' ? item.target.trim() : '',
+                npcTier: normalizeNpcTier(item.npcTier),
+                itemTier: normalizeItemTier(item.itemTier),
+                standaloneArchive: typeof item.standaloneArchive === 'boolean'
+                    ? item.standaloneArchive
+                    : undefined,
+                indexCard: typeof item.indexCard === 'string' ? item.indexCard.trim() : '',
+                relatedMemoryIds: Array.isArray(item.relatedMemoryIds)
+                    ? item.relatedMemoryIds.map(String).filter(Boolean)
+                    : [],
             }));
     } catch (e) {
         console.warn('[BB-Memory] AI 返回内容解析失败:', e.message, text.slice(0, 200));
@@ -231,6 +271,11 @@ async function extractFromExchange(chatId, userMessage, aiMessage) {
     let addedCount = 0;
 
     for (const mem of memories) {
+        if (mem.standaloneArchive === undefined) {
+            mem.standaloneArchive = inferStandaloneArchive(mem);
+        }
+        applyStandaloneArchivePolicy(mem);
+
         await addMemory(chatId, mem.content, mem.cognitiveType || 'episode', 'auto', {
             categoryPath: mem.categoryPath,
             title: mem.title,
@@ -239,6 +284,13 @@ async function extractFromExchange(chatId, userMessage, aiMessage) {
             tags: mem.tags,
             importance: mem.importance,
             emotionalWeight: mem.emotionalWeight,
+            subject: mem.subject,
+            target: mem.target,
+            npcTier: mem.npcTier || undefined,
+            itemTier: mem.itemTier || undefined,
+            standaloneArchive: mem.standaloneArchive,
+            indexCard: mem.indexCard || undefined,
+            relatedMemoryIds: mem.relatedMemoryIds?.length ? mem.relatedMemoryIds : undefined,
         });
         addedCount++;
     }

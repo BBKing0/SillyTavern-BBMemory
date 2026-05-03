@@ -52,6 +52,7 @@ import {
     getRelevantMemories,
     getResidentMemories,
     buildMemoryInjectionPrompt,
+    mergeExpandedRelevantResults,
 } from './retriever.js';
 import {
     MEMORY_TYPES,
@@ -60,6 +61,13 @@ import {
     formatMemoriesForInjection,
     getTypeDefinition,
 } from './memory-types.js';
+import {
+    NPC_TIERS,
+    ITEM_TIERS,
+    normalizeNpcTier,
+    normalizeItemTier,
+    expandMemoriesForEntityKeyword,
+} from './entity-tiers.js';
 import { initAutoGenerator, stopAutoGenerator } from './auto-generator.js';
 import { syncMessageVisibility } from './message-state.js';
 import {
@@ -163,13 +171,21 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     // 常驻记忆（L4）
     const residentMemories = getResidentMemories(memories);
 
-    // 相关记忆（L1~L3，带评分和等级）
-    const relevantResults = getRelevantMemories(memories, userMessage, {
+    // 相关记忆（L1~L3）+ 按需展开实体关联记忆
+    let relevantResults = getRelevantMemories(memories, userMessage, {
         maxResults: settings.maxResults || DEFAULT_SETTINGS.maxResults,
         minStrength: settings.minStrength || 0,
         enabledTypes: settings.typeEnabled,
         context,
     });
+    relevantResults = mergeExpandedRelevantResults(
+        memories,
+        userMessage,
+        relevantResults,
+        residentMemories,
+        context,
+        12,
+    );
 
     if (!residentMemories.length && !relevantResults.length) {
         clearInjection();
@@ -539,6 +555,35 @@ function buildMemoryItemHTML(m) {
         }).join('')
         : '';
 
+    const showNpcTier = (m.categoryPath || '').startsWith('npc.') || !!normalizeNpcTier(m.npcTier);
+    const showItemTier = (m.categoryPath || '').startsWith('item.') || !!normalizeItemTier(m.itemTier);
+    const showEntityTools = m.resident || showNpcTier || showItemTier;
+    const ntVal = normalizeNpcTier(m.npcTier);
+    const itVal = normalizeItemTier(m.itemTier);
+
+    let tierRow = '';
+    if (showEntityTools) {
+        tierRow = '<div class="bb-entity-meta-row">';
+        if (showNpcTier) {
+            tierRow += `<label class="bb-tier-label">NPC分级</label><select class="text_pole bb-tier-select" data-field="npcTier" data-id="${m.id}">`;
+            tierRow += '<option value="">—</option>';
+            tierRow += Object.values(NPC_TIERS).map(t =>
+                `<option value="${t.id}" ${ntVal === t.id ? 'selected' : ''}>${t.label}</option>`,
+            ).join('');
+            tierRow += '</select>';
+        }
+        if (showItemTier) {
+            tierRow += `<label class="bb-tier-label">物品分级</label><select class="text_pole bb-tier-select" data-field="itemTier" data-id="${m.id}">`;
+            tierRow += '<option value="">—</option>';
+            tierRow += Object.values(ITEM_TIERS).map(t =>
+                `<option value="${t.id}" ${itVal === t.id ? 'selected' : ''}>${t.label}</option>`,
+            ).join('');
+            tierRow += '</select>';
+        }
+        tierRow += `<input type="text" class="text_pole bb-index-card-input" data-id="${m.id}" placeholder="常驻索引卡（短摘要/状态，不写完整史）" value="${escapeHtml(m.indexCard || '')}" />`;
+        tierRow += '</div>';
+    }
+
     return `
         <div class="bb-mem-item" data-id="${m.id}" data-type="${m.cognitiveType || m.type || 'fact'}">
             <div class="bb-mem-item-header">
@@ -555,6 +600,7 @@ function buildMemoryItemHTML(m) {
                 <span class="bb-mem-item-source">${sourceLabel}</span>
                 ${tagsHTML}
             </div>
+            ${tierRow}
             <div class="bb-mem-item-actions">
                 <button class="menu_button bb-mem-btn-sm bb-mem-eye ${hasNotes ? 'has-notes' : ''}"
                         data-id="${m.id}" title="隐藏备注 (${notes.length})">
@@ -848,6 +894,25 @@ function rebindItemActions(overlay, chatId) {
             await removeHiddenNote(chatId, memId, noteId);
             toastr.info('备注已删除', DISPLAY_NAME);
             await rerenderManagerList(overlay, chatId);
+        });
+    });
+
+    overlay.querySelectorAll('.bb-tier-select').forEach(sel => {
+        sel.addEventListener('change', async (e) => {
+            e.stopPropagation();
+            const field = sel.dataset.field;
+            const val = sel.value;
+            await updateMemory(chatId, sel.dataset.id, { [field]: val });
+            toastr.success('分级已保存', DISPLAY_NAME);
+            await rerenderManagerList(overlay, chatId);
+        });
+    });
+
+    overlay.querySelectorAll('.bb-index-card-input').forEach(inp => {
+        inp.addEventListener('change', async (e) => {
+            e.stopPropagation();
+            await updateMemory(chatId, inp.dataset.id, { indexCard: inp.value.trim() });
+            toastr.info('索引卡已保存', DISPLAY_NAME);
         });
     });
 
@@ -1156,7 +1221,15 @@ async function init() {
     // 首次刷新侧边栏
     refreshSidebar();
 
-    console.log(`[${DISPLAY_NAME}] v2.5 初始化完成`);
+    /** 控制台 / 脚本按需展开某关键词相关的记忆条目 */
+    globalThis.bbMemoryExpandEntityKeyword = async function (keyword, limit = 12) {
+        const cid = getChatId();
+        if (!cid || !keyword) return [];
+        const list = await getMemories(cid);
+        return expandMemoriesForEntityKeyword(list, String(keyword), { limit });
+    };
+
+    console.log(`[${DISPLAY_NAME}] v2.6 初始化完成`);
 }
 
 // ═══ 启动 ═══
