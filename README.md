@@ -32,12 +32,22 @@
 
 ### 方法二：手动安装
 
-1. 将本文件夹复制到：
+1. 将本仓库解压/克隆到酒馆前端扩展目录（与[官方文档](https://docs.sillytavern.app/for-contributors/writing-extensions)一致）：
    ```
-   SillyTavern/public/scripts/extensions/third-party/
+   <SillyTavern>/public/scripts/extensions/third-party/
    ```
-2. 建议将文件夹重命名为 `bb-memory`
-3. 重启 SillyTavern
+2. **文件夹名称**应与解压后的目录一致（例如 `BB-Memory`）。程序会通过 SillyTavern 内置的 `findExtension('BB-Memory')` 解析真实路径，用于加载 `settings.html`；请勿随意改名除非你清楚自己在改挂载路径。
+3. 完全重启 SillyTavern（刷新页面或重启 Node 服务）。
+
+### SillyTavern 兼容性说明（重要）
+
+本扩展面向官方「UI 扩展」模型编写（`manifest.json` + `generate_interceptor` + `renderExtensionTemplateAsync`）。若你在酒馆里**看不到设置面板**或**命令列表里没有 `/memory`**，通常是下列原因之一：
+
+| 现象 | 常见原因 |
+|------|-----------|
+| 扩展设置区没有 BB-Memory | `renderExtensionTemplateAsync` 的第一个参数必须是当前安装目录的内部键（如 `third-party/BB-Memory`）。v2.6.1 起已改为优先使用官方 `findExtension` 解析，并会对 `#extensions_settings` / `#extensions_settings2` 做短暂重试挂载。 |
+| 酒馆版本过旧 | 请尽量使用 [SillyTavern 发行版](https://github.com/SillyTavern/SillyTavern/releases) 的最新稳定版；过旧内核可能没有 `SlashCommandParser`、`POPUP_RESULT` 等接口。 |
+| 扩展被禁用 | **扩展** 菜单中确认 BB-Memory 已勾选启用。 |
 
 ---
 
@@ -249,9 +259,11 @@ bb-memory/
 | `generateRaw()` | 无上下文的 AI 生成 |
 | `setExtensionPrompt()` | 注入内容到 prompt |
 | `eventSource.on()` | 监听 ST 事件 |
-| `renderExtensionTemplateAsync()` | 渲染 HTML 模板 |
+| `renderExtensionTemplateAsync()` | 渲染 HTML 模板（第一个参数为扩展内部目录键） |
+| `../../../extensions.js` → `findExtension()` | 按名称解析已安装扩展的真实路径（官方扩展脚本导出） |
 | `Popup.show.input/confirm` | 弹窗交互 |
-| `registerSlashCommand()` | 注册斜杠命令 |
+| `POPUP_RESULT.AFFIRMATIVE` | 确认弹窗「确定」按钮的返回值 |
+| `SlashCommandParser.addCommandObject()` / `registerSlashCommand()` | 注册斜杠命令（新版优先前者） |
 
 ### 数据存储方案
 
@@ -328,6 +340,21 @@ bb-memory/
 - `emotionalValence` 自动转换为 `emotionalWeight`（取绝对值）
 - 旧版 metadata 中的结构化信息会被提取到新字段（如 `metadata.npcName` → `subject`）
 - `typeEnabled` 设置自动补充新认知类型键
+
+---
+
+### v2.6.1（2026-05-03）— SillyTavern 接口对齐与界面挂载修复
+
+**修复与改进：**
+
+- 使用官方 `findExtension('BB-Memory')` 解析扩展目录键，保证 `renderExtensionTemplateAsync` 与磁盘路径一致，避免出现「酒馆里看不见设置」的情况。
+- 扩展设置 HTML 挂载增加对 `#extensions_settings` / `#extensions_settings2` 的兼容与短时重试，适配 DOM 较晚就绪的酒馆版本。
+- 斜杠命令改为优先通过 `SlashCommandParser.addCommandObject` 注册（失败时回退到旧版 `registerSlashCommand`）；并对新版解析器传入的无名参数（字符串或片段数组）做统一归一化。
+- `Popup.show.confirm` 的结果改为显式与 `POPUP_RESULT.AFFIRMATIVE` 比较，避免依赖 loosely truthy 判断。
+- 事件监听兼容 `event_types` 与 `eventTypes` 两种上下文字段命名。
+- 修正文档：手动安装路径说明与官方文档对齐。
+
+**涉及文件：** `index.js`、`memory-assistant.js`、`manifest.json`、`README.md`
 
 ---
 

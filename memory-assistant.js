@@ -386,7 +386,8 @@ function bindBatchEvents(window, chatId) {
 
         const ctx = SillyTavern.getContext();
         const ok = await ctx.Popup.show.confirm('批量删除', `确定删除选中的 ${selected.length} 条记忆吗？`);
-        if (!ok) return;
+        const affirmative = ctx.POPUP_RESULT?.AFFIRMATIVE ?? 1;
+        if (ok !== affirmative) return;
 
         for (const id of selected) {
             await removeMemory(chatId, id);

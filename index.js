@@ -81,6 +81,8 @@ import {
     buildMaintenanceHTML,
 } from './memory-maintainer.js';
 
+import { findExtension } from '../../../extensions.js';
+
 // ═══════════════════════════════════════════════════════════
 //  常量
 // ═══════════════════════════════════════════════════════════
@@ -95,13 +97,66 @@ const ROLE_SYSTEM = 0;
 //  辅助函数
 // ═══════════════════════════════════════════════════════════
 
+/**
+ * SillyTavern 内部扩展目录键（传给 renderExtensionTemplateAsync 的第一个参数）。
+ * 必须与磁盘上的扩展路径一致（通常为 third-party/<文件夹名>），参见官方文档：
+ * https://docs.sillytavern.app/for-contributors/writing-extensions
+ */
 function getExtensionFolder() {
     try {
-        const url = import.meta.url;
-        const match = url.match(/\/scripts\/extensions\/(.*?)\/index\.js/);
-        if (match) return match[1];
+        const hit = findExtension('BB-Memory');
+        if (hit?.name) return hit.name;
+    } catch (e) {
+        console.warn(`[${DISPLAY_NAME}] findExtension 失败，将尝试从脚本 URL 解析`, e);
+    }
+    try {
+        const url = String(import.meta.url);
+        let m = url.match(/\/scripts\/extensions\/(.+?)\/index\.mjs(?:\?|[#]|$)/i);
+        if (!m) m = url.match(/\/scripts\/extensions\/(.+?)\/index\.js(?:\?|[#]|$)/i);
+        if (!m) m = url.match(/\/scripts\/extensions\/(.+?)\/[^/]+\.(?:js|mjs)(?:\?|[#]|$)/i);
+        if (m?.[1]) return m[1];
     } catch { /* 忽略 */ }
-    return 'third-party/bb-memory';
+    return 'third-party/BB-Memory';
+}
+
+/** 扩展设置面板容器有时延迟插入 DOM，需短暂重试（与官方示例挂载时机差异兼容）。 */
+function pickExtensionsSettingsContainer() {
+    return document.getElementById('extensions_settings2')
+        || document.getElementById('extensions_settings')
+        || document.querySelector('#extensionsPane #extensions_settings2')
+        || document.querySelector('#extensionsPane #extensions_settings');
+}
+
+async function mountExtensionSettingsHtml(html, maxAttempts = 50, delayMs = 100) {
+    for (let i = 0; i < maxAttempts; i++) {
+        const container = pickExtensionsSettingsContainer();
+        if (container) {
+            container.insertAdjacentHTML('beforeend', html);
+            return true;
+        }
+        await new Promise(r => setTimeout(r, delayMs));
+    }
+    console.error(`[${DISPLAY_NAME}] 未找到扩展设置容器 (#extensions_settings / #extensions_settings2)，无法在酒馆界面显示设置`);
+    return false;
+}
+
+/** 新版斜杠命令解析器可能传入字符串或片段数组，统一成单行文本。 */
+function normalizeSlashUnnamed(unnamedArgs) {
+    if (unnamedArgs == null) return '';
+    if (typeof unnamedArgs === 'string') return unnamedArgs.trim();
+    if (Array.isArray(unnamedArgs)) {
+        return unnamedArgs.map((part) => {
+            if (typeof part === 'string') return part;
+            if (part && typeof part === 'object' && 'value' in part) return String(part.value);
+            return String(part);
+        }).join(' ').trim();
+    }
+    return String(unnamedArgs).trim();
+}
+
+function isPopupAffirmative(ctx, result) {
+    const affirmative = ctx.POPUP_RESULT?.AFFIRMATIVE ?? 1;
+    return result === affirmative;
 }
 
 function getChatId() {
@@ -768,7 +823,7 @@ function bindManagerEvents(overlay, chatId) {
     overlay.querySelector('#bb_mgr_clear')?.addEventListener('click', async () => {
         const ctx = SillyTavern.getContext();
         const ok = await ctx.Popup.show.confirm('确认清空', '确定要删除所有记忆吗？此操作不可撤销。');
-        if (!ok) return;
+        if (!isPopupAffirmative(ctx, ok)) return;
         await clearMemories(chatId);
         toastr.info('所有记忆已清空', DISPLAY_NAME);
         await rerenderManagerList(overlay, chatId);
@@ -802,7 +857,7 @@ function rebindItemActions(overlay, chatId) {
             const id = btn.dataset.id;
             const ctx = SillyTavern.getContext();
             const ok = await ctx.Popup.show.confirm('确认删除', '确定要删除这条记忆吗？');
-            if (!ok) return;
+            if (!isPopupAffirmative(ctx, ok)) return;
             await removeMemory(chatId, id);
             toastr.info('记忆已删除', DISPLAY_NAME);
             await rerenderManagerList(overlay, chatId);
@@ -1017,9 +1072,9 @@ function rebindItemActions(overlay, chatId) {
 function registerSlashCommands() {
     const ctx = SillyTavern.getContext();
 
-    // /memory add <内容> — 快速添加记忆
-    ctx.registerSlashCommand('memory', async (namedArgs, unnamedArgs) => {
-        const subCommand = String(unnamedArgs).trim().split(/\s+/);
+    const memorySlashCallback = async (namedArgs, unnamedArgs) => {
+        const line = normalizeSlashUnnamed(unnamedArgs);
+        const subCommand = line.split(/\s+/).filter(Boolean);
         const action = subCommand[0];
         const content = subCommand.slice(1).join(' ');
 
@@ -1041,7 +1096,6 @@ function registerSlashCommands() {
                 return results.map((m, i) => `${i + 1}. [${m.type}] ${m.content}`).join('\n');
             }
             case 'count': {
-                const memories = await getMemories(chatId);
                 const stats = await getMemoryStats(chatId);
                 let info = `共 ${stats.total} 条记忆`;
                 for (const [type, count] of Object.entries(stats.byType)) {
@@ -1057,7 +1111,26 @@ function registerSlashCommands() {
             default:
                 return '可用命令: /memory add|search|count|clear\n示例: /memory add 角色喜欢喝咖啡';
         }
-    }, [], '管理BB-Memory记忆 (add/search/count/clear)', true, true);
+    };
+
+    // 优先使用官方推荐的 SlashCommandParser（与新版酒馆命令浏览器兼容）
+    try {
+        if (typeof ctx.SlashCommandParser?.addCommandObject === 'function' && typeof ctx.SlashCommand?.fromProps === 'function') {
+            ctx.SlashCommandParser.addCommandObject(ctx.SlashCommand.fromProps({
+                name: 'memory',
+                callback: memorySlashCallback,
+                aliases: [],
+                helpString: '管理 BB-Memory 记忆 (add/search/count/clear)。示例: /memory add 角色喜欢喝咖啡',
+            }));
+        } else if (typeof ctx.registerSlashCommand === 'function') {
+            ctx.registerSlashCommand('memory', memorySlashCallback, [], '管理BB-Memory记忆 (add/search/count/clear)');
+        }
+    } catch (err) {
+        console.warn(`[${DISPLAY_NAME}] SlashCommandParser 注册失败，尝试旧版 registerSlashCommand`, err);
+        if (typeof ctx.registerSlashCommand === 'function') {
+            ctx.registerSlashCommand('memory', memorySlashCallback, [], '管理BB-Memory记忆 (add/search/count/clear)');
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1174,13 +1247,10 @@ async function init() {
         console.error(`[${DISPLAY_NAME}] 数据迁移失败:`, err);
     }
 
-    // 加载侧边栏 HTML 模板
+    // 加载侧边栏 HTML 模板（目录键必须与 findExtension / 实际安装路径一致）
     try {
         const settingsHtml = await ctx.renderExtensionTemplateAsync(extensionFolder, 'settings');
-        const container = document.getElementById('extensions_settings2');
-        if (container) {
-            container.insertAdjacentHTML('beforeend', settingsHtml);
-        }
+        await mountExtensionSettingsHtml(settingsHtml);
     } catch (err) {
         console.error(`[${DISPLAY_NAME}] 加载设置模板失败:`, err);
     }
@@ -1214,9 +1284,12 @@ async function init() {
         console.warn(`[${DISPLAY_NAME}] 斜杠命令注册失败:`, err);
     }
 
-    // 监听 SillyTavern 事件
-    ctx.eventSource.on(ctx.event_types.CHAT_CHANGED, onChatChanged);
-    ctx.eventSource.on(ctx.event_types.MESSAGE_RECEIVED, onNewMessage);
+    // 监听 SillyTavern 事件（兼容 event_types / eventTypes 命名）
+    const ev = ctx.event_types ?? ctx.eventTypes;
+    if (ev && ctx.eventSource) {
+        ctx.eventSource.on(ev.CHAT_CHANGED, onChatChanged);
+        ctx.eventSource.on(ev.MESSAGE_RECEIVED, onNewMessage);
+    }
 
     // 首次刷新侧边栏
     refreshSidebar();
@@ -1229,21 +1302,20 @@ async function init() {
         return expandMemoriesForEntityKeyword(list, String(keyword), { limit });
     };
 
-    console.log(`[${DISPLAY_NAME}] v2.6 初始化完成`);
+    console.log(`[${DISPLAY_NAME}] v2.6.1 初始化完成`);
 }
 
 // ═══ 启动 ═══
 
 (function startup() {
     const ctx = SillyTavern.getContext();
+    const ev = ctx.event_types ?? ctx.eventTypes;
 
-    if (ctx.eventSource && ctx.event_types) {
-        ctx.eventSource.on(ctx.event_types.APP_READY, () => init());
+    if (ctx.eventSource && ev?.APP_READY) {
+        ctx.eventSource.on(ev.APP_READY, () => init());
+    } else if (document.getElementById('extensions_settings2') || document.getElementById('extensions_settings')) {
+        init();
     } else {
-        if (document.getElementById('extensions_settings2')) {
-            init();
-        } else {
-            window.addEventListener('load', () => init());
-        }
+        window.addEventListener('load', () => init());
     }
 })();
