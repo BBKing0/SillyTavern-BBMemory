@@ -1,9 +1,22 @@
-/* ═══ BB-Memory 样式 ═══ */
+/* ═══ BB-Memory v2.0 样式 ═══ */
 
-/* --- 侧边栏 --- */
+/* ═══════════════════════════════════════
+   侧边栏设置面板
+   ═══════════════════════════════════════ */
 
 .bb-memory-settings {
     font-size: 0.95em;
+}
+
+.bb-mem-section-title {
+    font-weight: bold;
+    font-size: 0.9em;
+    margin: 10px 0 6px;
+    opacity: 0.85;
+}
+
+.bb-mem-section-title i {
+    margin-right: 4px;
 }
 
 .bb-mem-sidebar-info {
@@ -42,7 +55,9 @@
     resize: vertical;
 }
 
-/* --- 记忆管理弹窗（遮罩层）--- */
+/* ═══════════════════════════════════════
+   记忆管理弹窗（遮罩层）
+   ═══════════════════════════════════════ */
 
 .bb-mem-overlay {
     position: fixed;
@@ -56,20 +71,17 @@
 }
 
 .bb-mem-popup {
-    background: var(--SmartThemeBodyColor, #2b2b2b);
-    color: var(--SmartThemeBodyColor, #e0e0e0);
     background: var(--SmartThemeChatTintColor, #1e1e2e);
+    color: var(--SmartThemeBodyColor, #e0e0e0);
     border: 1px solid var(--SmartThemeBorderColor, #444);
     border-radius: 12px;
     width: 90%;
-    max-width: 620px;
-    max-height: 80vh;
+    max-width: 700px;
+    max-height: 85vh;
     display: flex;
     flex-direction: column;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
 }
-
-/* --- 弹窗头部 --- */
 
 .bb-mem-popup-header {
     display: flex;
@@ -113,6 +125,28 @@
     white-space: nowrap;
 }
 
+/* --- 类型过滤按钮组 --- */
+
+.bb-mem-type-filters {
+    display: flex;
+    gap: 4px;
+    padding: 0 18px 8px;
+    flex-wrap: wrap;
+}
+
+.bb-mem-type-filter {
+    font-size: 0.78em !important;
+    padding: 3px 8px !important;
+    min-width: unset !important;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+}
+
+.bb-mem-type-filter.active {
+    opacity: 1;
+    border-color: var(--SmartThemeQuoteColor, #888);
+}
+
 /* --- 统计 --- */
 
 .bb-mem-stats {
@@ -154,6 +188,22 @@
     border-color: var(--SmartThemeQuoteColor, #888);
 }
 
+.bb-mem-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+}
+
+.bb-mem-item-type {
+    font-size: 0.8em;
+    font-weight: bold;
+}
+
+.bb-mem-item-type i {
+    margin-right: 3px;
+}
+
 .bb-mem-item-content {
     font-size: 0.92em;
     line-height: 1.5;
@@ -177,6 +227,23 @@
 
 .bb-mem-item-source {
     margin-right: 4px;
+}
+
+/* --- 记忆强度条 --- */
+
+.bb-mem-strength-bar {
+    width: 40px;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.1);
+    overflow: hidden;
+}
+
+.bb-mem-strength-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: linear-gradient(90deg, #f44336, #ff9800, #4caf50);
+    transition: width 0.3s;
 }
 
 /* --- 关键词标签 --- */
@@ -229,6 +296,410 @@
 
 .bb-mem-footer .menu_button {
     flex: 1;
+    font-size: 0.82em;
+    min-width: 70px;
+}
+
+/* ═══════════════════════════════════════
+   记忆管家（悬浮窗）
+   ═══════════════════════════════════════ */
+
+.bb-assistant-window {
+    position: fixed;
+    top: 60px;
+    right: 20px;
+    width: 420px;
+    max-height: 80vh;
+    z-index: 99998;
+    background: var(--SmartThemeChatTintColor, #1e1e2e);
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.bb-assistant-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    background: var(--SmartThemeBlurTintColor, rgba(255, 255, 255, 0.05));
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #444);
+    cursor: grab;
+    user-select: none;
+}
+
+.bb-assistant-title {
+    font-weight: bold;
+    font-size: 0.95em;
+}
+
+.bb-assistant-title i {
+    margin-right: 6px;
+    color: #ba68c8;
+}
+
+.bb-assistant-controls {
+    display: flex;
+    gap: 4px;
+}
+
+.bb-assistant-btn {
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    opacity: 0.7;
+    transition: opacity 0.2s, background 0.2s;
+}
+
+.bb-assistant-btn:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.bb-assistant-close:hover {
+    color: #f44336;
+}
+
+/* --- Tab 栏 --- */
+
+.bb-assistant-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #444);
+}
+
+.bb-assistant-tab {
+    flex: 1;
+    background: none;
+    border: none;
+    color: inherit;
+    padding: 8px 6px;
+    font-size: 0.8em;
+    cursor: pointer;
+    opacity: 0.5;
+    transition: opacity 0.2s, border-color 0.2s;
+    border-bottom: 2px solid transparent;
+}
+
+.bb-assistant-tab:hover {
+    opacity: 0.8;
+}
+
+.bb-assistant-tab.active {
+    opacity: 1;
+    border-bottom-color: #ba68c8;
+}
+
+.bb-assistant-tab i {
+    margin-right: 3px;
+}
+
+/* --- 面板内容 --- */
+
+.bb-assistant-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    max-height: 60vh;
+}
+
+.bb-assistant-panel {
+    animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* --- 仪表盘 --- */
+
+.bb-dash-summary {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.bb-dash-stat {
+    flex: 1;
+    text-align: center;
+    padding: 10px 6px;
+    border-radius: 8px;
+    background: var(--SmartThemeBlurTintColor, rgba(255, 255, 255, 0.05));
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+}
+
+.bb-dash-stat-value {
+    font-size: 1.4em;
+    font-weight: bold;
+    color: #4fc3f7;
+}
+
+.bb-dash-stat-label {
+    font-size: 0.75em;
+    opacity: 0.6;
+    margin-top: 2px;
+}
+
+.bb-dash-section-title {
     font-size: 0.85em;
-    min-width: 80px;
+    font-weight: bold;
+    opacity: 0.7;
+    margin: 12px 0 6px;
+}
+
+.bb-dash-type-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.bb-dash-type-card {
+    text-align: center;
+    padding: 8px 4px;
+    border-radius: 6px;
+    background: var(--SmartThemeBlurTintColor, rgba(255, 255, 255, 0.04));
+    border: 1px solid;
+    border-color: var(--SmartThemeBorderColor, #444);
+}
+
+.bb-dash-type-card i {
+    display: block;
+    font-size: 1.2em;
+    margin-bottom: 4px;
+}
+
+.bb-dash-type-count {
+    display: block;
+    font-size: 1.1em;
+    font-weight: bold;
+}
+
+.bb-dash-type-label {
+    display: block;
+    font-size: 0.72em;
+    opacity: 0.6;
+}
+
+.bb-dash-recent-item {
+    padding: 5px 8px;
+    margin: 3px 0;
+    border-radius: 4px;
+    font-size: 0.85em;
+    background: var(--SmartThemeBlurTintColor, rgba(255, 255, 255, 0.03));
+}
+
+.bb-dash-recent-item i {
+    margin-right: 6px;
+}
+
+/* --- 分类浏览 --- */
+
+.bb-browse-types {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.bb-browse-type-btn {
+    background: none;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 0.8em;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.bb-browse-type-btn:hover {
+    background: var(--SmartThemeBlurTintColor, rgba(255, 255, 255, 0.08));
+}
+
+.bb-browse-count {
+    font-size: 0.85em;
+    opacity: 0.6;
+    margin-left: 3px;
+}
+
+.bb-browse-search {
+    margin-bottom: 8px;
+}
+
+.bb-browse-list {
+    max-height: 40vh;
+    overflow-y: auto;
+}
+
+.bb-browse-item {
+    padding: 8px;
+    margin: 4px 0;
+    border-radius: 6px;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    background: var(--SmartThemeBlurTintColor, rgba(255, 255, 255, 0.03));
+}
+
+.bb-browse-item-header {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8em;
+    margin-bottom: 4px;
+}
+
+.bb-browse-item-date {
+    opacity: 0.5;
+    font-size: 0.9em;
+}
+
+.bb-browse-item-content {
+    font-size: 0.88em;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.bb-browse-item-tags {
+    margin-top: 4px;
+    display: flex;
+    gap: 3px;
+    flex-wrap: wrap;
+}
+
+/* --- 健康分析 --- */
+
+.bb-health-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.bb-health-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px;
+    border-radius: 8px;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+}
+
+.bb-health-card i {
+    font-size: 1.2em;
+    margin-top: 2px;
+}
+
+.bb-health-card strong {
+    display: block;
+    margin-bottom: 2px;
+    font-size: 0.9em;
+}
+
+.bb-health-card p {
+    margin: 0;
+    font-size: 0.8em;
+    opacity: 0.7;
+}
+
+.bb-health-ok {
+    border-color: #4caf50;
+}
+
+.bb-health-ok i {
+    color: #4caf50;
+}
+
+.bb-health-warning {
+    border-color: #ff9800;
+    background: rgba(255, 152, 0, 0.05);
+}
+
+.bb-health-warning i {
+    color: #ff9800;
+}
+
+.bb-health-info {
+    border-color: #2196f3;
+}
+
+.bb-health-info i {
+    color: #2196f3;
+}
+
+.bb-health-detail {
+    margin-top: 8px;
+}
+
+.bb-health-mem-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 8px;
+    margin: 3px 0;
+    border-radius: 4px;
+    font-size: 0.83em;
+    background: var(--SmartThemeBlurTintColor, rgba(255, 255, 255, 0.03));
+}
+
+.bb-health-strength {
+    font-size: 0.85em;
+    opacity: 0.6;
+    white-space: nowrap;
+}
+
+/* --- 批量操作 --- */
+
+.bb-batch-tools {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+}
+
+.bb-batch-tools .menu_button {
+    font-size: 0.78em;
+    padding: 4px 8px;
+}
+
+.bb-batch-list {
+    max-height: 45vh;
+    overflow-y: auto;
+}
+
+.bb-batch-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    margin: 2px 0;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s;
+    font-size: 0.85em;
+}
+
+.bb-batch-item:hover {
+    background: var(--SmartThemeBlurTintColor, rgba(255, 255, 255, 0.06));
+}
+
+.bb-batch-checkbox {
+    flex-shrink: 0;
+}
+
+.bb-batch-content {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.bb-batch-strength {
+    font-size: 0.85em;
+    opacity: 0.5;
+    white-space: nowrap;
 }

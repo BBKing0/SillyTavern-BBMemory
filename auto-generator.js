@@ -1,0 +1,348 @@
+/**
+ * auto-generator.js —— BB-Memory 的"自动速记员"
+ *
+ * ═══════════════════════════════════════════════════════════
+ *  代码小课堂
+ * ═══════════════════════════════════════════════════════════
+ *
+ * 这个文件是什么？
+ *   想象有一个助手坐在你旁边，每当你和角色对话完，
+ *   它就自动帮你把重要的内容记到笔记本上。
+ *   这就是"AI 自动生成记忆"的功能。
+ *
+ * 用了哪些编程概念？
+ *   - 事件监听(Event Listener)：当AI回复消息时触发
+ *   - fetch/API调用：向AI服务发送请求
+ *   - JSON解析：把AI返回的文字解析成结构化数据
+ *   - try/catch：处理可能出错的情况（网络问题等）
+ *   - 防抖(debounce)：避免太频繁地调用API
+ *
+ * 工作流程：
+ *   1. 监听 AI 回复事件（MESSAGE_RECEIVED）
+ *   2. 收集当前楼层的用户消息 + AI回复
+ *   3. 调用 AI（主API的quiet模式 或 自定义API）
+ *   4. AI 返回结构化的记忆条目（JSON格式）
+ *   5. 解析并存入记忆库
+ *
+ * ═══════════════════════════════════════════════════════════
+ */
+
+import { getSettings, addMemory } from './memory-store.js';
+
+// ═══ 默认提示词模板 ═══
+
+const DEFAULT_EXTRACTION_PROMPT = `你是一个记忆提取助手。请根据以下对话内容，提取值得长期记忆的关键信息。
+
+规则：
+1. 只提取重要的、值得记住的信息，不要记录日常寒暄
+2. 每条记忆应简洁明了（一两句话）
+3. 正确分类每条记忆的类型
+4. 如果没有值得记忆的内容，返回空数组 []
+
+以纯JSON数组格式返回（不要包含markdown代码块标记），每条包含：
+- type: "event"|"timeline"|"item"|"npc"|"relationship"|"location"
+- content: 记忆内容（简洁描述）
+- tags: 相关标签数组（2-5个关键词）
+- importance: 重要性(0-1，0.5为普通，0.8以上为重要)
+- emotionalValence: 情感倾向(-1到1，负数消极，正数积极，0中性)
+
+[当前对话]
+用户: {{userMessage}}
+角色: {{aiMessage}}`;
+
+// ═══ 状态管理 ═══
+
+let isProcessing = false;
+let pendingMessages = [];
+let processingTimer = null;
+
+// ═══ 核心函数 ═══
+
+/**
+ * 获取当前使用的提示词模板
+ */
+function getExtractionPrompt() {
+    const settings = getSettings();
+    return settings.autoGenPrompt || DEFAULT_EXTRACTION_PROMPT;
+}
+
+/**
+ * 构建完整的提取提示词
+ */
+function buildPrompt(userMessage, aiMessage) {
+    const template = getExtractionPrompt();
+    return template
+        .replace('{{userMessage}}', userMessage || '(无)')
+        .replace('{{aiMessage}}', aiMessage || '(无)');
+}
+
+/**
+ * 通过主 API 的 generateRaw 调用（推荐方式）
+ * 使用 SillyTavern 当前配置的 API，以 raw 模式生成
+ */
+async function callMainApi(prompt) {
+    const { generateRaw } = SillyTavern.getContext();
+
+    const result = await generateRaw({
+        systemPrompt: '你是一个JSON格式的记忆提取助手。只输出纯JSON数组，不要包含其他文字。',
+        prompt: prompt,
+    });
+
+    return result;
+}
+
+/**
+ * 通过自定义 API 端点调用（备用方式）
+ * 支持 OpenAI 兼容格式
+ */
+async function callCustomApi(prompt) {
+    const settings = getSettings();
+    const { autoGenEndpoint, autoGenApiKey, autoGenModel } = settings;
+
+    if (!autoGenEndpoint) {
+        throw new Error('未配置自定义API端点');
+    }
+
+    const response = await fetch(autoGenEndpoint, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${autoGenApiKey}`,
+        },
+        body: JSON.stringify({
+            model: autoGenModel || 'gpt-3.5-turbo',
+            messages: [
+                {
+                    role: 'system',
+                    content: '你是一个JSON格式的记忆提取助手。只输出纯JSON数组，不要包含其他文字。',
+                },
+                {
+                    role: 'user',
+                    content: prompt,
+                },
+            ],
+            temperature: 0.3,
+            max_tokens: 1000,
+        }),
+    });
+
+    if (!response.ok) {
+        throw new Error(`API 请求失败: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+
+    // 兼容 OpenAI 格式
+    if (data.choices && data.choices[0]) {
+        return data.choices[0].message?.content || data.choices[0].text || '';
+    }
+
+    return data.content || data.text || JSON.stringify(data);
+}
+
+/**
+ * 解析 AI 返回的 JSON 文本为记忆条目数组
+ */
+function parseAiResponse(responseText) {
+    if (!responseText || !responseText.trim()) return [];
+
+    let text = responseText.trim();
+
+    // 移除可能的 markdown 代码块标记
+    text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+
+    // 尝试提取 JSON 数组
+    const arrayMatch = text.match(/\[[\s\S]*\]/);
+    if (arrayMatch) {
+        text = arrayMatch[0];
+    }
+
+    try {
+        const parsed = JSON.parse(text);
+        if (!Array.isArray(parsed)) return [];
+
+        // 验证和规范化每条记忆
+        return parsed
+            .filter(item => item && item.content && typeof item.content === 'string')
+            .map(item => ({
+                type: ['event', 'timeline', 'item', 'npc', 'location', 'relationship'].includes(item.type)
+                    ? item.type
+                    : 'event',
+                content: item.content.trim(),
+                tags: Array.isArray(item.tags)
+                    ? item.tags.map(t => ({ name: String(t), weight: 0.6 }))
+                    : [],
+                importance: typeof item.importance === 'number'
+                    ? Math.max(0, Math.min(1, item.importance))
+                    : 0.5,
+                emotionalValence: typeof item.emotionalValence === 'number'
+                    ? Math.max(-1, Math.min(1, item.emotionalValence))
+                    : 0.0,
+            }));
+    } catch (e) {
+        console.warn('[BB-Memory] AI 返回内容解析失败:', e.message, text.slice(0, 200));
+        return [];
+    }
+}
+
+/**
+ * 处理一轮对话，提取记忆
+ */
+async function processConversation(chatId, userMessage, aiMessage) {
+    if (isProcessing) {
+        pendingMessages.push({ chatId, userMessage, aiMessage });
+        return;
+    }
+
+    isProcessing = true;
+
+    try {
+        const settings = getSettings();
+        const prompt = buildPrompt(userMessage, aiMessage);
+
+        let responseText;
+
+        if (settings.autoGenMode === 'custom' && settings.autoGenEndpoint) {
+            responseText = await callCustomApi(prompt);
+        } else {
+            responseText = await callMainApi(prompt);
+        }
+
+        const memories = parseAiResponse(responseText);
+
+        if (memories.length > 0) {
+            let addedCount = 0;
+            for (const mem of memories) {
+                await addMemory(chatId, mem.content, mem.type, 'auto', {
+                    tags: mem.tags,
+                    importance: mem.importance,
+                    emotionalValence: mem.emotionalValence,
+                });
+                addedCount++;
+            }
+
+            console.log(`[BB-Memory] AI 自动生成了 ${addedCount} 条记忆`);
+
+            if (typeof toastr !== 'undefined') {
+                toastr.info(`自动记录了 ${addedCount} 条新记忆`, 'BB-Memory', {
+                    timeOut: 3000,
+                    preventDuplicates: true,
+                });
+            }
+        }
+    } catch (error) {
+        console.error('[BB-Memory] AI 自动生成记忆失败:', error);
+    } finally {
+        isProcessing = false;
+
+        // 处理等待队列中的下一条
+        if (pendingMessages.length > 0) {
+            const next = pendingMessages.shift();
+            setTimeout(() => processConversation(next.chatId, next.userMessage, next.aiMessage), 1000);
+        }
+    }
+}
+
+// ═══ 事件处理 ═══
+
+/**
+ * MESSAGE_RECEIVED 事件处理函数
+ * 当 AI 生成新回复时触发
+ */
+function onMessageReceived(messageIndex) {
+    const settings = getSettings();
+    if (!settings.enabled || !settings.autoGenEnabled) return;
+
+    const ctx = SillyTavern.getContext();
+    const chat = ctx.chat;
+    if (!chat || !chat.length) return;
+
+    const chatId = getChatId();
+    if (!chatId) return;
+
+    // 获取 AI 回复（当前消息）
+    const aiMsg = chat[messageIndex];
+    if (!aiMsg || aiMsg.is_user) return;
+    const aiMessage = aiMsg.mes || '';
+
+    // 获取最后一条用户消息
+    let userMessage = '';
+    for (let i = messageIndex - 1; i >= 0; i--) {
+        if (chat[i].is_user && chat[i].mes) {
+            userMessage = chat[i].mes;
+            break;
+        }
+    }
+
+    // 延迟处理，避免与生成过程冲突
+    if (processingTimer) clearTimeout(processingTimer);
+    processingTimer = setTimeout(() => {
+        processConversation(chatId, userMessage, aiMessage);
+    }, 2000);
+}
+
+/**
+ * 获取当前聊天 ID（与 index.js 共用逻辑）
+ */
+function getChatId() {
+    try {
+        const ctx = SillyTavern.getContext();
+        if (ctx.chatId) return String(ctx.chatId);
+        if (ctx.characters && ctx.characterId !== undefined) {
+            const char = ctx.characters[ctx.characterId];
+            if (char?.chat) return String(char.chat);
+        }
+    } catch { /* 忽略 */ }
+    return null;
+}
+
+// ═══ 初始化与清理 ═══
+
+let eventBound = false;
+
+/**
+ * 初始化自动生成模块
+ * 注册 MESSAGE_RECEIVED 事件监听
+ */
+export function initAutoGenerator() {
+    if (eventBound) return;
+
+    const ctx = SillyTavern.getContext();
+    ctx.eventSource.on(ctx.event_types.MESSAGE_RECEIVED, onMessageReceived);
+    eventBound = true;
+
+    console.log('[BB-Memory] AI 自动生成模块已初始化');
+}
+
+/**
+ * 停止自动生成（用于禁用时）
+ */
+export function stopAutoGenerator() {
+    if (!eventBound) return;
+
+    try {
+        const ctx = SillyTavern.getContext();
+        ctx.eventSource.removeListener(ctx.event_types.MESSAGE_RECEIVED, onMessageReceived);
+    } catch { /* 忽略 */ }
+
+    eventBound = false;
+    pendingMessages = [];
+    if (processingTimer) {
+        clearTimeout(processingTimer);
+        processingTimer = null;
+    }
+}
+
+/**
+ * 手动触发一次记忆提取（用于管理面板的"一键分析"）
+ */
+export async function manualExtract(chatId, userMessage, aiMessage) {
+    return processConversation(chatId, userMessage, aiMessage);
+}
+
+/**
+ * 获取默认提示词（用于设置面板显示）
+ */
+export function getDefaultPrompt() {
+    return DEFAULT_EXTRACTION_PROMPT;
+}

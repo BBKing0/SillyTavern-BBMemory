@@ -1,14 +1,28 @@
 /**
- * index.js —— BB-Memory 的"大脑"（主入口）
+ * index.js —— BB-Memory 的"大脑"（主入口 & 总指挥）
  *
- * 职责：
- *   1. 初始化扩展（加载设置、渲染侧边栏 UI）
- *   2. 监听 SillyTavern 事件（如切换聊天）
- *   3. 在生成文本前，检索相关记忆并注入到 prompt
- *   4. 处理用户操作（添加、删除、搜索记忆）
+ * ═══════════════════════════════════════════════════════════
+ *  代码小课堂
+ * ═══════════════════════════════════════════════════════════
  *
- * 所有与 SillyTavern 的交互都通过 SillyTavern.getContext() 完成，
- * 这是官方推荐的稳定 API。
+ * 这个文件是什么？
+ *   这是整个插件的"总指挥"。就像交响乐团的指挥家，
+ *   它不亲自演奏每个乐器，但负责协调所有人一起工作。
+ *
+ * 它做了什么？
+ *   1. 启动时初始化所有模块（记忆库、AI生成器、助手面板等）
+ *   2. 在 AI 生成回复前，检索相关记忆并注入到 prompt
+ *   3. 处理用户在界面上的操作（添加、管理记忆等）
+ *   4. 注册 /memory 斜杠命令，让用户在聊天框直接操作
+ *
+ * 用了哪些编程概念？
+ *   - import/export：模块化，不同文件各司其职
+ *   - async/await：等待异步操作完成
+ *   - 事件监听：响应"聊天切换""消息接收"等事件
+ *   - generate_interceptor：SillyTavern 的钩子，在生成前介入
+ *   - DOM操作：动态修改页面内容
+ *
+ * ═══════════════════════════════════════════════════════════
  */
 
 import {
@@ -23,9 +37,15 @@ import {
     clearMemories,
     exportMemories,
     importMemories,
+    decayMemories,
+    reinforceMemories,
+    migrateFromSettings,
+    getMemoryStats,
 } from './memory-store.js';
 
-import { searchMemories } from './retriever.js';
+import { searchMemories, simpleSearch } from './retriever.js';
+import { MEMORY_TYPES, formatMemoriesForInjection, getTypeDefinition } from './memory-types.js';
+import { initAutoGenerator, stopAutoGenerator } from './auto-generator.js';
 
 // ═══════════════════════════════════════════════════════════
 //  常量
@@ -34,20 +54,13 @@ import { searchMemories } from './retriever.js';
 const DISPLAY_NAME = 'BB-Memory';
 const INJECTION_KEY = 'bb_memory_injection';
 
-// setExtensionPrompt 需要的位置和角色常量
-// 这些值来自 SillyTavern 的 extension_prompt_types / extension_prompt_roles
-// 我们在本地定义，避免直接 import SillyTavern 内部文件
-const POSITION_IN_CHAT = 1;  // 插入到聊天历史中
-const ROLE_SYSTEM = 0;       // 作为系统消息
+const POSITION_IN_CHAT = 1;
+const ROLE_SYSTEM = 0;
 
 // ═══════════════════════════════════════════════════════════
 //  辅助函数
 // ═══════════════════════════════════════════════════════════
 
-/**
- * 自动检测当前扩展的文件夹路径。
- * renderExtensionTemplateAsync 需要知道 HTML 模板在哪个文件夹。
- */
 function getExtensionFolder() {
     try {
         const url = import.meta.url;
@@ -57,10 +70,6 @@ function getExtensionFolder() {
     return 'third-party/bb-memory';
 }
 
-/**
- * 获取当前聊天的唯一标识符。
- * SillyTavern 为每个聊天分配一个 chatId。
- */
 function getChatId() {
     try {
         const ctx = SillyTavern.getContext();
@@ -73,9 +82,6 @@ function getChatId() {
     return null;
 }
 
-/**
- * 获取最近 N 条用户消息文本（用于搜索上下文）。
- */
 function getLastUserMessage(chat) {
     if (!chat || !chat.length) return '';
     for (let i = chat.length - 1; i >= 0; i--) {
@@ -86,26 +92,16 @@ function getLastUserMessage(chat) {
     return '';
 }
 
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 // ═══════════════════════════════════════════════════════════
 //  生成拦截器（核心功能）
 // ═══════════════════════════════════════════════════════════
 
-/**
- * generate_interceptor：SillyTavern 在每次生成文本前会调用此函数。
- *
- * 我们在这里做以下事情：
- *   1. 读取用户最新的消息
- *   2. 在记忆库中搜索相关记忆
- *   3. 把找到的记忆格式化后注入到 prompt 中
- *
- * 这个函数必须注册到全局作用域（globalThis），
- * 并在 manifest.json 的 generate_interceptor 字段中声明。
- *
- * @param {Array} chat - 当前聊天记录数组
- * @param {number} contextSize - 上下文窗口大小
- * @param {Function} abort - 调用它可以中止生成
- * @param {string} type - 生成类型（'normal', 'quiet', 'swipe' 等）
- */
 globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type) {
     if (type === 'quiet') return;
 
@@ -121,29 +117,40 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     const userMessage = getLastUserMessage(chat);
     if (!userMessage) return;
 
-    const memories = getMemories(chatId);
+    const memories = await getMemories(chatId);
     if (!memories.length) {
         clearInjection();
         return;
     }
 
-    const results = searchMemories(
-        memories,
-        userMessage,
-        settings.maxResults || DEFAULT_SETTINGS.maxResults,
-    );
+    // 触发记忆衰减（每隔N条消息）
+    settings.messageCountSinceDecay = (settings.messageCountSinceDecay || 0) + 1;
+    if (settings.messageCountSinceDecay >= (settings.decayInterval || 10)) {
+        settings.messageCountSinceDecay = 0;
+        updateSettings({ messageCountSinceDecay: 0 });
+        decayMemories(chatId);
+    }
+
+    // 智能检索相关记忆
+    const results = searchMemories(memories, userMessage, {
+        maxResults: settings.maxResults || DEFAULT_SETTINGS.maxResults,
+        minStrength: settings.minStrength || 0,
+    });
 
     if (!results.length) {
         clearInjection();
         return;
     }
 
-    const memoryLines = results
-        .map((m, i) => `${i + 1}. ${m.content}`)
-        .join('\n');
+    // 巩固被检索到的记忆
+    const resultIds = results.map(m => m.id);
+    reinforceMemories(chatId, resultIds);
+
+    // 按类型格式化注入文本
+    const formattedMemories = formatMemoriesForInjection(results, settings.typeEnabled);
 
     const template = settings.injectionTemplate || DEFAULT_SETTINGS.injectionTemplate;
-    const injectionText = template.replace('{{memories}}', memoryLines);
+    const injectionText = template.replace('{{memories}}', formattedMemories);
 
     const ctx = SillyTavern.getContext();
     ctx.setExtensionPrompt(
@@ -169,9 +176,9 @@ function clearInjection() {
 //  侧边栏 UI 交互
 // ═══════════════════════════════════════════════════════════
 
-function refreshSidebar() {
+async function refreshSidebar() {
     const chatId = getChatId();
-    const memories = chatId ? getMemories(chatId) : [];
+    const memories = chatId ? await getMemories(chatId) : [];
 
     const countEl = document.getElementById('bb_memory_count');
     if (countEl) countEl.textContent = String(memories.length);
@@ -184,31 +191,67 @@ function refreshSidebar() {
 
     const maxEl = document.getElementById('bb_memory_max_results');
     if (maxEl) maxEl.value = String(getSettings().maxResults ?? DEFAULT_SETTINGS.maxResults);
+
+    const autoGenEl = document.getElementById('bb_memory_auto_gen');
+    if (autoGenEl) autoGenEl.checked = getSettings().autoGenEnabled;
 }
 
 function bindSidebarEvents() {
-    // 启用/禁用开关
     document.getElementById('bb_memory_enabled')?.addEventListener('change', (e) => {
         updateSettings({ enabled: e.target.checked });
         if (!e.target.checked) clearInjection();
-        console.log(`[${DISPLAY_NAME}] ${e.target.checked ? '已启用' : '已禁用'}`);
     });
 
-    // 注入深度
     document.getElementById('bb_memory_depth')?.addEventListener('change', (e) => {
         const val = parseInt(e.target.value, 10);
         if (!isNaN(val) && val >= 0) updateSettings({ injectionDepth: val });
     });
 
-    // 最大检索数
     document.getElementById('bb_memory_max_results')?.addEventListener('change', (e) => {
         const val = parseInt(e.target.value, 10);
         if (!isNaN(val) && val >= 1) updateSettings({ maxResults: val });
     });
 
-    // 注入模板
     document.getElementById('bb_memory_template')?.addEventListener('change', (e) => {
         updateSettings({ injectionTemplate: e.target.value });
+    });
+
+    document.getElementById('bb_memory_auto_gen')?.addEventListener('change', (e) => {
+        updateSettings({ autoGenEnabled: e.target.checked });
+        if (e.target.checked) {
+            initAutoGenerator();
+        } else {
+            stopAutoGenerator();
+        }
+    });
+
+    // 副API模式切换
+    document.getElementById('bb_memory_api_mode')?.addEventListener('change', (e) => {
+        updateSettings({ autoGenMode: e.target.value });
+        const customSection = document.getElementById('bb_memory_custom_api_section');
+        if (customSection) {
+            customSection.style.display = e.target.value === 'custom' ? 'block' : 'none';
+        }
+    });
+
+    // 自定义API设置
+    document.getElementById('bb_memory_api_endpoint')?.addEventListener('change', (e) => {
+        updateSettings({ autoGenEndpoint: e.target.value.trim() });
+    });
+    document.getElementById('bb_memory_api_key')?.addEventListener('change', (e) => {
+        updateSettings({ autoGenApiKey: e.target.value.trim() });
+    });
+    document.getElementById('bb_memory_api_model')?.addEventListener('change', (e) => {
+        updateSettings({ autoGenModel: e.target.value.trim() });
+    });
+
+    // 衰减设置
+    document.getElementById('bb_memory_decay_enabled')?.addEventListener('change', (e) => {
+        updateSettings({ decayEnabled: e.target.checked });
+    });
+    document.getElementById('bb_memory_decay_rate')?.addEventListener('change', (e) => {
+        const val = parseFloat(e.target.value);
+        if (!isNaN(val) && val > 0 && val < 1) updateSettings({ decayRate: val });
     });
 
     // 快速添加记忆按钮
@@ -216,9 +259,14 @@ function bindSidebarEvents() {
         handleAddMemory();
     });
 
-    // 打开记忆管理面板
+    // 打开记忆管理助手
     document.getElementById('bb_memory_manage_btn')?.addEventListener('click', () => {
         openMemoryManager();
+    });
+
+    // 世界书导入按钮
+    document.getElementById('bb_memory_import_wb_btn')?.addEventListener('click', () => {
+        handleWorldBookImport();
     });
 }
 
@@ -233,16 +281,50 @@ async function handleAddMemory() {
         return;
     }
 
-    const content = await showInputPopup('添加新记忆', '输入你想让角色记住的内容：');
+    const ctx = SillyTavern.getContext();
+    const content = await ctx.Popup.show.input('添加新记忆', '输入你想让角色记住的内容：');
     if (!content) return;
 
-    addMemory(chatId, content, 'manual');
+    await addMemory(chatId, content, 'event', 'manual');
     toastr.success('记忆已添加', DISPLAY_NAME);
     refreshSidebar();
 }
 
 // ═══════════════════════════════════════════════════════════
-//  记忆管理弹窗（完整的 CRUD 界面）
+//  世界书导入
+// ═══════════════════════════════════════════════════════════
+
+async function handleWorldBookImport() {
+    const chatId = getChatId();
+    if (!chatId) {
+        toastr.warning('请先选择一个角色并开始聊天', DISPLAY_NAME);
+        return;
+    }
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = async (ev) => {
+            try {
+                const { importWorldBook } = await import('./world-book-importer.js');
+                const count = await importWorldBook(chatId, ev.target.result);
+                toastr.success(`成功从世界书导入 ${count} 条记忆`, DISPLAY_NAME);
+                refreshSidebar();
+            } catch (err) {
+                toastr.error(`世界书导入失败：${err.message}`, DISPLAY_NAME);
+            }
+        };
+        reader.readAsText(file);
+    });
+    input.click();
+}
+
+// ═══════════════════════════════════════════════════════════
+//  记忆管理弹窗
 // ═══════════════════════════════════════════════════════════
 
 async function openMemoryManager() {
@@ -252,7 +334,7 @@ async function openMemoryManager() {
         return;
     }
 
-    const memories = getMemories(chatId);
+    const memories = await getMemories(chatId);
 
     const overlay = document.createElement('div');
     overlay.className = 'bb-mem-overlay';
@@ -267,6 +349,12 @@ function buildManagerHTML(memories, chatId) {
         ? memories.map(m => buildMemoryItemHTML(m)).join('')
         : '<div class="bb-mem-empty">暂无记忆，点击上方按钮添加第一条记忆吧</div>';
 
+    const typeFilterHTML = Object.values(MEMORY_TYPES).map(t =>
+        `<button class="menu_button bb-mem-type-filter" data-type="${t.id}" title="${t.description}">
+            <i class="${t.icon}"></i> ${t.label}
+        </button>`
+    ).join('');
+
     return `
         <div class="bb-mem-popup">
             <div class="bb-mem-popup-header">
@@ -280,6 +368,13 @@ function buildManagerHTML(memories, chatId) {
                 <button class="menu_button bb-mem-toolbar-btn" id="bb_mgr_add">
                     <i class="fa-solid fa-plus"></i> 添加
                 </button>
+            </div>
+
+            <div class="bb-mem-type-filters">
+                <button class="menu_button bb-mem-type-filter active" data-type="all">
+                    <i class="fa-solid fa-layer-group"></i> 全部
+                </button>
+                ${typeFilterHTML}
             </div>
 
             <div class="bb-mem-stats">
@@ -297,9 +392,11 @@ function buildManagerHTML(memories, chatId) {
                 <button class="menu_button" id="bb_mgr_import" title="从文件导入记忆">
                     <i class="fa-solid fa-upload"></i> 导入
                 </button>
-                <button class="menu_button menu_button_danger" id="bb_mgr_clear"
-                        title="清空所有记忆">
-                    <i class="fa-solid fa-trash"></i> 清空全部
+                <button class="menu_button" id="bb_mgr_import_wb" title="从世界书导入">
+                    <i class="fa-solid fa-book-atlas"></i> 世界书
+                </button>
+                <button class="menu_button menu_button_danger" id="bb_mgr_clear" title="清空所有记忆">
+                    <i class="fa-solid fa-trash"></i> 清空
                 </button>
             </div>
         </div>
@@ -308,23 +405,34 @@ function buildManagerHTML(memories, chatId) {
 
 function buildMemoryItemHTML(m) {
     const date = new Date(m.createdAt).toLocaleString('zh-CN');
-    const source = m.source === 'manual' ? '手动' : m.source === 'import' ? '导入' : m.source;
-    const keywordsHTML = (m.keywords || [])
-        .slice(0, 8)
-        .map(k => `<span class="bb-mem-tag">${escapeHtml(k)}</span>`)
+    const typeDef = getTypeDefinition(m.type || 'event');
+    const sourceLabel = { manual: '手动', auto: 'AI', import: '导入', worldbook: '世界书' }[m.source] || m.source;
+
+    const tagsHTML = (m.tags || [])
+        .slice(0, 6)
+        .map(t => `<span class="bb-mem-tag">${escapeHtml(typeof t === 'string' ? t : t.name)}</span>`)
         .join('');
 
+    const strengthBar = `<div class="bb-mem-strength-bar">
+        <div class="bb-mem-strength-fill" style="width: ${((m.strength || 1) * 100).toFixed(0)}%"></div>
+    </div>`;
+
     return `
-        <div class="bb-mem-item" data-id="${m.id}">
+        <div class="bb-mem-item" data-id="${m.id}" data-type="${m.type || 'event'}">
+            <div class="bb-mem-item-header">
+                <span class="bb-mem-item-type" style="color: ${typeDef.color}">
+                    <i class="${typeDef.icon}"></i> ${typeDef.label}
+                </span>
+                ${strengthBar}
+            </div>
             <div class="bb-mem-item-content">${escapeHtml(m.content)}</div>
             <div class="bb-mem-item-meta">
                 <span class="bb-mem-item-date">${date}</span>
-                <span class="bb-mem-item-source">${source}</span>
-                ${keywordsHTML}
+                <span class="bb-mem-item-source">${sourceLabel}</span>
+                ${tagsHTML}
             </div>
             <div class="bb-mem-item-actions">
-                <button class="menu_button bb-mem-btn-sm bb-mem-edit" data-id="${m.id}"
-                        title="编辑">
+                <button class="menu_button bb-mem-btn-sm bb-mem-edit" data-id="${m.id}" title="编辑">
                     <i class="fa-solid fa-pen"></i>
                 </button>
                 <button class="menu_button bb-mem-btn-sm bb-mem-delete menu_button_danger"
@@ -337,13 +445,11 @@ function buildMemoryItemHTML(m) {
 }
 
 function bindManagerEvents(overlay, chatId) {
-    // 关闭按钮
     overlay.querySelector('.bb-mem-close')?.addEventListener('click', () => {
         overlay.remove();
         refreshSidebar();
     });
 
-    // 点击遮罩层关闭
     overlay.addEventListener('click', (e) => {
         if (e.target === overlay) {
             overlay.remove();
@@ -351,38 +457,46 @@ function bindManagerEvents(overlay, chatId) {
         }
     });
 
+    // 类型过滤
+    overlay.querySelectorAll('.bb-mem-type-filter').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            overlay.querySelectorAll('.bb-mem-type-filter').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+
+            const type = btn.dataset.type;
+            const memories = await getMemories(chatId);
+            const filtered = type === 'all' ? memories : memories.filter(m => m.type === type);
+            renderMemoryList(overlay, filtered, chatId);
+        });
+    });
+
     // 添加记忆
     overlay.querySelector('#bb_mgr_add')?.addEventListener('click', async () => {
-        const content = await showInputPopup('添加新记忆', '输入记忆内容：');
+        const ctx = SillyTavern.getContext();
+        const content = await ctx.Popup.show.input('添加新记忆', '输入记忆内容：');
         if (!content) return;
-        addMemory(chatId, content, 'manual');
+        await addMemory(chatId, content, 'event', 'manual');
         toastr.success('记忆已添加', DISPLAY_NAME);
-        rerenderManagerList(overlay, chatId);
+        await rerenderManagerList(overlay, chatId);
     });
 
     // 搜索
-    overlay.querySelector('#bb_mgr_search')?.addEventListener('input', (e) => {
+    overlay.querySelector('#bb_mgr_search')?.addEventListener('input', async (e) => {
         const query = e.target.value.trim();
-        const memories = getMemories(chatId);
+        const memories = await getMemories(chatId);
 
         if (!query) {
-            rerenderManagerList(overlay, chatId);
+            renderMemoryList(overlay, memories, chatId);
             return;
         }
 
-        const results = searchMemories(memories, query, 100);
-        const listEl = overlay.querySelector('#bb_mgr_list');
-        if (listEl) {
-            listEl.innerHTML = results.length
-                ? results.map(m => buildMemoryItemHTML(m)).join('')
-                : '<div class="bb-mem-empty">未找到匹配的记忆</div>';
-        }
-        rebindItemActions(overlay, chatId);
+        const results = simpleSearch(memories, query, 100);
+        renderMemoryList(overlay, results, chatId);
     });
 
     // 导出
-    overlay.querySelector('#bb_mgr_export')?.addEventListener('click', () => {
-        const json = exportMemories(chatId);
+    overlay.querySelector('#bb_mgr_export')?.addEventListener('click', async () => {
+        const json = await exportMemories(chatId);
         const blob = new Blob([json], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -402,11 +516,11 @@ function bindManagerEvents(overlay, chatId) {
             const file = e.target.files?.[0];
             if (!file) return;
             const reader = new FileReader();
-            reader.onload = (ev) => {
+            reader.onload = async (ev) => {
                 try {
-                    const count = importMemories(chatId, ev.target.result);
+                    const count = await importMemories(chatId, ev.target.result);
                     toastr.success(`成功导入 ${count} 条记忆`, DISPLAY_NAME);
-                    rerenderManagerList(overlay, chatId);
+                    await rerenderManagerList(overlay, chatId);
                 } catch (err) {
                     toastr.error(`导入失败：${err.message}`, DISPLAY_NAME);
                 }
@@ -416,110 +530,141 @@ function bindManagerEvents(overlay, chatId) {
         input.click();
     });
 
+    // 世界书导入
+    overlay.querySelector('#bb_mgr_import_wb')?.addEventListener('click', async () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json';
+        input.addEventListener('change', (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = async (ev) => {
+                try {
+                    const { importWorldBook } = await import('./world-book-importer.js');
+                    const count = await importWorldBook(chatId, ev.target.result);
+                    toastr.success(`成功从世界书导入 ${count} 条记忆`, DISPLAY_NAME);
+                    await rerenderManagerList(overlay, chatId);
+                } catch (err) {
+                    toastr.error(`世界书导入失败：${err.message}`, DISPLAY_NAME);
+                }
+            };
+            reader.readAsText(file);
+        });
+        input.click();
+    });
+
     // 清空全部
     overlay.querySelector('#bb_mgr_clear')?.addEventListener('click', async () => {
-        const ok = await showConfirmPopup('确认清空', '确定要删除所有记忆吗？此操作不可撤销。');
+        const ctx = SillyTavern.getContext();
+        const ok = await ctx.Popup.show.confirm('确认清空', '确定要删除所有记忆吗？此操作不可撤销。');
         if (!ok) return;
-        clearMemories(chatId);
+        await clearMemories(chatId);
         toastr.info('所有记忆已清空', DISPLAY_NAME);
-        rerenderManagerList(overlay, chatId);
+        await rerenderManagerList(overlay, chatId);
     });
 
     rebindItemActions(overlay, chatId);
 }
 
-function rebindItemActions(overlay, chatId) {
-    // 删除按钮（使用事件委托）
-    overlay.querySelectorAll('.bb-mem-delete').forEach(btn => {
-        btn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            const id = btn.dataset.id;
-            const ok = await showConfirmPopup('确认删除', '确定要删除这条记忆吗？');
-            if (!ok) return;
-            removeMemory(chatId, id);
-            toastr.info('记忆已删除', DISPLAY_NAME);
-            rerenderManagerList(overlay, chatId);
-        });
-    });
-
-    // 编辑按钮
-    overlay.querySelectorAll('.bb-mem-edit').forEach(btn => {
-        btn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            const id = btn.dataset.id;
-            const memories = getMemories(chatId);
-            const memory = memories.find(m => m.id === id);
-            if (!memory) return;
-
-            const newContent = await showInputPopup('编辑记忆', '修改记忆内容：', memory.content);
-            if (!newContent || newContent === memory.content) return;
-
-            updateMemory(chatId, id, newContent);
-            toastr.success('记忆已更新', DISPLAY_NAME);
-            rerenderManagerList(overlay, chatId);
-        });
-    });
-}
-
-function rerenderManagerList(overlay, chatId) {
-    const memories = getMemories(chatId);
+function renderMemoryList(overlay, memories, chatId) {
     const listEl = overlay.querySelector('#bb_mgr_list');
     if (listEl) {
         listEl.innerHTML = memories.length
             ? memories.map(m => buildMemoryItemHTML(m)).join('')
-            : '<div class="bb-mem-empty">暂无记忆</div>';
+            : '<div class="bb-mem-empty">未找到匹配的记忆</div>';
     }
     const statsEl = overlay.querySelector('.bb-mem-stats');
     if (statsEl) statsEl.innerHTML = `共 <strong>${memories.length}</strong> 条记忆`;
     rebindItemActions(overlay, chatId);
 }
 
-// ═══════════════════════════════════════════════════════════
-//  通用 UI 工具
-// ═══════════════════════════════════════════════════════════
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+async function rerenderManagerList(overlay, chatId) {
+    const memories = await getMemories(chatId);
+    renderMemoryList(overlay, memories, chatId);
 }
 
-async function showInputPopup(title, message, defaultValue = '') {
-    try {
-        const ctx = SillyTavern.getContext();
-        if (ctx.Popup && ctx.POPUP_TYPE) {
-            const popup = new ctx.Popup(
-                `<h3>${title}</h3><p>${message}</p>`,
-                ctx.POPUP_TYPE.INPUT,
-                defaultValue,
-                { okButton: '确定', cancelButton: '取消' },
-            );
-            const result = await popup.show();
-            if (result === null || result === undefined) return null;
-            return String(result).trim() || null;
-        }
-    } catch { /* Popup API 不可用，使用 fallback */ }
+function rebindItemActions(overlay, chatId) {
+    overlay.querySelectorAll('.bb-mem-delete').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            const ctx = SillyTavern.getContext();
+            const ok = await ctx.Popup.show.confirm('确认删除', '确定要删除这条记忆吗？');
+            if (!ok) return;
+            await removeMemory(chatId, id);
+            toastr.info('记忆已删除', DISPLAY_NAME);
+            await rerenderManagerList(overlay, chatId);
+        });
+    });
 
-    const result = prompt(`${title}\n${message}`, defaultValue);
-    return result?.trim() || null;
+    overlay.querySelectorAll('.bb-mem-edit').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            const memories = await getMemories(chatId);
+            const memory = memories.find(m => m.id === id);
+            if (!memory) return;
+
+            const ctx = SillyTavern.getContext();
+            const newContent = await ctx.Popup.show.input('编辑记忆', '修改记忆内容：', memory.content);
+            if (!newContent || newContent === memory.content) return;
+
+            await updateMemory(chatId, id, newContent);
+            toastr.success('记忆已更新', DISPLAY_NAME);
+            await rerenderManagerList(overlay, chatId);
+        });
+    });
 }
 
-async function showConfirmPopup(title, message) {
-    try {
-        const ctx = SillyTavern.getContext();
-        if (ctx.Popup && ctx.POPUP_TYPE) {
-            const popup = new ctx.Popup(
-                `<h3>${title}</h3><p>${message}</p>`,
-                ctx.POPUP_TYPE.CONFIRM,
-                '',
-                { okButton: '确定', cancelButton: '取消' },
-            );
-            const result = await popup.show();
-            return !!result;
-        }
-    } catch { /* fallback */ }
+// ═══════════════════════════════════════════════════════════
+//  斜杠命令注册
+// ═══════════════════════════════════════════════════════════
 
-    return confirm(`${title}\n${message}`);
+function registerSlashCommands() {
+    const ctx = SillyTavern.getContext();
+
+    // /memory add <内容> — 快速添加记忆
+    ctx.registerSlashCommand('memory', async (namedArgs, unnamedArgs) => {
+        const subCommand = String(unnamedArgs).trim().split(/\s+/);
+        const action = subCommand[0];
+        const content = subCommand.slice(1).join(' ');
+
+        const chatId = getChatId();
+        if (!chatId) return '请先打开一个聊天';
+
+        switch (action) {
+            case 'add': {
+                if (!content) return '用法: /memory add <记忆内容>';
+                const type = namedArgs.type || 'event';
+                await addMemory(chatId, content, type, 'manual');
+                return `已添加记忆: ${content}`;
+            }
+            case 'search': {
+                if (!content) return '用法: /memory search <搜索词>';
+                const memories = await getMemories(chatId);
+                const results = searchMemories(memories, content, { maxResults: 5 });
+                if (!results.length) return '未找到相关记忆';
+                return results.map((m, i) => `${i + 1}. [${m.type}] ${m.content}`).join('\n');
+            }
+            case 'count': {
+                const memories = await getMemories(chatId);
+                const stats = await getMemoryStats(chatId);
+                let info = `共 ${stats.total} 条记忆`;
+                for (const [type, count] of Object.entries(stats.byType)) {
+                    const typeDef = getTypeDefinition(type);
+                    info += `\n  ${typeDef.label}: ${count}`;
+                }
+                return info;
+            }
+            case 'clear': {
+                await clearMemories(chatId);
+                return '所有记忆已清空';
+            }
+            default:
+                return '可用命令: /memory add|search|count|clear\n示例: /memory add 角色喜欢喝咖啡';
+        }
+    }, [], '管理BB-Memory记忆 (add/search/count/clear)', true, true);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -529,7 +674,6 @@ async function showConfirmPopup(title, message) {
 function onChatChanged() {
     clearInjection();
     refreshSidebar();
-    console.log(`[${DISPLAY_NAME}] 聊天已切换，记忆上下文已重置`);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -545,7 +689,17 @@ async function init() {
     // 确保设置已初始化
     getSettings();
 
-    // 加载侧边栏 HTML 模板并添加到设置面板
+    // v1 -> v2 数据迁移
+    try {
+        const migrated = await migrateFromSettings();
+        if (migrated > 0) {
+            toastr.info(`已从旧版迁移 ${migrated} 条记忆`, DISPLAY_NAME);
+        }
+    } catch (err) {
+        console.error(`[${DISPLAY_NAME}] 数据迁移失败:`, err);
+    }
+
+    // 加载侧边栏 HTML 模板
     try {
         const settingsHtml = await ctx.renderExtensionTemplateAsync(extensionFolder, 'settings');
         const container = document.getElementById('extensions_settings2');
@@ -563,27 +717,45 @@ async function init() {
         templateEl.value = s.injectionTemplate || DEFAULT_SETTINGS.injectionTemplate;
     }
 
+    // 初始化自定义API区域显示状态
+    const settings = getSettings();
+    const customSection = document.getElementById('bb_memory_custom_api_section');
+    if (customSection) {
+        customSection.style.display = settings.autoGenMode === 'custom' ? 'block' : 'none';
+    }
+
     // 绑定侧边栏事件
     bindSidebarEvents();
 
-    // 监听 SillyTavern 事件
-    ctx.eventSource.on(ctx.eventTypes.CHAT_CHANGED, onChatChanged);
+    // 初始化 AI 自动生成模块
+    if (settings.autoGenEnabled) {
+        initAutoGenerator();
+    }
 
-    // 首次加载时刷新侧边栏
+    // 注册斜杠命令
+    try {
+        registerSlashCommands();
+    } catch (err) {
+        console.warn(`[${DISPLAY_NAME}] 斜杠命令注册失败:`, err);
+    }
+
+    // 监听 SillyTavern 事件
+    ctx.eventSource.on(ctx.event_types.CHAT_CHANGED, onChatChanged);
+
+    // 首次刷新侧边栏
     refreshSidebar();
 
-    console.log(`[${DISPLAY_NAME}] 初始化完成 ✓`);
+    console.log(`[${DISPLAY_NAME}] v2.0 初始化完成`);
 }
 
 // ═══ 启动 ═══
-// 等待 SillyTavern 完全加载后再初始化
+
 (function startup() {
     const ctx = SillyTavern.getContext();
 
-    if (ctx.eventSource && ctx.eventTypes) {
-        ctx.eventSource.on(ctx.eventTypes.APP_READY, () => init());
+    if (ctx.eventSource && ctx.event_types) {
+        ctx.eventSource.on(ctx.event_types.APP_READY, () => init());
     } else {
-        // APP_READY 可能已经触发过了（扩展后加载的情况）
         if (document.getElementById('extensions_settings2')) {
             init();
         } else {

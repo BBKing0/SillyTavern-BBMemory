@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory</b>
+            <b>BB-Memory v2</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -29,13 +29,15 @@
 
             <hr />
 
-            <!-- 注入设置 -->
+            <!-- ═══ 注入设置 ═══ -->
+            <div class="bb-mem-section-title">
+                <i class="fa-solid fa-syringe"></i> 注入设置
+            </div>
+
             <div class="bb-mem-sidebar-section">
                 <label for="bb_memory_depth">
                     注入深度
-                    <small class="bb-mem-hint">
-                        记忆插入到聊天历史中的位置（0 = 最末尾）
-                    </small>
+                    <small class="bb-mem-hint">记忆插入到聊天历史中的位置（0 = 最末尾）</small>
                 </label>
                 <input id="bb_memory_depth" type="number" class="text_pole"
                        min="0" max="100" value="4" />
@@ -44,9 +46,7 @@
             <div class="bb-mem-sidebar-section">
                 <label for="bb_memory_max_results">
                     最大检索数
-                    <small class="bb-mem-hint">
-                        每次生成时最多注入多少条相关记忆
-                    </small>
+                    <small class="bb-mem-hint">每次生成时最多注入多少条相关记忆</small>
                 </label>
                 <input id="bb_memory_max_results" type="number" class="text_pole"
                        min="1" max="20" value="5" />
@@ -55,13 +55,106 @@
             <div class="bb-mem-sidebar-section">
                 <label for="bb_memory_template">
                     注入模板
-                    <small class="bb-mem-hint">
-                        用 {{memories}} 代表记忆内容
-                    </small>
+                    <small class="bb-mem-hint">用 {{memories}} 代表记忆内容</small>
                 </label>
-                <textarea id="bb_memory_template" class="text_pole bb-mem-textarea" rows="3">[角色记忆]
+                <textarea id="bb_memory_template" class="text_pole bb-mem-textarea" rows="3">[角色长期记忆]
 {{memories}}</textarea>
             </div>
+
+            <hr />
+
+            <!-- ═══ AI 自动生成设置 ═══ -->
+            <div class="bb-mem-section-title">
+                <i class="fa-solid fa-robot"></i> AI 自动生成
+            </div>
+
+            <label class="checkbox_label" style="margin: 8px 0;">
+                <input id="bb_memory_auto_gen" type="checkbox" />
+                <span>启用 AI 自动提取记忆</span>
+            </label>
+            <small class="bb-mem-hint" style="display: block; margin-bottom: 8px;">
+                开启后，每当 AI 回复时会自动提取值得记忆的信息
+            </small>
+
+            <div class="bb-mem-sidebar-section">
+                <label for="bb_memory_api_mode">
+                    API 模式
+                    <small class="bb-mem-hint">选择用于记忆提取的 AI 接口</small>
+                </label>
+                <select id="bb_memory_api_mode" class="text_pole">
+                    <option value="main">使用主 API（推荐）</option>
+                    <option value="custom">自定义 API 端点</option>
+                </select>
+            </div>
+
+            <div id="bb_memory_custom_api_section" style="display: none;">
+                <div class="bb-mem-sidebar-section">
+                    <label for="bb_memory_api_endpoint">
+                        API 端点
+                        <small class="bb-mem-hint">OpenAI 兼容格式，如 https://api.openai.com/v1/chat/completions</small>
+                    </label>
+                    <input id="bb_memory_api_endpoint" type="text" class="text_pole"
+                           placeholder="https://api.example.com/v1/chat/completions" />
+                </div>
+
+                <div class="bb-mem-sidebar-section">
+                    <label for="bb_memory_api_key">
+                        API Key
+                        <small class="bb-mem-hint">你的 API 密钥</small>
+                    </label>
+                    <input id="bb_memory_api_key" type="password" class="text_pole"
+                           placeholder="sk-..." />
+                </div>
+
+                <div class="bb-mem-sidebar-section">
+                    <label for="bb_memory_api_model">
+                        模型名称
+                        <small class="bb-mem-hint">例如 gpt-4o-mini, claude-3-haiku</small>
+                    </label>
+                    <input id="bb_memory_api_model" type="text" class="text_pole"
+                           placeholder="gpt-4o-mini" />
+                </div>
+            </div>
+
+            <hr />
+
+            <!-- ═══ 记忆衰减设置 ═══ -->
+            <div class="bb-mem-section-title">
+                <i class="fa-solid fa-brain"></i> 记忆衰减（模拟遗忘）
+            </div>
+
+            <label class="checkbox_label" style="margin: 8px 0;">
+                <input id="bb_memory_decay_enabled" type="checkbox" checked />
+                <span>启用记忆衰减</span>
+            </label>
+            <small class="bb-mem-hint" style="display: block; margin-bottom: 8px;">
+                模拟人脑的遗忘曲线，不重要的记忆会逐渐变淡
+            </small>
+
+            <div class="bb-mem-sidebar-section">
+                <label for="bb_memory_decay_rate">
+                    衰减速率
+                    <small class="bb-mem-hint">每次衰减减少的强度值（0.01~0.2）</small>
+                </label>
+                <input id="bb_memory_decay_rate" type="number" class="text_pole"
+                       min="0.01" max="0.2" step="0.01" value="0.05" />
+            </div>
+
+            <hr />
+
+            <!-- ═══ 世界书导入 ═══ -->
+            <div class="bb-mem-section-title">
+                <i class="fa-solid fa-book-atlas"></i> 世界书导入
+            </div>
+
+            <div class="bb-mem-sidebar-buttons">
+                <button id="bb_memory_import_wb_btn" class="menu_button" title="从世界书JSON文件初始化记忆">
+                    <i class="fa-solid fa-file-import"></i> 导入世界书
+                </button>
+            </div>
+            <small class="bb-mem-hint" style="display: block; margin-top: 4px;">
+                上传 SillyTavern 世界书 JSON，自动转换为向量化记忆条目
+            </small>
 
         </div>
     </div>
