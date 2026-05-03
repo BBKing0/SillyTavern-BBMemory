@@ -36,16 +36,33 @@ const DEFAULT_EXTRACTION_PROMPT = `你是一个记忆提取助手。请根据以
 
 规则：
 1. 只提取重要的、值得记住的信息，不要记录日常寒暄
-2. 每条记忆应简洁明了（一两句话）
-3. 正确分类每条记忆的类型
-4. 如果没有值得记忆的内容，返回空数组 []
+2. 每条记忆应有简短标题和清晰内容
+3. 如果对话中有重要原话（承诺、告白、威胁等），保留在 verbatim 字段
+4. 正确选择认知类型和分类路径
+5. 如果没有值得记忆的内容，返回空数组 []
+
+认知类型：
+- fact: 确定的事实（NPC信息、物品、地点、世界设定）
+- episode: 发生的事件或经历（事件、承诺、秘密、战斗）
+- emotion: 情感状态（好感变化、情绪波动、羁绊）
+- habit: 行为模式（习惯、偏好、口头禅）
+
+分类路径（选择最匹配的一个）：
+world.politics | world.lore | npc.profile | npc.relationship | npc.attitude |
+item.ownership | location.state | episode.event | episode.promise |
+episode.secret | episode.dialogue | episode.combat | emotion.bond |
+emotion.trauma | emotion.desire | habit.routine | habit.preference | habit.speech
 
 以纯JSON数组格式返回（不要包含markdown代码块标记），每条包含：
-- type: "event"|"timeline"|"item"|"npc"|"relationship"|"location"
-- content: 记忆内容（简洁描述）
-- tags: 相关标签数组（2-5个关键词）
-- importance: 重要性(0-1，0.5为普通，0.8以上为重要)
-- emotionalValence: 情感倾向(-1到1，负数消极，正数积极，0中性)
+- cognitiveType: "fact"|"episode"|"emotion"|"habit"
+- categoryPath: 分类路径（从上方列表选择）
+- title: 简短标题（3-8字）
+- content: 完整记忆内容
+- summary: 一句话摘要（10-20字）
+- verbatim: 重要原话（承诺/告白/威胁等，无则留空字符串""）
+- tags: 标签数组（2-5个关键词）
+- importance: 重要性(0-1)
+- emotionalWeight: 情感强度(0-1，0为中性，1为强烈)
 
 [当前对话]
 用户: {{userMessage}}
@@ -166,22 +183,27 @@ function parseAiResponse(responseText) {
         const parsed = JSON.parse(text);
         if (!Array.isArray(parsed)) return [];
 
-        // 验证和规范化每条记忆
+        const VALID_COG_TYPES = ['fact', 'episode', 'emotion', 'habit'];
+
         return parsed
             .filter(item => item && item.content && typeof item.content === 'string')
             .map(item => ({
-                type: ['event', 'timeline', 'item', 'npc', 'location', 'relationship'].includes(item.type)
-                    ? item.type
-                    : 'event',
+                cognitiveType: VALID_COG_TYPES.includes(item.cognitiveType)
+                    ? item.cognitiveType
+                    : 'episode',
+                categoryPath: item.categoryPath || '',
+                title: typeof item.title === 'string' ? item.title.trim() : '',
                 content: item.content.trim(),
+                summary: typeof item.summary === 'string' ? item.summary.trim() : '',
+                verbatim: typeof item.verbatim === 'string' ? item.verbatim.trim() : '',
                 tags: Array.isArray(item.tags)
                     ? item.tags.map(t => ({ name: String(t), weight: 0.6 }))
                     : [],
                 importance: typeof item.importance === 'number'
                     ? Math.max(0, Math.min(1, item.importance))
                     : 0.5,
-                emotionalValence: typeof item.emotionalValence === 'number'
-                    ? Math.max(-1, Math.min(1, item.emotionalValence))
+                emotionalWeight: typeof item.emotionalWeight === 'number'
+                    ? Math.max(0, Math.min(1, item.emotionalWeight))
                     : 0.0,
             }));
     } catch (e) {
@@ -209,10 +231,14 @@ async function extractFromExchange(chatId, userMessage, aiMessage) {
     let addedCount = 0;
 
     for (const mem of memories) {
-        await addMemory(chatId, mem.content, mem.type, 'auto', {
+        await addMemory(chatId, mem.content, mem.cognitiveType || 'episode', 'auto', {
+            categoryPath: mem.categoryPath,
+            title: mem.title,
+            summary: mem.summary,
+            verbatim: mem.verbatim,
             tags: mem.tags,
             importance: mem.importance,
-            emotionalValence: mem.emotionalValence,
+            emotionalWeight: mem.emotionalWeight,
         });
         addedCount++;
     }

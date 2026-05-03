@@ -98,16 +98,29 @@
 
 ---
 
-## 记忆类型说明
+## 认知类型说明（v2.2）
 
-| 类型 | 图标 | 说明 | 专属信息 |
-|------|------|------|----------|
-| 事件 | ⚡ | 故事中发生的事情 | 参与者、地点 |
-| 时间线 | 🕐 | 标记故事进度 | 第几天、章节、顺序 |
-| 物品 | 📦 | 角色持有的道具 | 持有者、数量、状态 |
-| NPC | 👥 | 出现的人物 | 名字、身份、关系、态度 |
-| 地点 | 📍 | 故事中的场景 | 名称、描述、是否到访 |
-| 关系 | ❤️ | 人物间关系 | 双方、关系类型 |
+| 认知类型 | 图标 | 说明 | 典型分类路径 |
+|----------|------|------|-------------|
+| 事实 fact | 📖 | 确定的信息 | `npc.profile` `item.ownership` `location.state` `world.politics` |
+| 情景 episode | 🎬 | 发生的事件 | `episode.event` `episode.promise` `episode.secret` `episode.combat` |
+| 情感 emotion | ❤️ | 情感状态 | `emotion.bond` `emotion.trauma` `npc.attitude` |
+| 习惯 habit | 🔄 | 行为模式 | `habit.routine` `habit.preference` `habit.speech` |
+
+### 记忆字段一览
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `cognitiveType` | string | 认知类型：fact/episode/emotion/habit |
+| `categoryPath` | string | 分类路径，如 `npc.relationship` |
+| `title` | string | 简短标题 |
+| `content` | string | 完整原始内容 |
+| `summary` | string | 一句话摘要 |
+| `verbatim` | string | 重要原话（承诺、告白等） |
+| `hiddenNotes` | string | 隐藏备注（AI 可见，用户默认不可见） |
+| `subject` / `target` | string | 主体/对象 |
+| `truthStatus` | string | 可信度状态：confirmed/rumor/lie/unknown |
+| `pinned` | boolean | 是否固定（固定的记忆不会衰减） |
 
 ---
 
@@ -252,6 +265,38 @@ bb-memory/
 ---
 
 ## 版本记录
+
+### v2.2.0（2026-05-03）— 认知记忆数据结构重构
+
+**核心变更：**
+- 认知类型系统：从 6 种物品分类（event/npc/item/…）升级为 4 种认知类型（fact/episode/emotion/habit），灵感来自认知心理学
+- 树状分类路径：新增 `categoryPath` 字段，支持 `world.politics`、`npc.relationship`、`episode.promise` 等 21 种分类路径
+- 丰富的记忆字段：每条记忆扩展到 27+ 字段，包含 `title`、`summary`、`compressed`、`verbatim`、`hiddenNotes` 等
+- 原话保留：`verbatim` 字段专门用于保存承诺、告白、威胁等重要原话，避免压缩失真
+- 结构化信息：新增 `subject`、`target`、`actors`、`location` 等字段，使记忆信息更加结构化
+- 状态与可信度：新增 `truthStatus`（确认/谣言/谎言）、`visibility`（公开/私密/秘密）、`confidence` 等字段
+- 惰性迁移：旧数据在首次读取时自动转换为新格式，无需手动操作
+
+**新增/重大修改文件：**
+- `memory-types.js` — 全面重写：认知类型定义 + 树状分类路径 + 旧类型映射 + 内容自动分类
+- `memory-store.js` — 重大更新：新 schema 定义、惰性迁移逻辑、通用字段更新、pinned 记忆免衰减
+- `auto-generator.js` — 提取 prompt 改为认知类型格式，AI 现在会输出 `title`、`summary`、`verbatim` 等字段
+
+**适配修改文件：**
+- `index.js` — 类型显示和过滤使用 `cognitiveType`，手动添加默认类型改为 `episode`
+- `memory-assistant.js` — 类型显示和过滤兼容新格式
+- `manifest.json` — 版本号 2.2.0
+
+**向后兼容：**
+- 旧记忆数据自动迁移：`type` → `legacyType` + `cognitiveType` + `categoryPath`
+- 旧类型名可继续使用：传入 `event`/`npc` 等旧类型名会自动映射到新认知类型
+- `MEMORY_TYPES` 导出保留，指向 `COGNITIVE_TYPES`
+- `getTypeDefinition()` 同时支持新旧类型 ID
+- `emotionalValence` 自动转换为 `emotionalWeight`（取绝对值）
+- 旧版 metadata 中的结构化信息会被提取到新字段（如 `metadata.npcName` → `subject`）
+- `typeEnabled` 设置自动补充新认知类型键
+
+---
 
 ### v2.1.0（2026-05-03）— 消息稳定化机制
 

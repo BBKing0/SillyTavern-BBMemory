@@ -1,247 +1,186 @@
 /**
- * memory-types.js —— BB-Memory 的"分类卡片"
+ * memory-types.js —— BB-Memory 的"认知分类系统"
  *
- * ═══════════════════════════════════════════════════════════
- *  代码小课堂
- * ═══════════════════════════════════════════════════════════
- *
- * 这个文件是什么？
- *   就像图书馆把书分成小说、历史、科技等类别一样，
- *   这个文件定义了记忆的不同"类型"，每种类型有自己的专属信息。
- *
- * 用了哪些编程概念？
- *   - Object（对象）：用花括号 {} 定义一组有名字的属性
- *   - 常量定义：用 const 创建不会变的值
- *   - export：让其他文件能引用这些定义
- *
- * 6种记忆类型：
- *   1. event    — 事件：故事中发生的事情
- *   2. timeline — 时间线：标记故事进度的时间节点
- *   3. item     — 物品：角色持有或提到的道具
- *   4. npc      — NPC：出现的人物
- *   5. location — 地点：故事中的场景
- *   6. relationship — 关系：人物之间的关系
- *
- * ═══════════════════════════════════════════════════════════
+ * v2.2 重构：从 6 种物品分类升级为 4 种认知类型 + 树状分类路径。
+ * 灵感来自认知心理学的记忆分类：
+ *   - fact    (陈述性记忆) — 确定的事实
+ *   - episode (情景记忆)   — 经历过的事件
+ *   - emotion (情感记忆)   — 情感和态度
+ *   - habit   (程序性记忆) — 行为模式和偏好
  */
 
-// ═══ 记忆类型定义 ═══
+// ═══════════════════════════════════════════════════════════
+//  四大认知类型
+// ═══════════════════════════════════════════════════════════
 
-export const MEMORY_TYPES = Object.freeze({
-    event: {
-        id: 'event',
-        label: '事件',
-        icon: 'fa-solid fa-bolt',
+export const COGNITIVE_TYPES = Object.freeze({
+    fact: {
+        id: 'fact',
+        label: '事实',
+        icon: 'fa-solid fa-book',
         color: '#4fc3f7',
-        description: '故事中发生的重要事件',
-        defaultMetadata: () => ({
-            participants: [],
-            location: '',
-        }),
-        metadataFields: [
-            { key: 'participants', label: '参与者', type: 'tags', placeholder: '输入人物名后回车' },
-            { key: 'location', label: '发生地点', type: 'text', placeholder: '事件发生的地点' },
-        ],
-        formatForInjection: (memory) => {
-            const parts = [memory.content];
-            if (memory.metadata?.location) {
-                parts.push(`(地点: ${memory.metadata.location})`);
-            }
-            return parts.join(' ');
-        },
+        description: '确定的事实信息（NPC档案、物品、地点、世界设定等）',
     },
-
-    timeline: {
-        id: 'timeline',
-        label: '时间线',
-        icon: 'fa-solid fa-clock-rotate-left',
+    episode: {
+        id: 'episode',
+        label: '情景',
+        icon: 'fa-solid fa-film',
         color: '#ba68c8',
-        description: '故事时间轴上的关键节点',
-        defaultMetadata: () => ({
-            storyDay: 1,
-            chapter: '',
-            sequenceOrder: 0,
-        }),
-        metadataFields: [
-            { key: 'storyDay', label: '故事第几天', type: 'number', placeholder: '1' },
-            { key: 'chapter', label: '章节/阶段', type: 'text', placeholder: '例如: 第一章' },
-            { key: 'sequenceOrder', label: '排序序号', type: 'number', placeholder: '0' },
-        ],
-        formatForInjection: (memory) => {
-            const meta = memory.metadata || {};
-            const prefix = meta.storyDay ? `[第${meta.storyDay}天]` : '';
-            const chapter = meta.chapter ? `(${meta.chapter})` : '';
-            return `${prefix}${chapter} ${memory.content}`.trim();
-        },
+        description: '发生过的事件或经历（战斗、对话、承诺、秘密等）',
     },
-
-    item: {
-        id: 'item',
-        label: '物品',
-        icon: 'fa-solid fa-box-open',
-        color: '#ffb74d',
-        description: '角色持有或提到的物品/道具',
-        defaultMetadata: () => ({
-            owner: '',
-            quantity: 1,
-            status: 'active',
-        }),
-        metadataFields: [
-            { key: 'owner', label: '持有者', type: 'text', placeholder: '谁拥有这个物品' },
-            { key: 'quantity', label: '数量', type: 'number', placeholder: '1' },
-            { key: 'status', label: '状态', type: 'select', options: [
-                { value: 'active', label: '持有中' },
-                { value: 'lost', label: '已丢失' },
-                { value: 'consumed', label: '已消耗' },
-                { value: 'given', label: '已赠出' },
-            ]},
-        ],
-        formatForInjection: (memory) => {
-            const meta = memory.metadata || {};
-            const qty = meta.quantity > 1 ? ` x${meta.quantity}` : '';
-            const status = meta.status && meta.status !== 'active' ? ` [${meta.status}]` : '';
-            const owner = meta.owner ? ` (${meta.owner}持有)` : '';
-            return `${memory.content}${qty}${status}${owner}`;
-        },
-    },
-
-    npc: {
-        id: 'npc',
-        label: 'NPC',
-        icon: 'fa-solid fa-user-group',
-        color: '#81c784',
-        description: '故事中出现的人物信息',
-        defaultMetadata: () => ({
-            npcName: '',
-            role: '',
-            relationship: '',
-            attitude: '',
-        }),
-        metadataFields: [
-            { key: 'npcName', label: 'NPC名字', type: 'text', placeholder: '人物名称' },
-            { key: 'role', label: '身份/职业', type: 'text', placeholder: '例如: 旅店老板' },
-            { key: 'relationship', label: '与主角关系', type: 'text', placeholder: '例如: 朋友、敌人' },
-            { key: 'attitude', label: '态度', type: 'select', options: [
-                { value: 'friendly', label: '友好' },
-                { value: 'neutral', label: '中立' },
-                { value: 'hostile', label: '敌对' },
-                { value: 'romantic', label: '暧昧' },
-                { value: 'unknown', label: '未知' },
-            ]},
-        ],
-        formatForInjection: (memory) => {
-            const meta = memory.metadata || {};
-            const name = meta.npcName || '未知人物';
-            const role = meta.role ? `(${meta.role})` : '';
-            const rel = meta.relationship ? ` - ${meta.relationship}` : '';
-            return `${name}${role}${rel}: ${memory.content}`;
-        },
-    },
-
-    location: {
-        id: 'location',
-        label: '地点',
-        icon: 'fa-solid fa-map-location-dot',
-        color: '#e57373',
-        description: '故事中的场景/地点',
-        defaultMetadata: () => ({
-            locationName: '',
-            description: '',
-            visited: true,
-        }),
-        metadataFields: [
-            { key: 'locationName', label: '地点名称', type: 'text', placeholder: '场景名' },
-            { key: 'description', label: '简短描述', type: 'text', placeholder: '这个地方的特征' },
-            { key: 'visited', label: '是否到访过', type: 'checkbox' },
-        ],
-        formatForInjection: (memory) => {
-            const meta = memory.metadata || {};
-            const name = meta.locationName || '未知地点';
-            const visited = meta.visited ? '' : ' [未到访]';
-            return `${name}${visited}: ${memory.content}`;
-        },
-    },
-
-    relationship: {
-        id: 'relationship',
-        label: '关系',
+    emotion: {
+        id: 'emotion',
+        label: '情感',
         icon: 'fa-solid fa-heart',
         color: '#f06292',
-        description: '人物之间的关系',
-        defaultMetadata: () => ({
-            person1: '',
-            person2: '',
-            relationType: '',
-        }),
-        metadataFields: [
-            { key: 'person1', label: '人物1', type: 'text', placeholder: '人物A' },
-            { key: 'person2', label: '人物2', type: 'text', placeholder: '人物B' },
-            { key: 'relationType', label: '关系类型', type: 'text', placeholder: '例如: 恋人、师徒、仇敌' },
-        ],
-        formatForInjection: (memory) => {
-            const meta = memory.metadata || {};
-            const p1 = meta.person1 || '?';
-            const p2 = meta.person2 || '?';
-            const rel = meta.relationType ? `[${meta.relationType}]` : '';
-            return `${p1} ↔ ${p2} ${rel}: ${memory.content}`;
-        },
+        description: '情感状态和关系变化（好感、敌意、情绪波动等）',
+    },
+    habit: {
+        id: 'habit',
+        label: '习惯',
+        icon: 'fa-solid fa-repeat',
+        color: '#81c784',
+        description: '行为模式和偏好（口头禅、日常习惯、喜好厌恶等）',
     },
 });
 
-// ═══ 工具函数 ═══
+// ═══════════════════════════════════════════════════════════
+//  树状分类路径
+// ═══════════════════════════════════════════════════════════
+
+export const CATEGORY_PATHS = Object.freeze({
+    // ── 世界 ──
+    'world.politics':  { label: '世界·政治', cognitiveType: 'fact' },
+    'world.lore':      { label: '世界·背景', cognitiveType: 'fact' },
+    'world.rules':     { label: '世界·规则', cognitiveType: 'fact' },
+    // ── NPC ──
+    'npc.profile':     { label: 'NPC·档案', cognitiveType: 'fact' },
+    'npc.relationship':{ label: 'NPC·关系', cognitiveType: 'fact' },
+    'npc.attitude':    { label: 'NPC·态度', cognitiveType: 'emotion' },
+    // ── 物品 ──
+    'item.ownership':  { label: '物品·持有', cognitiveType: 'fact' },
+    'item.quest':      { label: '物品·任务', cognitiveType: 'fact' },
+    // ── 地点 ──
+    'location.state':  { label: '地点·状态', cognitiveType: 'fact' },
+    'location.map':    { label: '地点·地图', cognitiveType: 'fact' },
+    // ── 情景 ──
+    'episode.event':   { label: '情景·事件', cognitiveType: 'episode' },
+    'episode.promise': { label: '情景·承诺', cognitiveType: 'episode' },
+    'episode.secret':  { label: '情景·秘密', cognitiveType: 'episode' },
+    'episode.dialogue':{ label: '情景·对话', cognitiveType: 'episode' },
+    'episode.combat':  { label: '情景·战斗', cognitiveType: 'episode' },
+    // ── 情感 ──
+    'emotion.bond':    { label: '情感·羁绊', cognitiveType: 'emotion' },
+    'emotion.trauma':  { label: '情感·创伤', cognitiveType: 'emotion' },
+    'emotion.desire':  { label: '情感·愿望', cognitiveType: 'emotion' },
+    // ── 习惯 ──
+    'habit.routine':   { label: '习惯·日常', cognitiveType: 'habit' },
+    'habit.preference':{ label: '习惯·偏好', cognitiveType: 'habit' },
+    'habit.speech':    { label: '习惯·语言', cognitiveType: 'habit' },
+});
+
+// ═══════════════════════════════════════════════════════════
+//  旧版类型 → 新版类型 映射表
+// ═══════════════════════════════════════════════════════════
+
+export const LEGACY_TYPE_MAP = Object.freeze({
+    event:        { cognitiveType: 'episode', categoryPath: 'episode.event' },
+    timeline:     { cognitiveType: 'episode', categoryPath: 'episode.event' },
+    item:         { cognitiveType: 'fact',    categoryPath: 'item.ownership' },
+    npc:          { cognitiveType: 'fact',    categoryPath: 'npc.profile' },
+    location:     { cognitiveType: 'fact',    categoryPath: 'location.state' },
+    relationship: { cognitiveType: 'fact',    categoryPath: 'npc.relationship' },
+});
+
+// ═══════════════════════════════════════════════════════════
+//  向后兼容：MEMORY_TYPES 指向新的认知类型
+//  让 index.js / memory-assistant.js 等文件中
+//  Object.values(MEMORY_TYPES) 的遍历自动使用新类型
+// ═══════════════════════════════════════════════════════════
+
+export const MEMORY_TYPES = COGNITIVE_TYPES;
+
+// ═══════════════════════════════════════════════════════════
+//  工具函数
+// ═══════════════════════════════════════════════════════════
 
 /**
- * 获取所有类型ID列表
+ * 获取所有认知类型 ID
  */
 export function getTypeIds() {
-    return Object.keys(MEMORY_TYPES);
+    return Object.keys(COGNITIVE_TYPES);
 }
 
 /**
- * 获取类型定义
+ * 获取类型定义（同时兼容新旧类型 ID）
  */
 export function getTypeDefinition(typeId) {
-    return MEMORY_TYPES[typeId] || MEMORY_TYPES.event;
+    if (COGNITIVE_TYPES[typeId]) return COGNITIVE_TYPES[typeId];
+    const mapped = LEGACY_TYPE_MAP[typeId];
+    if (mapped) return COGNITIVE_TYPES[mapped.cognitiveType];
+    return COGNITIVE_TYPES.fact;
 }
 
 /**
- * 获取类型的默认元数据
+ * 获取分类路径的显示标签
  */
-export function getDefaultMetadata(typeId) {
-    const typeDef = getTypeDefinition(typeId);
-    return typeDef.defaultMetadata();
+export function getCategoryLabel(path) {
+    return CATEGORY_PATHS[path]?.label || path || '';
 }
 
 /**
- * 按类型分组记忆，用于注入 prompt
- * 返回格式化好的文本，每种类型一个区块
+ * 获取分类路径的定义
+ */
+export function getCategoryDefinition(path) {
+    return CATEGORY_PATHS[path] || null;
+}
+
+/**
+ * 获取类型的默认元数据（保留兼容接口，新版不再使用 metadata 子对象）
+ */
+export function getDefaultMetadata(_typeId) {
+    return {};
+}
+
+/**
+ * 从记忆对象中解析出认知类型 ID（兼容新旧格式）
+ */
+export function resolveMemoryType(memory) {
+    if (memory.cognitiveType && COGNITIVE_TYPES[memory.cognitiveType]) {
+        return memory.cognitiveType;
+    }
+    const mapped = LEGACY_TYPE_MAP[memory.type];
+    return mapped ? mapped.cognitiveType : 'fact';
+}
+
+// ═══════════════════════════════════════════════════════════
+//  格式化注入（为 prompt 注入准备文本）
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 将记忆列表按认知类型分组，格式化为注入文本
  */
 export function formatMemoriesForInjection(memories, enabledTypes) {
     const grouped = {};
 
     for (const memory of memories) {
-        const type = memory.type || 'event';
-        if (enabledTypes && !enabledTypes[type]) continue;
-        if (!grouped[type]) grouped[type] = [];
-        grouped[type].push(memory);
+        const cogType = resolveMemoryType(memory);
+        if (enabledTypes && !enabledTypes[cogType]) continue;
+        if (!grouped[cogType]) grouped[cogType] = [];
+        grouped[cogType].push(memory);
     }
 
     const sections = [];
-
-    // 按固定顺序输出各类型
-    const typeOrder = ['event', 'timeline', 'npc', 'item', 'location', 'relationship'];
+    const typeOrder = ['fact', 'episode', 'emotion', 'habit'];
 
     for (const typeId of typeOrder) {
         const mems = grouped[typeId];
         if (!mems || !mems.length) continue;
 
-        const typeDef = getTypeDefinition(typeId);
+        const typeDef = COGNITIVE_TYPES[typeId];
         const header = `== ${typeDef.label} ==`;
         const lines = mems.map((m, i) => {
-            const formatted = typeDef.formatForInjection(m);
-            return typeId === 'event' || typeId === 'timeline'
-                ? `${i + 1}. ${formatted}`
-                : `- ${formatted}`;
+            return `${i + 1}. ${formatSingleMemory(m)}`;
         });
 
         sections.push(`${header}\n${lines.join('\n')}`);
@@ -251,21 +190,81 @@ export function formatMemoriesForInjection(memories, enabledTypes) {
 }
 
 /**
- * 根据内容自动推测记忆类型（用于世界书导入等场景）
+ * 格式化单条记忆为注入文本
+ */
+function formatSingleMemory(m) {
+    const parts = [];
+
+    if (m.title) parts.push(`[${m.title}]`);
+
+    const catLabel = getCategoryLabel(m.categoryPath);
+    if (catLabel) parts.push(`(${catLabel})`);
+
+    parts.push(m.summary || m.content);
+
+    if (m.verbatim) parts.push(`「${m.verbatim}」`);
+
+    if (m.subject && m.target) {
+        parts.push(`(${m.subject} → ${m.target})`);
+    } else if (m.subject) {
+        parts.push(`(${m.subject})`);
+    }
+
+    return parts.join(' ');
+}
+
+// ═══════════════════════════════════════════════════════════
+//  内容自动分类（用于世界书导入等场景）
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 根据内容推测旧版类型（保留兼容，世界书导入用）
  */
 export function guessTypeFromContent(content, keywords = []) {
     const text = (content + ' ' + keywords.join(' ')).toLowerCase();
 
-    // NPC 特征词
     if (/(?:角色|人物|名字|外貌|性格|npc|character)/.test(text)) return 'npc';
-    // 物品特征词
     if (/(?:物品|道具|武器|装备|药水|宝石|item|weapon|potion)/.test(text)) return 'item';
-    // 地点特征词
     if (/(?:地点|场所|城市|村庄|森林|洞穴|location|place|city)/.test(text)) return 'location';
-    // 关系特征词
     if (/(?:关系|感情|仇恨|友情|恋人|师徒|relation)/.test(text)) return 'relationship';
-    // 时间线特征词
     if (/(?:第.+天|时间线|章节|时间|之前|之后|timeline|chapter|day\s*\d)/.test(text)) return 'timeline';
 
     return 'event';
+}
+
+/**
+ * 根据内容推测认知类型和分类路径（新版推测）
+ */
+export function guessCognitiveInfo(content, keywords = []) {
+    const text = (content + ' ' + keywords.join(' ')).toLowerCase();
+
+    if (/(?:承诺|发誓|保证|约定|promise|swear|vow)/.test(text))
+        return { cognitiveType: 'episode', categoryPath: 'episode.promise' };
+    if (/(?:秘密|暗中|偷偷|不为人知|secret|hidden)/.test(text))
+        return { cognitiveType: 'episode', categoryPath: 'episode.secret' };
+    if (/(?:战斗|攻击|打|砍|施法|combat|fight|attack)/.test(text))
+        return { cognitiveType: 'episode', categoryPath: 'episode.combat' };
+
+    if (/(?:喜欢|讨厌|偏好|习惯|总是|从不|prefer|habit|always|never)/.test(text))
+        return { cognitiveType: 'habit', categoryPath: 'habit.preference' };
+    if (/(?:口头禅|说话方式|语气|口癖|catchphrase)/.test(text))
+        return { cognitiveType: 'habit', categoryPath: 'habit.speech' };
+
+    if (/(?:好感|敌意|情感|爱|恨|信任|背叛|love|hate|trust|betray)/.test(text))
+        return { cognitiveType: 'emotion', categoryPath: 'emotion.bond' };
+    if (/(?:创伤|恐惧|噩梦|阴影|trauma|fear|nightmare)/.test(text))
+        return { cognitiveType: 'emotion', categoryPath: 'emotion.trauma' };
+
+    if (/(?:角色|人物|名字|外貌|性格|身份|npc|character)/.test(text))
+        return { cognitiveType: 'fact', categoryPath: 'npc.profile' };
+    if (/(?:关系|与.+之间|relation)/.test(text))
+        return { cognitiveType: 'fact', categoryPath: 'npc.relationship' };
+    if (/(?:物品|道具|武器|装备|item|weapon)/.test(text))
+        return { cognitiveType: 'fact', categoryPath: 'item.ownership' };
+    if (/(?:地点|场所|城市|location|place)/.test(text))
+        return { cognitiveType: 'fact', categoryPath: 'location.state' };
+    if (/(?:政治|势力|阵营|王国|politics|faction)/.test(text))
+        return { cognitiveType: 'fact', categoryPath: 'world.politics' };
+
+    return { cognitiveType: 'episode', categoryPath: 'episode.event' };
 }

@@ -286,7 +286,7 @@ async function handleAddMemory() {
     const content = await ctx.Popup.show.input('添加新记忆', '输入你想让角色记住的内容：');
     if (!content) return;
 
-    await addMemory(chatId, content, 'event', 'manual');
+    await addMemory(chatId, content, 'episode', 'manual');
     toastr.success('记忆已添加', DISPLAY_NAME);
     refreshSidebar();
 }
@@ -406,7 +406,7 @@ function buildManagerHTML(memories, chatId) {
 
 function buildMemoryItemHTML(m) {
     const date = new Date(m.createdAt).toLocaleString('zh-CN');
-    const typeDef = getTypeDefinition(m.type || 'event');
+    const typeDef = getTypeDefinition(m.cognitiveType || m.type || 'fact');
     const sourceLabel = { manual: '手动', auto: 'AI', import: '导入', worldbook: '世界书' }[m.source] || m.source;
 
     const tagsHTML = (m.tags || [])
@@ -419,7 +419,7 @@ function buildMemoryItemHTML(m) {
     </div>`;
 
     return `
-        <div class="bb-mem-item" data-id="${m.id}" data-type="${m.type || 'event'}">
+        <div class="bb-mem-item" data-id="${m.id}" data-type="${m.cognitiveType || m.type || 'fact'}">
             <div class="bb-mem-item-header">
                 <span class="bb-mem-item-type" style="color: ${typeDef.color}">
                     <i class="${typeDef.icon}"></i> ${typeDef.label}
@@ -466,7 +466,7 @@ function bindManagerEvents(overlay, chatId) {
 
             const type = btn.dataset.type;
             const memories = await getMemories(chatId);
-            const filtered = type === 'all' ? memories : memories.filter(m => m.type === type);
+            const filtered = type === 'all' ? memories : memories.filter(m => (m.cognitiveType || m.type) === type);
             renderMemoryList(overlay, filtered, chatId);
         });
     });
@@ -476,7 +476,7 @@ function bindManagerEvents(overlay, chatId) {
         const ctx = SillyTavern.getContext();
         const content = await ctx.Popup.show.input('添加新记忆', '输入记忆内容：');
         if (!content) return;
-        await addMemory(chatId, content, 'event', 'manual');
+        await addMemory(chatId, content, 'episode', 'manual');
         toastr.success('记忆已添加', DISPLAY_NAME);
         await rerenderManagerList(overlay, chatId);
     });
@@ -637,7 +637,7 @@ function registerSlashCommands() {
         switch (action) {
             case 'add': {
                 if (!content) return '用法: /memory add <记忆内容>';
-                const type = namedArgs.type || 'event';
+                const type = namedArgs.type || 'episode';
                 await addMemory(chatId, content, type, 'manual');
                 return `已添加记忆: ${content}`;
             }
@@ -764,7 +764,7 @@ async function init() {
     // 首次刷新侧边栏
     refreshSidebar();
 
-    console.log(`[${DISPLAY_NAME}] v2.1 初始化完成`);
+    console.log(`[${DISPLAY_NAME}] v2.2 初始化完成`);
 }
 
 // ═══ 启动 ═══

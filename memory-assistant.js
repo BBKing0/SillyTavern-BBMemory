@@ -169,7 +169,7 @@ function buildDashboardHTML(memories, stats) {
         <div class="bb-dash-section-title">最近记忆</div>
         <div class="bb-dash-recent">
             ${memories.slice(-5).reverse().map(m => {
-                const typeDef = getTypeDefinition(m.type);
+                const typeDef = getTypeDefinition(m.cognitiveType || m.type);
                 return `<div class="bb-dash-recent-item">
                     <i class="${typeDef.icon}" style="color: ${typeDef.color}"></i>
                     <span>${escapeHtml(m.content.slice(0, 60))}${m.content.length > 60 ? '...' : ''}</span>
@@ -183,7 +183,7 @@ function buildBrowseHTML(memories) {
     const typeButtons = Object.values(MEMORY_TYPES).map(t =>
         `<button class="bb-browse-type-btn" data-browse-type="${t.id}" style="color: ${t.color}">
             <i class="${t.icon}"></i> ${t.label}
-            <span class="bb-browse-count">${memories.filter(m => m.type === t.id).length}</span>
+            <span class="bb-browse-count">${memories.filter(m => (m.cognitiveType || m.type) === t.id).length}</span>
         </button>`
     ).join('');
 
@@ -277,7 +277,7 @@ function buildBatchHTML(memories) {
         </div>
         <div class="bb-batch-list" id="bb_batch_list">
             ${memories.map(m => {
-                const typeDef = getTypeDefinition(m.type);
+                const typeDef = getTypeDefinition(m.cognitiveType || m.type);
                 return `<label class="bb-batch-item">
                     <input type="checkbox" data-id="${m.id}" class="bb-batch-checkbox" />
                     <i class="${typeDef.icon}" style="color: ${typeDef.color}"></i>
@@ -336,7 +336,7 @@ function bindBrowseEvents(window, chatId) {
         btn.addEventListener('click', async () => {
             const type = btn.dataset.browseType;
             const memories = await getMemories(chatId);
-            const filtered = memories.filter(m => m.type === type);
+            const filtered = memories.filter(m => (m.cognitiveType || m.type) === type);
             const listEl = window.querySelector('#bb_assistant_browse_list');
             if (listEl) {
                 listEl.innerHTML = filtered.length
@@ -404,7 +404,7 @@ function bindBatchEvents(window, chatId) {
 }
 
 function buildBrowseItemHTML(m) {
-    const typeDef = getTypeDefinition(m.type);
+    const typeDef = getTypeDefinition(m.cognitiveType || m.type);
     const date = new Date(m.createdAt).toLocaleString('zh-CN');
     const tagsHTML = (m.tags || []).slice(0, 4)
         .map(t => `<span class="bb-mem-tag">${escapeHtml(typeof t === 'string' ? t : t.name)}</span>`)
