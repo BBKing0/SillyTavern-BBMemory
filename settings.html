@@ -1,49 +1,67 @@
-<div class="smart-memory-settings" id="smart_memory_settings_root">
+<div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>Smart Memory</b>
+            <b>BB-Memory</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
 
-            <!-- Quick Status -->
-            <div id="smart_memory_status" class="smart-memory-status smart-memory-status--idle">
-                <span class="smart-memory-status-dot"></span>
-                <span class="smart-memory-status-text">空闲</span>
-            </div>
-
-            <!-- Enable Toggle -->
+            <!-- 启用开关 -->
             <label class="checkbox_label" style="margin: 8px 0;">
-                <input id="smart_memory_enabled" type="checkbox" checked />
-                <span>启用 Smart Memory</span>
+                <input id="bb_memory_enabled" type="checkbox" checked />
+                <span>启用 BB-Memory</span>
             </label>
 
-            <!-- Quick Stats -->
-            <div class="sm-sidebar-card">
-                <div class="sm-sidebar-stats">
-                    <div class="sm-sidebar-stat">
-                        <span>记忆:</span>
-                        <span class="sm-sidebar-stat-value" id="smart_memory_sidebar_total">0</span>
-                    </div>
-                    <div class="sm-sidebar-stat">
-                        <span>长期:</span>
-                        <span class="sm-sidebar-stat-value" id="smart_memory_sidebar_ltm">0</span>
-                    </div>
-                    <div class="sm-sidebar-stat">
-                        <span>短期:</span>
-                        <span class="sm-sidebar-stat-value" id="smart_memory_sidebar_stm">0</span>
-                    </div>
-                    <div class="sm-sidebar-stat">
-                        <span>固定:</span>
-                        <span class="sm-sidebar-stat-value" id="smart_memory_sidebar_pinned">0</span>
-                    </div>
-                </div>
+            <!-- 记忆数量 -->
+            <div class="bb-mem-sidebar-info">
+                当前聊天记忆数：<strong id="bb_memory_count">0</strong>
             </div>
 
-            <!-- Open Popup Button -->
-            <button id="smart_memory_open_popup" class="menu_button sm-open-popup-btn">
-                <i class="fa-solid fa-gear"></i> 打开管理面板
-            </button>
+            <!-- 快捷按钮 -->
+            <div class="bb-mem-sidebar-buttons">
+                <button id="bb_memory_add_btn" class="menu_button" title="添加一条新记忆">
+                    <i class="fa-solid fa-plus"></i> 添加记忆
+                </button>
+                <button id="bb_memory_manage_btn" class="menu_button" title="打开记忆管理面板">
+                    <i class="fa-solid fa-list"></i> 管理记忆
+                </button>
+            </div>
+
+            <hr />
+
+            <!-- 注入设置 -->
+            <div class="bb-mem-sidebar-section">
+                <label for="bb_memory_depth">
+                    注入深度
+                    <small class="bb-mem-hint">
+                        记忆插入到聊天历史中的位置（0 = 最末尾）
+                    </small>
+                </label>
+                <input id="bb_memory_depth" type="number" class="text_pole"
+                       min="0" max="100" value="4" />
+            </div>
+
+            <div class="bb-mem-sidebar-section">
+                <label for="bb_memory_max_results">
+                    最大检索数
+                    <small class="bb-mem-hint">
+                        每次生成时最多注入多少条相关记忆
+                    </small>
+                </label>
+                <input id="bb_memory_max_results" type="number" class="text_pole"
+                       min="1" max="20" value="5" />
+            </div>
+
+            <div class="bb-mem-sidebar-section">
+                <label for="bb_memory_template">
+                    注入模板
+                    <small class="bb-mem-hint">
+                        用 {{memories}} 代表记忆内容
+                    </small>
+                </label>
+                <textarea id="bb_memory_template" class="text_pole bb-mem-textarea" rows="3">[角色记忆]
+{{memories}}</textarea>
+            </div>
 
         </div>
     </div>

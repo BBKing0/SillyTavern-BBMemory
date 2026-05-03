@@ -1,11 +1,14 @@
 {
-    "display_name": "Smart Memory",
+    "display_name": "BB-Memory",
     "loading_order": 100,
+    "requires": [],
+    "optional": [],
     "js": "index.js",
     "css": "style.css",
-    "author": "SmartMemory Dev",
-    "version": "0.2.0",
-    "generate_interceptor": "smartMemoryInterceptor",
+    "author": "BB-Memory Dev",
+    "version": "1.0.0",
     "homePage": "",
-    "description": "Intelligent memory system with summarization, tagging, and retrieval for RP scenarios."
+    "auto_update": true,
+    "generate_interceptor": "bbMemoryInterceptor",
+    "description": "A simple long-term memory extension for SillyTavern."
 }

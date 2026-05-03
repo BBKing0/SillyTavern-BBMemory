@@ -1,388 +1,157 @@
 /**
- * Memory storage engine with save-slot management.
+ * memory-store.js —— BB-Memory 的"笔记本"
  *
- * Data hierarchy:
- *   extension_settings['smart_memory'] = {
- *       config: { ... },              // plugin settings
+ * 职责：管理记忆数据的增删改查（CRUD）。
+ * 数据存储在 SillyTavern 的 extensionSettings 中，
+ * 会随 SillyTavern 设置自动保存到服务端。
+ *
+ * 数据结构：
+ *   extensionSettings['bb_memory'] = {
+ *       enabled: true,
+ *       maxResults: 5,
+ *       injectionDepth: 4,
+ *       injectionTemplate: '...',
  *       chats: {
- *           [chatId]: {
- *               activeSlotId: string,
- *               slots: {
- *                   [slotId]: SaveSlot
- *               }
- *           }
+ *           [chatId]: [
+ *               { id, content, keywords, createdAt, source }
+ *           ]
  *       }
  *   }
- *
- * A "SaveSlot" holds an independent set of memories for a given chat,
- * enabling IF-line branching.
  */
 
-import { createMemoryEntry } from './memory-entry.js';
-import { runConsolidation, consolidateEntry, buildAssociativeLinks } from './consolidation.js';
+// ═══ 模块名（用作 extensionSettings 的 key）═══
+export const MODULE_NAME = 'bb_memory';
 
-const MODULE_NAME = 'smart_memory';
+// ═══ 默认设置 ═══
+export const DEFAULT_SETTINGS = Object.freeze({
+    enabled: true,
+    maxResults: 5,
+    injectionDepth: 4,
+    injectionTemplate: '[角色记忆]\n{{memories}}',
+});
 
-/**
- * @typedef {Object} SaveSlot
- * @property {string}        id
- * @property {string}        name
- * @property {MemoryEntry[]} memories
- * @property {number}        createdAt
- * @property {string}        [description]
- */
+// ═══ 获取/初始化设置 ═══
 
-/**
- * @typedef {Object} ChatData
- * @property {string}                  activeSlotId
- * @property {Record<string, SaveSlot>} slots
- */
+export function getSettings() {
+    const { extensionSettings } = SillyTavern.getContext();
 
-// ─── helpers ──────────────────────────────────────────────
-
-let _getContext = null;
-let _saveSettings = null;
-
-/**
- * Initialise the store with SillyTavern context helpers.
- * Must be called once during plugin startup.
- */
-export function initStore(getContextFn, saveSettingsFn) {
-    _getContext = getContextFn;
-    _saveSettings = saveSettingsFn;
-}
-
-function _root() {
-    const ctx = _getContext();
-    if (!ctx.extensionSettings[MODULE_NAME]) {
-        ctx.extensionSettings[MODULE_NAME] = { config: {}, chats: {} };
+    if (!extensionSettings[MODULE_NAME]) {
+        extensionSettings[MODULE_NAME] = { ...DEFAULT_SETTINGS, chats: {} };
     }
-    return ctx.extensionSettings[MODULE_NAME];
-}
 
-function _chatData(chatId) {
-    const root = _root();
-    if (!root.chats[chatId]) {
-        const defaultSlotId = _newSlotId();
-        root.chats[chatId] = {
-            activeSlotId: defaultSlotId,
-            slots: {
-                [defaultSlotId]: _createSlot(defaultSlotId, 'Default'),
-            },
-        };
+    const s = extensionSettings[MODULE_NAME];
+    for (const [key, val] of Object.entries(DEFAULT_SETTINGS)) {
+        if (s[key] === undefined) s[key] = val;
     }
-    return root.chats[chatId];
+    if (!s.chats) s.chats = {};
+
+    return s;
 }
 
-function _newSlotId() {
-    return `slot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+export function updateSettings(patch) {
+    const s = getSettings();
+    Object.assign(s, patch);
+    SillyTavern.getContext().saveSettingsDebounced();
 }
 
-function _createSlot(id, name) {
-    return { id, name, memories: [], createdAt: Date.now(), description: '' };
+// ═══ 记忆 CRUD ═══
+
+function generateId() {
+    return `bb_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function _save() {
-    _saveSettings?.();
+function extractKeywords(text) {
+    return text
+        .toLowerCase()
+        .split(/[\s,，。！？!?、；;：:""''（）()\[\]{}·\n\r\t]+/)
+        .map(t => t.trim())
+        .filter(t => t.length >= 2)
+        .filter((v, i, a) => a.indexOf(v) === i)
+        .slice(0, 20);
 }
 
-// ─── config (plugin settings) ─────────────────────────────
-
-export function getConfig() {
-    return _root().config || {};
-}
-
-export function setConfig(config) {
-    _root().config = { ..._root().config, ...config };
-    _save();
-}
-
-// ─── slot management ──────────────────────────────────────
-
-export function getSlots(chatId) {
-    return _chatData(chatId).slots;
-}
-
-export function getActiveSlotId(chatId) {
-    return _chatData(chatId).activeSlotId;
-}
-
-export function getActiveSlot(chatId) {
-    const cd = _chatData(chatId);
-    return cd.slots[cd.activeSlotId] ?? null;
-}
-
-export function switchSlot(chatId, slotId) {
-    const cd = _chatData(chatId);
-    if (!cd.slots[slotId]) throw new Error(`Slot ${slotId} not found`);
-    cd.activeSlotId = slotId;
-    _save();
-}
-
-export function createSlot(chatId, name, description = '') {
-    const cd = _chatData(chatId);
-    const id = _newSlotId();
-    cd.slots[id] = { ..._createSlot(id, name), description };
-    _save();
-    return id;
-}
-
-export function renameSlot(chatId, slotId, newName) {
-    const cd = _chatData(chatId);
-    if (!cd.slots[slotId]) return;
-    cd.slots[slotId].name = newName;
-    _save();
-}
-
-export function deleteSlot(chatId, slotId) {
-    const cd = _chatData(chatId);
-    if (!cd.slots[slotId]) return;
-    if (Object.keys(cd.slots).length <= 1) {
-        throw new Error('Cannot delete the last save slot.');
-    }
-    delete cd.slots[slotId];
-    if (cd.activeSlotId === slotId) {
-        cd.activeSlotId = Object.keys(cd.slots)[0];
-    }
-    _save();
-}
-
-/**
- * Deep-clone the active slot into a new slot (branch for IF lines).
- */
-export function duplicateSlot(chatId, slotId, newName) {
-    const cd = _chatData(chatId);
-    const source = cd.slots[slotId];
-    if (!source) throw new Error(`Slot ${slotId} not found`);
-
-    const newId = _newSlotId();
-    cd.slots[newId] = {
-        id: newId,
-        name: newName || `${source.name} (copy)`,
-        memories: JSON.parse(JSON.stringify(source.memories)),
-        createdAt: Date.now(),
-        description: source.description,
-    };
-    _save();
-    return newId;
-}
-
-// ─── memory CRUD ──────────────────────────────────────────
-
-/**
- * Get all memories in the active slot.
- */
 export function getMemories(chatId) {
-    return getActiveSlot(chatId)?.memories ?? [];
+    const s = getSettings();
+    return s.chats[chatId] || [];
 }
 
-/**
- * Add a memory entry to the active slot.
- * @param {string} chatId
- * @param {Partial<MemoryEntry>} data
- * @returns {MemoryEntry} the created entry
- */
-export function addMemory(chatId, data) {
-    const slot = getActiveSlot(chatId);
-    if (!slot) throw new Error('No active slot');
-    const entry = createMemoryEntry({ ...data, chatId });
-    slot.memories.push(entry);
-    _save();
+export function addMemory(chatId, content, source = 'manual') {
+    const s = getSettings();
+    if (!s.chats[chatId]) s.chats[chatId] = [];
+
+    const entry = {
+        id: generateId(),
+        content: content.trim(),
+        keywords: extractKeywords(content),
+        createdAt: Date.now(),
+        source,
+    };
+
+    s.chats[chatId].push(entry);
+    SillyTavern.getContext().saveSettingsDebounced();
     return entry;
 }
 
-/**
- * Update a memory entry by id (shallow merge).
- */
-export function updateMemory(chatId, entryId, updates) {
-    const slot = getActiveSlot(chatId);
-    if (!slot) return null;
-    const idx = slot.memories.findIndex(m => m.id === entryId);
-    if (idx === -1) return null;
-    slot.memories[idx] = { ...slot.memories[idx], ...updates };
-    _save();
-    return slot.memories[idx];
-}
+export function removeMemory(chatId, memoryId) {
+    const s = getSettings();
+    if (!s.chats[chatId]) return false;
 
-/**
- * Remove a memory entry by id.
- */
-export function removeMemory(chatId, entryId) {
-    const slot = getActiveSlot(chatId);
-    if (!slot) return;
-    slot.memories = slot.memories.filter(m => m.id !== entryId);
-    _save();
-}
+    const before = s.chats[chatId].length;
+    s.chats[chatId] = s.chats[chatId].filter(m => m.id !== memoryId);
 
-/**
- * Deactivate (soft-delete) a memory entry.
- */
-export function deactivateMemory(chatId, entryId) {
-    return updateMemory(chatId, entryId, { isActive: false });
-}
-
-/**
- * Toggle pin state.
- */
-export function togglePin(chatId, entryId) {
-    const slot = getActiveSlot(chatId);
-    if (!slot) return;
-    const entry = slot.memories.find(m => m.id === entryId);
-    if (!entry) return;
-    entry.isPinned = !entry.isPinned;
-    _save();
-    return entry;
-}
-
-/**
- * Bulk-replace all memories in the active slot (used for import).
- */
-export function replaceMemories(chatId, memories) {
-    const slot = getActiveSlot(chatId);
-    if (!slot) return;
-    slot.memories = memories;
-    _save();
-}
-
-// ─── consolidation & associative links ────────────────────
-
-/**
- * Run the consolidation pass: promote qualifying STM→LTM, prune excess STM.
- * @param {string} chatId
- * @param {import('./consolidation.js').ConsolidationConfig} config
- * @returns {{ promoted: string[], deactivated: string[] }}
- */
-export function runMemoryConsolidation(chatId, config = {}) {
-    const slot = getActiveSlot(chatId);
-    if (!slot) return { promoted: [], deactivated: [] };
-
-    const { promoted, deactivated } = runConsolidation(slot.memories, config);
-
-    for (const id of promoted) {
-        const idx = slot.memories.findIndex(m => m.id === id);
-        if (idx === -1) continue;
-        const updates = consolidateEntry(slot.memories[idx], config);
-        slot.memories[idx] = { ...slot.memories[idx], ...updates };
+    if (s.chats[chatId].length < before) {
+        SillyTavern.getContext().saveSettingsDebounced();
+        return true;
     }
+    return false;
+}
 
-    for (const id of deactivated) {
-        const idx = slot.memories.findIndex(m => m.id === id);
-        if (idx !== -1) {
-            slot.memories[idx].isActive = false;
+export function updateMemory(chatId, memoryId, newContent) {
+    const s = getSettings();
+    const list = s.chats[chatId];
+    if (!list) return null;
+
+    const entry = list.find(m => m.id === memoryId);
+    if (!entry) return null;
+
+    entry.content = newContent.trim();
+    entry.keywords = extractKeywords(newContent);
+    SillyTavern.getContext().saveSettingsDebounced();
+    return entry;
+}
+
+export function clearMemories(chatId) {
+    const s = getSettings();
+    s.chats[chatId] = [];
+    SillyTavern.getContext().saveSettingsDebounced();
+}
+
+export function exportMemories(chatId) {
+    const memories = getMemories(chatId);
+    return JSON.stringify(memories, null, 2);
+}
+
+export function importMemories(chatId, jsonString) {
+    const parsed = JSON.parse(jsonString);
+    if (!Array.isArray(parsed)) throw new Error('导入数据格式错误：应为数组');
+
+    const s = getSettings();
+    if (!s.chats[chatId]) s.chats[chatId] = [];
+
+    let count = 0;
+    for (const item of parsed) {
+        if (item.content && typeof item.content === 'string') {
+            s.chats[chatId].push({
+                id: generateId(),
+                content: item.content.trim(),
+                keywords: item.keywords || extractKeywords(item.content),
+                createdAt: item.createdAt || Date.now(),
+                source: item.source || 'import',
+            });
+            count++;
         }
     }
 
-    _save();
-    return { promoted, deactivated };
-}
-
-/**
- * Rebuild associative links for all active memories in the current slot.
- * @param {string} chatId
- * @param {number} [minStrength=0.15]
- */
-export function refreshAssociativeLinks(chatId, minStrength = 0.15) {
-    const slot = getActiveSlot(chatId);
-    if (!slot) return;
-
-    const linkMap = buildAssociativeLinks(slot.memories, minStrength);
-
-    for (const entry of slot.memories) {
-        entry.associativeLinks = linkMap.get(entry.id) || [];
-    }
-
-    _save();
-}
-
-/**
- * Get memories filtered by type.
- * @param {string} chatId
- * @param {'short_term'|'long_term'} memoryType
- * @returns {import('./memory-entry.js').MemoryEntry[]}
- */
-export function getMemoriesByType(chatId, memoryType) {
-    return getMemories(chatId).filter(m =>
-        m.isActive && (m.memoryType || 'short_term') === memoryType,
-    );
-}
-
-/**
- * Manually promote a specific memory to long-term.
- * @param {string} chatId
- * @param {string} entryId
- * @param {object} [config]
- */
-export function promoteToLongTerm(chatId, entryId, config = {}) {
-    const slot = getActiveSlot(chatId);
-    if (!slot) return null;
-    const idx = slot.memories.findIndex(m => m.id === entryId);
-    if (idx === -1) return null;
-
-    const updates = consolidateEntry(slot.memories[idx], config);
-    slot.memories[idx] = { ...slot.memories[idx], ...updates };
-    _save();
-    return slot.memories[idx];
-}
-
-/**
- * Demote a long-term memory back to short-term.
- * @param {string} chatId
- * @param {string} entryId
- */
-export function demoteToShortTerm(chatId, entryId) {
-    const slot = getActiveSlot(chatId);
-    if (!slot) return null;
-    const idx = slot.memories.findIndex(m => m.id === entryId);
-    if (idx === -1) return null;
-
-    slot.memories[idx] = {
-        ...slot.memories[idx],
-        memoryType: 'short_term',
-        consolidatedAt: null,
-    };
-    _save();
-    return slot.memories[idx];
-}
-
-// ─── import / export ──────────────────────────────────────
-
-/**
- * Export the active slot's memories as a JSON string.
- */
-export function exportSlot(chatId, slotId) {
-    const cd = _chatData(chatId);
-    const slot = cd.slots[slotId || cd.activeSlotId];
-    if (!slot) return null;
-    return JSON.stringify(slot, null, 2);
-}
-
-/**
- * Import memories from a JSON string into a new slot.
- */
-export function importSlot(chatId, jsonString, slotName) {
-    const parsed = JSON.parse(jsonString);
-    const id = _newSlotId();
-    const slot = {
-        id,
-        name: slotName || parsed.name || 'Imported',
-        memories: Array.isArray(parsed.memories) ? parsed.memories : [],
-        createdAt: Date.now(),
-        description: parsed.description || '',
-    };
-    const cd = _chatData(chatId);
-    cd.slots[id] = slot;
-    _save();
-    return id;
-}
-
-// ─── stats ────────────────────────────────────────────────
-
-export function getStats(chatId) {
-    const memories = getMemories(chatId);
-    return {
-        total: memories.length,
-        active: memories.filter(m => m.isActive).length,
-        pinned: memories.filter(m => m.isPinned).length,
-        slotCount: Object.keys(getSlots(chatId)).length,
-    };
+    SillyTavern.getContext().saveSettingsDebounced();
+    return count;
 }
