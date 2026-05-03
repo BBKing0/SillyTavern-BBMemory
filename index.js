@@ -46,7 +46,13 @@ import {
     getMemoryStats,
 } from './memory-store.js';
 
-import { searchMemories, simpleSearch } from './retriever.js';
+import {
+    searchMemories,
+    simpleSearch,
+    getRelevantMemories,
+    getResidentMemories,
+    buildMemoryInjectionPrompt,
+} from './retriever.js';
 import {
     MEMORY_TYPES,
     TRUTH_STATUS,
@@ -141,26 +147,35 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         decayMemories(chatId);
     }
 
-    // 智能检索相关记忆
-    const results = searchMemories(memories, userMessage, {
+    // 提取近期角色和地点作为检索上下文
+    const context = extractRecentContext(chat);
+
+    // 常驻记忆（L4）
+    const residentMemories = getResidentMemories(memories);
+
+    // 相关记忆（L1~L3，带评分和等级）
+    const relevantResults = getRelevantMemories(memories, userMessage, {
         maxResults: settings.maxResults || DEFAULT_SETTINGS.maxResults,
         minStrength: settings.minStrength || 0,
+        enabledTypes: settings.typeEnabled,
+        context,
     });
 
-    if (!results.length) {
+    if (!residentMemories.length && !relevantResults.length) {
         clearInjection();
         return;
     }
 
     // 巩固被检索到的记忆
-    const resultIds = results.map(m => m.id);
-    reinforceMemories(chatId, resultIds);
+    const resultIds = relevantResults.map(r => r.memory.id);
+    if (resultIds.length) reinforceMemories(chatId, resultIds);
 
-    // 按类型格式化注入文本
-    const formattedMemories = formatMemoriesForInjection(results, settings.typeEnabled);
-
-    const template = settings.injectionTemplate || DEFAULT_SETTINGS.injectionTemplate;
-    const injectionText = template.replace('{{memories}}', formattedMemories);
+    // 构建分区注入文本
+    const { text: injectionText, tokenEstimate, stats } = buildMemoryInjectionPrompt({
+        residentMemories,
+        relevantResults,
+        settings,
+    });
 
     const ctx = SillyTavern.getContext();
     ctx.setExtensionPrompt(
@@ -172,8 +187,36 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         ROLE_SYSTEM,
     );
 
-    console.log(`[${DISPLAY_NAME}] 注入了 ${results.length} 条相关记忆`);
+    console.log(
+        `[${DISPLAY_NAME}] 注入: 常驻${stats.residentCount} L3×${stats.l3} L2×${stats.l2} L1×${stats.l1} ≈${tokenEstimate}tok`,
+    );
 };
+
+/**
+ * 从近期聊天中提取角色名和地点，用于提升场景/关系评分。
+ */
+function extractRecentContext(chat) {
+    const recentActors = [];
+    const recentLocations = [];
+
+    if (!chat?.length) return { recentActors, recentLocations };
+
+    const recent = chat.slice(-6);
+    for (const msg of recent) {
+        if (!msg.mes) continue;
+        const text = msg.mes;
+        // 简单提取：引号中的名字、「」中的对话
+        const nameMatches = text.match(/(?:「|")([^「」""]{1,10})(?:」|")/g);
+        if (nameMatches) {
+            for (const m of nameMatches) {
+                const name = m.replace(/[「」""]/g, '').trim();
+                if (name.length >= 2 && name.length <= 8) recentActors.push(name);
+            }
+        }
+    }
+
+    return { recentActors: [...new Set(recentActors)], recentLocations };
+}
 
 function clearInjection() {
     try {
@@ -202,6 +245,9 @@ async function refreshSidebar() {
     const maxEl = document.getElementById('bb_memory_max_results');
     if (maxEl) maxEl.value = String(getSettings().maxResults ?? DEFAULT_SETTINGS.maxResults);
 
+    const tokenBudgetEl = document.getElementById('bb_memory_token_budget');
+    if (tokenBudgetEl) tokenBudgetEl.value = String(getSettings().tokenBudget ?? DEFAULT_SETTINGS.tokenBudget);
+
     const autoGenEl = document.getElementById('bb_memory_auto_gen');
     if (autoGenEl) autoGenEl.checked = getSettings().autoGenEnabled;
 }
@@ -220,6 +266,11 @@ function bindSidebarEvents() {
     document.getElementById('bb_memory_max_results')?.addEventListener('change', (e) => {
         const val = parseInt(e.target.value, 10);
         if (!isNaN(val) && val >= 1) updateSettings({ maxResults: val });
+    });
+
+    document.getElementById('bb_memory_token_budget')?.addEventListener('change', (e) => {
+        const val = parseInt(e.target.value, 10);
+        if (!isNaN(val) && val >= 100) updateSettings({ tokenBudget: val });
     });
 
     document.getElementById('bb_memory_template')?.addEventListener('change', (e) => {
@@ -491,6 +542,10 @@ function buildMemoryItemHTML(m) {
                 <button class="menu_button bb-mem-btn-sm bb-mem-fact-update" data-id="${m.id}" title="更新内容（保留历史）">
                     <i class="fa-solid fa-pen-to-square"></i>
                 </button>
+                <button class="menu_button bb-mem-btn-sm bb-mem-resident ${m.resident ? 'active' : ''}"
+                        data-id="${m.id}" title="${m.resident ? '取消常驻' : '设为常驻记忆'}">
+                    <i class="fa-solid fa-thumbtack"></i>
+                </button>
                 <button class="menu_button bb-mem-btn-sm bb-mem-edit" data-id="${m.id}" title="快速编辑">
                     <i class="fa-solid fa-pen"></i>
                 </button>
@@ -757,6 +812,21 @@ function rebindItemActions(overlay, chatId) {
             const noteId = btn.dataset.noteId;
             await removeHiddenNote(chatId, memId, noteId);
             toastr.info('备注已删除', DISPLAY_NAME);
+            await rerenderManagerList(overlay, chatId);
+        });
+    });
+
+    // 📌 常驻记忆切换
+    overlay.querySelectorAll('.bb-mem-resident').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            const memories = await getMemories(chatId);
+            const memory = memories.find(m => m.id === id);
+            if (!memory) return;
+            const newVal = !memory.resident;
+            await updateMemory(chatId, id, { resident: newVal });
+            toastr.success(newVal ? '已设为常驻记忆' : '已取消常驻', DISPLAY_NAME);
             await rerenderManagerList(overlay, chatId);
         });
     });

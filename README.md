@@ -89,7 +89,8 @@
 | 设置项 | 说明 | 默认值 |
 |--------|------|--------|
 | 注入深度 | 记忆插入到聊天历史中的位置（0=最末尾） | 4 |
-| 最大检索数 | 每次生成时最多注入多少条记忆 | 5 |
+| 最大检索数 | 每次生成时最多检索多少条相关记忆 | 10 |
+| Token 预算 | 注入记忆的最大 token 数，防止上下文溢出 | 800 |
 | 注入模板 | 控制记忆注入格式，`{{memories}}` 为占位符 | `[角色长期记忆]\n{{memories}}` |
 | AI 自动生成 | 是否自动从 AI 回复中提取记忆 | 关闭 |
 | API 模式 | 使用主 API 还是自定义端点 | 主 API |
@@ -117,10 +118,11 @@
 | `content` | string | 完整原始内容 |
 | `summary` | string | 一句话摘要 |
 | `verbatim` | string | 重要原话（承诺、告白等） |
-| `hiddenNotes` | string | 隐藏备注（AI 可见，用户默认不可见） |
+| `hiddenNotes` | array | 隐藏备注（AI 可见，用户默认不可见） |
 | `subject` / `target` | string | 主体/对象 |
-| `truthStatus` | string | 可信度状态：confirmed/rumor/lie/unknown |
+| `truthStatus` | string | 可信度：true/false/unknown/rumor/misleading/secret_true |
 | `pinned` | boolean | 是否固定（固定的记忆不会衰减） |
+| `resident` | boolean | 是否常驻（v2.4，每轮以索引卡形式注入） |
 
 ---
 
@@ -319,6 +321,39 @@ bb-memory/
 - `emotionalValence` 自动转换为 `emotionalWeight`（取绝对值）
 - 旧版 metadata 中的结构化信息会被提取到新字段（如 `metadata.npcName` → `subject`）
 - `typeEnabled` 设置自动补充新认知类型键
+
+---
+
+### v2.4.0（2026-05-03）— 检索与注入机制
+
+**新增功能：**
+- 8 维综合评分：`keywordScore`、`tagScore`、`embeddingScore`（预留）、`importance`、`emotionalWeight`、`strength`、`sceneScore`、`relationScore`
+- 分等级注入：L1（标签）、L2（摘要）、L3（完整内容+原话）、L4（常驻索引卡）
+- 常驻记忆：`resident` 字段标记关键角色/物品/世界状态，每轮以低 token 索引卡注入
+- 分区注入模板：`[常驻记忆]` / `[本轮相关记忆]` / `[隐藏备注]`
+- Token 预算控制：可调节的注入 token 上限（默认 800），常驻记忆占比不超过 30%
+- 场景/关系评分：自动检测对话中的角色名和地点，提升相关记忆优先级
+- 记忆管理器常驻按钮：📌 图钉图标，一键切换常驻状态
+
+**新增/重大修改文件：**
+- `retriever.js` — 全面重写：8 维评分 + 注入等级 + 常驻记忆 + token 预算 + `buildMemoryInjectionPrompt()`
+- `index.js` — 注入拦截器改用新的分区流程，新增 `extractRecentContext()` 近期上下文提取
+- `memory-store.js` — 新增 `resident` 字段迁移、`tokenBudget` 设置项
+- `settings.html` — 新增 Token 预算设置输入框
+- `style.css` — 常驻记忆按钮样式
+
+**核心函数：**
+- `calculateMemoryScore(memory, query, context)` — 8 维综合评分
+- `getResidentMemories(memories)` — 提取常驻记忆
+- `getRelevantMemories(memories, queryText, options)` — 智能检索（带评分和等级）
+- `buildMemoryInjectionPrompt({ residentMemories, relevantResults, settings })` — 分区注入构建
+- `chooseInjectionLevel(memory, score)` — 注入等级选择
+
+**向后兼容：**
+- `searchMemories()` 保留旧签名，内部调用 `getRelevantMemories()`
+- 旧记忆数据自动获得 `resident: false` 默认值
+- `simpleSearch()` 不受影响（管理面板搜索）
+- `tokenBudget` 默认 800，不影响旧设置
 
 ---
 

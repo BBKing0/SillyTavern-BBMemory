@@ -1,50 +1,64 @@
 /**
- * retriever.js —— BB-Memory 的"搜索引擎"
+ * retriever.js —— BB-Memory 的"搜索引擎 + 注入调度器"
  *
- * ═══════════════════════════════════════════════════════════
- *  代码小课堂
- * ═══════════════════════════════════════════════════════════
- *
- * 这个文件是什么？
- *   就像图书管理员帮你找书一样，这个文件负责在记忆库中
- *   找到与当前对话最相关的记忆。
- *
- * 用了哪些编程概念？
- *   - 算法：综合多个"打分维度"来判断一条记忆的相关性
- *   - 排序(sort)：按分数从高到低排列
- *   - 过滤(filter)：只保留满足条件的记忆
- *   - Fuse.js：SillyTavern 内置的模糊搜索库
- *     （能理解拼写错误或近似匹配）
- *
- * 搜索评分公式：
- *   总分 = 关键词匹配(30%) + 标签匹配(25%) + 记忆强度(25%) + 时效性(20%)
- *
- * 关键函数：
- *   - searchMemories()：主搜索函数，返回排序后的相关记忆
- *   - scoreMemory()：给单条记忆打综合分
- *   - computeKeywordMatch()：关键词维度打分
- *   - computeTagMatch()：标签维度打分
- *   - computeRecency()：时间维度打分（越新分越高）
- *
- * ═══════════════════════════════════════════════════════════
+ * v2.4 重写：
+ *   - 8 维综合评分 calculateMemoryScore()
+ *   - 分等级注入 L1/L2/L3/L4
+ *   - 常驻记忆 getResidentMemories()
+ *   - token 预算控制
+ *   - buildMemoryInjectionPrompt() 统一输出
  */
 
-// ═══ 评分权重配置 ═══
-const WEIGHTS = {
-    keyword: 0.30,
-    tag: 0.25,
-    strength: 0.25,
-    recency: 0.20,
+import {
+    COGNITIVE_TYPES,
+    TRUTH_STATUS,
+    HIDDEN_NOTE_TYPES,
+    resolveMemoryType,
+    getCategoryLabel,
+} from './memory-types.js';
+
+// ═══════════════════════════════════════════════════════════
+//  评分权重（可调参，总和不强制为 1，最终会归一化）
+// ═══════════════════════════════════════════════════════════
+
+const SCORE_WEIGHTS = {
+    keyword:        0.22,
+    tag:            0.15,
+    embedding:      0.00,   // 预留：接入 embedding 后改为 0.15~0.20
+    importance:     0.12,
+    emotionalWeight:0.08,
+    strength:       0.15,
+    scene:          0.15,
+    relation:       0.13,
 };
 
-// 时效性计算的时间窗口（7天内的记忆获得满分时效性）
 const RECENCY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
-// ═══ 文本分词 ═══
+// ═══════════════════════════════════════════════════════════
+//  注入等级定义
+// ═══════════════════════════════════════════════════════════
 
-/**
- * 从文本中提取搜索用的词语（token）
- */
+export const INJECTION_LEVELS = Object.freeze({
+    L4: { id: 'L4', label: '常驻',   tokenCost: 'minimal', description: '每轮注入的索引卡' },
+    L3: { id: 'L3', label: '完整',   tokenCost: 'high',    description: '完整内容 + 原话' },
+    L2: { id: 'L2', label: '摘要',   tokenCost: 'medium',  description: '摘要级别' },
+    L1: { id: 'L1', label: '标签',   tokenCost: 'low',     description: '仅标题/标签' },
+});
+
+// 大致 token 估算：1 个汉字 ≈ 1.5 token，1 个英文单词 ≈ 1 token
+function estimateTokens(text) {
+    if (!text) return 0;
+    const cjk = text.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g);
+    const cjkTokens = cjk ? cjk.length * 1.5 : 0;
+    const rest = text.replace(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g, '');
+    const wordTokens = rest.split(/\s+/).filter(Boolean).length;
+    return Math.ceil(cjkTokens + wordTokens);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  文本分词
+// ═══════════════════════════════════════════════════════════
+
 function extractTokens(text) {
     return text
         .toLowerCase()
@@ -53,40 +67,81 @@ function extractTokens(text) {
         .filter(t => t.length >= 2);
 }
 
-// ═══ 评分函数 ═══
+// ═══════════════════════════════════════════════════════════
+//  8 维综合评分
+// ═══════════════════════════════════════════════════════════
 
 /**
- * 关键词匹配度评分
- * 检查查询词语在记忆内容+关键词中出现了多少
+ * 对单条记忆进行 8 维综合评分。
+ * 返回 { total, breakdown } — breakdown 包含每个维度的原始分。
+ *
+ * @param {object} memory - 记忆条目
+ * @param {string} query - 用户当前消息
+ * @param {object} context - 可选上下文 { recentActors, recentLocations, chatHistory }
  */
-function computeKeywordMatch(memory, queryTokens) {
+export function calculateMemoryScore(memory, query, context = {}) {
+    const queryTokens = extractTokens(query);
+    const now = Date.now();
+
+    const breakdown = {
+        keyword:         computeKeywordScore(memory, queryTokens),
+        tag:             computeTagScore(memory.tags, queryTokens),
+        embedding:       computeEmbeddingScore(memory, query),
+        importance:      memory.importance ?? 0.5,
+        emotionalWeight: memory.emotionalWeight ?? 0.0,
+        strength:        memory.strength ?? 1.0,
+        scene:           computeSceneScore(memory, queryTokens, context),
+        relation:        computeRelationScore(memory, queryTokens, context),
+    };
+
+    // 加权求和
+    let weightedSum = 0;
+    let weightTotal = 0;
+    for (const [dim, weight] of Object.entries(SCORE_WEIGHTS)) {
+        weightedSum += (breakdown[dim] || 0) * weight;
+        weightTotal += weight;
+    }
+    const normalized = weightTotal > 0 ? weightedSum / weightTotal : 0;
+
+    // 时效性作为小幅修正（不是主维度，避免过度惩罚旧记忆）
+    const recencyBonus = computeRecency(memory.createdAt, now) * 0.1;
+
+    // pinned 记忆获得固定底分加成
+    const pinBonus = memory.pinned ? 0.15 : 0;
+
+    const total = Math.min(1.0, normalized + recencyBonus + pinBonus);
+
+    return { total, breakdown };
+}
+
+// ═══ 各维度计算 ═══
+
+function computeKeywordScore(memory, queryTokens) {
     if (!queryTokens.length) return 0;
 
-    const memText = memory.content.toLowerCase();
-    const memKeywords = (memory.keywords || []).join(' ').toLowerCase();
-    const searchTarget = memText + ' ' + memKeywords;
+    const searchTarget = [
+        memory.content,
+        memory.title || '',
+        memory.summary || '',
+        memory.subject || '',
+        memory.target || '',
+        (memory.keywords || []).join(' '),
+    ].join(' ').toLowerCase();
 
     let matchCount = 0;
     for (const token of queryTokens) {
-        if (searchTarget.includes(token)) {
-            matchCount++;
-        }
+        if (searchTarget.includes(token)) matchCount++;
     }
-
     return matchCount / queryTokens.length;
 }
 
-/**
- * 标签匹配度评分
- * 如果查询词语命中了记忆的标签，按标签权重累加
- */
-function computeTagMatch(memoryTags, queryTokens) {
-    if (!memoryTags || !memoryTags.length || !queryTokens.length) return 0;
+function computeTagScore(tags, queryTokens) {
+    if (!tags?.length || !queryTokens.length) return 0;
 
     let totalWeight = 0;
     let matchedWeight = 0;
 
-    for (const tag of memoryTags) {
+    for (const tag of tags) {
         const tagName = (tag.name || '').toLowerCase();
         const tagWeight = tag.weight || 0.5;
         totalWeight += tagWeight;
@@ -98,135 +153,389 @@ function computeTagMatch(memoryTags, queryTokens) {
             }
         }
     }
-
     return totalWeight > 0 ? matchedWeight / totalWeight : 0;
 }
 
 /**
- * 时效性评分
- * 越新创建的记忆，分数越高（7天内为满分范围）
+ * 预留：embedding 相似度评分。
+ * 当接入 embedding API 后，在此计算余弦相似度。
  */
+function computeEmbeddingScore(_memory, _query) {
+    return 0;
+}
+
+/**
+ * 场景相关度：检查当前消息是否提到了记忆中的地点或情景关键词。
+ */
+function computeSceneScore(memory, queryTokens, context) {
+    if (!queryTokens.length) return 0;
+    let score = 0;
+    let checks = 0;
+
+    // 地点匹配
+    if (memory.location) {
+        checks++;
+        const loc = memory.location.toLowerCase();
+        if (queryTokens.some(t => loc.includes(t) || t.includes(loc))) score += 1;
+    }
+
+    // context 中的近期地点匹配
+    if (context.recentLocations?.length && memory.location) {
+        checks++;
+        const loc = memory.location.toLowerCase();
+        if (context.recentLocations.some(l => l.toLowerCase().includes(loc) || loc.includes(l.toLowerCase()))) {
+            score += 1;
+        }
+    }
+
+    // categoryPath 中的场景类提升
+    if (memory.categoryPath?.startsWith('episode.') || memory.categoryPath?.startsWith('location.')) {
+        checks++;
+        if (queryTokens.length > 0) score += 0.3;
+    }
+
+    return checks > 0 ? Math.min(1, score / checks) : 0;
+}
+
+/**
+ * 关系相关度：检查当前消息是否提到了记忆中的人物。
+ */
+function computeRelationScore(memory, queryTokens, context) {
+    if (!queryTokens.length) return 0;
+    let score = 0;
+    let checks = 0;
+
+    const actorNames = [
+        memory.subject,
+        memory.target,
+        ...(memory.actors || []),
+    ].filter(Boolean).map(n => n.toLowerCase());
+
+    if (actorNames.length) {
+        checks++;
+        for (const name of actorNames) {
+            if (queryTokens.some(t => name.includes(t) || t.includes(name))) {
+                score += 1;
+                break;
+            }
+        }
+    }
+
+    // context 中的近期角色匹配
+    if (context.recentActors?.length && actorNames.length) {
+        checks++;
+        for (const name of actorNames) {
+            if (context.recentActors.some(a => a.toLowerCase().includes(name) || name.includes(a.toLowerCase()))) {
+                score += 1;
+                break;
+            }
+        }
+    }
+
+    // NPC / 关系类记忆基础加成
+    if (memory.categoryPath?.startsWith('npc.')) {
+        checks++;
+        score += 0.3;
+    }
+
+    return checks > 0 ? Math.min(1, score / checks) : 0;
+}
+
 function computeRecency(createdAt, now) {
     if (!createdAt) return 0.5;
     const age = now - createdAt;
     if (age <= 0) return 1.0;
     if (age >= RECENCY_WINDOW_MS) {
-        // 超过7天的记忆，使用对数衰减，不会降到0
         return Math.max(0.1, 1 - Math.log10(age / RECENCY_WINDOW_MS + 1) * 0.5);
     }
     return 1 - (age / RECENCY_WINDOW_MS) * 0.5;
 }
 
+// ═══════════════════════════════════════════════════════════
+//  注入等级选择
+// ═══════════════════════════════════════════════════════════
+
 /**
- * 综合评分函数
+ * 根据记忆属性和评分决定注入等级。
+ *   L4 = 常驻（resident === true）
+ *   L3 = 高分或有 verbatim
+ *   L2 = 中等分数
+ *   L1 = 低分但仍在阈值内
  */
-function scoreMemory(memory, queryTokens, now) {
-    const keywordScore = computeKeywordMatch(memory, queryTokens);
-    const tagScore = computeTagMatch(memory.tags, queryTokens);
-    const strengthScore = memory.strength ?? 1.0;
-    const recencyScore = computeRecency(memory.createdAt, now);
-
-    const totalScore =
-        keywordScore * WEIGHTS.keyword +
-        tagScore * WEIGHTS.tag +
-        strengthScore * WEIGHTS.strength +
-        recencyScore * WEIGHTS.recency;
-
-    // 重要性作为加成系数（0.5~1.5倍）
-    const importanceBonus = 0.5 + (memory.importance || 0.5);
-
-    return totalScore * importanceBonus;
+export function chooseInjectionLevel(memory, score) {
+    if (memory.resident) return 'L4';
+    if (score >= 0.55 || memory.verbatim) return 'L3';
+    if (score >= 0.30) return 'L2';
+    return 'L1';
 }
 
-// ═══ 主搜索函数 ═══
+// ═══════════════════════════════════════════════════════════
+//  常驻记忆
+// ═══════════════════════════════════════════════════════════
 
 /**
- * 在记忆列表中搜索与查询文本相关的记忆
- *
- * @param {Array} memories - 记忆数组
- * @param {string} queryText - 搜索文本
- * @param {object} options - 搜索选项
- * @param {number} options.maxResults - 最多返回条数（默认5）
- * @param {string|null} options.typeFilter - 只搜索某种类型（null=全部）
- * @param {number} options.minStrength - 最低记忆强度过滤（默认0）
- * @param {boolean} options.useFuse - 是否使用Fuse模糊搜索增强（默认true）
- * @returns {Array} 匹配到的记忆数组（按相关度从高到低）
+ * 从记忆列表中提取常驻记忆（resident === true）。
+ * 常驻记忆按 importance 降序排列。
  */
-export function searchMemories(memories, queryText, options = {}) {
+export function getResidentMemories(memories) {
+    return memories
+        .filter(m => m.resident === true && m.status !== 'archived')
+        .sort((a, b) => (b.importance || 0) - (a.importance || 0));
+}
+
+// ═══════════════════════════════════════════════════════════
+//  智能检索
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 在记忆中搜索与查询最相关的条目。
+ * 返回带评分的数组 [{ memory, score, breakdown, level }]
+ */
+export function getRelevantMemories(memories, queryText, options = {}) {
     const {
-        maxResults = 5,
+        maxResults = 10,
+        minScore = 0.05,
         typeFilter = null,
         minStrength = 0,
+        enabledTypes = null,
+        context = {},
         useFuse = true,
-    } = typeof options === 'number' ? { maxResults: options } : options;
+    } = options;
 
     if (!memories.length || !queryText.trim()) return [];
 
-    const queryTokens = extractTokens(queryText);
-    if (queryTokens.length === 0) return [];
-
-    const now = Date.now();
-
-    // 第一步：过滤
-    let candidates = memories;
-
-    if (typeFilter) {
-        candidates = candidates.filter(m => m.type === typeFilter);
-    }
-
-    if (minStrength > 0) {
-        candidates = candidates.filter(m => (m.strength ?? 1.0) >= minStrength);
-    }
+    // 过滤
+    let candidates = memories.filter(m => {
+        if (m.resident) return false;       // 常驻记忆单独处理
+        if (m.status === 'archived') return false;
+        if (typeFilter && (m.cognitiveType || m.type) !== typeFilter) return false;
+        if (minStrength > 0 && (m.strength ?? 1.0) < minStrength) return false;
+        if (enabledTypes) {
+            const ct = resolveMemoryType(m);
+            if (!enabledTypes[ct]) return false;
+        }
+        return true;
+    });
 
     if (!candidates.length) return [];
 
-    // 第二步：Fuse 模糊搜索（如果可用）
+    // Fuse 模糊匹配加成
     let fuseBoostMap = new Map();
-
     if (useFuse) {
         try {
             const Fuse = SillyTavern.libs.Fuse;
             if (Fuse) {
                 const fuse = new Fuse(candidates, {
-                    keys: ['content', 'keywords'],
+                    keys: ['content', 'title', 'summary', 'keywords', 'subject', 'target'],
                     threshold: 0.4,
                     includeScore: true,
                 });
-                const fuseResults = fuse.search(queryText);
-                for (const result of fuseResults) {
-                    // Fuse 的 score 越低越好(0=完美匹配)，转换为加成
-                    const boost = 1 - (result.score || 0);
-                    fuseBoostMap.set(result.item.id, boost * 0.3);
+                for (const result of fuse.search(queryText)) {
+                    fuseBoostMap.set(result.item.id, (1 - (result.score || 0)) * 0.15);
                 }
             }
-        } catch {
-            // Fuse 不可用时忽略
-        }
+        } catch { /* Fuse 不可用 */ }
     }
 
-    // 第三步：综合评分
+    // 评分
     const scored = [];
-
     for (const memory of candidates) {
-        let score = scoreMemory(memory, queryTokens, now);
-
-        // 加上 Fuse 模糊匹配的加成
+        const { total, breakdown } = calculateMemoryScore(memory, queryText, context);
         const fuseBoost = fuseBoostMap.get(memory.id) || 0;
-        score += fuseBoost;
+        const finalScore = Math.min(1.0, total + fuseBoost);
 
-        if (score > 0.01) {
-            scored.push({ memory, score });
+        if (finalScore >= minScore) {
+            scored.push({
+                memory,
+                score: finalScore,
+                breakdown,
+                level: chooseInjectionLevel(memory, finalScore),
+            });
         }
     }
 
-    // 第四步：排序并返回
     scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, maxResults);
+}
 
-    return scored.slice(0, maxResults).map(item => item.memory);
+// ═══════════════════════════════════════════════════════════
+//  分等级格式化
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 按注入等级格式化一条记忆为文本行。
+ *   L1 → 标签/标题
+ *   L2 → 摘要
+ *   L3 → 完整内容 + 原话
+ *   L4 → 常驻索引卡
+ */
+function formatByLevel(memory, level) {
+    const titlePart = memory.title ? `[${memory.title}]` : '';
+    const catPart = getCategoryLabel(memory.categoryPath);
+    const catLabel = catPart ? `(${catPart})` : '';
+
+    // truthStatus 标记
+    let truthMark = '';
+    if (memory.truthStatus && memory.truthStatus !== 'true') {
+        const ts = TRUTH_STATUS[memory.truthStatus];
+        if (ts) truthMark = `{${ts.label}} `;
+    }
+
+    switch (level) {
+        case 'L4': {
+            // 常驻索引卡：极简
+            const tagStr = (memory.tags || []).slice(0, 3).map(t => t.name || t).join('/');
+            const label = memory.title || memory.summary || memory.content.slice(0, 20);
+            return `◆ ${label}${tagStr ? ` [${tagStr}]` : ''}`;
+        }
+        case 'L1': {
+            const tagStr = (memory.tags || []).slice(0, 4).map(t => t.name || t).join(', ');
+            return `${titlePart}${catLabel} ${truthMark}${tagStr || memory.content.slice(0, 30)}`;
+        }
+        case 'L2': {
+            const text = memory.summary || memory.content.slice(0, 80);
+            return `${titlePart}${catLabel} ${truthMark}${text}`;
+        }
+        case 'L3':
+        default: {
+            const parts = [];
+            if (titlePart) parts.push(titlePart);
+            if (catLabel) parts.push(catLabel);
+            if (truthMark) parts.push(truthMark);
+            parts.push(memory.summary || memory.content);
+            if (memory.verbatim) parts.push(`「${memory.verbatim}」`);
+            if (memory.subject && memory.target) {
+                parts.push(`(${memory.subject} → ${memory.target})`);
+            } else if (memory.subject) {
+                parts.push(`(${memory.subject})`);
+            }
+            return parts.join(' ');
+        }
+    }
 }
 
 /**
- * 简单文本搜索（用于管理面板的搜索框，不需要复杂评分）
+ * 格式化 hiddenNotes 行
+ */
+function formatNoteLines(memory) {
+    if (!Array.isArray(memory.hiddenNotes)) return '';
+    const notes = memory.hiddenNotes.filter(n => n.allowInjection !== false);
+    if (!notes.length) return '';
+    return notes.map(n => {
+        const typeLabel = HIDDEN_NOTE_TYPES[n.type]?.label || '备注';
+        return `   [隐·${typeLabel}] ${n.content}`;
+    }).join('\n');
+}
+
+// ═══════════════════════════════════════════════════════════
+//  统一注入 Prompt 构建
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 构建完整的记忆注入文本，分三个区块：
+ *   [常驻记忆]   — L4 常驻索引卡
+ *   [本轮相关记忆] — L1~L3 分等级注入
+ *   [隐藏备注]   — hiddenNotes（含常驻 + 相关）
+ *
+ * @param {object} params
+ * @param {Array} params.residentMemories - getResidentMemories() 的结果
+ * @param {Array} params.relevantResults  - getRelevantMemories() 的结果
+ * @param {object} params.settings        - 用户设置
+ * @returns {{ text: string, tokenEstimate: number, stats: object }}
+ */
+export function buildMemoryInjectionPrompt({ residentMemories, relevantResults, settings }) {
+    const tokenBudget = settings.tokenBudget || 800;
+    let tokenUsed = 0;
+    const stats = { residentCount: 0, l3: 0, l2: 0, l1: 0, totalMemories: 0, hiddenNoteCount: 0 };
+
+    const sections = [];
+    const allHiddenLines = [];
+
+    // ── 区块 1：常驻记忆 ──
+    if (residentMemories.length) {
+        const residentLines = [];
+        for (const m of residentMemories) {
+            const line = formatByLevel(m, 'L4');
+            const cost = estimateTokens(line);
+            if (tokenUsed + cost > tokenBudget * 0.3) break; // 常驻最多占预算 30%
+            residentLines.push(line);
+            tokenUsed += cost;
+            stats.residentCount++;
+
+            const noteText = formatNoteLines(m);
+            if (noteText) {
+                allHiddenLines.push(noteText);
+                stats.hiddenNoteCount++;
+            }
+        }
+        if (residentLines.length) {
+            sections.push(`[常驻记忆]\n${residentLines.join('\n')}`);
+        }
+    }
+
+    // ── 区块 2：本轮相关记忆（按等级分组）──
+    const enabledTypes = settings.typeEnabled || {};
+    const relevantLines = [];
+
+    for (const { memory, level } of relevantResults) {
+        const cogType = resolveMemoryType(memory);
+        if (enabledTypes[cogType] === false) continue;
+
+        const line = formatByLevel(memory, level);
+        const cost = estimateTokens(line);
+        if (tokenUsed + cost > tokenBudget) break;
+
+        relevantLines.push(line);
+        tokenUsed += cost;
+        stats[level === 'L3' ? 'l3' : level === 'L2' ? 'l2' : 'l1']++;
+
+        const noteText = formatNoteLines(memory);
+        if (noteText) {
+            allHiddenLines.push(noteText);
+            stats.hiddenNoteCount++;
+        }
+    }
+
+    if (relevantLines.length) {
+        sections.push(`[本轮相关记忆]\n${relevantLines.map((l, i) => `${i + 1}. ${l}`).join('\n')}`);
+    }
+
+    // ── 区块 3：隐藏备注 ──
+    if (allHiddenLines.length) {
+        sections.unshift('（标记为[隐]的信息仅供你塑造角色行为和推进剧情，绝不要在对话中直接透露。）');
+        sections.push(`[隐藏备注]\n${allHiddenLines.join('\n')}`);
+    }
+
+    stats.totalMemories = stats.residentCount + stats.l3 + stats.l2 + stats.l1;
+    const text = sections.join('\n\n');
+    const tokenEstimate = estimateTokens(text);
+
+    return { text, tokenEstimate, stats };
+}
+
+// ═══════════════════════════════════════════════════════════
+//  向后兼容：旧版 searchMemories / simpleSearch
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 兼容旧版调用（返回记忆数组而非带评分的结果）
+ */
+export function searchMemories(memories, queryText, options = {}) {
+    const {
+        maxResults = 5,
+        minStrength = 0,
+    } = typeof options === 'number' ? { maxResults: options } : options;
+
+    const results = getRelevantMemories(memories, queryText, {
+        maxResults,
+        minStrength,
+    });
+
+    return results.map(r => r.memory);
+}
+
+/**
+ * 简单文本搜索（管理面板搜索框用）
  */
 export function simpleSearch(memories, queryText, maxResults = 100) {
     if (!memories.length || !queryText.trim()) return memories.slice(0, maxResults);
@@ -235,11 +544,12 @@ export function simpleSearch(memories, queryText, maxResults = 100) {
     const tokens = extractTokens(queryText);
 
     const results = memories.filter(m => {
-        const content = m.content.toLowerCase();
-        const keywords = (m.keywords || []).join(' ').toLowerCase();
-        const target = content + ' ' + keywords;
+        const target = [
+            m.content, m.title || '', m.summary || '',
+            m.subject || '', m.target || '',
+            (m.keywords || []).join(' '),
+        ].join(' ').toLowerCase();
 
-        // 整体包含或 token 命中
         if (target.includes(queryLower)) return true;
         return tokens.some(t => target.includes(t));
     });

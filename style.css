@@ -832,3 +832,21 @@
     margin-left: 6px;
     opacity: 0.8;
 }
+
+/* ═══════════════════════════════════════
+   v2.4: Resident memory button
+   ═══════════════════════════════════════ */
+
+.bb-mem-resident {
+    transition: color 0.2s, background-color 0.2s;
+}
+
+.bb-mem-resident.active {
+    color: #fff;
+    background-color: #e65100;
+    border-color: #e65100;
+}
+
+.bb-mem-resident.active:hover {
+    background-color: #bf360c;
+}

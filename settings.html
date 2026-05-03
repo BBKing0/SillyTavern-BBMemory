@@ -46,10 +46,19 @@
             <div class="bb-mem-sidebar-section">
                 <label for="bb_memory_max_results">
                     最大检索数
-                    <small class="bb-mem-hint">每次生成时最多注入多少条相关记忆</small>
+                    <small class="bb-mem-hint">每次生成时最多检索多少条相关记忆</small>
                 </label>
                 <input id="bb_memory_max_results" type="number" class="text_pole"
-                       min="1" max="20" value="5" />
+                       min="1" max="30" value="10" />
+            </div>
+
+            <div class="bb-mem-sidebar-section">
+                <label for="bb_memory_token_budget">
+                    Token 预算
+                    <small class="bb-mem-hint">注入记忆的最大 token 数，防止上下文溢出</small>
+                </label>
+                <input id="bb_memory_token_budget" type="number" class="text_pole"
+                       min="100" max="4000" step="50" value="800" />
             </div>
 
             <div class="bb-mem-sidebar-section">

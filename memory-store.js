@@ -40,6 +40,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
     },
     // 消息稳定化
     shortTermWindow: 5,
+    // v2.4: 注入 token 预算与检索
+    tokenBudget: 800,
+    maxResults: 10,
     // 统计
     messageCountSinceDecay: 0,
 });
@@ -188,6 +191,12 @@ function migrateToV23(entry) {
         changed = true;
     }
 
+    // v2.4: resident 字段
+    if (entry.resident === undefined) {
+        entry.resident = false;
+        changed = true;
+    }
+
     return changed;
 }
 
@@ -284,6 +293,7 @@ export async function addMemory(chatId, content, cognitiveType = 'episode', sour
         strength: 1.0,
         status: options.status || 'active',
         pinned: options.pinned || false,
+        resident: options.resident || false,
         // ── 来源 ──
         source,
         sourceMessageIds: options.sourceMessageIds || [],
