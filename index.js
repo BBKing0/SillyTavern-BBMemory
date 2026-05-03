@@ -46,6 +46,7 @@ import {
 import { searchMemories, simpleSearch } from './retriever.js';
 import { MEMORY_TYPES, formatMemoriesForInjection, getTypeDefinition } from './memory-types.js';
 import { initAutoGenerator, stopAutoGenerator } from './auto-generator.js';
+import { syncMessageVisibility } from './message-state.js';
 
 // ═══════════════════════════════════════════════════════════
 //  常量
@@ -674,6 +675,23 @@ function registerSlashCommands() {
 function onChatChanged() {
     clearInjection();
     refreshSidebar();
+
+    const settings = getSettings();
+    if (settings.enabled) {
+        syncMessageVisibility().catch(e => {
+            console.warn(`[${DISPLAY_NAME}] 聊天切换时消息同步失败:`, e);
+        });
+    }
+}
+
+async function onNewMessage() {
+    const settings = getSettings();
+    if (!settings.enabled) return;
+    try {
+        await syncMessageVisibility();
+    } catch (e) {
+        console.warn(`[${DISPLAY_NAME}] 消息可见性同步失败:`, e);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -741,11 +759,12 @@ async function init() {
 
     // 监听 SillyTavern 事件
     ctx.eventSource.on(ctx.event_types.CHAT_CHANGED, onChatChanged);
+    ctx.eventSource.on(ctx.event_types.MESSAGE_RECEIVED, onNewMessage);
 
     // 首次刷新侧边栏
     refreshSidebar();
 
-    console.log(`[${DISPLAY_NAME}] v2.0 初始化完成`);
+    console.log(`[${DISPLAY_NAME}] v2.1 初始化完成`);
 }
 
 // ═══ 启动 ═══

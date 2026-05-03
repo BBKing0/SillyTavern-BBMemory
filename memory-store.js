@@ -62,6 +62,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
         location: true,
         relationship: true,
     },
+    // 消息稳定化
+    shortTermWindow: 5,       // 保留最近多少条消息作为短期上下文
     // 统计
     messageCountSinceDecay: 0,
 });

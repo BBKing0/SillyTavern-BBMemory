@@ -28,6 +28,7 @@
  */
 
 import { getSettings, addMemory } from './memory-store.js';
+import { getExtractableExchanges, markExchangeExtracted } from './message-state.js';
 
 // ═══ 默认提示词模板 ═══
 
@@ -49,6 +50,10 @@ const DEFAULT_EXTRACTION_PROMPT = `你是一个记忆提取助手。请根据以
 [当前对话]
 用户: {{userMessage}}
 角色: {{aiMessage}}`;
+
+// ═══ 常量 ═══
+
+const MAX_EXTRACT_PER_CYCLE = 3;
 
 // ═══ 状态管理 ═══
 
@@ -186,7 +191,41 @@ function parseAiResponse(responseText) {
 }
 
 /**
- * 处理一轮对话，提取记忆
+ * 从一个 exchange 中提取记忆（不带队列控制，直接调用 AI）
+ * @returns {number} 成功添加的记忆条数
+ */
+async function extractFromExchange(chatId, userMessage, aiMessage) {
+    const settings = getSettings();
+    const prompt = buildPrompt(userMessage, aiMessage);
+
+    let responseText;
+    if (settings.autoGenMode === 'custom' && settings.autoGenEndpoint) {
+        responseText = await callCustomApi(prompt);
+    } else {
+        responseText = await callMainApi(prompt);
+    }
+
+    const memories = parseAiResponse(responseText);
+    let addedCount = 0;
+
+    for (const mem of memories) {
+        await addMemory(chatId, mem.content, mem.type, 'auto', {
+            tags: mem.tags,
+            importance: mem.importance,
+            emotionalValence: mem.emotionalValence,
+        });
+        addedCount++;
+    }
+
+    if (addedCount > 0) {
+        console.log(`[BB-Memory] 从 exchange 提取了 ${addedCount} 条记忆`);
+    }
+
+    return addedCount;
+}
+
+/**
+ * 处理一轮对话，提取记忆（保留用于手动提取的兼容接口）
  */
 async function processConversation(chatId, userMessage, aiMessage) {
     if (isProcessing) {
@@ -197,45 +236,19 @@ async function processConversation(chatId, userMessage, aiMessage) {
     isProcessing = true;
 
     try {
-        const settings = getSettings();
-        const prompt = buildPrompt(userMessage, aiMessage);
+        const count = await extractFromExchange(chatId, userMessage, aiMessage);
 
-        let responseText;
-
-        if (settings.autoGenMode === 'custom' && settings.autoGenEndpoint) {
-            responseText = await callCustomApi(prompt);
-        } else {
-            responseText = await callMainApi(prompt);
-        }
-
-        const memories = parseAiResponse(responseText);
-
-        if (memories.length > 0) {
-            let addedCount = 0;
-            for (const mem of memories) {
-                await addMemory(chatId, mem.content, mem.type, 'auto', {
-                    tags: mem.tags,
-                    importance: mem.importance,
-                    emotionalValence: mem.emotionalValence,
-                });
-                addedCount++;
-            }
-
-            console.log(`[BB-Memory] AI 自动生成了 ${addedCount} 条记忆`);
-
-            if (typeof toastr !== 'undefined') {
-                toastr.info(`自动记录了 ${addedCount} 条新记忆`, 'BB-Memory', {
-                    timeOut: 3000,
-                    preventDuplicates: true,
-                });
-            }
+        if (count > 0 && typeof toastr !== 'undefined') {
+            toastr.info(`自动记录了 ${count} 条新记忆`, 'BB-Memory', {
+                timeOut: 3000,
+                preventDuplicates: true,
+            });
         }
     } catch (error) {
         console.error('[BB-Memory] AI 自动生成记忆失败:', error);
     } finally {
         isProcessing = false;
 
-        // 处理等待队列中的下一条
         if (pendingMessages.length > 0) {
             const next = pendingMessages.shift();
             setTimeout(() => processConversation(next.chatId, next.userMessage, next.aiMessage), 1000);
@@ -248,37 +261,49 @@ async function processConversation(chatId, userMessage, aiMessage) {
 /**
  * MESSAGE_RECEIVED 事件处理函数
  * 当 AI 生成新回复时触发
+ *
+ * v2.1 变更：不再直接提取当前消息，而是：
+ *   1. 等待 index.js 完成消息可见性同步（自动隐藏旧消息）
+ *   2. 查找所有"插件自动隐藏 + 未提取"的 exchange
+ *   3. 逐个提取记忆，并用指纹防止重复
  */
-function onMessageReceived(messageIndex) {
+function onMessageReceived(_messageIndex) {
     const settings = getSettings();
     if (!settings.enabled || !settings.autoGenEnabled) return;
-
-    const ctx = SillyTavern.getContext();
-    const chat = ctx.chat;
-    if (!chat || !chat.length) return;
 
     const chatId = getChatId();
     if (!chatId) return;
 
-    // 获取 AI 回复（当前消息）
-    const aiMsg = chat[messageIndex];
-    if (!aiMsg || aiMsg.is_user) return;
-    const aiMessage = aiMsg.mes || '';
-
-    // 获取最后一条用户消息
-    let userMessage = '';
-    for (let i = messageIndex - 1; i >= 0; i--) {
-        if (chat[i].is_user && chat[i].mes) {
-            userMessage = chat[i].mes;
-            break;
-        }
-    }
-
-    // 延迟处理，避免与生成过程冲突
     if (processingTimer) clearTimeout(processingTimer);
-    processingTimer = setTimeout(() => {
-        processConversation(chatId, userMessage, aiMessage);
-    }, 2000);
+    processingTimer = setTimeout(async () => {
+        try {
+            const exchanges = await getExtractableExchanges();
+            if (!exchanges.length) return;
+
+            const toProcess = exchanges.slice(0, MAX_EXTRACT_PER_CYCLE);
+            let totalAdded = 0;
+
+            for (const ex of toProcess) {
+                try {
+                    const count = await extractFromExchange(chatId, ex.userMessage, ex.aiMessage);
+                    await markExchangeExtracted(ex.aiIndex, ex.hash);
+                    totalAdded += count;
+                } catch (err) {
+                    console.error('[BB-Memory] Exchange 提取失败:', err);
+                }
+            }
+
+            if (totalAdded > 0 && typeof toastr !== 'undefined') {
+                toastr.info(
+                    `自动记录了 ${totalAdded} 条新记忆（来自 ${toProcess.length} 个 exchange）`,
+                    'BB-Memory',
+                    { timeOut: 3000, preventDuplicates: true },
+                );
+            }
+        } catch (error) {
+            console.error('[BB-Memory] Exchange 处理流程出错:', error);
+        }
+    }, 2500);
 }
 
 /**

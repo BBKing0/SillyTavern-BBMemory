@@ -118,9 +118,10 @@ bb-memory/
 ├── manifest.json          ← 扩展清单，告诉 ST 这是什么扩展
 ├── index.js               ← 总指挥，协调所有模块
 ├── memory-store.js        ← 数据存储层，记忆的增删改查
+├── message-state.js       ← 消息管理员，自动隐藏 & exchange 去重（v2.1 新增）
 ├── retriever.js           ← 搜索引擎，智能检索相关记忆
 ├── memory-types.js        ← 类型定义，6种记忆的规格说明
-├── auto-generator.js      ← AI 自动记录员
+├── auto-generator.js      ← AI 自动记录员（v2.1 改为 exchange 模式）
 ├── memory-assistant.js    ← 记忆管家悬浮窗
 ├── world-book-importer.js ← 世界书翻译官
 ├── settings.html          ← 侧边栏设置面板
@@ -251,6 +252,31 @@ bb-memory/
 ---
 
 ## 版本记录
+
+### v2.1.0（2026-05-03）— 消息稳定化机制
+
+**新增功能：**
+- 消息自动隐藏：超出短期窗口（默认最近 5 条）的消息由插件自动隐藏（使用 SillyTavern 原生 `is_hidden`）
+- 消息状态标记：每条消息标记 `_bbmem_hideSource`（插件/用户隐藏）和 `_bbmem_extracted`（是否已提取）
+- Exchange 机制：将「AI 回复 + 前一条用户消息」组成 exchange，整体送入提取流程
+- Exchange 指纹去重：基于 cyrb53 哈希算法为每个 exchange 生成唯一指纹，防止重复提取
+- 重 Roll 安全：最近窗口内的消息不会被提取，频繁重新生成不会影响已隐藏消息的状态
+
+**新增文件：**
+- `message-state.js` — 消息状态管理器，负责自动隐藏、状态标记、指纹计算
+
+**修改文件：**
+- `auto-generator.js` — 提取流程改为 exchange 模式，每个周期最多处理 3 个 exchange
+- `index.js` — 在 MESSAGE_RECEIVED 和 CHAT_CHANGED 事件中集成消息同步
+- `memory-store.js` — 新增 `shortTermWindow` 设置项（默认 5）
+- `manifest.json` — 版本号升级到 2.1.0
+
+**向后兼容：**
+- 已有聊天数据无需迁移，首次加载时自动标记现有消息状态
+- 已有记忆数据不受影响
+- 新增的消息属性（`_bbmem_hideSource`、`_bbmem_extracted`）不会影响旧版本运行
+
+---
 
 ### v2.0.0（2026-05-03）— 全面升级
 
