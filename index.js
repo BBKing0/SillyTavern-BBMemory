@@ -82,7 +82,7 @@ import {
 } from './memory-maintainer.js';
 
 import { findExtension } from '../../../extensions.js';
-import { SlashCommandParser, SlashCommand } from '../../../slash-commands.js';
+import { registerSlashCommand } from '../../../slash-commands.js';
 
 // ═══════════════════════════════════════════════════════════
 //  常量
@@ -1117,17 +1117,19 @@ function registerSlashCommands() {
 
     // 优先使用官方推荐的 SlashCommandParser（与新版酒馆命令浏览器兼容）
     try {
-        SlashCommandParser.addCommandObject(SlashCommand.fromProps({
-            name: 'memory',
-            callback: memorySlashCallback,
-            aliases: [],
-            helpString: '管理 BB-Memory 记忆 (add/search/count/clear)。示例: /memory add 角色喜欢喝咖啡',
-        }));
-    } catch (err) {
-        console.warn(`[${DISPLAY_NAME}] SlashCommandParser 注册失败，尝试旧版 registerSlashCommand`, err);
-        if (typeof ctx.registerSlashCommand === 'function') {
-            ctx.registerSlashCommand('memory', memorySlashCallback, [], '管理BB-Memory记忆 (add/search/count/clear)');
+        if (typeof ctx.SlashCommandParser?.addCommandObject === 'function' && typeof ctx.SlashCommand?.fromProps === 'function') {
+            ctx.SlashCommandParser.addCommandObject(ctx.SlashCommand.fromProps({
+                name: 'memory',
+                callback: memorySlashCallback,
+                aliases: [],
+                helpString: '管理 BB-Memory 记忆 (add/search/count/clear)。示例: /memory add 角色喜欢喝咖啡',
+            }));
+        } else {
+            registerSlashCommand('memory', memorySlashCallback, [], '管理BB-Memory记忆 (add/search/count/clear)');
         }
+    } catch (err) {
+        console.warn(`[${DISPLAY_NAME}] SlashCommandParser 注册失败，使用 registerSlashCommand`, err);
+        registerSlashCommand('memory', memorySlashCallback, [], '管理BB-Memory记忆 (add/search/count/clear)');
     }
 }
 
