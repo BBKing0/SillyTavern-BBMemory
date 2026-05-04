@@ -411,7 +411,8 @@ export function initAutoGenerator() {
     if (eventBound) return;
 
     const ctx = SillyTavern.getContext();
-    ctx.eventSource.on(ctx.event_types.MESSAGE_RECEIVED, onMessageReceived);
+    const ev = ctx.event_types ?? ctx.eventTypes;
+    ctx.eventSource.on(ev.MESSAGE_RECEIVED, onMessageReceived);
     eventBound = true;
 
     console.log('[BB-Memory] AI 自动生成模块已初始化');
@@ -425,7 +426,8 @@ export function stopAutoGenerator() {
 
     try {
         const ctx = SillyTavern.getContext();
-        ctx.eventSource.removeListener(ctx.event_types.MESSAGE_RECEIVED, onMessageReceived);
+        const ev = ctx.event_types ?? ctx.eventTypes;
+        ctx.eventSource.removeListener(ev.MESSAGE_RECEIVED, onMessageReceived);
     } catch { /* 忽略 */ }
 
     eventBound = false;

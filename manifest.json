@@ -1,8 +1,6 @@
 {
     "display_name": "BB-Memory",
     "loading_order": 100,
-    "requires": [],
-    "optional": [],
     "js": "index.js",
     "css": "style.css",
     "author": "BB-Memory Dev",

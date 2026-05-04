@@ -82,6 +82,7 @@ import {
 } from './memory-maintainer.js';
 
 import { findExtension } from '../../../extensions.js';
+import { SlashCommandParser, SlashCommand } from '../../../slash-commands.js';
 
 // ═══════════════════════════════════════════════════════════
 //  常量
@@ -192,24 +193,24 @@ function escapeHtml(text) {
 // ═══════════════════════════════════════════════════════════
 
 globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type) {
-    if (type === 'quiet') return;
+    if (type === 'quiet') return chat;
 
     const settings = getSettings();
     if (!settings.enabled) {
         clearInjection();
-        return;
+        return chat;
     }
 
     const chatId = getChatId();
-    if (!chatId) return;
+    if (!chatId) return chat;
 
     const userMessage = getLastUserMessage(chat);
-    if (!userMessage) return;
+    if (!userMessage) return chat;
 
     const memories = await getMemories(chatId);
     if (!memories.length) {
         clearInjection();
-        return;
+        return chat;
     }
 
     // 触发记忆衰减（每隔N条消息）
@@ -244,7 +245,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
 
     if (!residentMemories.length && !relevantResults.length) {
         clearInjection();
-        return;
+        return chat;
     }
 
     // 巩固被检索到的记忆
@@ -264,13 +265,14 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         injectionText,
         POSITION_IN_CHAT,
         settings.injectionDepth ?? DEFAULT_SETTINGS.injectionDepth,
-        false,
         ROLE_SYSTEM,
     );
 
     console.log(
         `[${DISPLAY_NAME}] 注入: 常驻${stats.residentCount} L3×${stats.l3} L2×${stats.l2} L1×${stats.l1} ≈${tokenEstimate}tok`,
     );
+
+    return chat;
 };
 
 /**
@@ -302,7 +304,7 @@ function extractRecentContext(chat) {
 function clearInjection() {
     try {
         const ctx = SillyTavern.getContext();
-        ctx.setExtensionPrompt(INJECTION_KEY, '', POSITION_IN_CHAT, 0);
+        ctx.setExtensionPrompt(INJECTION_KEY, '', POSITION_IN_CHAT, 0, ROLE_SYSTEM);
     } catch { /* 忽略 */ }
 }
 
@@ -1115,16 +1117,12 @@ function registerSlashCommands() {
 
     // 优先使用官方推荐的 SlashCommandParser（与新版酒馆命令浏览器兼容）
     try {
-        if (typeof ctx.SlashCommandParser?.addCommandObject === 'function' && typeof ctx.SlashCommand?.fromProps === 'function') {
-            ctx.SlashCommandParser.addCommandObject(ctx.SlashCommand.fromProps({
-                name: 'memory',
-                callback: memorySlashCallback,
-                aliases: [],
-                helpString: '管理 BB-Memory 记忆 (add/search/count/clear)。示例: /memory add 角色喜欢喝咖啡',
-            }));
-        } else if (typeof ctx.registerSlashCommand === 'function') {
-            ctx.registerSlashCommand('memory', memorySlashCallback, [], '管理BB-Memory记忆 (add/search/count/clear)');
-        }
+        SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+            name: 'memory',
+            callback: memorySlashCallback,
+            aliases: [],
+            helpString: '管理 BB-Memory 记忆 (add/search/count/clear)。示例: /memory add 角色喜欢喝咖啡',
+        }));
     } catch (err) {
         console.warn(`[${DISPLAY_NAME}] SlashCommandParser 注册失败，尝试旧版 registerSlashCommand`, err);
         if (typeof ctx.registerSlashCommand === 'function') {
