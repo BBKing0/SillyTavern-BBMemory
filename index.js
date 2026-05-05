@@ -81,8 +81,9 @@ import {
     buildMaintenanceHTML,
 } from './memory-maintainer.js';
 
-import { findExtension } from '../../../extensions.js';
-import { registerSlashCommand } from '../../../slash-commands.js';
+// ST 核心模块 API 通过 SillyTavern.getContext() 获取，不使用静态导入
+// 参见官方文档: https://docs.sillytavern.app/for-contributors/writing-extensions
+// "Using imports from SillyTavern code is unreliable and can break at any time"
 
 // ═══════════════════════════════════════════════════════════
 //  常量
@@ -104,12 +105,7 @@ const ROLE_SYSTEM = 0;
  * https://docs.sillytavern.app/for-contributors/writing-extensions
  */
 function getExtensionFolder() {
-    try {
-        const hit = findExtension('BB-Memory');
-        if (hit?.name) return hit.name;
-    } catch (e) {
-        console.warn(`[${DISPLAY_NAME}] findExtension 失败，将尝试从脚本 URL 解析`, e);
-    }
+    // 从 import.meta.url 解析扩展目录路径，不依赖 ST 核心模块的静态导入
     try {
         const url = String(import.meta.url);
         let m = url.match(/\/scripts\/extensions\/(.+?)\/index\.mjs(?:\?|[#]|$)/i);
@@ -117,6 +113,7 @@ function getExtensionFolder() {
         if (!m) m = url.match(/\/scripts\/extensions\/(.+?)\/[^/]+\.(?:js|mjs)(?:\?|[#]|$)/i);
         if (m?.[1]) return m[1];
     } catch { /* 忽略 */ }
+    // 最终回退：假定为标准 third-party 安装路径
     return 'third-party/BB-Memory';
 }
 
@@ -1116,6 +1113,7 @@ function registerSlashCommands() {
     };
 
     // 优先使用官方推荐的 SlashCommandParser（与新版酒馆命令浏览器兼容）
+    // 所有 ST API 均通过 SillyTavern.getContext() 获取，不依赖静态导入
     try {
         if (typeof ctx.SlashCommandParser?.addCommandObject === 'function' && typeof ctx.SlashCommand?.fromProps === 'function') {
             ctx.SlashCommandParser.addCommandObject(ctx.SlashCommand.fromProps({
@@ -1124,12 +1122,14 @@ function registerSlashCommands() {
                 aliases: [],
                 helpString: '管理 BB-Memory 记忆 (add/search/count/clear)。示例: /memory add 角色喜欢喝咖啡',
             }));
-        } else {
-            registerSlashCommand('memory', memorySlashCallback, [], '管理BB-Memory记忆 (add/search/count/clear)');
+        } else if (typeof ctx.registerSlashCommand === 'function') {
+            ctx.registerSlashCommand('memory', memorySlashCallback, [], '管理BB-Memory记忆 (add/search/count/clear)');
         }
     } catch (err) {
-        console.warn(`[${DISPLAY_NAME}] SlashCommandParser 注册失败，使用 registerSlashCommand`, err);
-        registerSlashCommand('memory', memorySlashCallback, [], '管理BB-Memory记忆 (add/search/count/clear)');
+        console.warn(`[${DISPLAY_NAME}] SlashCommandParser 注册失败，尝试旧版 registerSlashCommand`, err);
+        if (typeof ctx.registerSlashCommand === 'function') {
+            ctx.registerSlashCommand('memory', memorySlashCallback, [], '管理BB-Memory记忆 (add/search/count/clear)');
+        }
     }
 }
 
@@ -1312,10 +1312,13 @@ async function init() {
     const ev = ctx.event_types ?? ctx.eventTypes;
 
     if (ctx.eventSource && ev?.APP_READY) {
+        // 首选：监听 APP_READY 事件（最可靠的初始化时机）
         ctx.eventSource.on(ev.APP_READY, () => init());
-    } else if (document.getElementById('extensions_settings2') || document.getElementById('extensions_settings')) {
+    } else if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        // DOM 已就绪，直接初始化
         init();
     } else {
+        // DOM 尚未就绪，等待 load 事件
         window.addEventListener('load', () => init());
     }
 })();
