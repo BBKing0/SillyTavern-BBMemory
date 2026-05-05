@@ -1123,6 +1123,8 @@ function bindManagerFooterEvents(managerOverlay, chatId) {
         await rerenderManagerList(managerOverlay, chatId);
     });
 }
+
+function buildManagerHTML(memories, chatId) {
     const memoryListHTML = memories.length
         ? memories.map(m => buildMemoryItemHTML(m)).join('')
         : '<div class="bb-mem-empty">暂无记忆，点击上方按钮添加第一条记忆吧</div>';
