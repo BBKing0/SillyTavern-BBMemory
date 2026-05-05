@@ -68,7 +68,7 @@ import {
     normalizeItemTier,
     expandMemoriesForEntityKeyword,
 } from './entity-tiers.js';
-import { initAutoGenerator, stopAutoGenerator } from './auto-generator.js';
+import { initAutoGenerator, stopAutoGenerator, extractFromContext, saveExtractedMemories } from './auto-generator.js';
 import { syncMessageVisibility } from './message-state.js';
 import {
     MEMORY_STATUS,
@@ -333,6 +333,9 @@ async function refreshSidebar() {
 
     const autoGenEl = document.getElementById('bb_memory_auto_gen');
     if (autoGenEl) autoGenEl.checked = getSettings().autoGenEnabled;
+
+    const debugLogEl = document.getElementById('bb_memory_debug_logging');
+    if (debugLogEl) debugLogEl.checked = getSettings().debugLogging;
 }
 
 function bindSidebarEvents() {
@@ -372,6 +375,10 @@ function bindSidebarEvents() {
         } else {
             stopAutoGenerator();
         }
+    });
+
+    document.getElementById('bb_memory_debug_logging')?.addEventListener('change', (e) => {
+        updateSettings({ debugLogging: e.target.checked });
     });
 
     // 副API模式切换
@@ -420,7 +427,7 @@ function bindSidebarEvents() {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  添加记忆
+//  手动添加记忆表单
 // ═══════════════════════════════════════════════════════════
 
 async function handleAddMemory() {
@@ -429,14 +436,297 @@ async function handleAddMemory() {
         toastr.warning('请先选择一个角色并开始聊天', DISPLAY_NAME);
         return;
     }
+    openAddMemoryForm(chatId, () => refreshSidebar());
+}
 
-    const ctx = SillyTavern.getContext();
-    const content = await ctx.Popup.show.input('添加新记忆', '输入你想让角色记住的内容：');
-    if (!content) return;
+function openAddMemoryForm(chatId, onSaved) {
+    // 避免重复弹窗
+    if (document.querySelector('.bb-mem-form-overlay')) return;
 
-    await addMemory(chatId, content, 'episode', 'manual');
-    toastr.success('记忆已添加', DISPLAY_NAME);
-    refreshSidebar();
+    const overlay = document.createElement('div');
+    overlay.className = 'bb-mem-form-overlay';
+    overlay.innerHTML = buildAddMemoryFormHTML();
+    document.body.appendChild(overlay);
+
+    bindAddMemoryFormEvents(overlay, chatId, onSaved);
+}
+
+function buildAddMemoryFormHTML() {
+    const cogTypes = [
+        { id: 'episode', label: '情景' },
+        { id: 'fact', label: '事实' },
+        { id: 'emotion', label: '情感' },
+        { id: 'habit', label: '习惯' },
+    ];
+
+    const truthStatuses = [
+        { id: 'true', label: '已确认' },
+        { id: 'unknown', label: '未知' },
+        { id: 'rumor', label: '传闻' },
+        { id: 'misleading', label: '误导' },
+        { id: 'secret_true', label: '隐藏真相' },
+        { id: 'false', label: '已否定' },
+    ];
+
+    return `
+        <div class="bb-mem-form-popup">
+            <div class="bb-mem-form-header">
+                <h3><i class="fa-solid fa-plus"></i> 添加新记忆</h3>
+                <span class="bb-mem-close" title="关闭">&times;</span>
+            </div>
+            <div class="bb-mem-form-body">
+                <div class="bb-mem-form-group">
+                    <label>记忆内容 <span class="bb-mem-form-hint">（必填）</span></label>
+                    <textarea class="text_pole" id="bb_form_content" rows="3"
+                              placeholder="输入记忆的完整内容..."></textarea>
+                </div>
+                <div class="bb-mem-form-row">
+                    <div class="bb-mem-form-group">
+                        <label>认知类型</label>
+                        <select class="text_pole" id="bb_form_cog_type">
+                            ${cogTypes.map(t => `<option value="${t.id}">${t.label}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="bb-mem-form-group">
+                        <label>分类路径</label>
+                        <select class="text_pole" id="bb_form_cat_path"></select>
+                    </div>
+                </div>
+                <div class="bb-mem-form-row">
+                    <div class="bb-mem-form-group">
+                        <label>标题 <span class="bb-mem-form-hint">3-8字</span></label>
+                        <input type="text" class="text_pole" id="bb_form_title" placeholder="简短标题" />
+                    </div>
+                    <div class="bb-mem-form-group">
+                        <label>摘要 <span class="bb-mem-form-hint">一句话</span></label>
+                        <input type="text" class="text_pole" id="bb_form_summary" placeholder="一句话总结" />
+                    </div>
+                </div>
+                <div class="bb-mem-form-group">
+                    <label>原话 <span class="bb-mem-form-hint">重要的角色原话/引用</span></label>
+                    <input type="text" class="text_pole" id="bb_form_verbatim" placeholder="「...」" />
+                </div>
+                <div class="bb-mem-form-row">
+                    <div class="bb-mem-form-group">
+                        <label>主体</label>
+                        <input type="text" class="text_pole" id="bb_form_subject" placeholder="主要实体名" />
+                    </div>
+                    <div class="bb-mem-form-group">
+                        <label>对象</label>
+                        <input type="text" class="text_pole" id="bb_form_target" placeholder="关联对象名" />
+                    </div>
+                </div>
+                <div class="bb-mem-form-group">
+                    <label>地点</label>
+                    <input type="text" class="text_pole" id="bb_form_location" placeholder="发生地点" />
+                </div>
+                <div class="bb-mem-form-row">
+                    <div class="bb-mem-form-group">
+                        <label>重要性: <span id="bb_form_importance_val" class="bb-mem-form-slider-val">50</span></label>
+                        <div class="bb-mem-form-slider-row">
+                            <span>0</span>
+                            <input type="range" min="0" max="100" value="50" id="bb_form_importance" />
+                            <span>100</span>
+                        </div>
+                    </div>
+                    <div class="bb-mem-form-group">
+                        <label>情感强度: <span id="bb_form_emotion_val" class="bb-mem-form-slider-val">0</span></label>
+                        <div class="bb-mem-form-slider-row">
+                            <span>0</span>
+                            <input type="range" min="0" max="100" value="0" id="bb_form_emotion" />
+                            <span>100</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="bb-mem-form-row">
+                    <div class="bb-mem-form-group">
+                        <label>可信度</label>
+                        <select class="text_pole" id="bb_form_truth">
+                            ${truthStatuses.map(t => `<option value="${t.id}">${t.label}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="bb-mem-form-group">
+                        <label>标签 <span class="bb-mem-form-hint">逗号分隔</span></label>
+                        <input type="text" class="text_pole" id="bb_form_tags" placeholder="关键词1, 关键词2" />
+                    </div>
+                </div>
+                <div class="bb-mem-form-row" id="bb_form_npc_row" style="display:none;">
+                    <div class="bb-mem-form-group">
+                        <label>NPC 分级</label>
+                        <select class="text_pole" id="bb_form_npc_tier">
+                            <option value="">— 不适用 —</option>
+                            <option value="core">核心 (core)</option>
+                            <option value="important">重要 (important)</option>
+                            <option value="minor">普通 (minor)</option>
+                            <option value="background">路人 (background)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="bb-mem-form-row" id="bb_form_item_row" style="display:none;">
+                    <div class="bb-mem-form-group">
+                        <label>物品分级</label>
+                        <select class="text_pole" id="bb_form_item_tier">
+                            <option value="">— 不适用 —</option>
+                            <option value="key">关键 (key)</option>
+                            <option value="equipped">持有 (equipped)</option>
+                            <option value="clue">线索 (clue)</option>
+                            <option value="consumable">消耗品 (consumable)</option>
+                            <option value="background">背景 (background)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="bb-mem-form-group">
+                    <label class="bb-mem-form-check">
+                        <input type="checkbox" id="bb_form_resident" />
+                        <span>常驻记忆（每轮自动注入索引卡）</span>
+                    </label>
+                </div>
+            </div>
+            <div class="bb-mem-form-footer">
+                <button class="menu_button" id="bb_form_cancel">
+                    <i class="fa-solid fa-times"></i> 取消
+                </button>
+                <button class="menu_button" id="bb_form_save" style="background:#4caf50;color:#fff;">
+                    <i class="fa-solid fa-save"></i> 保存
+                </button>
+            </div>
+        </div>
+    `;
+}
+
+function bindAddMemoryFormEvents(overlay, chatId, onSaved) {
+    const CATEGORY_PATHS = [
+        { path: 'world.politics', label: '世界·政治', type: 'fact' },
+        { path: 'world.lore', label: '世界·背景', type: 'fact' },
+        { path: 'world.rules', label: '世界·规则', type: 'fact' },
+        { path: 'npc.profile', label: 'NPC·档案', type: 'fact' },
+        { path: 'npc.relationship', label: 'NPC·关系', type: 'fact' },
+        { path: 'npc.emotion', label: 'NPC·情感线', type: 'emotion' },
+        { path: 'npc.secret', label: 'NPC·秘密', type: 'episode' },
+        { path: 'npc.goal', label: 'NPC·目标', type: 'fact' },
+        { path: 'npc.attitude', label: 'NPC·态度', type: 'emotion' },
+        { path: 'item.ownership', label: '物品·持有', type: 'fact' },
+        { path: 'item.quest', label: '物品·任务', type: 'fact' },
+        { path: 'item.key', label: '物品·关键', type: 'fact' },
+        { path: 'item.clue', label: '物品·线索', type: 'fact' },
+        { path: 'location.state', label: '地点·状态', type: 'fact' },
+        { path: 'location.map', label: '地点·地图', type: 'fact' },
+        { path: 'episode.event', label: '情景·事件', type: 'episode' },
+        { path: 'episode.promise', label: '情景·承诺', type: 'episode' },
+        { path: 'episode.secret', label: '情景·秘密', type: 'episode' },
+        { path: 'episode.dialogue', label: '情景·对话', type: 'episode' },
+        { path: 'episode.combat', label: '情景·战斗', type: 'episode' },
+        { path: 'emotion.bond', label: '情感·羁绊', type: 'emotion' },
+        { path: 'emotion.trauma', label: '情感·创伤', type: 'emotion' },
+        { path: 'emotion.desire', label: '情感·愿望', type: 'emotion' },
+        { path: 'habit.routine', label: '习惯·日常', type: 'habit' },
+        { path: 'habit.preference', label: '习惯·偏好', type: 'habit' },
+        { path: 'habit.speech', label: '习惯·语言', type: 'habit' },
+    ];
+
+    function updateCategoryPathSelect(cognitiveType) {
+        const select = overlay.querySelector('#bb_form_cat_path');
+        if (!select) return;
+        const filtered = CATEGORY_PATHS.filter(p => p.type === cognitiveType);
+        select.innerHTML = filtered.map(p =>
+            `<option value="${p.path}">${p.label}</option>`
+        ).join('');
+
+        // 条件显示 NPC/物品分级行
+        const npcRow = overlay.querySelector('#bb_form_npc_row');
+        const itemRow = overlay.querySelector('#bb_form_item_row');
+        const firstPath = filtered[0]?.path || '';
+        if (npcRow) npcRow.style.display = firstPath.startsWith('npc.') ? 'flex' : 'none';
+        if (itemRow) itemRow.style.display = firstPath.startsWith('item.') ? 'flex' : 'none';
+    }
+
+    // 初始化分类路径下拉
+    updateCategoryPathSelect('episode');
+
+    // 认知类型变化 → 更新分类路径 + 条件行
+    overlay.querySelector('#bb_form_cog_type')?.addEventListener('change', (e) => {
+        updateCategoryPathSelect(e.target.value);
+    });
+
+    // 分类路径变化 → 条件行
+    overlay.querySelector('#bb_form_cat_path')?.addEventListener('change', (e) => {
+        const npcRow = overlay.querySelector('#bb_form_npc_row');
+        const itemRow = overlay.querySelector('#bb_form_item_row');
+        const val = e.target.value;
+        if (npcRow) npcRow.style.display = val.startsWith('npc.') ? 'flex' : 'none';
+        if (itemRow) itemRow.style.display = val.startsWith('item.') ? 'flex' : 'none';
+    });
+
+    // 滑块实时更新
+    overlay.querySelector('#bb_form_importance')?.addEventListener('input', (e) => {
+        const valEl = overlay.querySelector('#bb_form_importance_val');
+        if (valEl) valEl.textContent = e.target.value;
+    });
+    overlay.querySelector('#bb_form_emotion')?.addEventListener('input', (e) => {
+        const valEl = overlay.querySelector('#bb_form_emotion_val');
+        if (valEl) valEl.textContent = e.target.value;
+    });
+
+    // 关闭
+    function closeForm() {
+        overlay.remove();
+    }
+
+    overlay.querySelector('.bb-mem-close')?.addEventListener('click', closeForm);
+    overlay.querySelector('#bb_form_cancel')?.addEventListener('click', closeForm);
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) closeForm();
+    });
+
+    // 保存
+    overlay.querySelector('#bb_form_save')?.addEventListener('click', async () => {
+        const content = overlay.querySelector('#bb_form_content')?.value?.trim();
+        if (!content) {
+            toastr.warning('请输入记忆内容', DISPLAY_NAME);
+            return;
+        }
+
+        const cognitiveType = overlay.querySelector('#bb_form_cog_type')?.value || 'episode';
+        const categoryPath = overlay.querySelector('#bb_form_cat_path')?.value || '';
+        const title = overlay.querySelector('#bb_form_title')?.value?.trim() || '';
+        const summary = overlay.querySelector('#bb_form_summary')?.value?.trim() || '';
+        const verbatim = overlay.querySelector('#bb_form_verbatim')?.value?.trim() || '';
+        const subject = overlay.querySelector('#bb_form_subject')?.value?.trim() || '';
+        const target = overlay.querySelector('#bb_form_target')?.value?.trim() || '';
+        const location = overlay.querySelector('#bb_form_location')?.value?.trim() || '';
+        const importance = parseInt(overlay.querySelector('#bb_form_importance')?.value || '50', 10) / 100;
+        const emotionalWeight = parseInt(overlay.querySelector('#bb_form_emotion')?.value || '0', 10) / 100;
+        const truthStatus = overlay.querySelector('#bb_form_truth')?.value || 'true';
+        const tagsRaw = overlay.querySelector('#bb_form_tags')?.value?.trim() || '';
+        const npcTier = overlay.querySelector('#bb_form_npc_tier')?.value || '';
+        const itemTier = overlay.querySelector('#bb_form_item_tier')?.value || '';
+        const resident = overlay.querySelector('#bb_form_resident')?.checked || false;
+
+        const tags = tagsRaw
+            ? tagsRaw.split(/[,，]/).map(t => t.trim()).filter(Boolean).map(t => ({ name: t, weight: 0.6 }))
+            : [];
+
+        await addMemory(chatId, content, cognitiveType, 'manual', {
+            categoryPath,
+            title,
+            summary,
+            verbatim,
+            subject,
+            target,
+            location,
+            importance,
+            emotionalWeight,
+            truthStatus,
+            tags,
+            npcTier: npcTier || undefined,
+            itemTier: itemTier || undefined,
+            resident,
+        });
+
+        toastr.success('记忆已添加', DISPLAY_NAME);
+        closeForm();
+        if (onSaved) onSaved();
+    });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -493,7 +783,346 @@ async function openMemoryManager() {
     bindManagerEvents(overlay, chatId);
 }
 
-function buildManagerHTML(memories, chatId) {
+// ═══════════════════════════════════════════════════════════
+//  AI 上下文提取 & 审核面板
+// ═══════════════════════════════════════════════════════════
+
+async function handleAiExtract(managerOverlay, chatId) {
+    // 显示加载状态
+    const listEl = managerOverlay.querySelector('#bb_mgr_list');
+    const oldHTML = listEl?.innerHTML || '';
+    if (listEl) {
+        listEl.innerHTML = `<div class="bb-mem-empty">
+            <i class="fa-solid fa-spinner fa-spin" style="font-size:2em;display:block;margin-bottom:12px;"></i>
+            正在分析对话，提取记忆...
+        </div>`;
+    }
+
+    try {
+        const candidates = await extractFromContext(chatId, 12);
+        if (!candidates || !candidates.length) {
+            if (listEl) listEl.innerHTML = `<div class="bb-mem-empty">AI 未发现值得记忆的内容</div>`;
+            setTimeout(() => { if (listEl) listEl.innerHTML = oldHTML; }, 2000);
+            // 重新渲染以恢复
+            await rerenderManagerList(managerOverlay, chatId);
+            toastr.info('AI 未发现值得记忆的内容', DISPLAY_NAME);
+            return;
+        }
+        showExtractReviewPanel(managerOverlay, chatId, candidates);
+    } catch (err) {
+        console.error('[BB-Memory] AI提取失败:', err);
+        if (listEl) listEl.innerHTML = oldHTML;
+        toastr.error(`AI提取失败：${err.message}`, DISPLAY_NAME);
+    }
+}
+
+function showExtractReviewPanel(managerOverlay, chatId, candidates) {
+    const listEl = managerOverlay.querySelector('#bb_mgr_list');
+    const statsEl = managerOverlay.querySelector('.bb-mem-stats');
+    const toolbarEl = managerOverlay.querySelector('.bb-mem-toolbar');
+    const filterEl = managerOverlay.querySelector('.bb-mem-type-filters');
+
+    // 隐藏普通工具栏和过滤器，显示审核工具栏
+    if (toolbarEl) toolbarEl.style.display = 'none';
+    if (filterEl) filterEl.style.display = 'none';
+    if (statsEl) statsEl.innerHTML = `AI 提取到 <strong>${candidates.length}</strong> 条候选记忆，请审核`;
+
+    // 渲染候选列表
+    if (listEl) {
+        listEl.innerHTML = candidates.map((mem, i) => buildCandidateItemHTML(mem, i)).join('');
+        bindCandidateItemEvents(listEl);
+    }
+
+    // 显示审核操作栏
+    const footerEl = managerOverlay.querySelector('.bb-mem-footer');
+    if (footerEl) {
+        footerEl.innerHTML = `
+            <button class="menu_button" id="bb_review_select_all">
+                <i class="fa-solid fa-check-double"></i> 全选
+            </button>
+            <button class="menu_button" id="bb_review_deselect_all">
+                <i class="fa-solid fa-times"></i> 取消全选
+            </button>
+            <button class="menu_button" id="bb_review_save" style="background:#4caf50;color:#fff;">
+                <i class="fa-solid fa-save"></i> 保存选中 (<span id="bb_review_count">0</span>)
+            </button>
+            <button class="menu_button menu_button_danger" id="bb_review_cancel">
+                <i class="fa-solid fa-ban"></i> 取消
+            </button>
+        `;
+        bindReviewFooterEvents(footerEl, managerOverlay, chatId, candidates);
+    }
+}
+
+function buildCandidateItemHTML(mem, index) {
+    const typeColors = { fact: '#4fc3f7', episode: '#ba68c8', emotion: '#f06292', habit: '#81c784' };
+    const typeLabels = { fact: '事实', episode: '情景', emotion: '情感', habit: '习惯' };
+    const color = typeColors[mem.cognitiveType] || '#888';
+    const label = typeLabels[mem.cognitiveType] || mem.cognitiveType;
+    const importance = Math.round((mem.importance || 0.5) * 100);
+
+    return `
+        <div class="bb-candidate-item" data-index="${index}">
+            <label class="bb-candidate-check">
+                <input type="checkbox" class="bb-candidate-cb" data-index="${index}" checked />
+                <span class="bb-candidate-type" style="color:${color}">[${label}]</span>
+            </label>
+            <div class="bb-candidate-body">
+                <div class="bb-candidate-row">
+                    <input type="text" class="text_pole bb-candidate-title" data-index="${index}" data-field="title"
+                           value="${escapeHtml(mem.title || '')}" placeholder="标题（3-8字）" />
+                    <select class="text_pole bb-candidate-path" data-index="${index}" data-field="categoryPath"
+                            style="max-width:150px;font-size:0.85em;">
+                        ${buildCategoryPathOptions(mem.cognitiveType, mem.categoryPath)}
+                    </select>
+                    <span class="bb-candidate-importance">
+                        重要度: <input type="range" min="0" max="100" value="${importance}"
+                               class="bb-candidate-importance-slider" data-index="${index}" />
+                        <span class="bb-candidate-importance-val">${importance}</span>
+                    </span>
+                </div>
+                <textarea class="text_pole bb-candidate-content" data-index="${index}" data-field="content"
+                          rows="2" placeholder="记忆内容">${escapeHtml(mem.content || '')}</textarea>
+                <div class="bb-candidate-row">
+                    <input type="text" class="text_pole bb-candidate-summary" data-index="${index}" data-field="summary"
+                           value="${escapeHtml(mem.summary || '')}" placeholder="摘要" style="flex:2;" />
+                    <input type="text" class="text_pole bb-candidate-verbatim" data-index="${index}" data-field="verbatim"
+                           value="${escapeHtml(mem.verbatim || '')}" placeholder="原话（可选）" style="flex:2;" />
+                </div>
+                <div class="bb-candidate-row">
+                    <input type="text" class="text_pole bb-candidate-subject" data-index="${index}" data-field="subject"
+                           value="${escapeHtml(mem.subject || '')}" placeholder="主体" style="flex:1;" />
+                    <input type="text" class="text_pole bb-candidate-target" data-index="${index}" data-field="target"
+                           value="${escapeHtml(mem.target || '')}" placeholder="对象" style="flex:1;" />
+                    <input type="text" class="text_pole bb-candidate-tags" data-index="${index}" data-field="tags"
+                           value="${(mem.tags || []).map(t => typeof t === 'string' ? t : t.name).join(', ')}"
+                           placeholder="标签（逗号分隔）" style="flex:1.5;" />
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function buildCategoryPathOptions(cognitiveType, selectedPath) {
+    // 动态路径列表（与 memory-types.js CATEGORY_PATHS 保持一致）
+    const allPaths = [
+        { path: 'world.politics', label: '世界·政治', type: 'fact' },
+        { path: 'world.lore', label: '世界·背景', type: 'fact' },
+        { path: 'world.rules', label: '世界·规则', type: 'fact' },
+        { path: 'npc.profile', label: 'NPC·档案', type: 'fact' },
+        { path: 'npc.relationship', label: 'NPC·关系', type: 'fact' },
+        { path: 'npc.emotion', label: 'NPC·情感线', type: 'emotion' },
+        { path: 'npc.secret', label: 'NPC·秘密', type: 'episode' },
+        { path: 'npc.goal', label: 'NPC·目标', type: 'fact' },
+        { path: 'npc.attitude', label: 'NPC·态度', type: 'emotion' },
+        { path: 'item.ownership', label: '物品·持有', type: 'fact' },
+        { path: 'item.quest', label: '物品·任务', type: 'fact' },
+        { path: 'item.key', label: '物品·关键', type: 'fact' },
+        { path: 'item.clue', label: '物品·线索', type: 'fact' },
+        { path: 'location.state', label: '地点·状态', type: 'fact' },
+        { path: 'location.map', label: '地点·地图', type: 'fact' },
+        { path: 'episode.event', label: '情景·事件', type: 'episode' },
+        { path: 'episode.promise', label: '情景·承诺', type: 'episode' },
+        { path: 'episode.secret', label: '情景·秘密', type: 'episode' },
+        { path: 'episode.dialogue', label: '情景·对话', type: 'episode' },
+        { path: 'episode.combat', label: '情景·战斗', type: 'episode' },
+        { path: 'emotion.bond', label: '情感·羁绊', type: 'emotion' },
+        { path: 'emotion.trauma', label: '情感·创伤', type: 'emotion' },
+        { path: 'emotion.desire', label: '情感·愿望', type: 'emotion' },
+        { path: 'habit.routine', label: '习惯·日常', type: 'habit' },
+        { path: 'habit.preference', label: '习惯·偏好', type: 'habit' },
+        { path: 'habit.speech', label: '习惯·语言', type: 'habit' },
+    ];
+
+    const filtered = allPaths.filter(p => p.type === cognitiveType);
+    if (!filtered.length) return allPaths.map(p => `<option value="${p.path}" ${p.path === selectedPath ? 'selected' : ''}>${p.label}</option>`).join('');
+
+    return filtered.map(p =>
+        `<option value="${p.path}" ${p.path === selectedPath ? 'selected' : ''}>${p.label}</option>`
+    ).join('');
+}
+
+function bindCandidateItemEvents(listEl) {
+    // 复选框变化 → 更新计数
+    listEl.querySelectorAll('.bb-candidate-cb').forEach(cb => {
+        cb.addEventListener('change', () => updateReviewCount(listEl));
+    });
+
+    // 重要性滑块
+    listEl.querySelectorAll('.bb-candidate-importance-slider').forEach(slider => {
+        slider.addEventListener('input', () => {
+            const valEl = slider.nextElementSibling;
+            if (valEl) valEl.textContent = slider.value;
+        });
+    });
+
+    // 任何输入变化 → 更新 candidates 数组
+    listEl.querySelectorAll('[data-field]').forEach(el => {
+        el.addEventListener('change', () => updateReviewCount(listEl));
+        el.addEventListener('input', () => updateReviewCount(listEl));
+    });
+}
+
+function updateReviewCount(listEl) {
+    const count = listEl.querySelectorAll('.bb-candidate-cb:checked').length;
+    const countEl = document.getElementById('bb_review_count');
+    if (countEl) countEl.textContent = String(count);
+}
+
+function collectCandidateData(listEl, candidates) {
+    const results = [];
+    listEl.querySelectorAll('.bb-candidate-item').forEach(item => {
+        const index = parseInt(item.dataset.index, 10);
+        const mem = { ...candidates[index] };
+        mem._selected = item.querySelector('.bb-candidate-cb')?.checked || false;
+
+        // 收集编辑后的字段
+        item.querySelectorAll('[data-field]').forEach(el => {
+            const field = el.dataset.field;
+            if (field === 'importance') {
+                mem.importance = parseInt(el.value, 10) / 100;
+            } else if (field === 'tags') {
+                mem.tags = el.value.split(/[,，]/).map(t => t.trim()).filter(Boolean)
+                    .map(t => ({ name: t, weight: 0.6 }));
+            } else if (field === 'emotionalWeight') {
+                mem.emotionalWeight = parseInt(el.value, 10) / 100;
+            } else {
+                mem[field] = el.value.trim();
+            }
+        });
+        results.push(mem);
+    });
+    return results;
+}
+
+function bindReviewFooterEvents(footerEl, managerOverlay, chatId, candidates) {
+    const listEl = managerOverlay.querySelector('#bb_mgr_list');
+
+    footerEl.querySelector('#bb_review_select_all')?.addEventListener('click', () => {
+        listEl.querySelectorAll('.bb-candidate-cb').forEach(cb => { cb.checked = true; });
+        updateReviewCount(listEl);
+    });
+
+    footerEl.querySelector('#bb_review_deselect_all')?.addEventListener('click', () => {
+        listEl.querySelectorAll('.bb-candidate-cb').forEach(cb => { cb.checked = false; });
+        updateReviewCount(listEl);
+    });
+
+    footerEl.querySelector('#bb_review_save')?.addEventListener('click', async () => {
+        const updated = collectCandidateData(listEl, candidates);
+        const count = await saveExtractedMemories(chatId, updated);
+        if (count > 0) {
+            toastr.success(`已保存 ${count} 条记忆`, DISPLAY_NAME);
+        } else {
+            toastr.info('未选择任何记忆', DISPLAY_NAME);
+        }
+        await restoreManagerUI(managerOverlay, chatId);
+    });
+
+    footerEl.querySelector('#bb_review_cancel')?.addEventListener('click', async () => {
+        await restoreManagerUI(managerOverlay, chatId);
+    });
+}
+
+async function restoreManagerUI(managerOverlay, chatId) {
+    const toolbarEl = managerOverlay.querySelector('.bb-mem-toolbar');
+    const filterEl = managerOverlay.querySelector('.bb-mem-type-filters');
+    const footerEl = managerOverlay.querySelector('.bb-mem-footer');
+
+    if (toolbarEl) toolbarEl.style.display = '';
+    if (filterEl) filterEl.style.display = '';
+
+    // 恢复原始 footer
+    if (footerEl) {
+        footerEl.innerHTML = `
+            <button class="menu_button" id="bb_mgr_export" title="导出记忆到文件">
+                <i class="fa-solid fa-download"></i> 导出
+            </button>
+            <button class="menu_button" id="bb_mgr_import" title="从文件导入记忆">
+                <i class="fa-solid fa-upload"></i> 导入
+            </button>
+            <button class="menu_button" id="bb_mgr_import_wb" title="从世界书导入">
+                <i class="fa-solid fa-book-atlas"></i> 世界书
+            </button>
+            <button class="menu_button menu_button_danger" id="bb_mgr_clear" title="清空所有记忆">
+                <i class="fa-solid fa-trash"></i> 清空
+            </button>
+        `;
+    }
+
+    await rerenderManagerList(managerOverlay, chatId);
+
+    // 重新绑定 footer 事件
+    bindManagerFooterEvents(managerOverlay, chatId);
+}
+
+function bindManagerFooterEvents(managerOverlay, chatId) {
+    managerOverlay.querySelector('#bb_mgr_export')?.addEventListener('click', async () => {
+        const json = await exportMemories(chatId);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `bb-memory-${chatId}-${Date.now()}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        toastr.success('记忆已导出', DISPLAY_NAME);
+    });
+
+    managerOverlay.querySelector('#bb_mgr_import')?.addEventListener('click', () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json';
+        input.addEventListener('change', (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = async (ev) => {
+                try {
+                    const count = await importMemories(chatId, ev.target.result);
+                    toastr.success(`成功导入 ${count} 条记忆`, DISPLAY_NAME);
+                    await rerenderManagerList(managerOverlay, chatId);
+                } catch (err) {
+                    toastr.error(`导入失败：${err.message}`, DISPLAY_NAME);
+                }
+            };
+            reader.readAsText(file);
+        });
+        input.click();
+    });
+
+    managerOverlay.querySelector('#bb_mgr_import_wb')?.addEventListener('click', async () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json';
+        input.addEventListener('change', (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = async (ev) => {
+                try {
+                    const { importWorldBook } = await import('./world-book-importer.js');
+                    const count = await importWorldBook(chatId, ev.target.result);
+                    toastr.success(`成功从世界书导入 ${count} 条记忆`, DISPLAY_NAME);
+                    await rerenderManagerList(managerOverlay, chatId);
+                } catch (err) {
+                    toastr.error(`世界书导入失败：${err.message}`, DISPLAY_NAME);
+                }
+            };
+            reader.readAsText(file);
+        });
+        input.click();
+    });
+
+    managerOverlay.querySelector('#bb_mgr_clear')?.addEventListener('click', async () => {
+        const ctx = SillyTavern.getContext();
+        const ok = await ctx.Popup.show.confirm('确认清空', '确定要删除所有记忆吗？此操作不可撤销。');
+        if (!isPopupAffirmative(ctx, ok)) return;
+        await clearMemories(chatId);
+        toastr.info('所有记忆已清空', DISPLAY_NAME);
+        await rerenderManagerList(managerOverlay, chatId);
+    });
+}
     const memoryListHTML = memories.length
         ? memories.map(m => buildMemoryItemHTML(m)).join('')
         : '<div class="bb-mem-empty">暂无记忆，点击上方按钮添加第一条记忆吧</div>';
@@ -516,6 +1145,9 @@ function buildManagerHTML(memories, chatId) {
                        placeholder="搜索记忆..." id="bb_mgr_search" />
                 <button class="menu_button bb-mem-toolbar-btn" id="bb_mgr_add">
                     <i class="fa-solid fa-plus"></i> 添加
+                </button>
+                <button class="menu_button bb-mem-toolbar-btn" id="bb_mgr_ai_extract">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> AI提取
                 </button>
             </div>
 
@@ -735,13 +1367,13 @@ function bindManagerEvents(overlay, chatId) {
     });
 
     // 添加记忆
-    overlay.querySelector('#bb_mgr_add')?.addEventListener('click', async () => {
-        const ctx = SillyTavern.getContext();
-        const content = await ctx.Popup.show.input('添加新记忆', '输入记忆内容：');
-        if (!content) return;
-        await addMemory(chatId, content, 'episode', 'manual');
-        toastr.success('记忆已添加', DISPLAY_NAME);
-        await rerenderManagerList(overlay, chatId);
+    overlay.querySelector('#bb_mgr_add')?.addEventListener('click', () => {
+        openAddMemoryForm(chatId, () => rerenderManagerList(overlay, chatId));
+    });
+
+    // AI提取
+    overlay.querySelector('#bb_mgr_ai_extract')?.addEventListener('click', async () => {
+        await handleAiExtract(overlay, chatId);
     });
 
     // 搜索

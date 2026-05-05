@@ -46,6 +46,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     maintenanceThreshold: 50,
     // 统计
     messageCountSinceDecay: 0,
+    // 调试
+    debugLogging: false,
 });
 
 // ═══ SillyTavern 接口 ═══

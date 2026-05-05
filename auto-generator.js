@@ -28,7 +28,7 @@
  */
 
 import { getSettings, addMemory } from './memory-store.js';
-import { getExtractableExchanges, markExchangeExtracted } from './message-state.js';
+import { getExtractableExchanges, markExchangeExtracted, isExchangeProcessed, computeExchangeHash } from './message-state.js';
 import {
     normalizeNpcTier,
     normalizeItemTier,
@@ -337,13 +337,42 @@ async function processConversation(chatId, userMessage, aiMessage) {
 // ═══ 事件处理 ═══
 
 /**
+ * 从聊天中获取最近的 exchange（用户消息 + AI 回复）
+ * PRIMARY 路径 —— 不依赖消息是否被隐藏，直接抓取最新对话
+ */
+function getLatestExchange() {
+    const ctx = SillyTavern.getContext();
+    const chat = ctx.chat;
+    if (!chat || chat.length < 2) return null;
+
+    let aiIndex = -1;
+    let userIndex = -1;
+
+    for (let i = chat.length - 1; i >= 0; i--) {
+        if (aiIndex === -1 && !chat[i].is_user && !chat[i].is_system) {
+            aiIndex = i;
+        } else if (aiIndex !== -1 && chat[i].is_user) {
+            userIndex = i;
+            break;
+        }
+    }
+
+    if (aiIndex === -1 || userIndex === -1) return null;
+
+    const userMessage = chat[userIndex].mes || '';
+    const aiMessage = chat[aiIndex].mes || '';
+    const hash = computeExchangeHash(userMessage, aiMessage);
+
+    return { userMessage, aiMessage, hash, userIndex, aiIndex };
+}
+
+/**
  * MESSAGE_RECEIVED 事件处理函数
  * 当 AI 生成新回复时触发
  *
- * v2.1 变更：不再直接提取当前消息，而是：
- *   1. 等待 index.js 完成消息可见性同步（自动隐藏旧消息）
- *   2. 查找所有"插件自动隐藏 + 未提取"的 exchange
- *   3. 逐个提取记忆，并用指纹防止重复
+ * 双路径设计：
+ *   PRIMARY：直接提取最新的 exchange（不等待消息被隐藏）
+ *   SECONDARY：提取已被插件隐藏的旧 exchange（兜底，确保不漏）
  */
 function onMessageReceived(_messageIndex) {
     const settings = getSettings();
@@ -355,28 +384,54 @@ function onMessageReceived(_messageIndex) {
     if (processingTimer) clearTimeout(processingTimer);
     processingTimer = setTimeout(async () => {
         try {
-            const exchanges = await getExtractableExchanges();
-            if (!exchanges.length) return;
-
-            const toProcess = exchanges.slice(0, MAX_EXTRACT_PER_CYCLE);
             let totalAdded = 0;
+            const debug = settings.debugLogging;
 
-            for (const ex of toProcess) {
-                try {
-                    const count = await extractFromExchange(chatId, ex.userMessage, ex.aiMessage);
-                    await markExchangeExtracted(ex.aiIndex, ex.hash);
-                    totalAdded += count;
-                } catch (err) {
-                    console.error('[BB-Memory] Exchange 提取失败:', err);
+            // ═══ PRIMARY：直接提取最新 exchange ═══
+            const primary = getLatestExchange();
+            if (primary) {
+                const alreadyDone = await isExchangeProcessed(chatId, primary.hash);
+                if (!alreadyDone) {
+                    if (debug) console.log('[BB-Memory] 🔍 PRIMARY 路径：直接提取最新 exchange');
+                    try {
+                        const count = await extractFromExchange(chatId, primary.userMessage, primary.aiMessage);
+                        await markExchangeExtracted(primary.aiIndex, primary.hash);
+                        totalAdded += count;
+                        if (debug) console.log(`[BB-Memory] PRIMARY 路径完成：+${count} 条记忆`);
+                    } catch (err) {
+                        console.error('[BB-Memory] PRIMARY 提取失败:', err);
+                    }
+                } else if (debug) {
+                    console.log('[BB-Memory] PRIMARY 路径：exchange 已处理，跳过');
+                }
+            }
+
+            // ═══ SECONDARY：提取已被隐藏的旧 exchange（兜底）═══
+            const exchanges = await getExtractableExchanges();
+            if (exchanges.length) {
+                if (debug) console.log(`[BB-Memory] 🔍 SECONDARY 路径：发现 ${exchanges.length} 个待提取 exchange`);
+                const remaining = Math.max(0, MAX_EXTRACT_PER_CYCLE - (totalAdded > 0 ? 1 : 0));
+                const toProcess = exchanges.slice(0, remaining);
+
+                for (const ex of toProcess) {
+                    try {
+                        const count = await extractFromExchange(chatId, ex.userMessage, ex.aiMessage);
+                        await markExchangeExtracted(ex.aiIndex, ex.hash);
+                        totalAdded += count;
+                    } catch (err) {
+                        console.error('[BB-Memory] SECONDARY 提取失败:', err);
+                    }
                 }
             }
 
             if (totalAdded > 0 && typeof toastr !== 'undefined') {
                 toastr.info(
-                    `自动记录了 ${totalAdded} 条新记忆（来自 ${toProcess.length} 个 exchange）`,
+                    `自动记录了 ${totalAdded} 条新记忆`,
                     'BB-Memory',
                     { timeOut: 3000, preventDuplicates: true },
                 );
+            } else if (debug && totalAdded === 0) {
+                console.log('[BB-Memory] 本轮无新记忆可提取');
             }
         } catch (error) {
             console.error('[BB-Memory] Exchange 处理流程出错:', error);
@@ -397,6 +452,137 @@ function getChatId() {
         }
     } catch { /* 忽略 */ }
     return null;
+}
+
+// ═══ 上下文提取（手动触发的批量提取）═══
+
+const CONTEXT_EXTRACTION_PROMPT = `你是一个记忆提取助手。请阅读以下对话片段，提取所有值得长期记忆的关键信息。
+
+规则：
+1. 提取所有重要的信息——不要只挑一条，尽可能全面
+2. 每条记忆应有简短标题和清晰内容
+3. 如果对话中有重要原话（承诺、告白、威胁等），保留在 verbatim 字段
+4. 正确选择认知类型和分类路径
+5. **一次性出场的路人**不要建 npc.profile 独立档案：设 standaloneArchive=false，分类用 episode.event，npcTier=background
+6. **核心/长线 NPC** 才用 npc.profile / npc.relationship 等，并标注 npcTier
+7. **消耗品、随手道具** 用 itemTier=consumable 或 background；任务关键物用 key / clue
+8. 如果没有值得记忆的内容，返回空数组 []
+
+认知类型：
+- fact: 确定的事实（NPC档案、物品、地点、世界设定）
+- episode: 发生的事件或经历（事件、承诺、秘密、战斗）
+- emotion: 情感状态（好感变化、情绪波动、羁绊）
+- habit: 行为模式（习惯、偏好、口头禅）
+
+分类路径（NPC 子类可归在对应路径下）：
+world.politics | world.lore | world.rules | npc.profile | npc.relationship | npc.emotion | npc.secret | npc.goal | npc.attitude |
+item.ownership | item.quest | item.key | item.clue | location.state | location.map |
+episode.event | episode.promise | episode.secret | episode.dialogue | episode.combat |
+emotion.bond | emotion.trauma | emotion.desire |
+habit.routine | habit.preference | habit.speech
+
+NPC 分级 npcTier：core / important / minor / background
+物品分级 itemTier：key / equipped / clue / consumable / background
+
+以纯JSON数组格式返回（不要包含markdown代码块标记），每条包含：
+- cognitiveType: "fact"|"episode"|"emotion"|"habit"
+- categoryPath: 分类路径
+- title: 简短标题（3-8字）
+- content: 完整记忆内容
+- summary: 一句话摘要
+- verbatim: 重要原话（无则 ""）
+- tags: 标签数组（2-5个关键词）
+- subject: 主要实体名
+- target: 关联对象名
+- importance: 重要性(0-1)
+- emotionalWeight: 情感强度(0-1)
+- npcTier: 可选
+- itemTier: 可选
+- standaloneArchive: true/false（路人设 false）
+- indexCard: 可选，一行常驻索引卡
+
+以下是要分析的对话：
+{{conversation}}`;
+
+/**
+ * 从上下文中提取候选记忆（不直接保存，返回给用户审核）
+ * @param {string} chatId
+ * @param {number} messageCount - 获取最近多少条消息
+ * @returns {Promise<Array>} 候选记忆数组
+ */
+export async function extractFromContext(chatId, messageCount = 12) {
+    const ctx = SillyTavern.getContext();
+    const chat = ctx.chat;
+    if (!chat || chat.length < 2) return [];
+
+    const settings = getSettings();
+    const recentMessages = chat.slice(-Math.min(messageCount, chat.length));
+
+    // 构建对话文本
+    const lines = [];
+    for (const msg of recentMessages) {
+        if (msg.is_system) continue;
+        const role = msg.is_user ? '用户' : '角色';
+        const text = (msg.mes || '').trim();
+        if (!text) continue;
+        lines.push(`${role}: ${text}`);
+    }
+
+    if (lines.length < 2) return [];
+
+    const conversationText = lines.join('\n');
+    const prompt = CONTEXT_EXTRACTION_PROMPT.replace('{{conversation}}', conversationText);
+
+    if (settings.debugLogging) {
+        console.log(`[BB-Memory] 上下文提取：分析最近 ${lines.length} 条消息`);
+    }
+
+    let responseText;
+    if (settings.autoGenMode === 'custom' && settings.autoGenEndpoint) {
+        responseText = await callCustomApi(prompt);
+    } else {
+        responseText = await callMainApi(prompt);
+    }
+
+    const memories = parseAiResponse(responseText);
+    return memories;
+}
+
+/**
+ * 保存用户审核通过的候选记忆
+ * @param {string} chatId
+ * @param {Array} candidateMemories - 包含用户编辑字段的候选记忆
+ * @returns {Promise<number>} 实际保存的记忆条数
+ */
+export async function saveExtractedMemories(chatId, candidateMemories) {
+    let count = 0;
+    for (const mem of candidateMemories) {
+        if (!mem._selected) continue;
+
+        if (mem.standaloneArchive === undefined) {
+            mem.standaloneArchive = inferStandaloneArchive(mem);
+        }
+        applyStandaloneArchivePolicy(mem);
+
+        await addMemory(chatId, mem.content, mem.cognitiveType || 'episode', 'auto', {
+            categoryPath: mem.categoryPath,
+            title: mem.title,
+            summary: mem.summary,
+            verbatim: mem.verbatim,
+            tags: mem.tags,
+            importance: mem.importance,
+            emotionalWeight: mem.emotionalWeight,
+            subject: mem.subject,
+            target: mem.target,
+            npcTier: mem.npcTier || undefined,
+            itemTier: mem.itemTier || undefined,
+            standaloneArchive: mem.standaloneArchive,
+            indexCard: mem.indexCard || undefined,
+            relatedMemoryIds: mem.relatedMemoryIds?.length ? mem.relatedMemoryIds : undefined,
+        });
+        count++;
+    }
+    return count;
 }
 
 // ═══ 初始化与清理 ═══
