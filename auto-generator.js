@@ -131,7 +131,7 @@ function buildPrompt(userMessage, aiMessage) {
  * 通过主 API 的 generateRaw 调用（推荐方式）
  * 使用 SillyTavern 当前配置的 API，以 raw 模式生成
  */
-async function callMainApi(prompt) {
+export async function callMainApi(prompt) {
     const { generateRaw } = SillyTavern.getContext();
 
     const result = await generateRaw({
@@ -146,7 +146,7 @@ async function callMainApi(prompt) {
  * 通过自定义 API 端点调用（备用方式）
  * 支持 OpenAI 兼容格式
  */
-async function callCustomApi(prompt) {
+export async function callCustomApi(prompt) {
     const settings = getSettings();
     const { autoGenEndpoint, autoGenApiKey, autoGenModel } = settings;
 
@@ -194,7 +194,7 @@ async function callCustomApi(prompt) {
 /**
  * 解析 AI 返回的 JSON 文本为记忆条目数组
  */
-function parseAiResponse(responseText) {
+export function parseAiResponse(responseText) {
     if (!responseText || !responseText.trim()) return [];
 
     let text = responseText.trim();
@@ -510,13 +510,15 @@ NPC 分级 npcTier：core / important / minor / background
  * @param {number} messageCount - 获取最近多少条消息
  * @returns {Promise<Array>} 候选记忆数组
  */
-export async function extractFromContext(chatId, messageCount = 12) {
+export async function extractFromContext(chatId, messageCount = 12, startFloor = undefined) {
     const ctx = SillyTavern.getContext();
     const chat = ctx.chat;
     if (!chat || chat.length < 2) return [];
 
     const settings = getSettings();
-    const recentMessages = chat.slice(-Math.min(messageCount, chat.length));
+    const recentMessages = startFloor !== undefined
+        ? chat.slice(startFloor, Math.min(startFloor + messageCount, chat.length))
+        : chat.slice(-Math.min(messageCount, chat.length));
 
     // 构建对话文本
     const lines = [];

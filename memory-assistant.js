@@ -406,7 +406,10 @@ function bindBatchEvents(window, chatId) {
 
 function buildBrowseItemHTML(m) {
     const typeDef = getTypeDefinition(m.cognitiveType || m.type);
-    const date = new Date(m.createdAt).toLocaleString('zh-CN');
+    const createdDate = new Date(m.createdAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const updatedStr = (m.updatedAt && m.updatedAt !== m.createdAt)
+        ? ` <span title="最后编辑" style="opacity:0.6;"><i class="fa-solid fa-pen" style="font-size:0.8em;"></i> ${new Date(m.updatedAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>`
+        : '';
     const tagsHTML = (m.tags || []).slice(0, 4)
         .map(t => `<span class="bb-mem-tag">${escapeHtml(typeof t === 'string' ? t : t.name)}</span>`)
         .join('');
@@ -427,7 +430,7 @@ function buildBrowseItemHTML(m) {
                 <span style="color: ${typeDef.color}"><i class="${typeDef.icon}"></i> ${typeDef.label}</span>
                 ${truthBadge}
                 ${noteIcon}
-                <span class="bb-browse-item-date">${date}</span>
+                <span class="bb-browse-item-date"><i class="fa-solid fa-calendar-plus" style="font-size:0.85em;"></i> ${createdDate}${updatedStr}</span>
             </div>
             <div class="bb-browse-item-content">${escapeHtml(m.content)}</div>
             <div class="bb-browse-item-tags">${tagsHTML}</div>

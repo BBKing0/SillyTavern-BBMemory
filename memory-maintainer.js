@@ -395,6 +395,7 @@ export function buildMaintenanceHTML(result) {
                     <strong>记忆维护建议</strong>
                     <p>当前共 ${totalMemories} 条活跃记忆（阈值 ${threshold}），发现 ${totalIssues} 个可优化项</p>
                 </div>
+                <span class="bb-mem-close bb-maint-close" title="关闭" style="margin-left:auto;">&times;</span>
             </div>
 
             <div class="bb-maint-body">

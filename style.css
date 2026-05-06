@@ -1179,7 +1179,9 @@
    v2.7: 手动添加记忆表单
    ═══════════════════════════════════════ */
 
-.bb-mem-form-overlay {
+.bb-mem-form-overlay,
+.bb-fact-update-overlay,
+.bb-floor-select-overlay {
     position: fixed;
     inset: 0;
     z-index: 100001;
@@ -1299,4 +1301,312 @@
 
 .bb-mem-form-footer .menu_button {
     min-width: 80px;
+}
+
+/* ═══════════════════════════════════════
+   手机端适配 (v2.8)
+   ═══════════════════════════════════════ */
+
+/* ── 平板 / 手机横屏 ── */
+@media (max-width: 768px) {
+
+    /* 记忆管理弹窗 */
+    .bb-mem-overlay {
+        padding: 0;
+    }
+    .bb-mem-popup {
+        width: 100%;
+        max-width: 100%;
+        max-height: 100vh;
+        border-radius: 0;
+    }
+    .bb-mem-popup-header {
+        padding: 10px 14px;
+    }
+    .bb-mem-popup-header h3 {
+        font-size: 1em;
+    }
+    .bb-mem-toolbar {
+        padding: 8px 14px;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .bb-mem-search {
+        min-width: 100%;
+        order: -1;
+    }
+    .bb-mem-type-filters {
+        padding: 0 14px 6px;
+        gap: 3px;
+    }
+    .bb-mem-type-filter {
+        font-size: 0.75em !important;
+        padding: 4px 7px !important;
+    }
+    .bb-mem-stats {
+        padding: 0 14px 6px;
+        font-size: 0.8em;
+    }
+    .bb-mem-list {
+        padding: 0 10px 10px;
+        max-height: 45vh;
+    }
+    .bb-mem-item {
+        padding: 8px 10px;
+    }
+    .bb-mem-item-content {
+        font-size: 0.88em;
+    }
+    .bb-mem-item-meta {
+        font-size: 0.74em;
+    }
+    .bb-mem-footer {
+        padding: 8px 10px;
+        gap: 4px;
+    }
+    .bb-mem-footer .menu_button {
+        font-size: 0.78em;
+        min-width: 60px;
+    }
+
+    /* 操作按钮：触屏模式下始终可见 */
+    .bb-mem-item-actions {
+        position: static;
+        opacity: 1;
+        margin-top: 8px;
+        justify-content: flex-end;
+    }
+    .bb-mem-btn-sm {
+        font-size: 0.85em !important;
+        padding: 5px 8px !important;
+        min-height: 36px;
+        min-width: 36px;
+    }
+
+    /* 记忆管家悬浮窗 → 底部抽屉 */
+    .bb-assistant-window {
+        top: auto;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        width: 100%;
+        max-height: 60vh;
+        border-radius: 12px 12px 0 0;
+    }
+    .bb-assistant-header {
+        padding: 8px 12px;
+    }
+    .bb-assistant-body {
+        max-height: 45vh;
+    }
+    .bb-assistant-tab {
+        font-size: 0.75em;
+        padding: 6px 4px;
+    }
+    .bb-dash-summary {
+        flex-wrap: wrap;
+    }
+    .bb-dash-stat {
+        flex: 1 1 45%;
+        min-width: 80px;
+    }
+    .bb-dash-type-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    /* 添加/编辑记忆表单 */
+    .bb-mem-form-overlay {
+        padding: 0;
+        align-items: flex-start;
+    }
+    .bb-mem-form-popup {
+        width: 100%;
+        max-width: 100%;
+        max-height: 100vh;
+        border-radius: 0;
+    }
+    .bb-mem-form-header {
+        padding: 10px 14px;
+    }
+    .bb-mem-form-header h3 {
+        font-size: 1em;
+    }
+    .bb-mem-form-body {
+        padding: 10px 14px;
+        max-height: 55vh;
+    }
+    .bb-mem-form-row {
+        flex-direction: column;
+        gap: 6px;
+    }
+    .bb-mem-form-footer {
+        padding: 10px 14px;
+    }
+    .bb-mem-form-footer .menu_button {
+        min-width: 60px;
+        font-size: 0.9em;
+    }
+
+    /* 维护弹窗 */
+    .bb-maint-panel {
+        width: 100%;
+        max-width: 100%;
+        border-radius: 0;
+        max-height: 90vh;
+    }
+    .bb-maint-header {
+        padding: 12px 14px;
+    }
+    .bb-maint-body {
+        padding: 10px 14px;
+    }
+    .bb-maint-actions {
+        flex-direction: column;
+        padding: 10px 14px;
+    }
+    .bb-maint-issue-reason {
+        max-width: 100px;
+        font-size: 0.75em;
+    }
+
+    /* 实体分级行 */
+    .bb-entity-meta-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .bb-entity-meta-row .bb-tier-select {
+        max-width: 100%;
+    }
+
+    /* AI提取审核 */
+    .bb-candidate-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    /* 浏览面板 */
+    .bb-browse-list {
+        max-height: 35vh;
+    }
+
+    /* 侧边栏按钮 */
+    .bb-mem-sidebar-buttons {
+        flex-direction: column;
+    }
+}
+
+/* ── 手机竖屏 ── */
+@media (max-width: 480px) {
+
+    .bb-mem-popup-header h3 {
+        font-size: 0.95em;
+    }
+    .bb-mem-list {
+        max-height: 40vh;
+        padding: 0 6px 8px;
+    }
+    .bb-mem-item {
+        padding: 6px 8px;
+        margin-bottom: 4px;
+    }
+    .bb-mem-item-content {
+        font-size: 0.85em;
+        line-height: 1.4;
+    }
+    .bb-mem-item-meta {
+        font-size: 0.7em;
+        gap: 2px;
+    }
+    .bb-mem-item-actions {
+        gap: 2px;
+    }
+    .bb-mem-btn-sm {
+        font-size: 0.8em !important;
+        padding: 4px 6px !important;
+        min-height: 32px;
+        min-width: 32px;
+    }
+    .bb-mem-toolbar {
+        gap: 4px;
+    }
+    .bb-mem-toolbar .menu_button {
+        font-size: 0.8em;
+        padding: 4px 8px;
+    }
+    .bb-mem-type-filter {
+        font-size: 0.7em !important;
+        padding: 3px 5px !important;
+    }
+    .bb-mem-footer .menu_button {
+        font-size: 0.75em;
+        min-width: 50px;
+        padding: 5px;
+    }
+
+    /* 记忆管家全屏 */
+    .bb-assistant-window {
+        top: 0;
+        max-height: 100vh;
+        border-radius: 0;
+    }
+    .bb-assistant-body {
+        max-height: 50vh;
+    }
+    .bb-assistant-tab {
+        font-size: 0.68em;
+        padding: 5px 2px;
+    }
+    .bb-dash-type-grid {
+        grid-template-columns: 1fr;
+    }
+    .bb-dash-stat {
+        flex: 1 1 100%;
+    }
+
+    /* 表单满屏 */
+    .bb-mem-form-body {
+        max-height: 50vh;
+        padding: 8px 10px;
+    }
+    .bb-mem-form-group label {
+        font-size: 0.8em;
+    }
+    .bb-mem-form-group input[type="text"],
+    .bb-mem-form-group select,
+    .bb-mem-form-group textarea {
+        font-size: 0.9em;
+    }
+
+    /* 维护弹窗 */
+    .bb-maint-header {
+        padding: 10px;
+    }
+    .bb-maint-header i {
+        font-size: 1.2em;
+    }
+    .bb-maint-header strong {
+        font-size: 0.95em;
+    }
+    .bb-maint-issue-reason {
+        display: none;
+    }
+    .bb-maint-issue-title {
+        font-size: 0.85em;
+    }
+    .bb-maint-actions .menu_button {
+        font-size: 0.85em;
+        padding: 8px;
+    }
+
+    /* tag */
+    .bb-mem-tag {
+        font-size: 0.75em;
+        padding: 1px 4px;
+    }
+
+    /* 强度条 */
+    .bb-mem-strength-bar {
+        width: 30px;
+        height: 3px;
+    }
 }

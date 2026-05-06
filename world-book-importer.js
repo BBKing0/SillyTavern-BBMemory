@@ -32,7 +32,7 @@
  * ═══════════════════════════════════════════════════════════
  */
 
-import { addMemory, extractKeywords } from './memory-store.js';
+import { addMemory, extractKeywords, getSettings } from './memory-store.js';
 import { guessTypeFromContent } from './memory-types.js';
 
 /**
@@ -204,4 +204,88 @@ export function previewWorldBook(jsonString) {
         guessedType: guessTypeFromContent(entry.content || '', entry.key || []),
         enabled: entry.enabled !== false,
     }));
+}
+
+/**
+ * 使用AI总结世界书内容后导入
+ * 将所有条目内容发送给AI，由AI整理为结构化的记忆条目
+ */
+export async function importWorldBookWithAI(chatId, jsonString) {
+    const data = JSON.parse(jsonString);
+    const entries = extractEntries(data);
+
+    if (!entries.length) {
+        throw new Error('未找到有效的世界书条目。请确保文件是 SillyTavern 世界书格式。');
+    }
+
+    const settings = getSettings();
+
+    // Check API configuration
+    if (settings.autoGenMode === 'custom') {
+        if (!settings.autoGenEndpoint) {
+            throw new Error('请先在设置中配置自定义 API 端点（端点地址、API Key、模型名称）');
+        }
+    }
+
+    // Build context text from all entries
+    const contextText = entries.map((entry, i) => {
+        const keys = (entry.key || []).join(', ');
+        const comment = entry.comment ? ` (${entry.comment})` : '';
+        return `[条目${i + 1}${comment}]\n关键词: ${keys}\n内容: ${entry.content}`;
+    }).join('\n\n');
+
+    // Build summarization prompt
+    const prompt = `你是一个世界书记忆整理助手。以下是世界书的所有条目，请将它们整理为结构化的长期记忆条目。
+
+规则：
+1. 合并相似的条目，避免重复信息
+2. 每条记忆应有简短标题和清晰内容
+3. 正确选择认知类型和分类路径
+4. 对于角色信息，建立 npc.profile；对于世界设定，使用 world.lore
+5. 保留重要的关键词作为 tags
+6. 如果没有值得保留的内容，返回空数组 []
+
+认知类型：fact | episode | emotion | habit
+分类路径：world.politics | world.lore | world.rules | npc.profile | npc.relationship | npc.emotion | npc.secret | npc.goal | npc.attitude | item.ownership | item.quest | item.key | item.clue | location.state | location.map | episode.event | episode.promise | episode.secret | episode.dialogue | episode.combat | emotion.bond | emotion.trauma | emotion.desire | habit.routine | habit.preference | habit.speech
+
+以纯JSON数组格式返回，每条包含字段：cognitiveType, categoryPath, title, content, summary, tags, subject, target, importance（0-1之间的小数）
+
+以下是世界书内容：
+
+${contextText}`;
+
+    // Call API
+    let responseText;
+    if (settings.autoGenMode === 'custom' && settings.autoGenEndpoint) {
+        const { callCustomApi } = await import('./auto-generator.js');
+        responseText = await callCustomApi(prompt);
+    } else {
+        const { callMainApi } = await import('./auto-generator.js');
+        responseText = await callMainApi(prompt);
+    }
+
+    // Parse and create memories
+    const { parseAiResponse } = await import('./auto-generator.js');
+    const memories = parseAiResponse(responseText);
+
+    if (!memories.length) {
+        throw new Error('AI 未能从世界书中提取到有效记忆条目');
+    }
+
+    let importedCount = 0;
+    for (const mem of memories) {
+        await addMemory(chatId, mem.content, mem.cognitiveType || 'fact', 'worldbook', {
+            categoryPath: mem.categoryPath,
+            title: mem.title,
+            summary: mem.summary,
+            tags: mem.tags,
+            subject: mem.subject,
+            target: mem.target,
+            importance: mem.importance,
+            emotionalWeight: mem.emotionalWeight || 0.0,
+        });
+        importedCount++;
+    }
+
+    return importedCount;
 }

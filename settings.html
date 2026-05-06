@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v2</b>
+            <b>BB-Memory</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -147,6 +147,13 @@
                     <input id="bb_memory_api_model" type="text" class="text_pole"
                            placeholder="gpt-4o-mini" />
                 </div>
+
+                <div class="bb-mem-sidebar-section" style="margin-top: 8px;">
+                    <button id="bb_memory_test_api" class="menu_button" style="width:100%;">
+                        <i class="fa-solid fa-plug"></i> 测试连接
+                    </button>
+                    <small id="bb_memory_test_result" style="display:block;margin-top:4px;font-size:0.8em;"></small>
+                </div>
             </div>
 
             <hr />
@@ -181,12 +188,15 @@
             </div>
 
             <div class="bb-mem-sidebar-buttons">
-                <button id="bb_memory_import_wb_btn" class="menu_button" title="从世界书JSON文件初始化记忆">
+                <button id="bb_memory_import_wb_btn" class="menu_button" title="从世界书JSON文件逐条导入">
                     <i class="fa-solid fa-file-import"></i> 导入世界书
+                </button>
+                <button id="bb_memory_import_wb_ai_btn" class="menu_button" title="先由AI整理总结世界书内容再导入">
+                    <i class="fa-solid fa-robot"></i> AI摘要导入
                 </button>
             </div>
             <small class="bb-mem-hint" style="display: block; margin-top: 4px;">
-                上传 SillyTavern 世界书 JSON，自动转换为向量化记忆条目
+                直接导入逐条创建记忆，AI摘要先由AI总结后再导入
             </small>
 
         </div>
