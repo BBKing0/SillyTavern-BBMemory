@@ -1853,3 +1853,228 @@
         flex-direction: column;
     }
 }
+
+/* ═══ v2.9.5：提取标记 ═══ */
+
+.bb-extract-marker {
+    display: inline-block;
+    margin-left: 6px;
+    font-size: 0.75em;
+    color: #81c784;
+    opacity: 0.7;
+    vertical-align: middle;
+}
+
+.bb-extract-marker i {
+    font-size: 1em;
+}
+
+/* ═══ v2.9.5：楼层选择对话框提取状态 ═══ */
+
+.bb-floor-status {
+    font-size: 0.85em;
+    opacity: 0.7;
+    margin-top: 8px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.05));
+}
+
+.bb-floor-status strong {
+    color: var(--SmartThemeQuoteColor, #ccc);
+}
+
+/* ═══ v2.9.5：折叠设置 ═══ */
+
+.bb-settings-section {
+    margin-bottom: 2px;
+}
+
+.bb-settings-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: bold;
+    font-size: 0.9em;
+    padding: 6px 4px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 0.15s;
+    user-select: none;
+}
+
+.bb-settings-section-header:hover {
+    background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.05));
+}
+
+.bb-settings-section-header > span:first-child {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.bb-settings-chevron {
+    font-size: 0.8em;
+    opacity: 0.5;
+    transition: transform 0.2s;
+}
+
+.bb-settings-section-body {
+    padding: 4px 0;
+}
+
+/* ═══ v2.9.5：命中记忆列表 ═══ */
+
+.bb-hit-list {
+    max-height: 180px;
+    overflow-y: auto;
+    font-size: 0.82em;
+    margin: 4px 0;
+}
+
+.bb-hit-item {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    padding: 3px 6px;
+    border-radius: 4px;
+    margin: 2px 0;
+    background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.03));
+}
+
+.bb-hit-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.bb-hit-score {
+    font-size: 0.85em;
+    opacity: 0.7;
+    min-width: 36px;
+    text-align: right;
+}
+
+.bb-hit-level {
+    font-weight: bold;
+    font-size: 0.75em;
+}
+
+.bb-hit-stats {
+    font-size: 0.75em;
+    opacity: 0.5;
+    margin-top: 4px;
+    text-align: center;
+}
+
+/* ═══ v2.9.5：常驻记忆面板 ═══ */
+
+.bb-persistent-tabs {
+    display: flex;
+    gap: 2px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #444);
+}
+
+.bb-persistent-tabs .bb-mgr-tab {
+    padding: 6px 12px;
+    font-size: 0.85em;
+}
+
+.bb-persistent-toolbar {
+    margin-bottom: 8px;
+}
+
+.bb-persistent-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 50vh;
+    overflow-y: auto;
+}
+
+.bb-persistent-item {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.03));
+    gap: 8px;
+}
+
+.bb-persistent-item-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.bb-persistent-item-name {
+    font-weight: bold;
+    font-size: 0.9em;
+    margin-bottom: 2px;
+}
+
+.bb-persistent-item-content {
+    font-size: 0.82em;
+    opacity: 0.8;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.bb-persistent-item-actions {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.bb-persistent-item-actions button {
+    padding: 2px 6px;
+    font-size: 0.75em;
+}
+
+/* 常驻记忆编辑表单 */
+.bb-persistent-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+    border-radius: 6px;
+    border: 1px dashed var(--SmartThemeBorderColor, #444);
+    margin-bottom: 8px;
+}
+
+.bb-persistent-form input,
+.bb-persistent-form textarea {
+    width: 100%;
+    padding: 6px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    background: var(--SmartThemeBackgroundColor, #222);
+    color: var(--SmartThemeTextColor, #ddd);
+    font-size: 0.85em;
+}
+
+.bb-persistent-form textarea {
+    resize: vertical;
+    min-height: 60px;
+}
+
+.bb-persistent-form-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+/* 移动端适配 */
+@media (max-width: 480px) {
+    .bb-persistent-item {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .bb-persistent-item-actions {
+        justify-content: flex-end;
+    }
+}

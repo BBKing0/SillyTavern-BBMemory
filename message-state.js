@@ -279,3 +279,33 @@ export async function markExchangeExtracted(aiIndex, hash) {
 
     await markExchangeProcessed(chatId, hash);
 }
+
+/**
+ * 刷新聊天消息上的提取标记图标
+ * 扫描 SillyTavern 聊天 DOM，为已提取的消息添加视觉标记
+ */
+export function refreshExtractionMarkers() {
+    const ctx = getContext();
+    const chat = ctx.chat;
+    if (!chat) return;
+
+    const msgBlocks = document.querySelectorAll('.mes');
+    msgBlocks.forEach(block => {
+        const existing = block.querySelector('.bb-extract-marker');
+        if (existing) existing.remove();
+
+        const mesId = block.getAttribute('mesid');
+        if (mesId == null) return;
+        const idx = parseInt(mesId, 10);
+        if (isNaN(idx) || idx < 0 || idx >= chat.length) return;
+
+        if (chat[idx]._bbmem_extracted) {
+            const marker = document.createElement('span');
+            marker.className = 'bb-extract-marker';
+            marker.title = '此消息已被 BB-Memory 提取';
+            marker.innerHTML = '<i class="fa-solid fa-circle-check"></i>';
+            const contentEl = block.querySelector('.mes_text') || block.querySelector('.mes_block') || block;
+            contentEl.appendChild(marker);
+        }
+    });
+}

@@ -27,12 +27,28 @@
                 </button>
             </div>
 
+            <!-- ═══ 命中记忆 ═══ -->
+            <div class="bb-settings-section">
+                <div class="bb-settings-section-header" data-section="hits">
+                    <span><i class="fa-solid fa-bullseye"></i> 命中记忆 <small id="bb_hit_timestamp" style="font-size:0.7em;opacity:0.5;margin-left:6px;"></small></span>
+                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                </div>
+                <div class="bb-settings-section-body">
+                    <div class="bb-hit-list" id="bb_hit_list">
+                        <div class="bb-mem-empty">等待下一次 AI 生成...</div>
+                    </div>
+                </div>
+            </div>
+
             <hr />
 
             <!-- ═══ 注入设置 ═══ -->
-            <div class="bb-mem-section-title">
-                <i class="fa-solid fa-syringe"></i> 注入设置
-            </div>
+            <div class="bb-settings-section">
+                <div class="bb-settings-section-header" data-section="injection">
+                    <span><i class="fa-solid fa-syringe"></i> 注入设置</span>
+                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                </div>
+                <div class="bb-settings-section-body">
 
             <div class="bb-mem-sidebar-section">
                 <label for="bb_memory_depth">
@@ -70,12 +86,18 @@
 {{memories}}</textarea>
             </div>
 
+                </div>
+            </div>
+
             <hr />
 
             <!-- ═══ 记忆维护设置 ═══ -->
-            <div class="bb-mem-section-title">
-                <i class="fa-solid fa-toolbox"></i> 记忆维护
-            </div>
+            <div class="bb-settings-section">
+                <div class="bb-settings-section-header" data-section="maintenance">
+                    <span><i class="fa-solid fa-toolbox"></i> 记忆维护</span>
+                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                </div>
+                <div class="bb-settings-section-body">
 
             <div class="bb-mem-sidebar-section">
                 <label for="bb_memory_maint_threshold">
@@ -86,12 +108,18 @@
                        min="10" max="500" step="10" value="50" />
             </div>
 
+                </div>
+            </div>
+
             <hr />
 
             <!-- ═══ AI 自动生成设置 ═══ -->
-            <div class="bb-mem-section-title">
-                <i class="fa-solid fa-robot"></i> AI 自动生成
-            </div>
+            <div class="bb-settings-section">
+                <div class="bb-settings-section-header" data-section="autogen">
+                    <span><i class="fa-solid fa-robot"></i> AI 自动生成</span>
+                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                </div>
+                <div class="bb-settings-section-body">
 
             <label class="checkbox_label" style="margin: 8px 0;">
                 <input id="bb_memory_auto_gen" type="checkbox" />
@@ -108,6 +136,15 @@
             <small class="bb-mem-hint" style="display: block; margin-bottom: 8px;">
                 开启后在浏览器控制台输出详细提取日志，用于排查自动提取问题
             </small>
+
+            <div class="bb-mem-sidebar-section">
+                <label for="bb_memory_auto_max_exchanges">
+                    每轮最大提取数
+                    <small class="bb-mem-hint">每次AI响应后最多向后扫描多少个交换（1-20，默认3）</small>
+                </label>
+                <input id="bb_memory_auto_max_exchanges" type="number" class="text_pole"
+                       min="1" max="20" value="3" />
+            </div>
 
             <!-- 自定义提取提示词 -->
             <div class="bb-mem-section-title" style="margin-top:12px;">
@@ -185,12 +222,18 @@
                 </div>
             </div>
 
+                </div>
+            </div>
+
             <hr />
 
             <!-- ═══ 记忆衰减设置 ═══ -->
-            <div class="bb-mem-section-title">
-                <i class="fa-solid fa-brain"></i> 记忆衰减（模拟遗忘）
-            </div>
+            <div class="bb-settings-section">
+                <div class="bb-settings-section-header" data-section="decay">
+                    <span><i class="fa-solid fa-brain"></i> 记忆衰减（模拟遗忘）</span>
+                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                </div>
+                <div class="bb-settings-section-body">
 
             <label class="checkbox_label" style="margin: 8px 0;">
                 <input id="bb_memory_decay_enabled" type="checkbox" checked />
@@ -209,12 +252,18 @@
                        min="0.01" max="0.2" step="0.01" value="0.05" />
             </div>
 
+                </div>
+            </div>
+
             <hr />
 
             <!-- ═══ 世界书导入 ═══ -->
-            <div class="bb-mem-section-title">
-                <i class="fa-solid fa-book-atlas"></i> 世界书导入
-            </div>
+            <div class="bb-settings-section">
+                <div class="bb-settings-section-header" data-section="worldbook">
+                    <span><i class="fa-solid fa-book-atlas"></i> 世界书导入</span>
+                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                </div>
+                <div class="bb-settings-section-body">
 
             <div class="bb-mem-sidebar-buttons">
                 <button id="bb_memory_import_wb_btn" class="menu_button" title="从世界书JSON文件逐条导入">
@@ -227,6 +276,9 @@
             <small class="bb-mem-hint" style="display: block; margin-top: 4px;">
                 直接导入逐条创建记忆，AI摘要先由AI总结后再导入
             </small>
+
+                </div>
+            </div>
 
         </div>
     </div>

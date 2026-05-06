@@ -506,13 +506,38 @@ function formatNoteLines(memory) {
  * @param {object} params.settings        - 用户设置
  * @returns {{ text: string, tokenEstimate: number, stats: object }}
  */
-export function buildMemoryInjectionPrompt({ residentMemories, relevantResults, settings }) {
+export function buildMemoryInjectionPrompt({ residentMemories, relevantResults, settings, persistentMemories = [] }) {
     const tokenBudget = settings.tokenBudget || 800;
     let tokenUsed = 0;
-    const stats = { residentCount: 0, l3: 0, l2: 0, l1: 0, totalMemories: 0, hiddenNoteCount: 0 };
+    const stats = { persistentCount: 0, residentCount: 0, l3: 0, l2: 0, l1: 0, totalMemories: 0, hiddenNoteCount: 0 };
 
     const sections = [];
     const allHiddenLines = [];
+
+    // ── 区块 0：常驻档案（NPC/物品/时间线）──
+    if (persistentMemories.length) {
+        const byCategory = { npc: [], item: [], timeline: [] };
+        for (const pm of persistentMemories) {
+            if (byCategory[pm.category]) byCategory[pm.category].push(pm);
+        }
+        const catLabels = { npc: 'NPC档案', item: '物品', timeline: '时间线' };
+        const archiveLines = [];
+        for (const [cat, items] of Object.entries(byCategory)) {
+            if (!items.length) continue;
+            archiveLines.push(`[${catLabels[cat]}]`);
+            for (const item of items) {
+                const line = `- ${item.name}: ${item.content}`;
+                const cost = estimateTokens(line);
+                if (tokenUsed + cost > tokenBudget * 0.35) break;
+                archiveLines.push(line);
+                tokenUsed += cost;
+                stats.persistentCount++;
+            }
+        }
+        if (archiveLines.length) {
+            sections.push(`[常驻档案]\n${archiveLines.join('\n')}`);
+        }
+    }
 
     // ── 区块 1：常驻记忆 ──
     if (residentMemories.length) {
@@ -569,7 +594,7 @@ export function buildMemoryInjectionPrompt({ residentMemories, relevantResults, 
         sections.push(`[隐藏备注]\n${allHiddenLines.join('\n')}`);
     }
 
-    stats.totalMemories = stats.residentCount + stats.l3 + stats.l2 + stats.l1;
+    stats.totalMemories = stats.persistentCount + stats.residentCount + stats.l3 + stats.l2 + stats.l1;
     const text = sections.join('\n\n');
     const tokenEstimate = estimateTokens(text);
 

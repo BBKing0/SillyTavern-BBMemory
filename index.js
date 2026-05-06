@@ -69,8 +69,9 @@ import {
     expandMemoriesForEntityKeyword,
 } from './entity-tiers.js';
 import { initAutoGenerator, stopAutoGenerator, extractFromContext, saveExtractedMemories, normalizeEndpoint, setAutoExtractProgressCallback } from './auto-generator.js';
-import { syncMessageVisibility } from './message-state.js';
+import { syncMessageVisibility, refreshExtractionMarkers } from './message-state.js';
 import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot } from './memory-slots.js';
+import { getPersistentMemories, addPersistentMemory, updatePersistentMemory, removePersistentMemory } from './persistent-memory.js';
 import {
     MEMORY_STATUS,
     checkMaintenanceNeeded,
@@ -95,6 +96,9 @@ const INJECTION_KEY = 'bb_memory_injection';
 
 const POSITION_IN_CHAT = 1;
 const ROLE_SYSTEM = 0;
+
+// v2.9.5：命中追踪缓存
+let lastRetrievalResult = { chatId: null, hits: [], timestamp: 0, stats: null };
 
 // ═══════════════════════════════════════════════════════════
 //  辅助函数
@@ -275,6 +279,9 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     // 提取近期角色和地点作为检索上下文
     const context = extractRecentContext(chat);
 
+    // 常驻档案（NPC/物品/时间线）—— v2.9.5
+    const persistentMemories = await getPersistentMemories(chatId);
+
     // 常驻记忆（L4）
     const residentMemories = getResidentMemories(memories);
 
@@ -294,7 +301,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         12,
     );
 
-    if (!residentMemories.length && !relevantResults.length) {
+    if (!persistentMemories.length && !residentMemories.length && !relevantResults.length) {
         clearInjection();
         return chat;
     }
@@ -305,6 +312,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
 
     // 构建分区注入文本
     const { text: injectionText, tokenEstimate, stats } = buildMemoryInjectionPrompt({
+        persistentMemories,
         residentMemories,
         relevantResults,
         settings,
@@ -320,8 +328,24 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     );
 
     console.log(
-        `[${DISPLAY_NAME}] 注入: 常驻${stats.residentCount} L3×${stats.l3} L2×${stats.l2} L1×${stats.l1} ≈${tokenEstimate}tok`,
+        `[${DISPLAY_NAME}] 注入: 档案${stats.persistentCount || 0} 常驻${stats.residentCount} L3×${stats.l3} L2×${stats.l2} L1×${stats.l1} ≈${tokenEstimate}tok`,
     );
+
+    // v2.9.5：存储命中追踪数据
+    lastRetrievalResult = {
+        chatId,
+        hits: relevantResults.map(r => ({
+            id: r.memory.id,
+            title: r.memory.title || r.memory.content.slice(0, 30),
+            cognitiveType: r.memory.cognitiveType,
+            score: r.score,
+            level: r.level,
+        })),
+        timestamp: Date.now(),
+        stats: { ...stats },
+    };
+    // 更新侧边栏命中显示
+    renderHitDisplay();
 
     return chat;
 };
@@ -391,7 +415,13 @@ async function refreshSidebar() {
     const debugLogEl = document.getElementById('bb_memory_debug_logging');
     if (debugLogEl) debugLogEl.checked = getSettings().debugLogging;
 
+    const maxExchangesEl = document.getElementById('bb_memory_auto_max_exchanges');
+    if (maxExchangesEl) maxExchangesEl.value = String(getSettings().autoGenMaxExchanges ?? 3);
+
     restoreApiSettings(getSettings());
+
+    // v2.9.5：刷新命中记忆显示
+    renderHitDisplay();
 }
 
 /**
@@ -413,6 +443,45 @@ function restoreApiSettings(s) {
     const customSection = document.getElementById('bb_memory_custom_api_section');
     if (customSection) {
         customSection.style.display = s.autoGenMode === 'custom' ? 'block' : 'none';
+    }
+}
+
+// v2.9.5：渲染命中记忆列表
+function renderHitDisplay() {
+    const listEl = document.getElementById('bb_hit_list');
+    const tsEl = document.getElementById('bb_hit_timestamp');
+    if (!listEl) return;
+
+    const result = lastRetrievalResult;
+    if (!result.hits || !result.hits.length) {
+        listEl.innerHTML = '<div class="bb-mem-empty">等待下一次 AI 生成...</div>';
+        if (tsEl) tsEl.textContent = '';
+        return;
+    }
+
+    if (tsEl && result.timestamp) {
+        tsEl.textContent = new Date(result.timestamp).toLocaleTimeString('zh-CN');
+    }
+
+    const typeIcons = { fact: 'fa-lightbulb', episode: 'fa-film', emotion: 'fa-heart', habit: 'fa-repeat' };
+    const levelColors = { L4: '#ce93d8', L3: '#4fc3f7', L2: '#ffb74d', L1: '#9e9e9e' };
+
+    listEl.innerHTML = result.hits.map(h => {
+        const icon = typeIcons[h.cognitiveType] || 'fa-circle';
+        const color = levelColors[h.level] || '#888';
+        const scorePct = Math.round(h.score * 100);
+        return `<div class="bb-hit-item">
+            <i class="fa-solid ${icon}" style="color:${color};font-size:0.8em;"></i>
+            <span class="bb-hit-title">${escapeHtml(h.title)}</span>
+            <span class="bb-hit-score">${scorePct}%</span>
+            <span class="bb-hit-level" style="color:${color}">${h.level}</span>
+        </div>`;
+    }).join('');
+
+    if (result.stats) {
+        listEl.innerHTML += `<div class="bb-hit-stats">
+            档案${result.stats.persistentCount || 0} 常驻${result.stats.residentCount || 0} L3×${result.stats.l3 || 0} L2×${result.stats.l2 || 0} L1×${result.stats.l1 || 0}
+        </div>`;
     }
 }
 
@@ -457,6 +526,12 @@ function bindSidebarEvents() {
 
     document.getElementById('bb_memory_debug_logging')?.addEventListener('change', (e) => {
         updateSettings({ debugLogging: e.target.checked });
+    });
+
+    // v2.9.5：每轮最大提取数
+    document.getElementById('bb_memory_auto_max_exchanges')?.addEventListener('change', (e) => {
+        const val = parseInt(e.target.value, 10);
+        if (!isNaN(val) && val >= 1 && val <= 20) updateSettings({ autoGenMaxExchanges: val });
     });
 
     // 副API模式切换
@@ -1399,6 +1474,10 @@ function showFloorSelectionDialog(chatId, callback) {
                         建议每次提取不超过 20 条消息
                     </small>
                 </div>
+                <div class="bb-floor-status" id="bb_floor_status">
+                    已提取：<strong id="bb_floor_extracted">-</strong> 个交换 &nbsp;
+                    未提取：<strong id="bb_floor_unextracted">-</strong> 个交换
+                </div>
             </div>
             <div class="bb-mem-form-footer">
                 <button class="menu_button" id="bb_floor_cancel">
@@ -1415,16 +1494,40 @@ function showFloorSelectionDialog(chatId, callback) {
     const startInput = overlay.querySelector('#bb_floor_start');
     const endInput = overlay.querySelector('#bb_floor_end');
     const countEl = overlay.querySelector('#bb_floor_count');
+    const extractedEl = overlay.querySelector('#bb_floor_extracted');
+    const unextractedEl = overlay.querySelector('#bb_floor_unextracted');
 
     const updateCount = () => {
         const start = parseInt(startInput.value, 10);
         const end = parseInt(endInput.value, 10);
         if (!isNaN(start) && !isNaN(end) && end >= start) {
             countEl.textContent = String(end - start + 1);
+
+            // 统计提取状态
+            let extracted = 0;
+            let unextracted = 0;
+            for (let i = start; i <= end && i < chat.length; i++) {
+                const msg = chat[i];
+                if (msg.is_system || msg.is_user) continue;
+                if (msg._bbmem_extracted) extracted++;
+                else {
+                    // 尝试找到前面最近的一个 user 消息来确定是 exchange 的 AI 部分
+                    let hasUser = false;
+                    for (let j = i - 1; j >= start && j >= 0; j--) {
+                        if (chat[j].is_user) { hasUser = true; break; }
+                        if (chat[j].is_system) continue;
+                    }
+                    if (hasUser) unextracted++;
+                }
+            }
+            if (extractedEl) extractedEl.textContent = String(extracted);
+            if (unextractedEl) unextractedEl.textContent = String(unextracted);
         }
     };
     startInput?.addEventListener('input', updateCount);
     endInput?.addEventListener('input', updateCount);
+    // 初始化提取状态
+    updateCount();
 
     const closeDialog = () => overlay.remove();
     overlay.querySelector('.bb-mem-close')?.addEventListener('click', closeDialog);
@@ -1460,21 +1563,26 @@ async function handleAiExtract(managerOverlay, chatId) {
         showProgressToast('正在分析对话', 0, 1);
 
         try {
-            const candidates = await extractFromContext(chatId, count, startFloor);
+            const { memories: candidates, skippedCount } = await extractFromContext(chatId, count, startFloor);
 
             showProgressToast('正在分析对话', 1, 1);
 
             if (!candidates || !candidates.length) {
                 dismissProgressToast(2000);
-                if (listEl) listEl.innerHTML = `<div class="bb-mem-empty">AI 未发现值得记忆的内容</div>`;
+                const skipMsg = skippedCount > 0 ? `（跳过 ${skippedCount} 个已提取交换）` : '';
+                if (listEl) listEl.innerHTML = `<div class="bb-mem-empty">AI 未发现值得记忆的内容${skipMsg}</div>`;
                 setTimeout(() => { if (listEl) listEl.innerHTML = oldHTML; }, 2000);
                 await rerenderManagerList(managerOverlay, chatId);
-                toastr.info('AI 未发现值得记忆的内容', DISPLAY_NAME);
+                if (skippedCount > 0) {
+                    toastr.info(`AI 未发现新记忆（已跳过 ${skippedCount} 个已提取交换）`, DISPLAY_NAME);
+                } else {
+                    toastr.info('AI 未发现值得记忆的内容', DISPLAY_NAME);
+                }
                 return;
             }
 
             dismissProgressToast(1500);
-            showExtractReviewPanel(managerOverlay, chatId, candidates);
+            showExtractReviewPanel(managerOverlay, chatId, candidates, skippedCount);
         } catch (err) {
             console.error('[BB-Memory] AI提取失败:', err);
             showProgressError(err.message);
@@ -1484,7 +1592,7 @@ async function handleAiExtract(managerOverlay, chatId) {
     });
 }
 
-function showExtractReviewPanel(managerOverlay, chatId, candidates) {
+function showExtractReviewPanel(managerOverlay, chatId, candidates, skippedCount = 0) {
     const listEl = managerOverlay.querySelector('#bb_mgr_list');
     const statsEl = managerOverlay.querySelector('.bb-mem-stats');
     const toolbarEl = managerOverlay.querySelector('.bb-mem-toolbar');
@@ -1493,7 +1601,8 @@ function showExtractReviewPanel(managerOverlay, chatId, candidates) {
     // 隐藏普通工具栏和过滤器，显示审核工具栏
     if (toolbarEl) toolbarEl.style.display = 'none';
     if (filterEl) filterEl.style.display = 'none';
-    if (statsEl) statsEl.innerHTML = `AI 提取到 <strong>${candidates.length}</strong> 条候选记忆，请审核`;
+    const skipNote = skippedCount > 0 ? `（跳过 ${skippedCount} 个已提取交换）` : '';
+    if (statsEl) statsEl.innerHTML = `AI 提取到 <strong>${candidates.length}</strong> 条候选记忆，请审核${skipNote}`;
 
     // 渲染候选列表
     if (listEl) {
@@ -1948,6 +2057,131 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
     });
 }
 
+// ═══ v2.9.5：常驻记忆面板 ═══
+
+async function renderPersistentPanel(overlay, chatId, category = 'npc') {
+    const listEl = overlay.querySelector('#bb_persistent_list');
+    if (!listEl) return;
+
+    try {
+        const all = await getPersistentMemories(chatId);
+        const items = all.filter(e => e.category === category);
+        if (!items.length) {
+            const catLabels = { npc: 'NPC', item: '物品', timeline: '时间线' };
+            listEl.innerHTML = `<div class="bb-mem-empty">暂无${catLabels[category] || ''}档案，点击上方"添加"按钮创建</div>`;
+        } else {
+            listEl.innerHTML = items.map(item => `
+                <div class="bb-persistent-item" data-id="${item.id}">
+                    <div class="bb-persistent-item-info">
+                        <div class="bb-persistent-item-name">${escapeHtml(item.name)}</div>
+                        <div class="bb-persistent-item-content">${escapeHtml(item.content)}</div>
+                    </div>
+                    <div class="bb-persistent-item-actions">
+                        <button class="menu_button bb-persistent-edit" data-id="${item.id}" title="编辑">
+                            <i class="fa-solid fa-pen"></i>
+                        </button>
+                        <button class="menu_button bb-persistent-delete" data-id="${item.id}" title="删除">
+                            <i class="fa-solid fa-trash"></i>
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+        bindPersistentEvents(overlay, chatId);
+    } catch (err) {
+        listEl.innerHTML = `<div class="bb-mem-empty">加载失败：${escapeHtml(err.message)}</div>`;
+    }
+}
+
+function bindPersistentEvents(overlay, chatId) {
+    let currentCategory = 'npc';
+
+    // 子标签切换
+    overlay.querySelectorAll('.bb-persistent-tabs .bb-mgr-tab').forEach(tab => {
+        tab.addEventListener('click', async () => {
+            overlay.querySelectorAll('.bb-persistent-tabs .bb-mgr-tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            currentCategory = tab.dataset.pcat;
+            await renderPersistentPanel(overlay, chatId, currentCategory);
+        });
+    });
+
+    // 添加按钮
+    const addBtn = overlay.querySelector('#bb_persistent_add');
+    const formEl = overlay.querySelector('#bb_persistent_form');
+    const nameInput = overlay.querySelector('#bb_persistent_name');
+    const contentInput = overlay.querySelector('#bb_persistent_content');
+    let editingId = null;
+
+    addBtn?.addEventListener('click', () => {
+        editingId = null;
+        if (nameInput) nameInput.value = '';
+        if (contentInput) contentInput.value = '';
+        if (formEl) formEl.style.display = 'flex';
+    });
+
+    // 取消编辑
+    overlay.querySelector('#bb_persistent_cancel')?.addEventListener('click', () => {
+        editingId = null;
+        if (formEl) formEl.style.display = 'none';
+    });
+
+    // 保存
+    overlay.querySelector('#bb_persistent_save')?.addEventListener('click', async () => {
+        const name = nameInput?.value?.trim();
+        const content = contentInput?.value?.trim();
+        if (!name || !content) {
+            toastr.warning('名称和内容不能为空', DISPLAY_NAME);
+            return;
+        }
+        try {
+            if (editingId) {
+                await updatePersistentMemory(chatId, editingId, { name, content });
+                toastr.success('档案已更新', DISPLAY_NAME);
+            } else {
+                await addPersistentMemory(chatId, currentCategory, name, content);
+                toastr.success('档案已添加', DISPLAY_NAME);
+            }
+            editingId = null;
+            if (formEl) formEl.style.display = 'none';
+            await renderPersistentPanel(overlay, chatId, currentCategory);
+        } catch (err) {
+            toastr.error(`保存失败：${err.message}`, DISPLAY_NAME);
+        }
+    });
+
+    // 编辑按钮
+    overlay.querySelectorAll('.bb-persistent-edit').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const id = btn.dataset.id;
+            const all = await getPersistentMemories(chatId);
+            const item = all.find(e => e.id === id);
+            if (!item) return;
+            editingId = id;
+            if (nameInput) nameInput.value = item.name;
+            if (contentInput) contentInput.value = item.content;
+            if (formEl) formEl.style.display = 'flex';
+        });
+    });
+
+    // 删除按钮
+    overlay.querySelectorAll('.bb-persistent-delete').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const id = btn.dataset.id;
+            const ctx = SillyTavern.getContext();
+            const ok = await ctx.Popup.show.confirm('删除档案', '确定删除此常驻档案吗？');
+            if (!isPopupAffirmative(ctx, ok)) return;
+            try {
+                await removePersistentMemory(chatId, id);
+                toastr.success('档案已删除', DISPLAY_NAME);
+                await renderPersistentPanel(overlay, chatId, currentCategory);
+            } catch (err) {
+                toastr.error(`删除失败：${err.message}`, DISPLAY_NAME);
+            }
+        });
+    });
+}
+
 function buildManagerHTML(memories, chatId) {
     const memoryListHTML = memories.length
         ? memories.map(m => buildMemoryItemHTML(m)).join('')
@@ -1983,6 +2217,9 @@ function buildManagerHTML(memories, chatId) {
                 </button>
                 <button class="bb-mgr-tab" data-tab="slots">
                     <i class="fa-solid fa-floppy-disk"></i> 存档
+                </button>
+                <button class="bb-mgr-tab" data-tab="persistent">
+                    <i class="fa-solid fa-archive"></i> 常驻档案
                 </button>
             </div>
 
@@ -2021,6 +2258,36 @@ function buildManagerHTML(memories, chatId) {
             <div class="bb-mgr-panel" data-panel="slots" style="display:none;">
                 <div class="bb-slots-panel" id="bb_mgr_slots">
                     <div class="bb-mem-empty"><i class="fa-solid fa-spinner fa-spin"></i> 加载中...</div>
+                </div>
+            </div>
+
+            <div class="bb-mgr-panel" data-panel="persistent" style="display:none;">
+                <div class="bb-persistent-tabs">
+                    <button class="bb-mgr-tab active" data-pcat="npc">
+                        <i class="fa-solid fa-user"></i> NPC
+                    </button>
+                    <button class="bb-mgr-tab" data-pcat="item">
+                        <i class="fa-solid fa-box"></i> 物品
+                    </button>
+                    <button class="bb-mgr-tab" data-pcat="timeline">
+                        <i class="fa-solid fa-clock"></i> 时间线
+                    </button>
+                </div>
+                <div class="bb-persistent-toolbar">
+                    <button class="menu_button" id="bb_persistent_add">
+                        <i class="fa-solid fa-plus"></i> 添加
+                    </button>
+                </div>
+                <div class="bb-persistent-list" id="bb_persistent_list">
+                    <div class="bb-mem-empty">加载中...</div>
+                </div>
+                <div class="bb-persistent-form" id="bb_persistent_form" style="display:none;">
+                    <input type="text" id="bb_persistent_name" placeholder="名称（必填）" />
+                    <textarea id="bb_persistent_content" placeholder="内容（必填）" rows="3"></textarea>
+                    <div class="bb-persistent-form-actions">
+                        <button class="menu_button" id="bb_persistent_cancel">取消</button>
+                        <button class="menu_button" id="bb_persistent_save" style="background:#4caf50;color:#fff;">保存</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2199,17 +2466,21 @@ function bindManagerEvents(overlay, chatId) {
         }
     });
 
-    // Tab 切换（记忆 / 存档）
+    // Tab 切换（记忆 / 存档 / 常驻档案）
     overlay.querySelectorAll('.bb-mgr-tab').forEach(tab => {
         tab.addEventListener('click', async () => {
-            overlay.querySelectorAll('.bb-mgr-tab').forEach(t => t.classList.remove('active'));
-            tab.classList.add('active');
             const panelName = tab.dataset.tab;
+            // 仅处理顶层 tab（排除常驻子 tab）
+            if (!panelName) return;
+            overlay.querySelectorAll('.bb-mgr-tabs > .bb-mgr-tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
             overlay.querySelectorAll('.bb-mgr-panel').forEach(p => {
                 p.style.display = p.dataset.panel === panelName ? 'block' : 'none';
             });
             if (panelName === 'slots') {
                 await renderSlotsPanel(overlay, chatId);
+            } else if (panelName === 'persistent') {
+                await renderPersistentPanel(overlay, chatId, 'npc');
             }
         });
     });
@@ -2600,8 +2871,9 @@ function onChatChanged() {
             console.warn(`[${DISPLAY_NAME}] 聊天切换时消息同步失败:`, e);
         });
 
-        // 延迟检查维护需求，避免阻塞聊天切换
+        // 延迟检查维护需求和刷新提取标记，避免阻塞聊天切换
         setTimeout(() => triggerMaintenanceCheck(), 3000);
+        setTimeout(() => refreshExtractionMarkers(), 800);
     }
 }
 
@@ -2684,6 +2956,50 @@ function showMaintenancePopup(chatId, result) {
 //  初始化
 // ═══════════════════════════════════════════════════════════
 
+// v2.9.5：初始化折叠设置面板
+function initCollapsibleSettings() {
+    document.querySelectorAll('.bb-settings-section-header').forEach(header => {
+        header.addEventListener('click', () => {
+            const body = header.nextElementSibling;
+            const chevron = header.querySelector('.bb-settings-chevron i');
+            const isCollapsed = body.style.display === 'none';
+
+            body.style.display = isCollapsed ? '' : 'none';
+            if (chevron) {
+                if (isCollapsed) {
+                    chevron.classList.remove('fa-chevron-right');
+                    chevron.classList.add('fa-chevron-down');
+                } else {
+                    chevron.classList.remove('fa-chevron-down');
+                    chevron.classList.add('fa-chevron-right');
+                }
+            }
+
+            const sectionKey = header.dataset.section;
+            const s = getSettings();
+            if (!s._collapsedSections) s._collapsedSections = {};
+            s._collapsedSections[sectionKey] = !isCollapsed;
+            updateSettings({ _collapsedSections: s._collapsedSections });
+        });
+    });
+
+    // 恢复折叠状态
+    const s = getSettings();
+    const collapsed = s._collapsedSections || {};
+    document.querySelectorAll('.bb-settings-section-header').forEach(header => {
+        const key = header.dataset.section;
+        if (collapsed[key]) {
+            const body = header.nextElementSibling;
+            if (body) body.style.display = 'none';
+            const chevron = header.querySelector('.bb-settings-chevron i');
+            if (chevron) {
+                chevron.classList.remove('fa-chevron-down');
+                chevron.classList.add('fa-chevron-right');
+            }
+        }
+    });
+}
+
 async function init() {
     console.log(`[${DISPLAY_NAME}] 初始化中...`);
 
@@ -2737,6 +3053,9 @@ async function init() {
     // 绑定侧边栏事件
     bindSidebarEvents();
 
+    // v2.9.5：初始化折叠设置
+    initCollapsibleSettings();
+
     // 初始化 AI 自动生成模块
     if (settings.autoGenEnabled) {
         initAutoGenerator();
@@ -2746,6 +3065,7 @@ async function init() {
     setAutoExtractProgressCallback((phase, current, total) => {
         if (phase === 'done') {
             dismissProgressToast(3000);
+            setTimeout(() => refreshExtractionMarkers(), 500);
         } else {
             showProgressToast('正在提取记忆', current, total);
         }

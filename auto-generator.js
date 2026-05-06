@@ -97,10 +97,6 @@ NPC 分级 npcTier（事实类/档案类条目填写，路人片段填 backgroun
 用户: {{userMessage}}
 角色: {{aiMessage}}`;
 
-// ═══ 常量 ═══
-
-const MAX_EXTRACT_PER_CYCLE = 3;
-
 // ═══ 状态管理 ═══
 
 let isProcessing = false;
@@ -423,11 +419,12 @@ function onMessageReceived(_messageIndex) {
         try {
             let totalAdded = 0;
             const debug = settings.debugLogging;
+            const maxExchanges = settings.autoGenMaxExchanges ?? 3;
 
             // ═══ PRIMARY：直接提取最新 exchange ═══
             const primary = getLatestExchange();
             const exchanges = await getExtractableExchanges();
-            const totalExchanges = (primary ? 1 : 0) + Math.min(exchanges.length, MAX_EXTRACT_PER_CYCLE - (primary ? 1 : 0));
+            const totalExchanges = (primary ? 1 : 0) + Math.min(exchanges.length, maxExchanges - (primary ? 1 : 0));
             let processedExchanges = 0;
 
             if (primary) {
@@ -456,7 +453,7 @@ function onMessageReceived(_messageIndex) {
             // ═══ SECONDARY：提取已被隐藏的旧 exchange（兜底）═══
             if (exchanges.length) {
                 if (debug) console.log(`[BB-Memory] 🔍 SECONDARY 路径：发现 ${exchanges.length} 个待提取 exchange`);
-                const remaining = Math.max(0, MAX_EXTRACT_PER_CYCLE - (totalAdded > 0 ? 1 : 0));
+                const remaining = Math.max(0, maxExchanges - (totalAdded > 0 ? 1 : 0));
                 const toProcess = exchanges.slice(0, remaining);
 
                 for (const ex of toProcess) {
@@ -567,31 +564,65 @@ NPC 分级 npcTier：core / important / minor / background
 export async function extractFromContext(chatId, messageCount = 12, startFloor = undefined) {
     const ctx = SillyTavern.getContext();
     const chat = ctx.chat;
-    if (!chat || chat.length < 2) return [];
+    if (!chat || chat.length < 2) return { memories: [], skippedCount: 0 };
 
     const settings = getSettings();
     const recentMessages = startFloor !== undefined
         ? chat.slice(startFloor, Math.min(startFloor + messageCount, chat.length))
         : chat.slice(-Math.min(messageCount, chat.length));
 
-    // 构建对话文本
-    const lines = [];
-    for (const msg of recentMessages) {
-        if (msg.is_system) continue;
-        const role = msg.is_user ? '用户' : '角色';
-        const text = (msg.mes || '').trim();
-        if (!text) continue;
-        lines.push(`${role}: ${text}`);
+    // 按 exchange 配对并去重
+    const pairs = [];
+    let skippedCount = 0;
+    for (let i = 0; i < recentMessages.length; i++) {
+        const msg = recentMessages[i];
+        if (msg.is_system || msg.is_user) continue;
+        // 找到该 AI 消息前面的用户消息
+        const aiIndex = chat.indexOf(msg);
+        if (aiIndex < 1) continue;
+        let userIndex = aiIndex - 1;
+        while (userIndex >= 0 && (chat[userIndex].is_system || !chat[userIndex].is_user)) {
+            userIndex--;
+        }
+        if (userIndex < 0) continue;
+        const userMsg = chat[userIndex];
+        const aiMsg = msg;
+
+        // 检查是否已提取
+        if (aiMsg._bbmem_extracted) { skippedCount++; continue; }
+        const hash = computeExchangeHash(
+            (userMsg.mes || '').trim(),
+            (aiMsg.mes || '').trim(),
+        );
+        if (await isExchangeProcessed(chatId, hash)) {
+            aiMsg._bbmem_extracted = true;
+            skippedCount++;
+            continue;
+        }
+
+        pairs.push({ userMsg, aiMsg });
     }
 
-    if (lines.length < 2) return [];
+    // 构建对话文本（仅未提取的 exchange）
+    const lines = [];
+    for (const { userMsg, aiMsg } of pairs) {
+        const userText = (userMsg.mes || '').trim();
+        const aiText = (aiMsg.mes || '').trim();
+        if (!userText && !aiText) continue;
+        if (userText) lines.push(`用户: ${userText}`);
+        if (aiText) lines.push(`角色: ${aiText}`);
+    }
+
+    if (lines.length < 2) {
+        return { memories: [], skippedCount };
+    }
 
     const conversationText = lines.join('\n');
     const contextTemplate = settings.autoGenContextPrompt || CONTEXT_EXTRACTION_PROMPT;
     const prompt = contextTemplate.replace('{{conversation}}', conversationText);
 
     if (settings.debugLogging) {
-        console.log(`[BB-Memory] 上下文提取：分析最近 ${lines.length} 条消息`);
+        console.log(`[BB-Memory] 上下文提取：分析 ${pairs.length} 个交换（${lines.length} 条消息），跳过 ${skippedCount} 个已提取`);
     }
 
     let responseText;
@@ -602,7 +633,7 @@ export async function extractFromContext(chatId, messageCount = 12, startFloor =
     }
 
     const memories = parseAiResponse(responseText);
-    return memories;
+    return { memories, skippedCount };
 }
 
 /**
