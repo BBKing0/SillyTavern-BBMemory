@@ -128,6 +128,19 @@ function buildPrompt(userMessage, aiMessage) {
 }
 
 /**
+ * 规范化 API 端点 URL，自动补全 OpenAI 兼容路径
+ *   https://api.example.com           -> .../v1/chat/completions
+ *   https://api.example.com/v1        -> .../v1/chat/completions
+ *   https://api.example.com/v1/chat/completions -> 保持不变
+ */
+export function normalizeEndpoint(url) {
+    let cleaned = url.trim().replace(/\/+$/, '');
+    if (cleaned.endsWith('/chat/completions')) return cleaned;
+    if (cleaned.endsWith('/v1')) return cleaned + '/chat/completions';
+    return cleaned + '/v1/chat/completions';
+}
+
+/**
  * 通过主 API 的 generateRaw 调用（推荐方式）
  * 使用 SillyTavern 当前配置的 API，以 raw 模式生成
  */
@@ -154,7 +167,13 @@ export async function callCustomApi(prompt) {
         throw new Error('未配置自定义API端点');
     }
 
-    const response = await fetch(autoGenEndpoint, {
+    const endpoint = normalizeEndpoint(autoGenEndpoint);
+
+    if (settings.debugLogging) {
+        console.log('[BB-Memory] 副API请求端点:', endpoint);
+    }
+
+    const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -374,6 +393,24 @@ function getLatestExchange() {
  *   PRIMARY：直接提取最新的 exchange（不等待消息被隐藏）
  *   SECONDARY：提取已被插件隐藏的旧 exchange（兜底，确保不漏）
  */
+// ═══ 进度回调 ═══
+
+let onAutoExtractProgress = null;
+
+/**
+ * 设置自动提取的进度回调（由 index.js 调用）
+ * @param {function|null} cb - (phase: string, current: number, total: number) => void
+ */
+export function setAutoExtractProgressCallback(cb) {
+    onAutoExtractProgress = cb;
+}
+
+function reportProgress(phase, current, total) {
+    if (typeof onAutoExtractProgress === 'function') {
+        onAutoExtractProgress(phase, current, total);
+    }
+}
+
 function onMessageReceived(_messageIndex) {
     const settings = getSettings();
     if (!settings.enabled || !settings.autoGenEnabled) return;
@@ -389,31 +426,41 @@ function onMessageReceived(_messageIndex) {
 
             // ═══ PRIMARY：直接提取最新 exchange ═══
             const primary = getLatestExchange();
+            const exchanges = await getExtractableExchanges();
+            const totalExchanges = (primary ? 1 : 0) + Math.min(exchanges.length, MAX_EXTRACT_PER_CYCLE - (primary ? 1 : 0));
+            let processedExchanges = 0;
+
             if (primary) {
                 const alreadyDone = await isExchangeProcessed(chatId, primary.hash);
                 if (!alreadyDone) {
                     if (debug) console.log('[BB-Memory] 🔍 PRIMARY 路径：直接提取最新 exchange');
+                    reportProgress('正在提取记忆', processedExchanges, totalExchanges);
                     try {
                         const count = await extractFromExchange(chatId, primary.userMessage, primary.aiMessage);
                         await markExchangeExtracted(primary.aiIndex, primary.hash);
                         totalAdded += count;
+                        processedExchanges++;
+                        reportProgress('正在提取记忆', processedExchanges, totalExchanges);
                         if (debug) console.log(`[BB-Memory] PRIMARY 路径完成：+${count} 条记忆`);
                     } catch (err) {
                         console.error('[BB-Memory] PRIMARY 提取失败:', err);
+                        processedExchanges++;
+                        reportProgress('正在提取记忆', processedExchanges, totalExchanges);
                     }
-                } else if (debug) {
-                    console.log('[BB-Memory] PRIMARY 路径：exchange 已处理，跳过');
+                } else {
+                    if (debug) console.log('[BB-Memory] PRIMARY 路径：exchange 已处理，跳过');
+                    if (totalExchanges > 0) totalExchanges = Math.max(0, totalExchanges - 1);
                 }
             }
 
             // ═══ SECONDARY：提取已被隐藏的旧 exchange（兜底）═══
-            const exchanges = await getExtractableExchanges();
             if (exchanges.length) {
                 if (debug) console.log(`[BB-Memory] 🔍 SECONDARY 路径：发现 ${exchanges.length} 个待提取 exchange`);
                 const remaining = Math.max(0, MAX_EXTRACT_PER_CYCLE - (totalAdded > 0 ? 1 : 0));
                 const toProcess = exchanges.slice(0, remaining);
 
                 for (const ex of toProcess) {
+                    reportProgress('正在提取记忆', processedExchanges, totalExchanges);
                     try {
                         const count = await extractFromExchange(chatId, ex.userMessage, ex.aiMessage);
                         await markExchangeExtracted(ex.aiIndex, ex.hash);
@@ -421,7 +468,14 @@ function onMessageReceived(_messageIndex) {
                     } catch (err) {
                         console.error('[BB-Memory] SECONDARY 提取失败:', err);
                     }
+                    processedExchanges++;
+                    reportProgress('正在提取记忆', processedExchanges, totalExchanges);
                 }
+            }
+
+            // 最终进度
+            if (totalExchanges > 0) {
+                reportProgress('done', totalExchanges, totalExchanges);
             }
 
             if (totalAdded > 0 && typeof toastr !== 'undefined') {
@@ -533,7 +587,8 @@ export async function extractFromContext(chatId, messageCount = 12, startFloor =
     if (lines.length < 2) return [];
 
     const conversationText = lines.join('\n');
-    const prompt = CONTEXT_EXTRACTION_PROMPT.replace('{{conversation}}', conversationText);
+    const contextTemplate = settings.autoGenContextPrompt || CONTEXT_EXTRACTION_PROMPT;
+    const prompt = contextTemplate.replace('{{conversation}}', conversationText);
 
     if (settings.debugLogging) {
         console.log(`[BB-Memory] 上下文提取：分析最近 ${lines.length} 条消息`);
@@ -556,8 +611,10 @@ export async function extractFromContext(chatId, messageCount = 12, startFloor =
  * @param {Array} candidateMemories - 包含用户编辑字段的候选记忆
  * @returns {Promise<number>} 实际保存的记忆条数
  */
-export async function saveExtractedMemories(chatId, candidateMemories) {
+export async function saveExtractedMemories(chatId, candidateMemories, onProgress) {
     let count = 0;
+    const selected = candidateMemories.filter(m => m._selected);
+    const total = selected.length;
     for (const mem of candidateMemories) {
         if (!mem._selected) continue;
 
@@ -583,6 +640,9 @@ export async function saveExtractedMemories(chatId, candidateMemories) {
             relatedMemoryIds: mem.relatedMemoryIds?.length ? mem.relatedMemoryIds : undefined,
         });
         count++;
+        if (typeof onProgress === 'function') {
+            onProgress(count, total);
+        }
     }
     return count;
 }

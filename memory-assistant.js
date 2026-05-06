@@ -455,34 +455,43 @@ function initDrag(window) {
     let isDragging = false;
     let startX, startY, startLeft, startTop;
 
-    handle.addEventListener('mousedown', (e) => {
+    function onStart(e) {
         if (e.target.closest('button')) return;
         isDragging = true;
-        startX = e.clientX;
-        startY = e.clientY;
+        const point = e.touches ? e.touches[0] : e;
+        startX = point.clientX;
+        startY = point.clientY;
         const rect = window.getBoundingClientRect();
         startLeft = rect.left;
         startTop = rect.top;
         handle.style.cursor = 'grabbing';
         e.preventDefault();
-    });
+    }
 
-    document.addEventListener('mousemove', (e) => {
+    function onMove(e) {
         if (!isDragging) return;
-        const dx = e.clientX - startX;
-        const dy = e.clientY - startY;
+        const point = e.touches ? e.touches[0] : e;
+        const dx = point.clientX - startX;
+        const dy = point.clientY - startY;
         window.style.left = `${startLeft + dx}px`;
         window.style.top = `${startTop + dy}px`;
         window.style.right = 'auto';
         window.style.bottom = 'auto';
-    });
+    }
 
-    document.addEventListener('mouseup', () => {
+    function onEnd() {
         if (isDragging) {
             isDragging = false;
             handle.style.cursor = 'grab';
         }
-    });
+    }
+
+    handle.addEventListener('mousedown', onStart);
+    handle.addEventListener('touchstart', onStart, { passive: false });
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('touchmove', onMove, { passive: false });
+    document.addEventListener('mouseup', onEnd);
+    document.addEventListener('touchend', onEnd);
 }
 
 // ═══ 工具函数 ═══

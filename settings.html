@@ -109,6 +109,35 @@
                 开启后在浏览器控制台输出详细提取日志，用于排查自动提取问题
             </small>
 
+            <!-- 自定义提取提示词 -->
+            <div class="bb-mem-section-title" style="margin-top:12px;">
+                <i class="fa-solid fa-pen-to-square"></i> 自定义提示词
+            </div>
+
+            <div class="bb-mem-sidebar-section">
+                <label for="bb_memory_auto_prompt">
+                    对话提取提示词
+                    <small class="bb-mem-hint">
+                        变量：<code>{<!-- -->{userMessage}}</code> <code>{<!-- -->{aiMessage}}</code>
+                        <br /><a id="bb_memory_reset_auto_prompt" href="javascript:void(0)" style="font-size:0.9em;opacity:0.7;">恢复默认</a>
+                    </small>
+                </label>
+                <textarea id="bb_memory_auto_prompt" class="text_pole bb-mem-textarea" rows="6"
+                          placeholder="留空使用默认"></textarea>
+            </div>
+
+            <div class="bb-mem-sidebar-section">
+                <label for="bb_memory_context_prompt">
+                    上下文提取提示词（手动提取时使用）
+                    <small class="bb-mem-hint">
+                        变量：<code>{<!-- -->{conversation}}</code>
+                        <br /><a id="bb_memory_reset_context_prompt" href="javascript:void(0)" style="font-size:0.9em;opacity:0.7;">恢复默认</a>
+                    </small>
+                </label>
+                <textarea id="bb_memory_context_prompt" class="text_pole bb-mem-textarea" rows="6"
+                          placeholder="留空使用默认"></textarea>
+            </div>
+
             <div class="bb-mem-sidebar-section">
                 <label for="bb_memory_api_mode">
                     API 模式
@@ -124,10 +153,10 @@
                 <div class="bb-mem-sidebar-section">
                     <label for="bb_memory_api_endpoint">
                         API 端点
-                        <small class="bb-mem-hint">OpenAI 兼容格式，如 https://api.openai.com/v1/chat/completions</small>
+                        <small class="bb-mem-hint">OpenAI 兼容格式，只需输入基础地址（自动补全 /v1/chat/completions）</small>
                     </label>
                     <input id="bb_memory_api_endpoint" type="text" class="text_pole"
-                           placeholder="https://api.example.com/v1/chat/completions" />
+                           placeholder="https://api.example.com" />
                 </div>
 
                 <div class="bb-mem-sidebar-section">

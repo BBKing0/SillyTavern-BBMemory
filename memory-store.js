@@ -30,6 +30,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     autoGenApiKey: '',
     autoGenModel: '',
     autoGenPrompt: '',
+    autoGenContextPrompt: '',
     // 认知类型开关（v2.2 升级为四类）
     typeEnabled: {
         fact: true,

@@ -68,8 +68,9 @@ import {
     normalizeItemTier,
     expandMemoriesForEntityKeyword,
 } from './entity-tiers.js';
-import { initAutoGenerator, stopAutoGenerator, extractFromContext, saveExtractedMemories } from './auto-generator.js';
+import { initAutoGenerator, stopAutoGenerator, extractFromContext, saveExtractedMemories, normalizeEndpoint, setAutoExtractProgressCallback } from './auto-generator.js';
 import { syncMessageVisibility } from './message-state.js';
+import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot } from './memory-slots.js';
 import {
     MEMORY_STATUS,
     checkMaintenanceNeeded,
@@ -183,6 +184,59 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// ═══ 提取进度浮动弹窗 ═══
+
+let progressToastEl = null;
+
+function showProgressToast(message, current, total) {
+    // 移除旧弹窗
+    if (progressToastEl) {
+        progressToastEl.remove();
+        progressToastEl = null;
+    }
+
+    const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+    const toast = document.createElement('div');
+    toast.className = 'bb-extract-toast';
+    toast.innerHTML = `
+        <div class="bb-extract-toast-header">
+            <i class="fa-solid fa-brain"></i> BB-Memory 提取
+        </div>
+        <div class="bb-extract-toast-progress">
+            <div class="bb-extract-toast-bar">
+                <div class="bb-extract-toast-fill" style="width:${pct}%"></div>
+            </div>
+            <span class="bb-extract-toast-text">${message} ${current}/${total}</span>
+        </div>
+    `;
+    document.body.appendChild(toast);
+    progressToastEl = toast;
+}
+
+function dismissProgressToast(delay = 2500) {
+    if (!progressToastEl) return;
+    const toast = progressToastEl;
+    toast.classList.add('bb-extract-done');
+    const header = toast.querySelector('.bb-extract-toast-header');
+    if (header) header.innerHTML = `<i class="fa-solid fa-check-circle"></i> 提取完成`;
+    setTimeout(() => {
+        if (toast.parentNode) toast.remove();
+        if (progressToastEl === toast) progressToastEl = null;
+    }, delay);
+}
+
+function showProgressError(message) {
+    if (!progressToastEl) return;
+    const toast = progressToastEl;
+    toast.classList.add('bb-extract-error');
+    const header = toast.querySelector('.bb-extract-toast-header');
+    if (header) header.innerHTML = `<i class="fa-solid fa-exclamation-circle"></i> ${escapeHtml(message)}`;
+    setTimeout(() => {
+        if (toast.parentNode) toast.remove();
+        if (progressToastEl === toast) progressToastEl = null;
+    }, 3000);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -336,6 +390,30 @@ async function refreshSidebar() {
 
     const debugLogEl = document.getElementById('bb_memory_debug_logging');
     if (debugLogEl) debugLogEl.checked = getSettings().debugLogging;
+
+    restoreApiSettings(getSettings());
+}
+
+/**
+ * 恢复副 API 配置字段到 UI
+ */
+function restoreApiSettings(s) {
+    const apiModeEl = document.getElementById('bb_memory_api_mode');
+    if (apiModeEl) apiModeEl.value = s.autoGenMode || 'main';
+
+    const endpointEl = document.getElementById('bb_memory_api_endpoint');
+    if (endpointEl) endpointEl.value = s.autoGenEndpoint || '';
+
+    const keyEl = document.getElementById('bb_memory_api_key');
+    if (keyEl) keyEl.value = s.autoGenApiKey || '';
+
+    const modelEl = document.getElementById('bb_memory_api_model');
+    if (modelEl) modelEl.value = s.autoGenModel || '';
+
+    const customSection = document.getElementById('bb_memory_custom_api_section');
+    if (customSection) {
+        customSection.style.display = s.autoGenMode === 'custom' ? 'block' : 'none';
+    }
 }
 
 function bindSidebarEvents() {
@@ -423,7 +501,9 @@ function bindSidebarEvents() {
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 10000);
 
-            const response = await fetch(settings.autoGenEndpoint, {
+            const testEndpoint = normalizeEndpoint(settings.autoGenEndpoint);
+
+            const response = await fetch(testEndpoint, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -458,6 +538,26 @@ function bindSidebarEvents() {
             }
             toastr.error(`API 连接测试失败：${err.name === 'AbortError' ? '连接超时（10秒）' : err.message}`, DISPLAY_NAME);
         }
+    });
+
+    // 自定义提示词
+    document.getElementById('bb_memory_auto_prompt')?.addEventListener('change', (e) => {
+        updateSettings({ autoGenPrompt: e.target.value });
+    });
+    document.getElementById('bb_memory_context_prompt')?.addEventListener('change', (e) => {
+        updateSettings({ autoGenContextPrompt: e.target.value });
+    });
+    document.getElementById('bb_memory_reset_auto_prompt')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        const el = document.getElementById('bb_memory_auto_prompt');
+        if (el) { el.value = ''; updateSettings({ autoGenPrompt: '' }); }
+        toastr.info('已恢复默认对话提取提示词', DISPLAY_NAME);
+    });
+    document.getElementById('bb_memory_reset_context_prompt')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        const el = document.getElementById('bb_memory_context_prompt');
+        if (el) { el.value = ''; updateSettings({ autoGenContextPrompt: '' }); }
+        toastr.info('已恢复默认上下文提取提示词', DISPLAY_NAME);
     });
 
     // 衰减设置
@@ -1357,18 +1457,27 @@ async function handleAiExtract(managerOverlay, chatId) {
             </div>`;
         }
 
+        showProgressToast('正在分析对话', 0, 1);
+
         try {
             const candidates = await extractFromContext(chatId, count, startFloor);
+
+            showProgressToast('正在分析对话', 1, 1);
+
             if (!candidates || !candidates.length) {
+                dismissProgressToast(2000);
                 if (listEl) listEl.innerHTML = `<div class="bb-mem-empty">AI 未发现值得记忆的内容</div>`;
                 setTimeout(() => { if (listEl) listEl.innerHTML = oldHTML; }, 2000);
                 await rerenderManagerList(managerOverlay, chatId);
                 toastr.info('AI 未发现值得记忆的内容', DISPLAY_NAME);
                 return;
             }
+
+            dismissProgressToast(1500);
             showExtractReviewPanel(managerOverlay, chatId, candidates);
         } catch (err) {
             console.error('[BB-Memory] AI提取失败:', err);
+            showProgressError(err.message);
             if (listEl) listEl.innerHTML = oldHTML;
             toastr.error(`AI提取失败：${err.message}`, DISPLAY_NAME);
         }
@@ -1569,11 +1678,22 @@ function bindReviewFooterEvents(footerEl, managerOverlay, chatId, candidates) {
 
     footerEl.querySelector('#bb_review_save')?.addEventListener('click', async () => {
         const updated = collectCandidateData(listEl, candidates);
-        const count = await saveExtractedMemories(chatId, updated);
-        if (count > 0) {
-            toastr.success(`已保存 ${count} 条记忆`, DISPLAY_NAME);
-        } else {
+        const selected = updated.filter(m => m._selected);
+        if (!selected.length) {
             toastr.info('未选择任何记忆', DISPLAY_NAME);
+            return;
+        }
+        showProgressToast('正在保存记忆', 0, selected.length);
+        try {
+            const count = await saveExtractedMemories(chatId, updated, (current, total) => {
+                showProgressToast('正在保存记忆', current, total);
+            });
+            dismissProgressToast(2000);
+            if (count > 0) {
+                toastr.success(`已保存 ${count} 条记忆`, DISPLAY_NAME);
+            }
+        } catch (err) {
+            showProgressError(err.message);
         }
         await restoreManagerUI(managerOverlay, chatId);
     });
@@ -1683,6 +1803,151 @@ function bindManagerFooterEvents(managerOverlay, chatId) {
     });
 }
 
+// ═══ 存档槽面板 ═══
+
+async function renderSlotsPanel(overlay, chatId) {
+    const slotsEl = overlay.querySelector('#bb_mgr_slots');
+    if (!slotsEl) return;
+
+    const charId = getCharacterId();
+    if (!charId) {
+        slotsEl.innerHTML = '<div class="bb-mem-empty">请先选择角色开始聊天</div>';
+        return;
+    }
+
+    try {
+        const slots = await listSlots(charId);
+        const mems = await getMemories(chatId);
+        const currentCount = mems.length;
+
+        slotsEl.innerHTML = `
+            <div class="bb-slots-info">
+                <i class="fa-solid fa-circle-info"></i>
+                当前聊天 <strong>${currentCount}</strong> 条记忆 · 角色ID: ${charId}
+            </div>
+
+            <div class="bb-slots-list">
+                ${slots.map(s => `
+                    <div class="bb-slot-item">
+                        <div class="bb-slot-info">
+                            <span class="bb-slot-name">
+                                <i class="fa-solid fa-floppy-disk"></i> ${escapeHtml(s.name)}
+                                ${s.name === 'default' ? '<span class="bb-slot-default-badge">默认</span>' : ''}
+                            </span>
+                            <span class="bb-slot-count">${s.count} 条记忆</span>
+                        </div>
+                        <div class="bb-slot-actions">
+                            <button class="menu_button bb-slot-btn-save" data-slot="${escapeHtml(s.name)}"
+                                    title="将当前记忆保存到此槽">
+                                <i class="fa-solid fa-arrow-up"></i> 保存
+                            </button>
+                            <button class="menu_button bb-slot-btn-load" data-slot="${escapeHtml(s.name)}"
+                                    title="从此槽加载记忆（会覆盖当前）">
+                                <i class="fa-solid fa-arrow-down"></i> 加载
+                            </button>
+                            ${s.name !== 'default' ? `
+                            <button class="menu_button menu_button_danger bb-slot-btn-delete" data-slot="${escapeHtml(s.name)}"
+                                    title="删除此存档槽">
+                                <i class="fa-solid fa-trash"></i>
+                            </button>` : ''}
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+
+            <div class="bb-slots-create">
+                <input type="text" class="text_pole" id="bb_slot_new_name"
+                       placeholder="新存档名称（如：if线A、主线）" />
+                <button class="menu_button" id="bb_slot_create_btn">
+                    <i class="fa-solid fa-plus"></i> 新建存档
+                </button>
+            </div>
+        `;
+
+        bindSlotEvents(overlay, chatId, charId, slotsEl);
+    } catch (err) {
+        slotsEl.innerHTML = `<div class="bb-mem-empty">加载失败：${escapeHtml(err.message)}</div>`;
+    }
+}
+
+function bindSlotEvents(overlay, chatId, charId, slotsEl) {
+    // 保存到槽
+    slotsEl.querySelectorAll('.bb-slot-btn-save').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const slotName = btn.dataset.slot;
+            try {
+                const count = await saveToSlot(charId, chatId, slotName);
+                toastr.success(`已保存 ${count} 条记忆到「${slotName}」`, DISPLAY_NAME);
+                await renderSlotsPanel(overlay, chatId);
+            } catch (err) {
+                toastr.error(`保存失败：${err.message}`, DISPLAY_NAME);
+            }
+        });
+    });
+
+    // 从槽加载
+    slotsEl.querySelectorAll('.bb-slot-btn-load').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const slotName = btn.dataset.slot;
+            const ctx = SillyTavern.getContext();
+            const ok = await ctx.Popup.show.confirm(
+                '加载存档',
+                `确定从「${slotName}」加载记忆吗？当前聊天的记忆将被覆盖！`
+            );
+            if (!isPopupAffirmative(ctx, ok)) return;
+
+            try {
+                const count = await loadFromSlot(charId, chatId, slotName);
+                toastr.success(`已从「${slotName}」加载 ${count} 条记忆`, DISPLAY_NAME);
+                await renderSlotsPanel(overlay, chatId);
+                // 也刷新记忆列表
+                await rerenderManagerList(overlay, chatId);
+            } catch (err) {
+                toastr.error(`加载失败：${err.message}`, DISPLAY_NAME);
+            }
+        });
+    });
+
+    // 删除槽
+    slotsEl.querySelectorAll('.bb-slot-btn-delete').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const slotName = btn.dataset.slot;
+            const ctx = SillyTavern.getContext();
+            const ok = await ctx.Popup.show.confirm(
+                '删除存档',
+                `确定删除存档「${slotName}」吗？此操作不可撤销！`
+            );
+            if (!isPopupAffirmative(ctx, ok)) return;
+
+            try {
+                await deleteSlot(charId, slotName);
+                toastr.success(`已删除存档「${slotName}」`, DISPLAY_NAME);
+                await renderSlotsPanel(overlay, chatId);
+            } catch (err) {
+                toastr.error(`删除失败：${err.message}`, DISPLAY_NAME);
+            }
+        });
+    });
+
+    // 新建槽
+    slotsEl.querySelector('#bb_slot_create_btn')?.addEventListener('click', async () => {
+        const input = slotsEl.querySelector('#bb_slot_new_name');
+        const name = input?.value?.trim();
+        if (!name) {
+            toastr.warning('请输入存档名称', DISPLAY_NAME);
+            return;
+        }
+        try {
+            await createEmptySlot(charId, name);
+            toastr.success(`已创建存档「${name}」`, DISPLAY_NAME);
+            input.value = '';
+            await renderSlotsPanel(overlay, chatId);
+        } catch (err) {
+            toastr.error(`创建失败：${err.message}`, DISPLAY_NAME);
+        }
+    });
+}
+
 function buildManagerHTML(memories, chatId) {
     const memoryListHTML = memories.length
         ? memories.map(m => buildMemoryItemHTML(m)).join('')
@@ -1712,34 +1977,51 @@ function buildManagerHTML(memories, chatId) {
                 </button>
             </div>
 
-            <div class="bb-mem-type-filters">
-                <button class="menu_button bb-mem-type-filter active" data-type="all">
-                    <i class="fa-solid fa-layer-group"></i> 全部
+            <div class="bb-mgr-tabs">
+                <button class="bb-mgr-tab active" data-tab="memories">
+                    <i class="fa-solid fa-list"></i> 记忆
                 </button>
-                ${typeFilterHTML}
+                <button class="bb-mgr-tab" data-tab="slots">
+                    <i class="fa-solid fa-floppy-disk"></i> 存档
+                </button>
             </div>
 
-            <div class="bb-mem-stats">
-                共 <strong>${memories.length}</strong> 条记忆
+            <div class="bb-mgr-panel" data-panel="memories">
+                <div class="bb-mem-type-filters">
+                    <button class="menu_button bb-mem-type-filter active" data-type="all">
+                        <i class="fa-solid fa-layer-group"></i> 全部
+                    </button>
+                    ${typeFilterHTML}
+                </div>
+
+                <div class="bb-mem-stats">
+                    共 <strong>${memories.length}</strong> 条记忆
+                </div>
+
+                <div class="bb-mem-list" id="bb_mgr_list">
+                    ${memoryListHTML}
+                </div>
+
+                <div class="bb-mem-footer">
+                    <button class="menu_button" id="bb_mgr_export" title="导出记忆到文件">
+                        <i class="fa-solid fa-download"></i> 导出
+                    </button>
+                    <button class="menu_button" id="bb_mgr_import" title="从文件导入记忆">
+                        <i class="fa-solid fa-upload"></i> 导入
+                    </button>
+                    <button class="menu_button" id="bb_mgr_import_wb" title="从世界书导入">
+                        <i class="fa-solid fa-book-atlas"></i> 世界书
+                    </button>
+                    <button class="menu_button menu_button_danger" id="bb_mgr_clear" title="清空所有记忆">
+                        <i class="fa-solid fa-trash"></i> 清空
+                    </button>
+                </div>
             </div>
 
-            <div class="bb-mem-list" id="bb_mgr_list">
-                ${memoryListHTML}
-            </div>
-
-            <div class="bb-mem-footer">
-                <button class="menu_button" id="bb_mgr_export" title="导出记忆到文件">
-                    <i class="fa-solid fa-download"></i> 导出
-                </button>
-                <button class="menu_button" id="bb_mgr_import" title="从文件导入记忆">
-                    <i class="fa-solid fa-upload"></i> 导入
-                </button>
-                <button class="menu_button" id="bb_mgr_import_wb" title="从世界书导入">
-                    <i class="fa-solid fa-book-atlas"></i> 世界书
-                </button>
-                <button class="menu_button menu_button_danger" id="bb_mgr_clear" title="清空所有记忆">
-                    <i class="fa-solid fa-trash"></i> 清空
-                </button>
+            <div class="bb-mgr-panel" data-panel="slots" style="display:none;">
+                <div class="bb-slots-panel" id="bb_mgr_slots">
+                    <div class="bb-mem-empty"><i class="fa-solid fa-spinner fa-spin"></i> 加载中...</div>
+                </div>
             </div>
         </div>
     `;
@@ -1915,6 +2197,21 @@ function bindManagerEvents(overlay, chatId) {
             overlay.remove();
             refreshSidebar();
         }
+    });
+
+    // Tab 切换（记忆 / 存档）
+    overlay.querySelectorAll('.bb-mgr-tab').forEach(tab => {
+        tab.addEventListener('click', async () => {
+            overlay.querySelectorAll('.bb-mgr-tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            const panelName = tab.dataset.tab;
+            overlay.querySelectorAll('.bb-mgr-panel').forEach(p => {
+                p.style.display = p.dataset.panel === panelName ? 'block' : 'none';
+            });
+            if (panelName === 'slots') {
+                await renderSlotsPanel(overlay, chatId);
+            }
+        });
     });
 
     // 类型过滤
@@ -2421,12 +2718,21 @@ async function init() {
         templateEl.value = s.injectionTemplate || DEFAULT_SETTINGS.injectionTemplate;
     }
 
+    // 恢复自定义提示词
+    const autoPromptEl = document.getElementById('bb_memory_auto_prompt');
+    if (autoPromptEl) autoPromptEl.value = getSettings().autoGenPrompt || '';
+    const ctxPromptEl = document.getElementById('bb_memory_context_prompt');
+    if (ctxPromptEl) ctxPromptEl.value = getSettings().autoGenContextPrompt || '';
+
     // 初始化自定义API区域显示状态
     const settings = getSettings();
     const customSection = document.getElementById('bb_memory_custom_api_section');
     if (customSection) {
         customSection.style.display = settings.autoGenMode === 'custom' ? 'block' : 'none';
     }
+
+    // 恢复副API字段值到UI
+    restoreApiSettings(settings);
 
     // 绑定侧边栏事件
     bindSidebarEvents();
@@ -2435,6 +2741,15 @@ async function init() {
     if (settings.autoGenEnabled) {
         initAutoGenerator();
     }
+
+    // 设置自动提取进度回调
+    setAutoExtractProgressCallback((phase, current, total) => {
+        if (phase === 'done') {
+            dismissProgressToast(3000);
+        } else {
+            showProgressToast('正在提取记忆', current, total);
+        }
+    });
 
     // 注册斜杠命令
     try {
