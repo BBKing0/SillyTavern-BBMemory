@@ -2387,7 +2387,7 @@
     width: 48px;
     height: 48px;
     border-radius: 50%;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: linear-gradient(135deg, var(--SmartThemeQuoteColor, #667eea) 0%, var(--SmartThemeEmColor, #764ba2) 100%);
     color: #fff;
     border: none;
     box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
@@ -2427,11 +2427,11 @@
     box-shadow: 0 2px 6px rgba(244, 67, 54, 0.4);
 }
 
-/* 悬浮菜单面板 */
+/* 悬浮菜单面板 — 相对悬浮球定位，跟随拖拽 */
 .bb-floating-menu {
-    position: fixed;
-    bottom: 140px;
-    right: 16px;
+    position: absolute;
+    bottom: 56px;
+    right: 0;
     z-index: 9998;
     width: 260px;
     background: var(--SmartThemeChatTintColor, #1e1e2e);
@@ -2489,8 +2489,6 @@
     .bb-floating-menu {
         width: 85vw;
         max-width: 280px;
-        right: 10px;
-        bottom: 125px;
     }
     .bb-floating-menu-item {
         padding: 10px 14px;

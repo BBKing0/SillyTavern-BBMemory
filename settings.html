@@ -213,6 +213,21 @@
                        placeholder="如：路人甲, 酒保, 门卫" />
             </div>
 
+            <!-- v3.0.0: 批量提取模式 -->
+            <div class="bb-mem-sidebar-section">
+                <label for="bb_memory_extraction_batch_mode">
+                    手动提取模式
+                    <small class="bb-mem-hint">
+                        <strong>逐层</strong>：每层独立提取，更省 token 但耗时长；
+                        <strong>批量</strong>：所有楼层打包一次提取
+                    </small>
+                </label>
+                <select id="bb_memory_extraction_batch_mode" class="text_pole">
+                    <option value="single" selected>逐层提取 - 每层独立提取</option>
+                    <option value="batch">批量提取 - 所有楼层打包</option>
+                </select>
+            </div>
+
             <!-- 自定义提取提示词 -->
             <div class="bb-mem-section-title" style="margin-top:12px;">
                 <i class="fa-solid fa-pen-to-square"></i> 自定义提示词

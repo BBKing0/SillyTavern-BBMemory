@@ -685,10 +685,16 @@ NPC 分级 npcTier：core / important / minor / background
 {{conversation}}`;
 
 /**
- * 从上下文中提取候选记忆（不直接保存，返回给用户审核）
+ * 从上下文中提取记忆
+ *
+ * v3.0.0: 支持逐层提取（single）和批量提取（batch）双模式
+ * - single: 每个 exchange 独立调 AI、直接保存、标记隐藏
+ * - batch:  所有 exchange 打包一次提取（原有逻辑），返回候选供审核
+ *
  * @param {string} chatId
  * @param {number} messageCount - 获取最近多少条消息
- * @returns {Promise<Array>} 候选记忆数组
+ * @param {number} [startFloor] - 起始楼层
+ * @returns {Promise<{ memories: Array, skippedCount: number, processedExchanges?: Array, _directSaved?: number }>}
  */
 export async function extractFromContext(chatId, messageCount = 12, startFloor = undefined) {
     const ctx = SillyTavern.getContext();
@@ -696,6 +702,7 @@ export async function extractFromContext(chatId, messageCount = 12, startFloor =
     if (!chat || chat.length < 2) return { memories: [], skippedCount: 0 };
 
     const settings = getSettings();
+    const batchMode = settings.extractionBatchMode || 'single';
     const recentMessages = startFloor !== undefined
         ? chat.slice(startFloor, Math.min(startFloor + messageCount, chat.length))
         : chat.slice(-Math.min(messageCount, chat.length));
@@ -706,7 +713,6 @@ export async function extractFromContext(chatId, messageCount = 12, startFloor =
     for (let i = 0; i < recentMessages.length; i++) {
         const msg = recentMessages[i];
         if (msg.is_system || msg.is_user) continue;
-        // 找到该 AI 消息前面的用户消息
         const aiIndex = chat.indexOf(msg);
         if (aiIndex < 1) continue;
         let userIndex = aiIndex - 1;
@@ -717,9 +723,7 @@ export async function extractFromContext(chatId, messageCount = 12, startFloor =
         const userMsg = chat[userIndex];
         const aiMsg = msg;
 
-        // 检查是否已提取
         if (aiMsg._bbmem_extracted) { skippedCount++; continue; }
-        // v2.9.8: 跳过元标记消息
         if (aiMsg._bbmem_meta_marker) { skippedCount++; continue; }
         const hash = computeExchangeHash(
             (userMsg.mes || '').trim(),
@@ -731,8 +735,43 @@ export async function extractFromContext(chatId, messageCount = 12, startFloor =
             continue;
         }
 
-        pairs.push({ userMsg, aiMsg });
+        pairs.push({ userMsg, aiMsg, userIndex, aiIndex, hash });
     }
+
+    if (pairs.length === 0) {
+        return { memories: [], skippedCount };
+    }
+
+    // v3.0.0: 逐层提取模式 — 每层独立调用 AI、直接保存、标记隐藏
+    if (batchMode === 'single') {
+        let totalAdded = 0;
+        for (let p = 0; p < pairs.length; p++) {
+            const pair = pairs[p];
+            reportProgress('逐层提取', p, pairs.length);
+            try {
+                const added = await extractFromExchange(
+                    chatId,
+                    pair.userMsg.mes || '',
+                    pair.aiMsg.mes || '',
+                );
+                totalAdded += added;
+                await markExchangeExtracted(pair.aiIndex, pair.hash);
+                hideExchange(pair.userIndex, pair.aiIndex);
+            } catch (err) {
+                console.warn('[BB-Memory] 逐层提取失败，楼层:', pair.aiIndex, err);
+            }
+        }
+        reportProgress('done', pairs.length, pairs.length);
+        if (settings.debugLogging) {
+            console.log(`[BB-Memory] 逐层提取完成：${pairs.length} 层，新增 ${totalAdded} 条记忆，跳过 ${skippedCount} 个`);
+        }
+        return { memories: [], skippedCount, _directSaved: totalAdded, processedExchanges: [] };
+    }
+
+    // ── 批量提取模式（原有逻辑）──
+    const processedExchanges = pairs.map(p => ({
+        userIndex: p.userIndex, aiIndex: p.aiIndex, hash: p.hash,
+    }));
 
     // 构建对话文本（仅未提取的 exchange）
     const lines = [];
@@ -754,7 +793,7 @@ export async function extractFromContext(chatId, messageCount = 12, startFloor =
     const prompt = (contextTemplate + instructions).replace('{{conversation}}', conversationText);
 
     if (settings.debugLogging) {
-        console.log(`[BB-Memory] 上下文提取：分析 ${pairs.length} 个交换（${lines.length} 条消息），跳过 ${skippedCount} 个已提取`);
+        console.log(`[BB-Memory] 批量提取：分析 ${pairs.length} 个交换（${lines.length} 条消息），跳过 ${skippedCount} 个已提取`);
     }
 
     let responseText;
@@ -765,7 +804,7 @@ export async function extractFromContext(chatId, messageCount = 12, startFloor =
     }
 
     const memories = parseAiResponse(responseText);
-    return { memories, skippedCount };
+    return { memories, skippedCount, processedExchanges };
 }
 
 /**

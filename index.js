@@ -69,7 +69,7 @@ import {
     expandMemoriesForEntityKeyword,
 } from './entity-tiers.js';
 import { initAutoGenerator, stopAutoGenerator, extractFromContext, saveExtractedMemories, normalizeEndpoint, setAutoExtractProgressCallback, getPendingAutoCandidates, clearPendingAutoCandidates } from './auto-generator.js';
-import { syncMessageVisibility, refreshExtractionMarkers } from './message-state.js';
+import { syncMessageVisibility, refreshExtractionMarkers, markExchangeExtracted, hideExchange } from './message-state.js';
 import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot } from './memory-slots.js';
 import { getPersistentMemories, addPersistentMemory, updatePersistentMemory, removePersistentMemory } from './persistent-memory.js';
 import {
@@ -454,6 +454,10 @@ async function refreshSidebar() {
     const excludedNpcsEl = document.getElementById('bb_memory_excluded_npcs');
     if (excludedNpcsEl) excludedNpcsEl.value = getSettings().excludedNpcs || '';
 
+    // v3.0.0: 批量提取模式
+    const extractionBatchModeEl = document.getElementById('bb_memory_extraction_batch_mode');
+    if (extractionBatchModeEl) extractionBatchModeEl.value = getSettings().extractionBatchMode || 'single';
+
     restoreApiSettings(getSettings());
 
     // v2.9.5：刷新命中记忆显示
@@ -752,6 +756,11 @@ function bindSidebarEvents() {
     });
     document.getElementById('bb_memory_excluded_npcs')?.addEventListener('change', (e) => {
         updateSettings({ excludedNpcs: e.target.value.trim() });
+    });
+
+    // v3.0.0: 批量提取模式
+    document.getElementById('bb_memory_extraction_batch_mode')?.addEventListener('change', (e) => {
+        updateSettings({ extractionBatchMode: e.target.value });
     });
 
     // 衰减设置
@@ -1694,7 +1703,26 @@ async function handleAiExtract(managerOverlay, chatId) {
         showProgressToast('正在分析对话', 0, 1);
 
         try {
-            const { memories: candidates, skippedCount } = await extractFromContext(chatId, count, startFloor);
+            const {
+                memories: candidates,
+                skippedCount,
+                processedExchanges,
+                _directSaved,
+            } = await extractFromContext(chatId, count, startFloor);
+
+            // v3.0.0: 逐层提取模式 — 已直接保存，无需审核
+            if (_directSaved !== undefined) {
+                dismissProgressToast(1500);
+                if (listEl) listEl.innerHTML = oldHTML;
+                await rerenderManagerList(managerOverlay, chatId);
+                if (_directSaved > 0) {
+                    toastr.success(`逐层提取完成，新增 ${_directSaved} 条记忆`, DISPLAY_NAME);
+                } else {
+                    const skipMsg = skippedCount > 0 ? `（跳过 ${skippedCount} 个已提取交换）` : '';
+                    toastr.info(`AI 未发现新记忆${skipMsg}`, DISPLAY_NAME);
+                }
+                return;
+            }
 
             showProgressToast('正在分析对话', 1, 1);
 
@@ -1716,6 +1744,16 @@ async function handleAiExtract(managerOverlay, chatId) {
             const settings = getSettings();
             const confirmMode = settings.extractionConfirmMode || 'semi';
 
+            // v3.0.0: 保存后标记/隐藏 exchange 的辅助函数
+            const markAndHideExchanges = async () => {
+                if (processedExchanges && processedExchanges.length > 0) {
+                    for (const ex of processedExchanges) {
+                        await markExchangeExtracted(ex.aiIndex, ex.hash);
+                        hideExchange(ex.userIndex, ex.aiIndex);
+                    }
+                }
+            };
+
             if (confirmMode === 'auto') {
                 // 自动模式：直接保存，跳过审核
                 dismissProgressToast(1500);
@@ -1726,11 +1764,12 @@ async function handleAiExtract(managerOverlay, chatId) {
                 );
                 dismissProgressToast(2000);
                 toastr.success(`自动保存了 ${savedCount} 条记忆`, DISPLAY_NAME);
+                await markAndHideExchanges();
                 await restoreManagerUI(managerOverlay, chatId);
             } else {
                 // semi 或 active 模式：显示审核面板
                 dismissProgressToast(1500);
-                showExtractReviewPanel(managerOverlay, chatId, candidates, skippedCount);
+                showExtractReviewPanel(managerOverlay, chatId, candidates, skippedCount, processedExchanges);
             }
         } catch (err) {
             console.error('[BB-Memory] AI提取失败:', err);
@@ -1741,7 +1780,7 @@ async function handleAiExtract(managerOverlay, chatId) {
     });
 }
 
-function showExtractReviewPanel(managerOverlay, chatId, candidates, skippedCount = 0) {
+function showExtractReviewPanel(managerOverlay, chatId, candidates, skippedCount = 0, processedExchanges = []) {
     const listEl = managerOverlay.querySelector('#bb_mgr_list');
     const statsEl = managerOverlay.querySelector('.bb-mem-stats');
     const toolbarEl = managerOverlay.querySelector('.bb-mem-toolbar');
@@ -1776,7 +1815,7 @@ function showExtractReviewPanel(managerOverlay, chatId, candidates, skippedCount
                 <i class="fa-solid fa-ban"></i> 取消
             </button>
         `;
-        bindReviewFooterEvents(footerEl, managerOverlay, chatId, candidates);
+        bindReviewFooterEvents(footerEl, managerOverlay, chatId, candidates, processedExchanges);
     }
 }
 
@@ -2002,7 +2041,7 @@ function collectCandidateData(listEl, candidates) {
     return results;
 }
 
-function bindReviewFooterEvents(footerEl, managerOverlay, chatId, candidates) {
+function bindReviewFooterEvents(footerEl, managerOverlay, chatId, candidates, processedExchanges = []) {
     const listEl = managerOverlay.querySelector('#bb_mgr_list');
 
     footerEl.querySelector('#bb_review_select_all')?.addEventListener('click', () => {
@@ -2030,6 +2069,13 @@ function bindReviewFooterEvents(footerEl, managerOverlay, chatId, candidates) {
             dismissProgressToast(2000);
             if (count > 0) {
                 toastr.success(`已保存 ${count} 条记忆`, DISPLAY_NAME);
+            }
+            // v3.0.0: 保存后标记/隐藏对应 exchange
+            if (processedExchanges.length > 0) {
+                for (const ex of processedExchanges) {
+                    await markExchangeExtracted(ex.aiIndex, ex.hash);
+                    hideExchange(ex.userIndex, ex.aiIndex);
+                }
             }
         } catch (err) {
             showProgressError(err.message);
@@ -3236,7 +3282,7 @@ function injectFloatingHub() {
     hub.className = 'bb-floating-hub';
     hub.innerHTML = '<i class="fa-solid fa-brain"></i><span class="bb-hub-badge" id="bb_hub_badge" style="display:none;">0</span>';
 
-    // 菜单面板
+    // 菜单面板（内嵌于 hub 内，position:absolute 跟随拖拽）
     const menu = document.createElement('div');
     menu.id = 'bb_floating_menu';
     menu.className = 'bb-floating-menu';
@@ -3253,6 +3299,10 @@ function injectFloatingHub() {
             <div class="bb-floating-menu-item" id="bb_hub_hit_info">
                 <i class="fa-solid fa-bullseye"></i>
                 <span>命中: <strong id="bb_hub_hit_count">-</strong> 条</span>
+            </div>
+            <div class="bb-floating-menu-item" id="bb_hub_extract_progress" style="display:none;">
+                <i class="fa-solid fa-spinner fa-spin"></i>
+                <span>提取中... <strong id="bb_hub_extract_pct">0%</strong></span>
             </div>
             <div class="bb-floating-menu-item bb-floating-menu-action" data-action="toggle_visibility">
                 <i class="fa-solid fa-eye-slash"></i>
@@ -3273,8 +3323,8 @@ function injectFloatingHub() {
         </div>
     `;
 
+    hub.appendChild(menu);
     document.body.appendChild(hub);
-    document.body.appendChild(menu);
 
     // 拖拽逻辑
     let dragging = false;
@@ -3340,9 +3390,10 @@ function injectFloatingHub() {
     document.addEventListener('mouseup', endDrag);
     document.addEventListener('touchend', endDrag);
 
-    // 点击/触摸结束 → 如果没有移动则展开菜单
+    // 点击/触摸结束 → 如果没有移动则展开菜单（但不包括菜单内的点击）
     hub.addEventListener('click', (e) => {
         if (hasMoved) { e.preventDefault(); e.stopPropagation(); return; }
+        if (menu.contains(e.target)) return; // 菜单内的点击由菜单自己处理
         toggleFloatingMenu();
     });
 
@@ -3487,8 +3538,12 @@ async function onNewMessage() {
     const settings = getSettings();
     if (!settings.enabled) return;
     try {
-        await syncMessageVisibility();
-        // v2.9.8: 刷新提取标记和隐藏状态
+        // v3.0.0: 仅当 autoGen 关闭时由本函数管理窗口。
+        // autoGen 启用时由 onMessageReceived 的提取+hideExchange 管理，
+        // 避免 syncMessageVisibility 在提取定时器之前截断可见 exchange。
+        if (!settings.autoGenEnabled) {
+            await syncMessageVisibility();
+        }
         setTimeout(() => refreshExtractionMarkers(), 300);
     } catch (e) {
         console.warn(`[${DISPLAY_NAME}] 消息可见性同步失败:`, e);
@@ -3669,13 +3724,31 @@ async function init() {
         initAutoGenerator();
     }
 
-    // 设置自动提取进度回调
+    // 设置自动提取进度回调（v3.0.0: 同步更新悬浮菜单进度行）
     setAutoExtractProgressCallback((phase, current, total) => {
+        const progRow = document.getElementById('bb_hub_extract_progress');
+        const pctEl = document.getElementById('bb_hub_extract_pct');
         if (phase === 'done') {
             dismissProgressToast(3000);
             setTimeout(() => refreshExtractionMarkers(), 500);
+            // 悬浮菜单进度行 — 显示完成
+            if (progRow) {
+                progRow.style.display = 'flex';
+                const icon = progRow.querySelector('i');
+                if (icon) { icon.className = 'fa-solid fa-check-circle'; icon.style.color = '#4caf50'; }
+                if (pctEl) pctEl.textContent = '完成';
+                setTimeout(() => { if (progRow) progRow.style.display = 'none'; }, 2500);
+            }
         } else {
             showProgressToast('正在提取记忆', current, total);
+            // 悬浮菜单进度行 — 显示进度
+            if (progRow) {
+                progRow.style.display = 'flex';
+                const icon = progRow.querySelector('i');
+                if (icon) { icon.className = 'fa-solid fa-spinner fa-spin'; icon.style.color = ''; }
+                const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+                if (pctEl) pctEl.textContent = pct + '%';
+            }
         }
     });
 
@@ -3724,7 +3797,7 @@ async function init() {
         toastr.info(newLabel, DISPLAY_NAME, { timeOut: 1500 });
     });
 
-    console.log(`[${DISPLAY_NAME}] v2.9.9 初始化完成`);
+    console.log(`[${DISPLAY_NAME}] v3.0.0 初始化完成`);
 }
 
 // ═══ 启动 ═══

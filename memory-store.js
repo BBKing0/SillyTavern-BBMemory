@@ -40,6 +40,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     summaryMode: 'roleplay',             // 'self'（代入式） | 'roleplay'（扮演式）
     excludedNpcs: '',                    // 逗号分隔的不总结 NPC 列表
     currentSlotName: 'default',          // 当前使用的存档槽名
+    // v3.0.0: 批量提取模式
+    extractionBatchMode: 'single',       // 'single'（逐层提取） | 'batch'（批量提取）
     // 认知类型开关（v2.2 升级为四类）
     typeEnabled: {
         fact: true,
