@@ -583,6 +583,33 @@ async function bindHitItemClicks(listEl) {
     });
 }
 
+// v3.1: 渲染悬浮窗命中记忆列表（紧凑版）
+function renderHubHitList(listEl) {
+    const result = lastRetrievalResult;
+    if (!result.hits || !result.hits.length) {
+        listEl.innerHTML = '<div class="bb-hub-hit-item" style="opacity:0.5;justify-content:center;">暂无命中记忆</div>';
+        return;
+    }
+
+    const typeIcons = { fact: 'fa-lightbulb', episode: 'fa-film', emotion: 'fa-heart', habit: 'fa-repeat' };
+    const levelColors = { L4: '#ce93d8', L3: '#4fc3f7', L2: '#ffb74d', L1: '#9e9e9e' };
+
+    listEl.innerHTML = result.hits.map(h => {
+        const icon = typeIcons[h.cognitiveType] || 'fa-circle';
+        const color = levelColors[h.level] || '#888';
+        const scorePct = Math.round(h.score * 100);
+        const shortTitle = (h.title || '').length > 14
+            ? escapeHtml(h.title.slice(0, 14)) + '...'
+            : escapeHtml(h.title);
+        return `<div class="bb-hub-hit-item" title="${escapeHtml(h.title)}">
+            <i class="fa-solid ${icon}" style="color:${color};font-size:0.7em;"></i>
+            <span class="bb-hub-hit-title">${shortTitle}</span>
+            <span class="bb-hub-hit-level" style="color:${color}">${h.level}</span>
+            <span class="bb-hub-hit-score">${scorePct}%</span>
+        </div>`;
+    }).join('');
+}
+
 function bindSidebarEvents() {
     document.getElementById('bb_memory_enabled')?.addEventListener('change', (e) => {
         updateSettings({ enabled: e.target.checked });
@@ -3296,10 +3323,12 @@ function injectFloatingHub() {
                 <i class="fa-solid fa-floppy-disk"></i>
                 <span>存档: <strong>default</strong> · <strong>0</strong> 条</span>
             </div>
-            <div class="bb-floating-menu-item" id="bb_hub_hit_info">
+            <div class="bb-floating-menu-item bb-floating-menu-action" id="bb_hub_hit_info" data-action="toggle_hit_list">
                 <i class="fa-solid fa-bullseye"></i>
                 <span>命中: <strong id="bb_hub_hit_count">-</strong> 条</span>
+                <i class="fa-solid fa-chevron-down" style="margin-left:auto;font-size:0.7em;opacity:0.5;"></i>
             </div>
+            <div id="bb_hub_hit_list" style="display:none;"></div>
             <div class="bb-floating-menu-item" id="bb_hub_extract_progress" style="display:none;">
                 <i class="fa-solid fa-spinner fa-spin"></i>
                 <span>提取中... <strong id="bb_hub_extract_pct">0%</strong></span>
@@ -3403,7 +3432,10 @@ function injectFloatingHub() {
         if (!actionItem) return;
         const action = actionItem.dataset.action;
         await handleFloatingMenuAction(action);
-        menu.style.display = 'none';
+        // 折叠/展开类操作不关闭菜单
+        if (action !== 'toggle_hit_list') {
+            menu.style.display = 'none';
+        }
     });
 
     // 点击其他区域关闭菜单
@@ -3420,10 +3452,39 @@ function injectFloatingHub() {
 let floatingMenuVisible = false;
 function toggleFloatingMenu() {
     const menu = document.getElementById('bb_floating_menu');
-    if (!menu) return;
+    const hub = document.getElementById('bb_floating_hub');
+    if (!menu || !hub) return;
     floatingMenuVisible = !floatingMenuVisible;
-    menu.style.display = floatingMenuVisible ? 'block' : 'none';
-    if (floatingMenuVisible) refreshFloatingHubData();
+    if (floatingMenuVisible) {
+        const hubRect = hub.getBoundingClientRect();
+        const menuWidth = 268;   // CSS width 260 + some padding
+        const menuMaxHeight = 320;
+        const gap = 56;          // distance from hub center to menu edge
+        const edgeMargin = 16;   // min distance from viewport edge
+
+        // 水平方向：悬浮球靠右 → 菜单向左展开
+        if (hubRect.right + menuWidth > window.innerWidth - edgeMargin) {
+            menu.style.right = 'auto';
+            menu.style.left = '0';
+        } else {
+            menu.style.left = 'auto';
+            menu.style.right = '0';
+        }
+
+        // 垂直方向：悬浮球靠上 → 菜单向下展开
+        if (hubRect.top - menuMaxHeight - gap < edgeMargin) {
+            menu.style.bottom = 'auto';
+            menu.style.top = gap + 'px';
+        } else {
+            menu.style.top = 'auto';
+            menu.style.bottom = gap + 'px';
+        }
+
+        menu.style.display = 'block';
+        refreshFloatingHubData();
+    } else {
+        menu.style.display = 'none';
+    }
 }
 
 async function refreshFloatingHubData() {
@@ -3465,6 +3526,12 @@ async function refreshFloatingHubData() {
     if (toggleItem) {
         const showing = document.body.classList.contains('bb-show-extracted');
         toggleItem.className = showing ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash';
+    }
+
+    // v3.1: 命中列表展开时同步刷新
+    const hitList = document.getElementById('bb_hub_hit_list');
+    if (hitList && hitList.style.display !== 'none') {
+        renderHubHitList(hitList);
     }
 }
 
@@ -3510,6 +3577,27 @@ async function handleFloatingMenuAction(action) {
         case 'open_manager': {
             await openMemoryManager();
             break;
+        }
+        case 'toggle_hit_list': {
+            const hitList = document.getElementById('bb_hub_hit_list');
+            const hitRow = document.getElementById('bb_hub_hit_info');
+            if (!hitList || !hitRow) return;
+            const chevron = hitRow.querySelector('.fa-chevron-down, .fa-chevron-up');
+            if (hitList.style.display === 'none') {
+                renderHubHitList(hitList);
+                hitList.style.display = '';
+                if (chevron) {
+                    chevron.className = 'fa-solid fa-chevron-up';
+                    chevron.style.cssText = 'margin-left:auto;font-size:0.7em;opacity:0.5;';
+                }
+            } else {
+                hitList.style.display = 'none';
+                if (chevron) {
+                    chevron.className = 'fa-solid fa-chevron-down';
+                    chevron.style.cssText = 'margin-left:auto;font-size:0.7em;opacity:0.5;';
+                }
+            }
+            return;
         }
     }
 }

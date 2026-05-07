@@ -548,12 +548,13 @@ function onMessageReceived(_messageIndex) {
                 });
             }
 
+            console.log(`[BB-Memory] 滑动窗口检查: ${visibleExchanges.length} 可见 / 窗口${windowSize}`);
             if (debug) {
-                console.log(`[BB-Memory] 滑动窗口：${visibleExchanges.length} 个可见 exchange，窗口大小 ${windowSize}`);
+                console.log(`[BB-Memory] 滑动窗口详情：${visibleExchanges.length} 个可见 exchange，窗口大小 ${windowSize}`);
             }
 
-            // ═══ 若可见 exchange 超过窗口大小，提取最旧的 ═══
-            if (visibleExchanges.length > windowSize) {
+            // ═══ 若可见 exchange 达到窗口大小，提取最旧的 ═══
+            if (visibleExchanges.length >= windowSize) {
                 const oldest = visibleExchanges[0];
                 const alreadyDone = await isExchangeProcessed(chatId, oldest.hash);
 
@@ -610,11 +611,14 @@ function onMessageReceived(_messageIndex) {
                 // popup 模式由 index.js 的进度回调触发
             }
 
-            if (visibleExchanges.length > windowSize) {
+            if (visibleExchanges.length >= windowSize) {
                 reportProgress('done', 1, 1);
             }
         } catch (error) {
             console.error('[BB-Memory] 滑动窗口处理出错:', error);
+            if (typeof toastr !== 'undefined') {
+                toastr.warning('自动提取记忆失败，请检查 API 配置', 'BB-Memory', { timeOut: 5000 });
+            }
         }
     }, 2500);
 }

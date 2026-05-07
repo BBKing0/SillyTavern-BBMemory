@@ -2387,7 +2387,7 @@
     width: 48px;
     height: 48px;
     border-radius: 50%;
-    background: linear-gradient(135deg, var(--SmartThemeQuoteColor, #667eea) 0%, var(--SmartThemeEmColor, #764ba2) 100%);
+    background: var(--SmartThemeQuoteColor, #667eea);
     color: #fff;
     border: none;
     box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
@@ -2475,6 +2475,39 @@
 }
 .bb-floating-menu-action:active {
     background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.14));
+}
+
+/* 浮窗命中记忆子列表 */
+.bb-hub-hit-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 14px 4px 28px;
+    font-size: 0.75em;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.05));
+    cursor: default;
+}
+.bb-hub-hit-item:last-child {
+    border-bottom: none;
+}
+.bb-hub-hit-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.85;
+}
+.bb-hub-hit-score {
+    font-weight: bold;
+    font-size: 0.85em;
+    color: var(--SmartThemeQuoteColor, #4caf50);
+    min-width: 30px;
+    text-align: right;
+}
+.bb-hub-hit-level {
+    font-size: 0.7em;
+    min-width: 18px;
+    text-align: center;
 }
 
 /* 悬浮球移动端适配 */
