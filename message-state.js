@@ -336,10 +336,20 @@ export function refreshExtractionMarkers() {
         const msg = chat[idx];
 
         // ── 元标记按钮（所有消息都添加）──
+        // v2.9.9: 清晰的双图标区分 — 🗃️ 可提取 / 🤖 元指令
         const metaBtn = document.createElement('button');
         metaBtn.className = 'bb-meta-toggle-btn';
-        metaBtn.title = msg._bbmem_meta_marker ? '取消元指令标记' : '标记为元指令（不提取）';
-        metaBtn.innerHTML = msg._bbmem_meta_marker ? '🤖' : '<i class="fa-solid fa-robot"></i>';
+        if (msg._bbmem_meta_marker) {
+            metaBtn.title = '🤖 元指令 — 点击取消标记（恢复可提取）';
+            metaBtn.innerHTML = '🤖';
+            metaBtn.style.opacity = '1';
+            metaBtn.style.color = 'var(--SmartThemeEmColor, #888)';
+        } else {
+            metaBtn.title = '🗃️ 可提取 — 点击标记为元指令（不提取）';
+            metaBtn.innerHTML = '🗃️';
+            metaBtn.style.opacity = '0.5';
+            metaBtn.style.color = 'var(--SmartThemeQuoteColor, #4caf50)';
+        }
         // 插入到 mes_buttons 行或 mes_block 中
         const btnRow = block.querySelector('.mes_buttons');
         if (btnRow) {

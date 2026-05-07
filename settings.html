@@ -188,6 +188,31 @@
                        min="2" max="20" value="5" />
             </div>
 
+            <!-- v2.9.9: 总结模式 -->
+            <div class="bb-mem-sidebar-section">
+                <label for="bb_memory_summary_mode">
+                    总结模式
+                    <small class="bb-mem-hint">
+                        <strong>扮演式</strong>：从用户输入+AI回复中综合提取用户信息；
+                        <strong>代入式</strong>：仅从用户输入中提取用户信息
+                    </small>
+                </label>
+                <select id="bb_memory_summary_mode" class="text_pole">
+                    <option value="roleplay" selected>扮演式 - 综合提取</option>
+                    <option value="self">代入式 - 仅用户输入</option>
+                </select>
+            </div>
+
+            <!-- v2.9.9: 排除 NPC -->
+            <div class="bb-mem-sidebar-section">
+                <label for="bb_memory_excluded_npcs">
+                    不总结的 NPC
+                    <small class="bb-mem-hint">逗号分隔 NPC 名称，这些 NPC 的信息不会被提取为独立记忆</small>
+                </label>
+                <input id="bb_memory_excluded_npcs" type="text" class="text_pole"
+                       placeholder="如：路人甲, 酒保, 门卫" />
+            </div>
+
             <!-- 自定义提取提示词 -->
             <div class="bb-mem-section-title" style="margin-top:12px;">
                 <i class="fa-solid fa-pen-to-square"></i> 自定义提示词

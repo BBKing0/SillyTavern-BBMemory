@@ -2281,3 +2281,219 @@
         overflow-y: auto;
     }
 }
+
+/* ═══════════════════════════════════════════════════════
+   v2.9.9: 管理面板 flex 布局修复（手机端列表占满空间）
+   ═══════════════════════════════════════════════════════ */
+
+@media (max-width: 768px) {
+    .bb-mgr-panel {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        overflow: hidden;
+        min-height: 0;
+    }
+    .bb-mgr-panel .bb-mem-list {
+        flex: 1;
+        max-height: none;
+        overflow-y: auto;
+    }
+    .bb-mgr-panel .bb-mem-footer {
+        flex-shrink: 0;
+    }
+    .bb-mem-popup-header {
+        padding: 8px 12px;
+    }
+    .bb-mem-toolbar {
+        padding: 6px 12px;
+    }
+    .bb-mem-type-filters {
+        padding: 0 12px 4px;
+    }
+    .bb-mem-stats {
+        padding: 0 12px 4px;
+    }
+    .bb-slots-panel {
+        flex: 1;
+        overflow-y: auto;
+        max-height: none;
+    }
+}
+
+/* ═══════════════════════════════════════════════════════
+   v2.9.9: 当前存档状态栏
+   ═══════════════════════════════════════════════════════ */
+
+.bb-current-slot-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 18px;
+    font-size: 0.82em;
+    opacity: 0.8;
+    background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.04));
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #444);
+}
+.bb-current-slot-bar strong {
+    opacity: 1;
+    color: var(--SmartThemeQuoteColor, #4caf50);
+}
+
+/* ═══════════════════════════════════════════════════════
+   v2.9.9: 批量操作栏增强（始终可见 + disabled）
+   ═══════════════════════════════════════════════════════ */
+
+.bb-batch-hint {
+    font-size: 0.72em;
+    opacity: 0.4;
+    margin-left: auto;
+}
+.bb-mem-batch-bar .menu_button:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+    pointer-events: auto;
+}
+
+/* ═══════════════════════════════════════════════════════
+   v2.9.9: 元标记按钮增强（图标区分 + 点击动画）
+   ═══════════════════════════════════════════════════════ */
+
+.bb-meta-toggle-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0 4px;
+    font-size: 0.85em;
+    transition: transform 0.15s, opacity 0.15s;
+    vertical-align: middle;
+}
+.bb-meta-toggle-btn:hover {
+    transform: scale(1.2);
+}
+.bb-meta-toggle-btn:active {
+    transform: scale(0.85);
+}
+
+/* ═══════════════════════════════════════════════════════
+   v2.9.9: 可拖拽悬浮球 (Floating Action Hub)
+   ═══════════════════════════════════════════════════════ */
+
+.bb-floating-hub {
+    position: fixed;
+    bottom: 80px;
+    right: 16px;
+    z-index: 9999;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #fff;
+    border: none;
+    box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 1.1em;
+    transition: transform 0.2s, box-shadow 0.2s;
+    user-select: none;
+    -webkit-user-select: none;
+}
+.bb-floating-hub:hover {
+    transform: scale(1.08);
+    box-shadow: 0 6px 24px rgba(102, 126, 234, 0.55);
+}
+.bb-floating-hub:active {
+    transform: scale(0.95);
+}
+
+.bb-hub-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    background: #f44336;
+    color: #fff;
+    font-size: 0.65em;
+    font-weight: bold;
+    min-width: 18px;
+    height: 18px;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 4px;
+    line-height: 1;
+    box-shadow: 0 2px 6px rgba(244, 67, 54, 0.4);
+}
+
+/* 悬浮菜单面板 */
+.bb-floating-menu {
+    position: fixed;
+    bottom: 140px;
+    right: 16px;
+    z-index: 9998;
+    width: 260px;
+    background: var(--SmartThemeChatTintColor, #1e1e2e);
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+}
+.bb-floating-menu-header {
+    padding: 10px 14px;
+    font-size: 0.9em;
+    font-weight: bold;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #444);
+    opacity: 0.8;
+}
+.bb-floating-menu-body {
+    padding: 6px 0;
+}
+.bb-floating-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    font-size: 0.82em;
+    cursor: default;
+}
+.bb-floating-menu-item i {
+    width: 16px;
+    text-align: center;
+    opacity: 0.6;
+}
+.bb-floating-menu-item strong {
+    color: var(--SmartThemeQuoteColor, #4caf50);
+}
+.bb-floating-menu-action {
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.bb-floating-menu-action:hover {
+    background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.08));
+}
+.bb-floating-menu-action:active {
+    background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.14));
+}
+
+/* 悬浮球移动端适配 */
+@media (max-width: 480px) {
+    .bb-floating-hub {
+        width: 44px;
+        height: 44px;
+        bottom: 70px;
+        right: 10px;
+        font-size: 1em;
+    }
+    .bb-floating-menu {
+        width: 85vw;
+        max-width: 280px;
+        right: 10px;
+        bottom: 125px;
+    }
+    .bb-floating-menu-item {
+        padding: 10px 14px;
+        font-size: 0.85em;
+    }
+}

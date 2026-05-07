@@ -447,6 +447,13 @@ async function refreshSidebar() {
     const contextWindowEl = document.getElementById('bb_memory_context_window');
     if (contextWindowEl) contextWindowEl.value = String(getSettings().contextWindowExchanges ?? 5);
 
+    // v2.9.9: 总结模式
+    const summaryModeEl = document.getElementById('bb_memory_summary_mode');
+    if (summaryModeEl) summaryModeEl.value = getSettings().summaryMode || 'roleplay';
+
+    const excludedNpcsEl = document.getElementById('bb_memory_excluded_npcs');
+    if (excludedNpcsEl) excludedNpcsEl.value = getSettings().excludedNpcs || '';
+
     restoreApiSettings(getSettings());
 
     // v2.9.5：刷新命中记忆显示
@@ -737,6 +744,14 @@ function bindSidebarEvents() {
     document.getElementById('bb_memory_context_window')?.addEventListener('change', (e) => {
         const val = parseInt(e.target.value, 10);
         if (!isNaN(val) && val >= 2 && val <= 20) updateSettings({ contextWindowExchanges: val });
+    });
+
+    // v2.9.9: 总结模式
+    document.getElementById('bb_memory_summary_mode')?.addEventListener('change', (e) => {
+        updateSettings({ summaryMode: e.target.value });
+    });
+    document.getElementById('bb_memory_excluded_npcs')?.addEventListener('change', (e) => {
+        updateSettings({ excludedNpcs: e.target.value.trim() });
     });
 
     // 衰减设置
@@ -1530,6 +1545,9 @@ async function openMemoryManager() {
 
     bindManagerEvents(overlay, chatId);
 
+    // v2.9.9: 刷新当前存档状态栏
+    updateCurrentSlotBar(overlay, chatId);
+
     // v2.9.8: 检查是否有待审核的自动提取候选
     const pending = getPendingAutoCandidates();
     if (pending.length > 0) {
@@ -2126,6 +2144,21 @@ function bindManagerFooterEvents(managerOverlay, chatId) {
 
 // ═══ 存档槽面板 ═══
 
+// v2.9.9: 刷新记忆面板顶部的当前存档状态栏
+async function updateCurrentSlotBar(overlay, chatId) {
+    const nameEl = overlay.querySelector('#bb_current_slot_name');
+    const countEl = overlay.querySelector('#bb_current_slot_count');
+    if (!nameEl && !countEl) return;
+
+    const mems = await getMemories(chatId);
+    const currentCount = mems.length;
+    const settings = getSettings();
+    const currentSlot = settings.currentSlotName || 'default';
+
+    if (nameEl) nameEl.textContent = currentSlot;
+    if (countEl) countEl.textContent = String(currentCount);
+}
+
 async function renderSlotsPanel(overlay, chatId) {
     const slotsEl = overlay.querySelector('#bb_mgr_slots');
     if (!slotsEl) return;
@@ -2199,7 +2232,9 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
             try {
                 const count = await saveToSlot(charId, chatId, slotName);
                 toastr.success(`已保存 ${count} 条记忆到「${slotName}」`, DISPLAY_NAME);
+                updateSettings({ currentSlotName: slotName });
                 await renderSlotsPanel(overlay, chatId);
+                updateCurrentSlotBar(overlay, chatId);
             } catch (err) {
                 toastr.error(`保存失败：${err.message}`, DISPLAY_NAME);
             }
@@ -2220,7 +2255,9 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
             try {
                 const count = await loadFromSlot(charId, chatId, slotName);
                 toastr.success(`已从「${slotName}」加载 ${count} 条记忆`, DISPLAY_NAME);
+                updateSettings({ currentSlotName: slotName });
                 await renderSlotsPanel(overlay, chatId);
+                updateCurrentSlotBar(overlay, chatId);
                 // 也刷新记忆列表
                 await rerenderManagerList(overlay, chatId);
             } catch (err) {
@@ -2436,6 +2473,12 @@ function buildManagerHTML(memories, chatId) {
             </div>
 
             <div class="bb-mgr-panel" data-panel="memories">
+                <!-- v2.9.9: 当前存档状态栏 -->
+                <div class="bb-current-slot-bar">
+                    <span><i class="fa-solid fa-floppy-disk"></i> 存档: <strong id="bb_current_slot_name">default</strong></span>
+                    <span>记忆: <strong id="bb_current_slot_count">0</strong> 条</span>
+                </div>
+
                 <div class="bb-mem-type-filters">
                     <button class="menu_button bb-mem-type-filter active" data-type="all">
                         <i class="fa-solid fa-layer-group"></i> 全部
@@ -2443,23 +2486,24 @@ function buildManagerHTML(memories, chatId) {
                     ${typeFilterHTML}
                 </div>
 
-                <!-- v2.9.8: 批量操作栏 -->
-                <div class="bb-mem-batch-bar" id="bb_batch_bar" style="display:none;">
+                <!-- v2.9.9: 批量操作栏（始终可见，无选择时按钮 disabled） -->
+                <div class="bb-mem-batch-bar" id="bb_batch_bar">
                     <span class="bb-batch-count">已选 <strong id="bb_batch_count">0</strong> 条</span>
                     <button class="menu_button" id="bb_batch_select_all">全选</button>
                     <button class="menu_button" id="bb_batch_deselect_all">取消全选</button>
-                    <button class="menu_button" id="bb_batch_delete" style="color:#f44336;">
+                    <button class="menu_button" id="bb_batch_delete" style="color:#f44336;" disabled>
                         <i class="fa-solid fa-trash"></i> 删除
                     </button>
-                    <button class="menu_button" id="bb_batch_archive">
+                    <button class="menu_button" id="bb_batch_archive" disabled>
                         <i class="fa-solid fa-box-archive"></i> 归档
                     </button>
-                    <button class="menu_button" id="bb_batch_fuzzy">
+                    <button class="menu_button" id="bb_batch_fuzzy" disabled>
                         <i class="fa-solid fa-cloud"></i> 模糊化
                     </button>
-                    <button class="menu_button" id="bb_batch_pin">
+                    <button class="menu_button" id="bb_batch_pin" disabled>
                         <i class="fa-solid fa-thumbtack"></i> 固定
                     </button>
+                    <span class="bb-batch-hint">勾选左侧复选框以启用</span>
                 </div>
 
                 <div class="bb-mem-stats">
@@ -2891,12 +2935,15 @@ function bindBatchEvents(overlay, chatId) {
 }
 
 function updateBatchUI(overlay) {
-    const batchBar = overlay.querySelector('#bb_batch_bar');
     const countEl = overlay.querySelector('#bb_batch_count');
     const checked = overlay.querySelectorAll('.bb-mem-batch-cb:checked');
     const count = checked.length;
     if (countEl) countEl.textContent = String(count);
-    if (batchBar) batchBar.style.display = count > 0 ? 'flex' : 'none';
+    // v2.9.9: 始终显示批量栏，用 disabled 控制按钮
+    ['bb_batch_delete', 'bb_batch_archive', 'bb_batch_fuzzy', 'bb_batch_pin'].forEach(id => {
+        const btn = overlay.querySelector('#' + id);
+        if (btn) btn.disabled = (count === 0);
+    });
 }
 
 function renderMemoryList(overlay, memories, chatId) {
@@ -3180,22 +3227,240 @@ function registerSlashCommands() {
 //  v2.9.8: 隐藏消息切换按钮
 // ═══════════════════════════════════════════════════════════
 
-function injectHiddenToggleButton() {
-    if (document.getElementById('bb_show_hidden_btn')) return;
+// v2.9.9: 可拖拽悬浮球（Floating Action Hub）
+function injectFloatingHub() {
+    if (document.getElementById('bb_floating_hub')) return;
 
-    const btn = document.createElement('button');
-    btn.id = 'bb_show_hidden_btn';
-    btn.className = 'bb-show-hidden-btn';
-    btn.title = '显示/隐藏已提取的消息';
-    btn.innerHTML = '<i class="fa-solid fa-eye-slash"></i>';
-    btn.addEventListener('click', () => {
-        document.body.classList.toggle('bb-show-extracted');
-        const showing = document.body.classList.contains('bb-show-extracted');
-        btn.innerHTML = showing ? '<i class="fa-solid fa-eye"></i>' : '<i class="fa-solid fa-eye-slash"></i>';
-        btn.title = showing ? '隐藏已提取的消息' : '显示已提取的消息';
-        toastr.info(showing ? '已显示被隐藏的楼层' : '已隐藏已提取的楼层', DISPLAY_NAME, { timeOut: 1500 });
+    const hub = document.createElement('div');
+    hub.id = 'bb_floating_hub';
+    hub.className = 'bb-floating-hub';
+    hub.innerHTML = '<i class="fa-solid fa-brain"></i><span class="bb-hub-badge" id="bb_hub_badge" style="display:none;">0</span>';
+
+    // 菜单面板
+    const menu = document.createElement('div');
+    menu.id = 'bb_floating_menu';
+    menu.className = 'bb-floating-menu';
+    menu.style.display = 'none';
+    menu.innerHTML = `
+        <div class="bb-floating-menu-header">
+            <i class="fa-solid fa-brain"></i> BB-Memory
+        </div>
+        <div class="bb-floating-menu-body">
+            <div class="bb-floating-menu-item" id="bb_hub_slot_info">
+                <i class="fa-solid fa-floppy-disk"></i>
+                <span>存档: <strong>default</strong> · <strong>0</strong> 条</span>
+            </div>
+            <div class="bb-floating-menu-item" id="bb_hub_hit_info">
+                <i class="fa-solid fa-bullseye"></i>
+                <span>命中: <strong id="bb_hub_hit_count">-</strong> 条</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="toggle_visibility">
+                <i class="fa-solid fa-eye-slash"></i>
+                <span>切换楼层可见</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="meta_last">
+                <i class="fa-solid fa-tag"></i>
+                <span>标记最后消息</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="manual_extract">
+                <i class="fa-solid fa-wand-magic-sparkles"></i>
+                <span>手动提取</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_manager">
+                <i class="fa-solid fa-gear"></i>
+                <span>记忆管理</span>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(hub);
+    document.body.appendChild(menu);
+
+    // 拖拽逻辑
+    let dragging = false;
+    let startX = 0, startY = 0, startLeft = 0, startTop = 0;
+    let hasMoved = false;
+
+    hub.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        dragging = true;
+        hasMoved = false;
+        startX = e.clientX;
+        startY = e.clientY;
+        const rect = hub.getBoundingClientRect();
+        startLeft = rect.left;
+        startTop = rect.top;
+        hub.style.transition = 'none';
+        e.preventDefault();
     });
-    document.body.appendChild(btn);
+
+    hub.addEventListener('touchstart', (e) => {
+        dragging = true;
+        hasMoved = false;
+        const t = e.touches[0];
+        startX = t.clientX;
+        startY = t.clientY;
+        const rect = hub.getBoundingClientRect();
+        startLeft = rect.left;
+        startTop = rect.top;
+        hub.style.transition = 'none';
+    }, { passive: false });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!dragging) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) hasMoved = true;
+        let newLeft = startLeft + dx;
+        let newTop = startTop + dy;
+        newLeft = Math.max(0, Math.min(window.innerWidth - hub.offsetWidth, newLeft));
+        newTop = Math.max(0, Math.min(window.innerHeight - hub.offsetHeight, newTop));
+        hub.style.left = newLeft + 'px';
+        hub.style.top = newTop + 'px';
+    });
+
+    document.addEventListener('touchmove', (e) => {
+        if (!dragging) return;
+        const t = e.touches[0];
+        const dx = t.clientX - startX;
+        const dy = t.clientY - startY;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) hasMoved = true;
+        let newLeft = startLeft + dx;
+        let newTop = startTop + dy;
+        newLeft = Math.max(0, Math.min(window.innerWidth - hub.offsetWidth, newLeft));
+        newTop = Math.max(0, Math.min(window.innerHeight - hub.offsetHeight, newTop));
+        hub.style.left = newLeft + 'px';
+        hub.style.top = newTop + 'px';
+    }, { passive: false });
+
+    const endDrag = () => {
+        dragging = false;
+        hub.style.transition = '';
+    };
+    document.addEventListener('mouseup', endDrag);
+    document.addEventListener('touchend', endDrag);
+
+    // 点击/触摸结束 → 如果没有移动则展开菜单
+    hub.addEventListener('click', (e) => {
+        if (hasMoved) { e.preventDefault(); e.stopPropagation(); return; }
+        toggleFloatingMenu();
+    });
+
+    // 菜单项点击
+    menu.addEventListener('click', async (e) => {
+        const actionItem = e.target.closest('.bb-floating-menu-action');
+        if (!actionItem) return;
+        const action = actionItem.dataset.action;
+        await handleFloatingMenuAction(action);
+        menu.style.display = 'none';
+    });
+
+    // 点击其他区域关闭菜单
+    document.addEventListener('click', (e) => {
+        if (!menu.contains(e.target) && e.target !== hub && !hub.contains(e.target)) {
+            menu.style.display = 'none';
+        }
+    });
+
+    // 定期更新徽章和状态
+    setInterval(() => refreshFloatingHubData(), 5000);
+}
+
+let floatingMenuVisible = false;
+function toggleFloatingMenu() {
+    const menu = document.getElementById('bb_floating_menu');
+    if (!menu) return;
+    floatingMenuVisible = !floatingMenuVisible;
+    menu.style.display = floatingMenuVisible ? 'block' : 'none';
+    if (floatingMenuVisible) refreshFloatingHubData();
+}
+
+async function refreshFloatingHubData() {
+    // 更新命中数徽章
+    const hitCountEl = document.getElementById('bb_hub_hit_count');
+    const badge = document.getElementById('bb_hub_badge');
+    if (hitCountEl || badge) {
+        const chatId = getChatId();
+        if (chatId) {
+            try {
+                const mems = await getMemories(chatId);
+                const hits = mems.filter(m => (m.hitScore || m.lastHitScore || 0) > 0);
+                const count = hits.length;
+                if (hitCountEl) hitCountEl.textContent = String(count);
+                if (badge) {
+                    badge.textContent = count > 99 ? '99+' : String(count);
+                    badge.style.display = count > 0 ? 'block' : 'none';
+                }
+            } catch { /* ignore */ }
+        }
+    }
+
+    // 更新存档信息
+    const slotInfo = document.getElementById('bb_hub_slot_info');
+    if (slotInfo) {
+        try {
+            const chatId = getChatId();
+            if (chatId) {
+                const mems = await getMemories(chatId);
+                const settings = getSettings();
+                const slotName = settings.currentSlotName || 'default';
+                slotInfo.innerHTML = `<i class="fa-solid fa-floppy-disk"></i> <span>存档: <strong>${escapeHtml(slotName)}</strong> · <strong>${mems.length}</strong> 条</span>`;
+            }
+        } catch { /* ignore */ }
+    }
+
+    // 更新可见性按钮图标
+    const toggleItem = document.querySelector('.bb-floating-menu-action[data-action="toggle_visibility"] i');
+    if (toggleItem) {
+        const showing = document.body.classList.contains('bb-show-extracted');
+        toggleItem.className = showing ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash';
+    }
+}
+
+async function handleFloatingMenuAction(action) {
+    const chatId = getChatId();
+    switch (action) {
+        case 'toggle_visibility': {
+            document.body.classList.toggle('bb-show-extracted');
+            const showing = document.body.classList.contains('bb-show-extracted');
+            toastr.info(showing ? '已显示被隐藏的楼层' : '已隐藏已提取的楼层', DISPLAY_NAME, { timeOut: 1500 });
+            break;
+        }
+        case 'meta_last': {
+            const ctx = SillyTavern.getContext();
+            const chat = ctx.chat;
+            if (!chat || chat.length < 2) {
+                toastr.warning('聊天消息不足', DISPLAY_NAME);
+                return;
+            }
+            let aiIdx = -1;
+            for (let i = chat.length - 1; i >= 0; i--) {
+                if (!chat[i].is_user && !chat[i].is_system) { aiIdx = i; break; }
+            }
+            if (aiIdx === -1) { toastr.warning('未找到 AI 消息', DISPLAY_NAME); return; }
+            chat[aiIdx]._bbmem_meta_marker = !chat[aiIdx]._bbmem_meta_marker;
+            try { ctx.saveChatDebounced(); } catch {}
+            setTimeout(() => refreshExtractionMarkers(), 100);
+            const label = chat[aiIdx]._bbmem_meta_marker ? '🤖 已标记为元指令（不提取）' : '🗃️ 已标记为可提取';
+            toastr.info(label, DISPLAY_NAME, { timeOut: 1500 });
+            break;
+        }
+        case 'manual_extract': {
+            if (chatId) {
+                try { await import('./auto-generator.js').then(m => m.autoExtractOnce?.(chatId)); } catch {}
+            }
+            if (typeof handleAiExtract === 'function') {
+                handleAiExtract(chatId);
+            } else {
+                toastr.info('请使用管理面板中的"AI提取"按钮', DISPLAY_NAME);
+            }
+            break;
+        }
+        case 'open_manager': {
+            await openMemoryManager();
+            break;
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -3439,10 +3704,27 @@ async function init() {
         return expandMemoriesForEntityKeyword(list, String(keyword), { limit });
     };
 
-    // v2.9.8: 注入隐藏消息切换按钮
-    injectHiddenToggleButton();
+    // v2.9.9: 注入可拖拽悬浮球
+    injectFloatingHub();
 
-    console.log(`[${DISPLAY_NAME}] v2.9.8 初始化完成`);
+    // v2.9.9: 修复元标记按钮 — 全局委托点击事件
+    document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.bb-meta-toggle-btn');
+        if (!btn) return;
+        const mesBlock = btn.closest('.mes');
+        const mesId = mesBlock?.getAttribute('mesid');
+        const currentChat = SillyTavern.getContext().chat;
+        if (mesId == null || !currentChat) return;
+        const idx = parseInt(mesId, 10);
+        if (isNaN(idx) || idx < 0 || idx >= currentChat.length) return;
+        currentChat[idx]._bbmem_meta_marker = !currentChat[idx]._bbmem_meta_marker;
+        try { SillyTavern.getContext().saveChatDebounced(); } catch {}
+        refreshExtractionMarkers();
+        const newLabel = currentChat[idx]._bbmem_meta_marker ? '🤖 已标记为元指令（不提取）' : '🗃️ 已标记为可提取';
+        toastr.info(newLabel, DISPLAY_NAME, { timeOut: 1500 });
+    });
+
+    console.log(`[${DISPLAY_NAME}] v2.9.9 初始化完成`);
 }
 
 // ═══ 启动 ═══

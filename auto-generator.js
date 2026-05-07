@@ -131,11 +131,48 @@ function getExtractionPrompt() {
 }
 
 /**
+ * v2.9.9: 构建总结模式 + 排除NPC 的附加指令
+ */
+function buildSummaryInstructions() {
+    const settings = getSettings();
+    const parts = [];
+
+    // 获取角色名和用户名
+    let charName = '';
+    let userName = '';
+    try {
+        const ctx = SillyTavern.getContext();
+        if (ctx.characters && ctx.characterId !== undefined) {
+            charName = ctx.characters[ctx.characterId]?.name || '';
+        }
+        if (ctx.name1) userName = ctx.name1;
+    } catch { /* ignore */ }
+
+    // 总结模式
+    if (settings.summaryMode === 'self') {
+        parts.push(`【重要：代入式总结模式】用户 "${userName || '用户'}" 是扮演者本人。关于 "${userName || '用户'}" 的信息**只能从用户消息中提取**，严禁从AI回复中推断或总结用户的信息。AI角色 "${charName || '角色'}" 的信息正常从AI回复中提取。`);
+    } else {
+        parts.push(`【扮演式总结模式】用户 "${userName || '用户'}" 和 AI角色 "${charName || '角色'}" 的信息均可从对话中综合提取。`);
+    }
+
+    // 排除 NPC
+    if (settings.excludedNpcs && settings.excludedNpcs.trim()) {
+        const npcs = settings.excludedNpcs.split(',').map(n => n.trim()).filter(Boolean);
+        if (npcs.length > 0) {
+            parts.push(`【排除NPC】以下 NPC 的信息**不需要**提取为独立记忆：${npcs.join('、')}。在对话中出现这些NPC时，不要为其创建 npc.profile 或以他们为 subject 的记忆条目。`);
+        }
+    }
+
+    return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';
+}
+
+/**
  * 构建完整的提取提示词
  */
 function buildPrompt(userMessage, aiMessage) {
     const template = getExtractionPrompt();
-    return template
+    const instructions = buildSummaryInstructions();
+    return (template + instructions)
         .replace('{{userMessage}}', userMessage || '(无)')
         .replace('{{aiMessage}}', aiMessage || '(无)');
 }
@@ -713,7 +750,8 @@ export async function extractFromContext(chatId, messageCount = 12, startFloor =
 
     const conversationText = lines.join('\n');
     const contextTemplate = settings.autoGenContextPrompt || CONTEXT_EXTRACTION_PROMPT;
-    const prompt = contextTemplate.replace('{{conversation}}', conversationText);
+    const instructions = buildSummaryInstructions();
+    const prompt = (contextTemplate + instructions).replace('{{conversation}}', conversationText);
 
     if (settings.debugLogging) {
         console.log(`[BB-Memory] 上下文提取：分析 ${pairs.length} 个交换（${lines.length} 条消息），跳过 ${skippedCount} 个已提取`);

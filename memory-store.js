@@ -36,6 +36,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
     extractionConfirmMode: 'semi',       // 'active' | 'semi' | 'auto'
     activeConfirmStyle: 'popup',         // 'popup' | 'toast'（仅 active 模式有效）
     contextWindowExchanges: 5,           // 滑动窗口保留的 exchange 数（2-20）
+    // v2.9.9: 总结模式与 NPC 排除
+    summaryMode: 'roleplay',             // 'self'（代入式） | 'roleplay'（扮演式）
+    excludedNpcs: '',                    // 逗号分隔的不总结 NPC 列表
+    currentSlotName: 'default',          // 当前使用的存档槽名
     // 认知类型开关（v2.2 升级为四类）
     typeEnabled: {
         fact: true,
