@@ -32,6 +32,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
     autoGenPrompt: '',
     autoGenContextPrompt: '',
     autoGenMaxExchanges: 3,
+    // v2.9.8: 提取确认模式与滑动窗口
+    extractionConfirmMode: 'semi',       // 'active' | 'semi' | 'auto'
+    activeConfirmStyle: 'popup',         // 'popup' | 'toast'（仅 active 模式有效）
+    contextWindowExchanges: 5,           // 滑动窗口保留的 exchange 数（2-20）
     // 认知类型开关（v2.2 升级为四类）
     typeEnabled: {
         fact: true,

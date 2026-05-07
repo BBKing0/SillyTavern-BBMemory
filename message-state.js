@@ -125,16 +125,15 @@ export async function markExchangeProcessed(chatId, hash) {
 // ═══════════════════════════════════════════════════════════
 
 /**
- * 扫描当前聊天，将超出短期窗口的消息自动隐藏。
+ * v2.9.8: 扫描当前聊天，基于 exchange 窗口自动隐藏消息。
  *
  * 规则：
+ *   - 从末尾向前数 N 个可见 exchange 保留，其余隐藏
  *   - index 0（角色问候语）永远不隐藏
  *   - 系统消息(is_system)跳过
- *   - 短期窗口内的消息不动
- *   - 窗口外、尚未隐藏的消息 → 设为 is_hidden=true, _bbmem_hideSource='plugin'
- *   - 窗口外、已经隐藏但没有我们标记的 → 视为用户手动隐藏, _bbmem_hideSource='user'
+ *   - 隐藏来源：_bbmem_hideSource='plugin'（插件隐藏）或 'user'（用户手动隐藏）
  *
- * @param {number} [windowOverride] - 覆盖短期窗口大小
+ * @param {number} [windowOverride] - 覆盖 exchange 窗口大小
  * @returns {Promise<{ hiddenCount: number }>} 本次新隐藏的消息数
  */
 export async function syncMessageVisibility(windowOverride) {
@@ -143,35 +142,37 @@ export async function syncMessageVisibility(windowOverride) {
     if (!chat || chat.length <= 1) return { hiddenCount: 0 };
 
     const settings = getSettings();
-    const windowSize = windowOverride ?? settings.shortTermWindow ?? 5;
+    const windowExchanges = windowOverride ?? settings.contextWindowExchanges ?? 5;
 
-    // cutoff: 从这个 index 开始（不含）到末尾是短期窗口
-    const cutoff = Math.max(1, chat.length - windowSize);
+    // 从末尾反向计数 exchange（AI 消息），找到窗口截止位置
+    let visibleExchangeCount = 0;
+    let cutoff = chat.length;
+    for (let i = chat.length - 1; i >= 1; i--) {
+        const msg = chat[i];
+        if (msg.is_system || msg.is_user || msg.is_hidden) continue;
+        visibleExchangeCount++;
+        if (visibleExchangeCount >= windowExchanges) {
+            cutoff = i;
+            break;
+        }
+    }
 
     let hiddenCount = 0;
     let changed = false;
 
-    for (let i = 1; i < chat.length; i++) {
+    for (let i = 1; i < cutoff; i++) {
         const msg = chat[i];
-
-        // 跳过系统消息
         if (msg.is_system) continue;
 
-        if (i < cutoff) {
-            // ── 这条消息在短期窗口之外 ──
-            if (!msg.is_hidden) {
-                // 还没被隐藏 → 由插件隐藏
-                msg.is_hidden = true;
-                msg._bbmem_hideSource = 'plugin';
-                hiddenCount++;
-                changed = true;
-            } else if (!msg._bbmem_hideSource) {
-                // 已经被隐藏，但没有我们的标记 → 是用户/其他方式隐藏的
-                msg._bbmem_hideSource = 'user';
-                changed = true;
-            }
+        if (!msg.is_hidden) {
+            msg.is_hidden = true;
+            msg._bbmem_hideSource = 'plugin';
+            hiddenCount++;
+            changed = true;
+        } else if (!msg._bbmem_hideSource) {
+            msg._bbmem_hideSource = 'user';
+            changed = true;
         }
-        // 窗口内的消息：不做任何操作
     }
 
     if (changed) {
@@ -179,7 +180,7 @@ export async function syncMessageVisibility(windowOverride) {
     }
 
     if (hiddenCount > 0) {
-        console.log(`${LOG_TAG} 自动隐藏了 ${hiddenCount} 条消息（保留最近 ${windowSize} 条）`);
+        console.log(`${LOG_TAG} 自动隐藏了 ${hiddenCount} 条消息（保留最近 ${windowExchanges} 个 exchange）`);
     }
 
     return { hiddenCount };
@@ -227,6 +228,8 @@ export async function getExtractableExchanges() {
         if (msg._bbmem_hideSource !== 'plugin') continue;
         // 已经提取过的跳过
         if (msg._bbmem_extracted) continue;
+        // v2.9.8: 元标记消息跳过
+        if (msg._bbmem_meta_marker) continue;
 
         // 向前找最近的用户消息，组成 exchange
         let userText = '';
@@ -281,8 +284,36 @@ export async function markExchangeExtracted(aiIndex, hash) {
 }
 
 /**
- * 刷新聊天消息上的提取标记图标
- * 扫描 SillyTavern 聊天 DOM，为已提取的消息添加视觉标记
+ * v2.9.8: 隐藏一个 exchange（用户消息 + AI 回复）
+ * 标记为插件隐藏，使其在聊天界面不可见
+ * @param {number} userIndex - 用户消息索引
+ * @param {number} aiIndex - AI 消息索引
+ * @returns {boolean} 是否实际隐藏了消息
+ */
+export function hideExchange(userIndex, aiIndex) {
+    const ctx = getContext();
+    const chat = ctx.chat;
+    if (!chat) return false;
+
+    let changed = false;
+    if (chat[userIndex] && !chat[userIndex].is_hidden) {
+        chat[userIndex].is_hidden = true;
+        chat[userIndex]._bbmem_hideSource = 'plugin';
+        changed = true;
+    }
+    if (chat[aiIndex] && !chat[aiIndex].is_hidden) {
+        chat[aiIndex].is_hidden = true;
+        chat[aiIndex]._bbmem_hideSource = 'plugin';
+        changed = true;
+    }
+
+    if (changed) saveChat();
+    return changed;
+}
+
+/**
+ * v2.9.8: 刷新聊天消息上的提取标记、隐藏状态和元标记按钮
+ * 扫描 SillyTavern 聊天 DOM，为已提取/元标记的消息添加视觉标记和隐藏样式
  */
 export function refreshExtractionMarkers() {
     const ctx = getContext();
@@ -291,21 +322,50 @@ export function refreshExtractionMarkers() {
 
     const msgBlocks = document.querySelectorAll('.mes');
     msgBlocks.forEach(block => {
-        const existing = block.querySelector('.bb-extract-marker');
-        if (existing) existing.remove();
+        // 移除旧标记
+        const existingMarker = block.querySelector('.bb-extract-marker');
+        if (existingMarker) existingMarker.remove();
+        const existingMetaBtn = block.querySelector('.bb-meta-toggle-btn');
+        if (existingMetaBtn) existingMetaBtn.remove();
 
         const mesId = block.getAttribute('mesid');
         if (mesId == null) return;
         const idx = parseInt(mesId, 10);
         if (isNaN(idx) || idx < 0 || idx >= chat.length) return;
 
-        if (chat[idx]._bbmem_extracted) {
+        const msg = chat[idx];
+
+        // ── 元标记按钮（所有消息都添加）──
+        const metaBtn = document.createElement('button');
+        metaBtn.className = 'bb-meta-toggle-btn';
+        metaBtn.title = msg._bbmem_meta_marker ? '取消元指令标记' : '标记为元指令（不提取）';
+        metaBtn.innerHTML = msg._bbmem_meta_marker ? '🤖' : '<i class="fa-solid fa-robot"></i>';
+        // 插入到 mes_buttons 行或 mes_block 中
+        const btnRow = block.querySelector('.mes_buttons');
+        if (btnRow) {
+            btnRow.appendChild(metaBtn);
+        } else {
+            const contentEl = block.querySelector('.mes_block') || block;
+            contentEl.appendChild(metaBtn);
+        }
+
+        // ── 提取标记 ──
+        if (msg._bbmem_extracted) {
             const marker = document.createElement('span');
             marker.className = 'bb-extract-marker';
             marker.title = '此消息已被 BB-Memory 提取';
             marker.innerHTML = '<i class="fa-solid fa-circle-check"></i>';
             const contentEl = block.querySelector('.mes_text') || block.querySelector('.mes_block') || block;
             contentEl.appendChild(marker);
+        }
+
+        // ── 隐藏已提取/元标记的消息 ──
+        if (msg._bbmem_extracted || msg._bbmem_meta_marker) {
+            if (!block.classList.contains('bb-extracted-hidden')) {
+                block.classList.add('bb-extracted-hidden');
+            }
+        } else {
+            block.classList.remove('bb-extracted-hidden');
         }
     });
 }

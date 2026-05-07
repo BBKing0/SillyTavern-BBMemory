@@ -68,7 +68,7 @@ import {
     normalizeItemTier,
     expandMemoriesForEntityKeyword,
 } from './entity-tiers.js';
-import { initAutoGenerator, stopAutoGenerator, extractFromContext, saveExtractedMemories, normalizeEndpoint, setAutoExtractProgressCallback } from './auto-generator.js';
+import { initAutoGenerator, stopAutoGenerator, extractFromContext, saveExtractedMemories, normalizeEndpoint, setAutoExtractProgressCallback, getPendingAutoCandidates, clearPendingAutoCandidates } from './auto-generator.js';
 import { syncMessageVisibility, refreshExtractionMarkers } from './message-state.js';
 import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot } from './memory-slots.js';
 import { getPersistentMemories, addPersistentMemory, updatePersistentMemory, removePersistentMemory } from './persistent-memory.js';
@@ -99,6 +99,9 @@ const ROLE_SYSTEM = 0;
 
 // v2.9.5：命中追踪缓存
 let lastRetrievalResult = { chatId: null, hits: [], timestamp: 0, stats: null };
+
+// v2.9.8：管理面板当前类型筛选
+let activeFilter = 'all';
 
 // ═══════════════════════════════════════════════════════════
 //  辅助函数
@@ -347,6 +350,17 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     // 更新侧边栏命中显示
     renderHitDisplay();
 
+    // v2.9.8: active+popup 模式，检查是否需要弹出浮动审核
+    const confirmMode = settings.extractionConfirmMode || 'semi';
+    const confirmStyle = settings.activeConfirmStyle || 'popup';
+    if (confirmMode === 'active' && confirmStyle === 'popup') {
+        const pending = getPendingAutoCandidates();
+        if (pending.length > 0) {
+            showFloatingReviewPanel(chatId, pending);
+            clearPendingAutoCandidates();
+        }
+    }
+
     return chat;
 };
 
@@ -418,6 +432,21 @@ async function refreshSidebar() {
     const maxExchangesEl = document.getElementById('bb_memory_auto_max_exchanges');
     if (maxExchangesEl) maxExchangesEl.value = String(getSettings().autoGenMaxExchanges ?? 3);
 
+    // v2.9.8: 确认模式
+    const confirmModeEl = document.getElementById('bb_memory_extract_confirm_mode');
+    if (confirmModeEl) confirmModeEl.value = getSettings().extractionConfirmMode || 'semi';
+
+    const confirmStyleEl = document.getElementById('bb_memory_active_confirm_style');
+    if (confirmStyleEl) confirmStyleEl.value = getSettings().activeConfirmStyle || 'popup';
+
+    const confirmStyleSection = document.getElementById('bb_active_confirm_style_section');
+    if (confirmStyleSection) {
+        confirmStyleSection.style.display = (getSettings().extractionConfirmMode === 'active') ? 'block' : 'none';
+    }
+
+    const contextWindowEl = document.getElementById('bb_memory_context_window');
+    if (contextWindowEl) contextWindowEl.value = String(getSettings().contextWindowExchanges ?? 5);
+
     restoreApiSettings(getSettings());
 
     // v2.9.5：刷新命中记忆显示
@@ -446,7 +475,7 @@ function restoreApiSettings(s) {
     }
 }
 
-// v2.9.5：渲染命中记忆列表
+// v2.9.8：渲染命中记忆列表（支持点击展开）
 function renderHitDisplay() {
     const listEl = document.getElementById('bb_hit_list');
     const tsEl = document.getElementById('bb_hit_timestamp');
@@ -470,12 +499,14 @@ function renderHitDisplay() {
         const icon = typeIcons[h.cognitiveType] || 'fa-circle';
         const color = levelColors[h.level] || '#888';
         const scorePct = Math.round(h.score * 100);
-        return `<div class="bb-hit-item">
+        return `<div class="bb-hit-item" data-memory-id="${h.id}" title="点击查看完整记忆">
             <i class="fa-solid ${icon}" style="color:${color};font-size:0.8em;"></i>
             <span class="bb-hit-title">${escapeHtml(h.title)}</span>
             <span class="bb-hit-score">${scorePct}%</span>
             <span class="bb-hit-level" style="color:${color}">${h.level}</span>
-        </div>`;
+            <i class="fa-solid fa-chevron-right bb-hit-expand-icon" style="font-size:0.7em;opacity:0.4;"></i>
+        </div>
+        <div class="bb-hit-detail" id="bb_hit_detail_${h.id}" style="display:none;"></div>`;
     }).join('');
 
     if (result.stats) {
@@ -483,6 +514,62 @@ function renderHitDisplay() {
             档案${result.stats.persistentCount || 0} 常驻${result.stats.residentCount || 0} L3×${result.stats.l3 || 0} L2×${result.stats.l2 || 0} L1×${result.stats.l1 || 0}
         </div>`;
     }
+
+    bindHitItemClicks(listEl);
+}
+
+// v2.9.8：绑定命中记忆点击展开事件
+async function bindHitItemClicks(listEl) {
+    listEl.querySelectorAll('.bb-hit-item').forEach(item => {
+        item.addEventListener('click', async () => {
+            const memoryId = item.dataset.memoryId;
+            if (!memoryId) return;
+
+            const detailEl = document.getElementById(`bb_hit_detail_${memoryId}`);
+            if (!detailEl) return;
+
+            if (detailEl.style.display === 'none' || !detailEl.style.display) {
+                try {
+                    const chatId = getChatId();
+                    if (!chatId) return;
+                    const memories = await getMemories(chatId);
+                    const mem = memories.find(m => m.id === memoryId);
+                    if (!mem) {
+                        detailEl.innerHTML = '<div class="bb-mem-empty" style="padding:6px;">记忆已不存在</div>';
+                    } else {
+                        const typeDef = getTypeDefinition(mem.cognitiveType || 'fact');
+                        detailEl.innerHTML = `
+                            <div class="bb-hit-detail-card">
+                                <div class="bb-hit-detail-header">
+                                    <span style="color:${typeDef.color}"><i class="${typeDef.icon}"></i> ${typeDef.label}</span>
+                                    <span class="bb-hit-detail-date">${new Date(mem.createdAt).toLocaleString('zh-CN')}</span>
+                                </div>
+                                <div class="bb-hit-detail-title">${escapeHtml(mem.title || '(无标题)')}</div>
+                                <div class="bb-hit-detail-content">${escapeHtml(mem.content)}</div>
+                                ${mem.summary ? `<div class="bb-hit-detail-summary"><strong>摘要：</strong>${escapeHtml(mem.summary)}</div>` : ''}
+                                ${mem.verbatim ? `<div class="bb-hit-detail-verbatim"><strong>原话：</strong>"${escapeHtml(mem.verbatim)}"</div>` : ''}
+                                <div class="bb-hit-detail-meta">
+                                    <span>强度: ${Math.round((mem.strength || 1) * 100)}%</span>
+                                    <span>来源: ${mem.source || 'unknown'}</span>
+                                    <span>${mem.status || 'active'}</span>
+                                </div>
+                            </div>
+                        `;
+                    }
+                } catch (e) {
+                    detailEl.innerHTML = '<div class="bb-mem-empty" style="padding:6px;">加载失败</div>';
+                }
+                detailEl.style.display = 'block';
+                item.querySelector('.bb-hit-expand-icon')?.classList.replace('fa-chevron-right', 'fa-chevron-down');
+                item.style.background = 'var(--SmartThemeBlurTintColor, rgba(255,255,255,0.08))';
+            } else {
+                detailEl.style.display = 'none';
+                item.querySelector('.bb-hit-expand-icon')?.classList.replace('fa-chevron-down', 'fa-chevron-right');
+                item.style.background = '';
+            }
+        });
+        item.style.cursor = 'pointer';
+    });
 }
 
 function bindSidebarEvents() {
@@ -633,6 +720,23 @@ function bindSidebarEvents() {
         const el = document.getElementById('bb_memory_context_prompt');
         if (el) { el.value = ''; updateSettings({ autoGenContextPrompt: '' }); }
         toastr.info('已恢复默认上下文提取提示词', DISPLAY_NAME);
+    });
+
+    // v2.9.8: 确认模式
+    document.getElementById('bb_memory_extract_confirm_mode')?.addEventListener('change', (e) => {
+        updateSettings({ extractionConfirmMode: e.target.value });
+        const styleSection = document.getElementById('bb_active_confirm_style_section');
+        if (styleSection) {
+            styleSection.style.display = e.target.value === 'active' ? 'block' : 'none';
+        }
+    });
+    document.getElementById('bb_memory_active_confirm_style')?.addEventListener('change', (e) => {
+        updateSettings({ activeConfirmStyle: e.target.value });
+    });
+    // v2.9.8: 上下文窗口
+    document.getElementById('bb_memory_context_window')?.addEventListener('change', (e) => {
+        const val = parseInt(e.target.value, 10);
+        if (!isNaN(val) && val >= 2 && val <= 20) updateSettings({ contextWindowExchanges: val });
     });
 
     // 衰减设置
@@ -1425,6 +1529,15 @@ async function openMemoryManager() {
     document.body.appendChild(overlay);
 
     bindManagerEvents(overlay, chatId);
+
+    // v2.9.8: 检查是否有待审核的自动提取候选
+    const pending = getPendingAutoCandidates();
+    if (pending.length > 0) {
+        setTimeout(() => {
+            showExtractReviewPanel(overlay, chatId, pending, 0);
+            clearPendingAutoCandidates();
+        }, 300);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1581,8 +1694,26 @@ async function handleAiExtract(managerOverlay, chatId) {
                 return;
             }
 
-            dismissProgressToast(1500);
-            showExtractReviewPanel(managerOverlay, chatId, candidates, skippedCount);
+            // v2.9.8: 检查确认模式
+            const settings = getSettings();
+            const confirmMode = settings.extractionConfirmMode || 'semi';
+
+            if (confirmMode === 'auto') {
+                // 自动模式：直接保存，跳过审核
+                dismissProgressToast(1500);
+                const selected = candidates.map(m => ({ ...m, _selected: true }));
+                showProgressToast('正在保存记忆', 0, selected.length);
+                const savedCount = await saveExtractedMemories(chatId, selected,
+                    (cur, total) => showProgressToast('正在保存记忆', cur, total),
+                );
+                dismissProgressToast(2000);
+                toastr.success(`自动保存了 ${savedCount} 条记忆`, DISPLAY_NAME);
+                await restoreManagerUI(managerOverlay, chatId);
+            } else {
+                // semi 或 active 模式：显示审核面板
+                dismissProgressToast(1500);
+                showExtractReviewPanel(managerOverlay, chatId, candidates, skippedCount);
+            }
         } catch (err) {
             console.error('[BB-Memory] AI提取失败:', err);
             showProgressError(err.message);
@@ -1629,6 +1760,87 @@ function showExtractReviewPanel(managerOverlay, chatId, candidates, skippedCount
         `;
         bindReviewFooterEvents(footerEl, managerOverlay, chatId, candidates);
     }
+}
+
+// v2.9.8: 浮动审核弹窗（active 模式 popup 风格，不依赖管理面板）
+async function showFloatingReviewPanel(chatId, candidates) {
+    const existing = document.querySelector('.bb-floating-review-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'bb-mem-overlay bb-floating-review-overlay';
+    overlay.innerHTML = `
+        <div class="bb-mem-popup" style="max-width:650px;">
+            <div class="bb-mem-popup-header">
+                <h3><i class="fa-solid fa-clipboard-check"></i> 记忆审核</h3>
+                <button class="bb-mem-close menu_button menu_button_danger" style="padding:2px 8px;">×</button>
+            </div>
+            <div class="bb-mem-stats" style="padding:6px 18px;">
+                AI 自动提取到 <strong>${candidates.length}</strong> 条候选记忆，请审核
+            </div>
+            <div class="bb-mem-list" id="bb_floating_review_list" style="max-height:50vh;">
+                ${candidates.map((mem, i) => buildCandidateItemHTML(mem, i)).join('')}
+            </div>
+            <div class="bb-mem-footer" id="bb_floating_review_footer">
+                <button class="menu_button" id="bb_fr_select_all">
+                    <i class="fa-solid fa-check-double"></i> 全选
+                </button>
+                <button class="menu_button" id="bb_fr_deselect_all">
+                    <i class="fa-solid fa-times"></i> 取消全选
+                </button>
+                <button class="menu_button" id="bb_fr_save" style="background:#4caf50;color:#fff;">
+                    <i class="fa-solid fa-save"></i> 保存选中 (<span id="bb_fr_count">0</span>)
+                </button>
+                <button class="menu_button menu_button_danger" id="bb_fr_cancel">
+                    <i class="fa-solid fa-ban"></i> 取消
+                </button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const listEl = overlay.querySelector('#bb_floating_review_list');
+    if (listEl) bindCandidateItemEvents(listEl);
+
+    // 绑定底部按钮
+    const footerEl = overlay.querySelector('#bb_floating_review_footer');
+    if (footerEl) {
+        footerEl.querySelector('#bb_fr_select_all')?.addEventListener('click', () => {
+            overlay.querySelectorAll('.bb-candidate-cb').forEach(cb => { cb.checked = true; });
+            updateFloatingReviewCount(overlay);
+        });
+        footerEl.querySelector('#bb_fr_deselect_all')?.addEventListener('click', () => {
+            overlay.querySelectorAll('.bb-candidate-cb').forEach(cb => { cb.checked = false; });
+            updateFloatingReviewCount(overlay);
+        });
+        footerEl.querySelector('#bb_fr_save')?.addEventListener('click', async () => {
+            const data = collectCandidateData(overlay);
+            const selected = data.filter(d => d._selected);
+            if (!selected.length) { toastr.info('未选择任何记忆', DISPLAY_NAME); return; }
+            showProgressToast('正在保存记忆', 0, selected.length);
+            const savedCount = await saveExtractedMemories(chatId, selected,
+                (cur, total) => showProgressToast('正在保存记忆', cur, total),
+            );
+            dismissProgressToast(2000);
+            toastr.success(`保存了 ${savedCount} 条记忆`, DISPLAY_NAME);
+            overlay.remove();
+            refreshSidebar();
+        });
+        footerEl.querySelector('#bb_fr_cancel')?.addEventListener('click', () => overlay.remove());
+    }
+
+    // 关闭按钮
+    overlay.querySelector('.bb-mem-close')?.addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+    // 初始计数
+    updateFloatingReviewCount(overlay);
+}
+
+function updateFloatingReviewCount(overlay) {
+    const count = overlay.querySelectorAll('.bb-candidate-cb:checked').length;
+    const el = overlay.querySelector('#bb_fr_count');
+    if (el) el.textContent = String(count);
 }
 
 function buildCandidateItemHTML(mem, index) {
@@ -2231,6 +2443,25 @@ function buildManagerHTML(memories, chatId) {
                     ${typeFilterHTML}
                 </div>
 
+                <!-- v2.9.8: 批量操作栏 -->
+                <div class="bb-mem-batch-bar" id="bb_batch_bar" style="display:none;">
+                    <span class="bb-batch-count">已选 <strong id="bb_batch_count">0</strong> 条</span>
+                    <button class="menu_button" id="bb_batch_select_all">全选</button>
+                    <button class="menu_button" id="bb_batch_deselect_all">取消全选</button>
+                    <button class="menu_button" id="bb_batch_delete" style="color:#f44336;">
+                        <i class="fa-solid fa-trash"></i> 删除
+                    </button>
+                    <button class="menu_button" id="bb_batch_archive">
+                        <i class="fa-solid fa-box-archive"></i> 归档
+                    </button>
+                    <button class="menu_button" id="bb_batch_fuzzy">
+                        <i class="fa-solid fa-cloud"></i> 模糊化
+                    </button>
+                    <button class="menu_button" id="bb_batch_pin">
+                        <i class="fa-solid fa-thumbtack"></i> 固定
+                    </button>
+                </div>
+
                 <div class="bb-mem-stats">
                     共 <strong>${memories.length}</strong> 条记忆
                 </div>
@@ -2386,6 +2617,7 @@ function buildMemoryItemHTML(m) {
     return `
         <div class="bb-mem-item" data-id="${m.id}" data-type="${m.cognitiveType || m.type || 'fact'}">
             <div class="bb-mem-item-header">
+                <input type="checkbox" class="bb-mem-batch-cb" data-id="${m.id}" style="margin-right:8px;width:15px;height:15px;cursor:pointer;flex-shrink:0;" />
                 <span class="bb-mem-item-type" style="color: ${typeDef.color}">
                     <i class="${typeDef.icon}"></i> ${typeDef.label}
                 </span>
@@ -2485,15 +2717,15 @@ function bindManagerEvents(overlay, chatId) {
         });
     });
 
-    // 类型过滤
+    // 类型过滤（v2.9.8: 追踪 activeFilter）
     overlay.querySelectorAll('.bb-mem-type-filter').forEach(btn => {
         btn.addEventListener('click', async () => {
             overlay.querySelectorAll('.bb-mem-type-filter').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
 
-            const type = btn.dataset.type;
+            activeFilter = btn.dataset.type;
             const memories = await getMemories(chatId);
-            const filtered = type === 'all' ? memories : memories.filter(m => (m.cognitiveType || m.type) === type);
+            const filtered = activeFilter === 'all' ? memories : memories.filter(m => (m.cognitiveType || m.type) === activeFilter);
             renderMemoryList(overlay, filtered, chatId);
         });
     });
@@ -2593,6 +2825,78 @@ function bindManagerEvents(overlay, chatId) {
     });
 
     rebindItemActions(overlay, chatId);
+    bindBatchEvents(overlay, chatId);
+}
+
+// v2.9.8: 批量操作事件绑定
+function bindBatchEvents(overlay, chatId) {
+    const updateUI = () => updateBatchUI(overlay);
+
+    // checkbox 变化时更新 UI
+    overlay.addEventListener('change', (e) => {
+        if (e.target.classList.contains('bb-mem-batch-cb')) {
+            updateUI();
+        }
+    });
+
+    overlay.querySelector('#bb_batch_select_all')?.addEventListener('click', () => {
+        overlay.querySelectorAll('.bb-mem-batch-cb').forEach(cb => { cb.checked = true; });
+        updateUI();
+    });
+
+    overlay.querySelector('#bb_batch_deselect_all')?.addEventListener('click', () => {
+        overlay.querySelectorAll('.bb-mem-batch-cb').forEach(cb => { cb.checked = false; });
+        updateUI();
+    });
+
+    async function batchAction(action, confirmMsg) {
+        const checked = overlay.querySelectorAll('.bb-mem-batch-cb:checked');
+        const ids = [...checked].map(cb => cb.dataset.id).filter(Boolean);
+        if (!ids.length) {
+            toastr.info('未选择任何记忆', DISPLAY_NAME);
+            return;
+        }
+        const ctx = SillyTavern.getContext();
+        const ok = await ctx.Popup.show.confirm(confirmMsg.title, `${confirmMsg.body} (${ids.length} 条)`);
+        if (!isPopupAffirmative(ctx, ok)) return;
+
+        for (const id of ids) {
+            switch (action) {
+                case 'delete': await removeMemory(chatId, id); break;
+                case 'archive': await updateMemory(chatId, id, { status: 'archived' }); break;
+                case 'fuzzy': {
+                    const { fuzzyMemory } = await import('./memory-maintainer.js');
+                    await fuzzyMemory(chatId, id);
+                    break;
+                }
+                case 'pin': await updateMemory(chatId, id, { pinned: true }); break;
+            }
+        }
+        toastr.success(confirmMsg.success, DISPLAY_NAME);
+        // 保持当前的类型筛选
+        const memories = await getMemories(chatId);
+        const filtered = activeFilter === 'all' ? memories : memories.filter(m => (m.cognitiveType || m.type) === activeFilter);
+        renderMemoryList(overlay, filtered, chatId);
+        updateUI();
+    }
+
+    overlay.querySelector('#bb_batch_delete')?.addEventListener('click', () =>
+        batchAction('delete', { title: '批量删除', body: '确定要删除选中的记忆吗？', success: '已批量删除' }));
+    overlay.querySelector('#bb_batch_archive')?.addEventListener('click', () =>
+        batchAction('archive', { title: '批量归档', body: '确定要归档选中的记忆吗？', success: '已批量归档' }));
+    overlay.querySelector('#bb_batch_fuzzy')?.addEventListener('click', () =>
+        batchAction('fuzzy', { title: '批量模糊化', body: '确定要模糊化选中的记忆吗？', success: '已批量模糊化' }));
+    overlay.querySelector('#bb_batch_pin')?.addEventListener('click', () =>
+        batchAction('pin', { title: '批量固定', body: '确定要固定选中的记忆吗？', success: '已批量固定' }));
+}
+
+function updateBatchUI(overlay) {
+    const batchBar = overlay.querySelector('#bb_batch_bar');
+    const countEl = overlay.querySelector('#bb_batch_count');
+    const checked = overlay.querySelectorAll('.bb-mem-batch-cb:checked');
+    const count = checked.length;
+    if (countEl) countEl.textContent = String(count);
+    if (batchBar) batchBar.style.display = count > 0 ? 'flex' : 'none';
 }
 
 function renderMemoryList(overlay, memories, chatId) {
@@ -2831,8 +3135,23 @@ function registerSlashCommands() {
                 await clearMemories(chatId);
                 return '所有记忆已清空';
             }
+            case 'meta': {
+                // v2.9.8: 标记/取消最后一条 AI 消息为元指令
+                const ct = SillyTavern.getContext().chat;
+                if (!ct || ct.length < 2) return '聊天消息不足';
+                // 找最后一条 AI 消息
+                let aiIdx = -1;
+                for (let i = ct.length - 1; i >= 0; i--) {
+                    if (!ct[i].is_user && !ct[i].is_system) { aiIdx = i; break; }
+                }
+                if (aiIdx === -1) return '未找到 AI 消息';
+                ct[aiIdx]._bbmem_meta_marker = !ct[aiIdx]._bbmem_meta_marker;
+                try { SillyTavern.getContext().saveChatDebounced(); } catch {}
+                setTimeout(() => refreshExtractionMarkers(), 100);
+                return ct[aiIdx]._bbmem_meta_marker ? '已标记为元指令 🤖（不会提取）' : '已取消元指令标记';
+            }
             default:
-                return '可用命令: /memory add|search|count|clear\n示例: /memory add 角色喜欢喝咖啡';
+                return '可用命令: /memory add|search|count|clear|meta\n示例: /memory add 角色喜欢喝咖啡';
         }
     };
 
@@ -2844,7 +3163,7 @@ function registerSlashCommands() {
                 name: 'memory',
                 callback: memorySlashCallback,
                 aliases: [],
-                helpString: '管理 BB-Memory 记忆 (add/search/count/clear)。示例: /memory add 角色喜欢喝咖啡',
+                helpString: '管理 BB-Memory 记忆 (add/search/count/clear/meta)。示例: /memory add 角色喜欢喝咖啡',
             }));
         } else if (typeof ctx.registerSlashCommand === 'function') {
             ctx.registerSlashCommand('memory', memorySlashCallback, [], '管理BB-Memory记忆 (add/search/count/clear)');
@@ -2855,6 +3174,28 @@ function registerSlashCommands() {
             ctx.registerSlashCommand('memory', memorySlashCallback, [], '管理BB-Memory记忆 (add/search/count/clear)');
         }
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  v2.9.8: 隐藏消息切换按钮
+// ═══════════════════════════════════════════════════════════
+
+function injectHiddenToggleButton() {
+    if (document.getElementById('bb_show_hidden_btn')) return;
+
+    const btn = document.createElement('button');
+    btn.id = 'bb_show_hidden_btn';
+    btn.className = 'bb-show-hidden-btn';
+    btn.title = '显示/隐藏已提取的消息';
+    btn.innerHTML = '<i class="fa-solid fa-eye-slash"></i>';
+    btn.addEventListener('click', () => {
+        document.body.classList.toggle('bb-show-extracted');
+        const showing = document.body.classList.contains('bb-show-extracted');
+        btn.innerHTML = showing ? '<i class="fa-solid fa-eye"></i>' : '<i class="fa-solid fa-eye-slash"></i>';
+        btn.title = showing ? '隐藏已提取的消息' : '显示已提取的消息';
+        toastr.info(showing ? '已显示被隐藏的楼层' : '已隐藏已提取的楼层', DISPLAY_NAME, { timeOut: 1500 });
+    });
+    document.body.appendChild(btn);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2882,6 +3223,8 @@ async function onNewMessage() {
     if (!settings.enabled) return;
     try {
         await syncMessageVisibility();
+        // v2.9.8: 刷新提取标记和隐藏状态
+        setTimeout(() => refreshExtractionMarkers(), 300);
     } catch (e) {
         console.warn(`[${DISPLAY_NAME}] 消息可见性同步失败:`, e);
     }
@@ -3096,7 +3439,10 @@ async function init() {
         return expandMemoriesForEntityKeyword(list, String(keyword), { limit });
     };
 
-    console.log(`[${DISPLAY_NAME}] v2.6.1 初始化完成`);
+    // v2.9.8: 注入隐藏消息切换按钮
+    injectHiddenToggleButton();
+
+    console.log(`[${DISPLAY_NAME}] v2.9.8 初始化完成`);
 }
 
 // ═══ 启动 ═══

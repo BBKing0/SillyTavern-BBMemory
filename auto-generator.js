@@ -28,7 +28,7 @@
  */
 
 import { getSettings, addMemory } from './memory-store.js';
-import { getExtractableExchanges, markExchangeExtracted, isExchangeProcessed, computeExchangeHash } from './message-state.js';
+import { getExtractableExchanges, markExchangeExtracted, isExchangeProcessed, computeExchangeHash, hideExchange } from './message-state.js';
 import {
     normalizeNpcTier,
     normalizeItemTier,
@@ -102,6 +102,23 @@ NPC 分级 npcTier（事实类/档案类条目填写，路人片段填 backgroun
 let isProcessing = false;
 let pendingMessages = [];
 let processingTimer = null;
+
+// v2.9.8: 主动模式下等待审核的候选记忆
+let pendingAutoCandidates = [];
+
+/**
+ * 获取待审核的自动提取候选记忆
+ */
+export function getPendingAutoCandidates() {
+    return pendingAutoCandidates;
+}
+
+/**
+ * 清空待审核的自动提取候选记忆
+ */
+export function clearPendingAutoCandidates() {
+    pendingAutoCandidates = [];
+}
 
 // ═══ 核心函数 ═══
 
@@ -318,6 +335,32 @@ async function extractFromExchange(chatId, userMessage, aiMessage) {
 }
 
 /**
+ * v2.9.8: 从一个 exchange 中提取记忆（仅调用 AI 并解析，不保存到数据库）
+ * 用于 active 确认模式——提取结果先作为候选，等待用户审核
+ * @returns {Promise<Array>} 解析后的候选记忆数组
+ */
+async function extractFromExchangeRaw(chatId, userMessage, aiMessage) {
+    const settings = getSettings();
+    const prompt = buildPrompt(userMessage, aiMessage);
+
+    let responseText;
+    if (settings.autoGenMode === 'custom' && settings.autoGenEndpoint) {
+        responseText = await callCustomApi(prompt);
+    } else {
+        responseText = await callMainApi(prompt);
+    }
+
+    const memories = parseAiResponse(responseText);
+    // 为候选记忆补充默认字段（与 extractFromExchange 对齐）
+    for (const mem of memories) {
+        if (mem.standaloneArchive === undefined) {
+            mem.standaloneArchive = inferStandaloneArchive(mem);
+        }
+    }
+    return memories;
+}
+
+/**
  * 处理一轮对话，提取记忆（保留用于手动提取的兼容接口）
  */
 async function processConversation(chatId, userMessage, aiMessage) {
@@ -407,6 +450,15 @@ function reportProgress(phase, current, total) {
     }
 }
 
+/**
+ * v2.9.8: MESSAGE_RECEIVED 事件处理函数（滑动窗口策略）
+ *
+ * 当 AI 生成新回复时触发。新逻辑：
+ *   1. 收集所有可见 exchange（非隐藏、非元标记、非系统消息）
+ *   2. 若可见 exchange 数 > contextWindowExchanges，取最旧的提取
+ *   3. 提取后隐藏该 exchange，保留最近 N 个可见
+ *   4. 根据 extractionConfirmMode 决定是否弹审核窗
+ */
 function onMessageReceived(_messageIndex) {
     const settings = getSettings();
     if (!settings.enabled || !settings.autoGenEnabled) return;
@@ -417,75 +469,115 @@ function onMessageReceived(_messageIndex) {
     if (processingTimer) clearTimeout(processingTimer);
     processingTimer = setTimeout(async () => {
         try {
-            let totalAdded = 0;
             const debug = settings.debugLogging;
-            const maxExchanges = settings.autoGenMaxExchanges ?? 3;
+            const windowSize = settings.contextWindowExchanges ?? 5;
+            const confirmMode = settings.extractionConfirmMode || 'semi';
 
-            // ═══ PRIMARY：直接提取最新 exchange ═══
-            const primary = getLatestExchange();
-            const exchanges = await getExtractableExchanges();
-            const totalExchanges = (primary ? 1 : 0) + Math.min(exchanges.length, maxExchanges - (primary ? 1 : 0));
-            let processedExchanges = 0;
+            const ctx = SillyTavern.getContext();
+            const chat = ctx.chat;
+            if (!chat || chat.length < 2) return;
 
-            if (primary) {
-                const alreadyDone = await isExchangeProcessed(chatId, primary.hash);
-                if (!alreadyDone) {
-                    if (debug) console.log('[BB-Memory] 🔍 PRIMARY 路径：直接提取最新 exchange');
-                    reportProgress('正在提取记忆', processedExchanges, totalExchanges);
-                    try {
-                        const count = await extractFromExchange(chatId, primary.userMessage, primary.aiMessage);
-                        await markExchangeExtracted(primary.aiIndex, primary.hash);
-                        totalAdded += count;
-                        processedExchanges++;
-                        reportProgress('正在提取记忆', processedExchanges, totalExchanges);
-                        if (debug) console.log(`[BB-Memory] PRIMARY 路径完成：+${count} 条记忆`);
-                    } catch (err) {
-                        console.error('[BB-Memory] PRIMARY 提取失败:', err);
-                        processedExchanges++;
-                        reportProgress('正在提取记忆', processedExchanges, totalExchanges);
+            // ═══ 收集所有可见 exchange ═══
+            const visibleExchanges = [];
+            for (let i = 1; i < chat.length; i++) {
+                const aiMsg = chat[i];
+                if (aiMsg.is_user || aiMsg.is_system) continue;
+                if (aiMsg.is_hidden) continue;
+                if (aiMsg._bbmem_extracted) continue;
+                if (aiMsg._bbmem_meta_marker) continue;
+
+                // 向前找最近的可见用户消息
+                let userIdx = -1;
+                for (let j = i - 1; j >= 0; j--) {
+                    if (chat[j].is_user && !chat[j].is_hidden && !chat[j]._bbmem_meta_marker) {
+                        userIdx = j;
+                        break;
                     }
-                } else {
-                    if (debug) console.log('[BB-Memory] PRIMARY 路径：exchange 已处理，跳过');
-                    if (totalExchanges > 0) totalExchanges = Math.max(0, totalExchanges - 1);
                 }
-            }
+                if (userIdx === -1) continue;
 
-            // ═══ SECONDARY：提取已被隐藏的旧 exchange（兜底）═══
-            if (exchanges.length) {
-                if (debug) console.log(`[BB-Memory] 🔍 SECONDARY 路径：发现 ${exchanges.length} 个待提取 exchange`);
-                const remaining = Math.max(0, maxExchanges - (totalAdded > 0 ? 1 : 0));
-                const toProcess = exchanges.slice(0, remaining);
-
-                for (const ex of toProcess) {
-                    reportProgress('正在提取记忆', processedExchanges, totalExchanges);
-                    try {
-                        const count = await extractFromExchange(chatId, ex.userMessage, ex.aiMessage);
-                        await markExchangeExtracted(ex.aiIndex, ex.hash);
-                        totalAdded += count;
-                    } catch (err) {
-                        console.error('[BB-Memory] SECONDARY 提取失败:', err);
-                    }
-                    processedExchanges++;
-                    reportProgress('正在提取记忆', processedExchanges, totalExchanges);
-                }
-            }
-
-            // 最终进度
-            if (totalExchanges > 0) {
-                reportProgress('done', totalExchanges, totalExchanges);
-            }
-
-            if (totalAdded > 0 && typeof toastr !== 'undefined') {
-                toastr.info(
-                    `自动记录了 ${totalAdded} 条新记忆`,
-                    'BB-Memory',
-                    { timeOut: 3000, preventDuplicates: true },
+                const userMsg = chat[userIdx];
+                const hash = computeExchangeHash(
+                    (userMsg.mes || '').trim(),
+                    (aiMsg.mes || '').trim(),
                 );
-            } else if (debug && totalAdded === 0) {
-                console.log('[BB-Memory] 本轮无新记忆可提取');
+
+                visibleExchanges.push({
+                    userMessage: userMsg.mes || '',
+                    aiMessage: aiMsg.mes || '',
+                    userIndex: userIdx,
+                    aiIndex: i,
+                    hash,
+                });
+            }
+
+            if (debug) {
+                console.log(`[BB-Memory] 滑动窗口：${visibleExchanges.length} 个可见 exchange，窗口大小 ${windowSize}`);
+            }
+
+            // ═══ 若可见 exchange 超过窗口大小，提取最旧的 ═══
+            if (visibleExchanges.length > windowSize) {
+                const oldest = visibleExchanges[0];
+                const alreadyDone = await isExchangeProcessed(chatId, oldest.hash);
+
+                if (!alreadyDone) {
+                    reportProgress('正在提取记忆', 0, 1);
+
+                    if (confirmMode === 'active') {
+                        // 主动模式：提取但不保存，排队等待审核
+                        if (debug) console.log('[BB-Memory] 主动模式：提取最旧 exchange 并排队等待审核');
+                        const candidates = await extractFromExchangeRaw(
+                            chatId, oldest.userMessage, oldest.aiMessage,
+                        );
+                        if (candidates.length > 0) {
+                            pendingAutoCandidates.push(...candidates);
+                        }
+                        reportProgress('正在提取记忆', 1, 1);
+                    } else {
+                        // semi 或 auto 模式：直接保存
+                        if (debug) console.log(`[BB-Memory] ${confirmMode} 模式：提取并直接保存最旧 exchange`);
+                        const count = await extractFromExchange(
+                            chatId, oldest.userMessage, oldest.aiMessage,
+                        );
+                        reportProgress('正在提取记忆', 1, 1);
+                        if (count > 0 && typeof toastr !== 'undefined') {
+                            toastr.info(
+                                `自动记录了 ${count} 条新记忆`,
+                                'BB-Memory',
+                                { timeOut: 3000, preventDuplicates: true },
+                            );
+                        }
+                    }
+
+                    await markExchangeExtracted(oldest.aiIndex, oldest.hash);
+                }
+
+                // 隐藏最旧的 exchange
+                hideExchange(oldest.userIndex, oldest.aiIndex);
+
+                if (debug) console.log('[BB-Memory] 滑动窗口：已隐藏最旧 exchange');
+            }
+
+            // ═══ active 模式通知 ═══
+            if (confirmMode === 'active' && pendingAutoCandidates.length > 0) {
+                const confirmStyle = settings.activeConfirmStyle || 'popup';
+                if (confirmStyle === 'toast') {
+                    if (typeof toastr !== 'undefined') {
+                        toastr.info(
+                            `自动提取到 ${pendingAutoCandidates.length} 条候选记忆，请打开管理面板审核`,
+                            'BB-Memory',
+                            { timeOut: 5000 },
+                        );
+                    }
+                }
+                // popup 模式由 index.js 的进度回调触发
+            }
+
+            if (visibleExchanges.length > windowSize) {
+                reportProgress('done', 1, 1);
             }
         } catch (error) {
-            console.error('[BB-Memory] Exchange 处理流程出错:', error);
+            console.error('[BB-Memory] 滑动窗口处理出错:', error);
         }
     }, 2500);
 }
@@ -590,6 +682,8 @@ export async function extractFromContext(chatId, messageCount = 12, startFloor =
 
         // 检查是否已提取
         if (aiMsg._bbmem_extracted) { skippedCount++; continue; }
+        // v2.9.8: 跳过元标记消息
+        if (aiMsg._bbmem_meta_marker) { skippedCount++; continue; }
         const hash = computeExchangeHash(
             (userMsg.mes || '').trim(),
             (aiMsg.mes || '').trim(),

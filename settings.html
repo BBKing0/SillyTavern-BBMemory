@@ -146,6 +146,48 @@
                        min="1" max="20" value="3" />
             </div>
 
+            <!-- v2.9.8: 确认模式 -->
+            <div class="bb-mem-sidebar-section">
+                <label for="bb_memory_extract_confirm_mode">
+                    提取确认模式
+                    <small class="bb-mem-hint">
+                        <strong>主动</strong>：所有提取都需确认；
+                        <strong>半自动</strong>：仅手动提取需确认（默认）；
+                        <strong>自动</strong>：全部直接保存
+                    </small>
+                </label>
+                <select id="bb_memory_extract_confirm_mode" class="text_pole">
+                    <option value="active">主动 - 所有提取需确认</option>
+                    <option value="semi" selected>半自动 - 手动提取需确认</option>
+                    <option value="auto">自动 - 全部直接保存</option>
+                </select>
+            </div>
+
+            <!-- v2.9.8: active 模式的子选项 -->
+            <div class="bb-mem-sidebar-section" id="bb_active_confirm_style_section" style="display:none;">
+                <label for="bb_memory_active_confirm_style">
+                    主动模式通知方式
+                    <small class="bb-mem-hint">
+                        <strong>浮动弹窗</strong>：直接在聊天界面弹出审核窗口；
+                        <strong>通知提示</strong>：仅显示提示，需手动打开管理面板
+                    </small>
+                </label>
+                <select id="bb_memory_active_confirm_style" class="text_pole">
+                    <option value="popup" selected>浮动弹窗</option>
+                    <option value="toast">通知提示</option>
+                </select>
+            </div>
+
+            <!-- v2.9.8: 上下文窗口大小 -->
+            <div class="bb-mem-sidebar-section">
+                <label for="bb_memory_context_window">
+                    上下文窗口大小
+                    <small class="bb-mem-hint">保留最近 N 个 exchange 在上下文可见，超出后提取最旧的（2-20，默认5）</small>
+                </label>
+                <input id="bb_memory_context_window" type="number" class="text_pole"
+                       min="2" max="20" value="5" />
+            </div>
+
             <!-- 自定义提取提示词 -->
             <div class="bb-mem-section-title" style="margin-top:12px;">
                 <i class="fa-solid fa-pen-to-square"></i> 自定义提示词
