@@ -40,6 +40,7 @@ import {
     clearMemories,
     exportMemories,
     importMemories,
+    saveMemoriesData,
     decayMemories,
     reinforceMemories,
     migrateFromSettings,
@@ -68,7 +69,7 @@ import {
     normalizeItemTier,
     expandMemoriesForEntityKeyword,
 } from './entity-tiers.js';
-import { initAutoGenerator, stopAutoGenerator, extractFromContext, saveExtractedMemories, normalizeEndpoint, setAutoExtractProgressCallback, getPendingAutoCandidates, clearPendingAutoCandidates } from './auto-generator.js';
+import { initAutoGenerator, stopAutoGenerator, extractFromContext, saveExtractedMemories, normalizeEndpoint, setAutoExtractProgressCallback, getPendingAutoCandidates, clearPendingAutoCandidates, callEmbeddingApi, embedExistingMemories } from './auto-generator.js';
 import { syncMessageVisibility, refreshExtractionMarkers, markExchangeExtracted, hideExchange } from './message-state.js';
 import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot } from './memory-slots.js';
 import { getPersistentMemories, addPersistentMemory, updatePersistentMemory, removePersistentMemory } from './persistent-memory.js';
@@ -229,6 +230,16 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     // 提取近期角色和地点作为检索上下文
     const context = extractRecentContext(chat);
 
+    // v4.0.0: 生成查询向量用于语义检索
+    let queryEmbedding = null;
+    if (settings.embeddingEnabled && settings.embeddingEndpoint) {
+        try {
+            queryEmbedding = await callEmbeddingApi(userMessage);
+        } catch (e) {
+            console.warn('[BB-Memory] 查询向量化失败，使用纯关键词检索:', e.message);
+        }
+    }
+
     // 常驻档案（NPC/物品/时间线）—— v2.9.5
     const persistentMemories = await getPersistentMemories(chatId);
 
@@ -241,6 +252,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         minStrength: settings.minStrength || 0,
         enabledTypes: settings.typeEnabled,
         context,
+        queryEmbedding,
     });
     relevantResults = mergeExpandedRelevantResults(
         memories,
@@ -249,6 +261,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         residentMemories,
         context,
         12,
+        queryEmbedding,
     );
 
     if (!persistentMemories.length && !residentMemories.length && !relevantResults.length) {
@@ -433,6 +446,16 @@ function restoreApiSettings(s) {
 
     const modelEl = document.getElementById('bb_memory_api_model');
     if (modelEl) modelEl.value = s.autoGenModel || '';
+
+    // v4.0.0: 恢复 embedding 设置
+    const embEnabledEl = document.getElementById('bb_memory_embedding_enabled');
+    if (embEnabledEl) embEnabledEl.checked = s.embeddingEnabled !== false;
+    const embEndpointEl = document.getElementById('bb_memory_embedding_endpoint');
+    if (embEndpointEl) embEndpointEl.value = s.embeddingEndpoint || '';
+    const embKeyEl = document.getElementById('bb_memory_embedding_key');
+    if (embKeyEl) embKeyEl.value = s.embeddingApiKey || '';
+    const embModelEl = document.getElementById('bb_memory_embedding_model');
+    if (embModelEl) embModelEl.value = s.embeddingModel || '';
 
     const customSection = document.getElementById('bb_memory_custom_api_section');
     if (customSection) {
@@ -659,6 +682,64 @@ function bindSidebarEvents() {
     });
     document.getElementById('bb_memory_api_model')?.addEventListener('change', (e) => {
         updateSettings({ autoGenModel: e.target.value.trim() });
+    });
+
+    // v4.0.0: embedding 设置
+    document.getElementById('bb_memory_embedding_enabled')?.addEventListener('change', (e) => {
+        updateSettings({ embeddingEnabled: e.target.checked });
+    });
+    document.getElementById('bb_memory_embedding_endpoint')?.addEventListener('change', (e) => {
+        updateSettings({ embeddingEndpoint: e.target.value.trim() });
+    });
+    document.getElementById('bb_memory_embedding_key')?.addEventListener('change', (e) => {
+        updateSettings({ embeddingApiKey: e.target.value.trim() });
+    });
+    document.getElementById('bb_memory_embedding_model')?.addEventListener('change', (e) => {
+        updateSettings({ embeddingModel: e.target.value.trim() });
+    });
+    document.getElementById('bb_memory_reindex_btn')?.addEventListener('click', async () => {
+        const resultEl = document.getElementById('bb_memory_reindex_result');
+        const settings = getSettings();
+        if (!settings.embeddingEndpoint) {
+            if (resultEl) {
+                resultEl.style.color = '#f44336';
+                resultEl.innerHTML = '<i class="fa-solid fa-times-circle"></i> 请先配置 Embedding API 端点';
+            }
+            return;
+        }
+        const chatId = getChatId();
+        if (!chatId) {
+            if (resultEl) {
+                resultEl.style.color = '#f44336';
+                resultEl.innerHTML = '<i class="fa-solid fa-times-circle"></i> 请先打开一个聊天';
+            }
+            return;
+        }
+        if (resultEl) {
+            resultEl.style.color = '';
+            resultEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在向量化...';
+        }
+        try {
+            const memories = await getMemories(chatId);
+            const count = await embedExistingMemories(memories, (current, total) => {
+                if (resultEl) {
+                    resultEl.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> 正在向量化... ${current}/${total}`;
+                }
+            });
+            await saveMemoriesData(chatId, memories);
+            if (resultEl) {
+                resultEl.style.color = '#4caf50';
+                resultEl.innerHTML = `<i class="fa-solid fa-check-circle"></i> 完成！${count} 条记忆已生成语义向量`;
+            }
+            if (typeof toastr !== 'undefined') {
+                toastr.info(`向量化完成: ${count} 条`, 'BB-Memory', { timeOut: 3000 });
+            }
+        } catch (e) {
+            if (resultEl) {
+                resultEl.style.color = '#f44336';
+                resultEl.innerHTML = `<i class="fa-solid fa-times-circle"></i> 失败: ${e.message}`;
+            }
+        }
     });
 
     // 测试 API 连接
@@ -3330,6 +3411,48 @@ function registerSlashCommands() {
         console.warn(`[${DISPLAY_NAME}] SlashCommandParser 注册失败，尝试旧版 registerSlashCommand`, err);
         if (typeof ctx.registerSlashCommand === 'function') {
             ctx.registerSlashCommand('memory', memorySlashCallback, [], '管理BB-Memory记忆 (add/search/count/clear)');
+        }
+    }
+
+    // v4.0.0: bb-reindex —— 批量为已有记忆生成语义向量
+    const reindexCallback = async (_namedArgs, _unnamedArgs) => {
+        const chatId = getChatId();
+        if (!chatId) return '请先打开一个聊天';
+
+        const settings = getSettings();
+        if (!settings.embeddingEndpoint) return '请先在设置中配置 Embedding API 端点';
+
+        const memories = await getMemories(chatId);
+        const needEmbed = memories.filter(m => !m.embedding && m.status !== 'archived' && m.status !== 'deleted');
+        if (!needEmbed.length) return '所有记忆已有向量，无需重建索引';
+
+        const total = needEmbed.length;
+        try {
+            const count = await embedExistingMemories(needEmbed, (current) => {
+                // 进度由 toastr 显示
+            });
+            await saveMemoriesData(chatId, memories);
+            return `向量化完成: ${count}/${total} 条记忆已生成语义向量`;
+        } catch (e) {
+            return `向量化失败: ${e.message}`;
+        }
+    };
+
+    try {
+        if (typeof ctx.SlashCommandParser?.addCommandObject === 'function' && typeof ctx.SlashCommand?.fromProps === 'function') {
+            ctx.SlashCommandParser.addCommandObject(ctx.SlashCommand.fromProps({
+                name: 'bb-reindex',
+                callback: reindexCallback,
+                aliases: [],
+                helpString: '为 BB-Memory 已有记忆批量生成语义向量。需先配置 Embedding API。',
+            }));
+        } else if (typeof ctx.registerSlashCommand === 'function') {
+            ctx.registerSlashCommand('bb-reindex', reindexCallback, [], '为BB-Memory已有记忆批量生成语义向量');
+        }
+    } catch (err) {
+        console.warn(`[${DISPLAY_NAME}] bb-reindex 命令注册失败`, err);
+        if (typeof ctx.registerSlashCommand === 'function') {
+            ctx.registerSlashCommand('bb-reindex', reindexCallback, [], '为BB-Memory已有记忆批量生成语义向量');
         }
     }
 }

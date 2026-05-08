@@ -324,6 +324,61 @@
 
             <hr />
 
+            <!-- ═══ v4.0.0: 语义向量设置 ═══ -->
+            <div class="bb-settings-section">
+                <div class="bb-settings-section-header" data-section="embedding">
+                    <span><i class="fa-solid fa-vector-square"></i> 语义向量</span>
+                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                </div>
+                <div class="bb-settings-section-body">
+
+            <label class="checkbox_label" style="margin: 8px 0;">
+                <input id="bb_memory_embedding_enabled" type="checkbox" checked />
+                <span>启用语义向量检索</span>
+            </label>
+            <small class="bb-mem-hint" style="display: block; margin-bottom: 8px;">
+                使用 Embedding API 对记忆进行语义向量化，提升检索准确度。禁用后回退为纯关键词匹配。
+            </small>
+
+            <div class="bb-mem-sidebar-section">
+                <label for="bb_memory_embedding_endpoint">
+                    Embedding API 端点
+                    <small class="bb-mem-hint">OpenAI 兼容格式（自动补全 /v1/embeddings）</small>
+                </label>
+                <input id="bb_memory_embedding_endpoint" type="text" class="text_pole"
+                       placeholder="https://api.example.com" />
+            </div>
+
+            <div class="bb-mem-sidebar-section">
+                <label for="bb_memory_embedding_key">
+                    Embedding API Key
+                    <small class="bb-mem-hint">可复用对话 API 的 key</small>
+                </label>
+                <input id="bb_memory_embedding_key" type="password" class="text_pole"
+                       placeholder="sk-..." />
+            </div>
+
+            <div class="bb-mem-sidebar-section">
+                <label for="bb_memory_embedding_model">
+                    Embedding 模型
+                    <small class="bb-mem-hint">如 text-embedding-3-small、bge-large-zh 等</small>
+                </label>
+                <input id="bb_memory_embedding_model" type="text" class="text_pole"
+                       placeholder="text-embedding-3-small" />
+            </div>
+
+            <div class="bb-mem-sidebar-section" style="margin-top: 8px;">
+                <button id="bb_memory_reindex_btn" class="menu_button" style="width:100%;">
+                    <i class="fa-solid fa-rotate"></i> 重建语义索引
+                </button>
+                <small id="bb_memory_reindex_result" style="display:block;margin-top:4px;font-size:0.8em;"></small>
+            </div>
+
+                </div>
+            </div>
+
+            <hr />
+
             <!-- ═══ 记忆衰减设置 ═══ -->
             <div class="bb-settings-section">
                 <div class="bb-settings-section-header" data-section="decay">

@@ -261,6 +261,75 @@ export async function callCustomApi(prompt) {
 }
 
 /**
+ * v4.0.0: 规范化 Embedding API 端点 URL
+ */
+function normalizeEmbeddingEndpoint(url) {
+    let cleaned = url.trim().replace(/\/+$/, '');
+    if (cleaned.endsWith('/embeddings')) return cleaned;
+    if (cleaned.endsWith('/v1')) return cleaned + '/embeddings';
+    return cleaned + '/v1/embeddings';
+}
+
+/**
+ * v4.0.0: 调用 Embedding API 生成向量
+ */
+export async function callEmbeddingApi(text) {
+    const settings = getSettings();
+    const { embeddingEndpoint, embeddingApiKey, embeddingModel } = settings;
+
+    if (!embeddingEndpoint) {
+        throw new Error('未配置 Embedding API 端点');
+    }
+
+    const endpoint = normalizeEmbeddingEndpoint(embeddingEndpoint);
+
+    if (settings.debugLogging) {
+        console.log('[BB-Memory] Embedding API 请求端点:', endpoint, '模型:', embeddingModel);
+    }
+
+    const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${embeddingApiKey}`,
+        },
+        body: JSON.stringify({
+            model: embeddingModel,
+            input: text,
+        }),
+    });
+
+    if (!response.ok) {
+        const errText = await response.text().catch(() => '');
+        throw new Error(`Embedding API 请求失败: ${response.status} ${response.statusText}${errText ? ' - ' + errText : ''}`);
+    }
+
+    const data = await response.json();
+
+    if (data.data && data.data[0] && Array.isArray(data.data[0].embedding)) {
+        return data.data[0].embedding;
+    }
+
+    throw new Error('Embedding API 返回格式异常');
+}
+
+/**
+ * v4.0.0: 为一条记忆生成 embedding 向量
+ * @param {object} mem - 含 summary/content 的记忆条目
+ * @returns {number[]|null} 向量数组或 null
+ */
+async function embedMemoryEntry(mem) {
+    const text = mem.summary || mem.content?.slice(0, 100) || '';
+    if (!text) return null;
+    try {
+        return await callEmbeddingApi(text);
+    } catch (e) {
+        console.warn('[BB-Memory] 向量化失败，将跳过此条:', e.message);
+        return null;
+    }
+}
+
+/**
  * 解析 AI 返回的 JSON 文本为记忆条目数组
  */
 export function parseAiResponse(responseText) {
@@ -345,6 +414,8 @@ async function extractFromExchange(chatId, userMessage, aiMessage) {
         }
         applyStandaloneArchivePolicy(mem);
 
+        const embedding = await embedMemoryEntry(mem);
+
         await addMemory(chatId, mem.content, mem.cognitiveType || 'episode', 'auto', {
             categoryPath: mem.categoryPath,
             title: mem.title,
@@ -360,6 +431,7 @@ async function extractFromExchange(chatId, userMessage, aiMessage) {
             standaloneArchive: mem.standaloneArchive,
             indexCard: mem.indexCard || undefined,
             relatedMemoryIds: mem.relatedMemoryIds?.length ? mem.relatedMemoryIds : undefined,
+            embedding,
         });
         addedCount++;
     }
@@ -388,11 +460,12 @@ async function extractFromExchangeRaw(chatId, userMessage, aiMessage) {
     }
 
     const memories = parseAiResponse(responseText);
-    // 为候选记忆补充默认字段（与 extractFromExchange 对齐）
+    // 为候选记忆补充默认字段并生成 embedding
     for (const mem of memories) {
         if (mem.standaloneArchive === undefined) {
             mem.standaloneArchive = inferStandaloneArchive(mem);
         }
+        mem._embedding = await embedMemoryEntry(mem);
     }
     return memories;
 }
@@ -867,10 +940,38 @@ export async function saveExtractedMemories(chatId, candidateMemories, onProgres
             standaloneArchive: mem.standaloneArchive,
             indexCard: mem.indexCard || undefined,
             relatedMemoryIds: mem.relatedMemoryIds?.length ? mem.relatedMemoryIds : undefined,
+            embedding: mem._embedding ?? null,
         });
         count++;
         if (typeof onProgress === 'function') {
             onProgress(count, total);
+        }
+    }
+    return count;
+}
+
+/**
+ * v4.0.0: 批量为已有记忆生成 embedding（用于重新索引）
+ * @param {Array} memories - 需要处理的记忆数组（会原地修改）
+ * @param {Function} onProgress - (current, total) => void
+ * @returns {Promise<number>} 成功向量化的条数
+ */
+export async function embedExistingMemories(memories, onProgress) {
+    let count = 0;
+    const total = memories.length;
+    for (let i = 0; i < memories.length; i++) {
+        const mem = memories[i];
+        if (mem.embedding && mem.embedding !== null) continue;
+        if (mem.status === 'archived' || mem.status === 'deleted') continue;
+
+        const embedding = await embedMemoryEntry(mem);
+        if (embedding) {
+            mem.embedding = embedding;
+            count++;
+        }
+
+        if (typeof onProgress === 'function') {
+            onProgress(i + 1, total);
         }
     }
     return count;

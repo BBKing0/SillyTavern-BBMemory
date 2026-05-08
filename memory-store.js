@@ -30,6 +30,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
     autoGenApiKey: '',
     autoGenModel: '',
     autoGenPrompt: '',
+    // v4.0.0: 向量化语义检索
+    embeddingEnabled: true,
+    embeddingEndpoint: '',
+    embeddingApiKey: '',
+    embeddingModel: 'text-embedding-3-small',
     autoGenContextPrompt: '',
     autoGenMaxExchanges: 3,
     // v2.9.8: 提取确认模式与滑动窗口
@@ -108,7 +113,7 @@ function storageKey(chatId) {
     return `${STORAGE_PREFIX}${chatId}`;
 }
 
-async function saveMemories(chatId, memories) {
+export async function saveMemoriesData(chatId, memories) {
     const lf = getLocalForage();
     await lf.setItem(storageKey(chatId), memories);
 }
@@ -245,6 +250,17 @@ function migrateToV26(entry) {
     return changed;
 }
 
+/**
+ * v4.0.0：embedding 字段迁移
+ */
+function migrateToVEmbedding(entry) {
+    if (entry.embedding === undefined) {
+        entry.embedding = null;
+        return true;
+    }
+    return false;
+}
+
 // ═══════════════════════════════════════════════════════════
 //  记忆读取（含惰性迁移）
 // ═══════════════════════════════════════════════════════════
@@ -272,11 +288,14 @@ export async function getMemories(chatId) {
         if (migrateToV26(entry)) {
             needsMigration = true;
         }
+        if (migrateToVEmbedding(entry)) {
+            needsMigration = true;
+        }
         return entry;
     });
 
     if (needsMigration) {
-        await saveMemories(chatId, memories);
+        await saveMemoriesData(chatId, memories);
         console.log(`[BB-Memory] 已将 ${chatId} 的记忆迁移到新格式`);
     }
 
@@ -348,6 +367,8 @@ export async function addMemory(chatId, content, cognitiveType = 'episode', sour
         indexCard: options.indexCard || '',
         relatedMemoryIds: Array.isArray(options.relatedMemoryIds) ? options.relatedMemoryIds : [],
         standaloneArchive: options.standaloneArchive !== undefined ? options.standaloneArchive : true,
+        // ── v4.0.0: 语义向量 ──
+        embedding: options.embedding ?? null,
         // ── 来源 ──
         source,
         sourceMessageIds: options.sourceMessageIds || [],
@@ -363,7 +384,7 @@ export async function addMemory(chatId, content, cognitiveType = 'episode', sour
     };
 
     memories.push(entry);
-    await saveMemories(chatId, memories);
+    await saveMemoriesData(chatId, memories);
     return entry;
 }
 
@@ -375,7 +396,7 @@ export async function removeMemory(chatId, memoryId) {
     const filtered = memories.filter(m => m.id !== memoryId);
 
     if (filtered.length < memories.length) {
-        await saveMemories(chatId, filtered);
+        await saveMemoriesData(chatId, filtered);
         return true;
     }
     return false;
@@ -404,7 +425,7 @@ export async function updateMemory(chatId, memoryId, updates) {
     }
 
     entry.updatedAt = Date.now();
-    await saveMemories(chatId, memories);
+    await saveMemoriesData(chatId, memories);
     return entry;
 }
 
@@ -438,7 +459,7 @@ export async function updateFactContent(chatId, memoryId, newContent, options = 
     if (options.verbatim !== undefined) entry.verbatim = options.verbatim;
     entry.updatedAt = Date.now();
 
-    await saveMemories(chatId, memories);
+    await saveMemoriesData(chatId, memories);
     return entry;
 }
 
@@ -468,7 +489,7 @@ export async function addHiddenNote(chatId, memoryId, note) {
 
     entry.hiddenNotes.push(noteEntry);
     entry.updatedAt = Date.now();
-    await saveMemories(chatId, memories);
+    await saveMemoriesData(chatId, memories);
     return noteEntry;
 }
 
@@ -485,7 +506,7 @@ export async function removeHiddenNote(chatId, memoryId, noteId) {
 
     if (entry.hiddenNotes.length < before) {
         entry.updatedAt = Date.now();
-        await saveMemories(chatId, memories);
+        await saveMemoriesData(chatId, memories);
         return true;
     }
     return false;
@@ -495,7 +516,7 @@ export async function removeHiddenNote(chatId, memoryId, noteId) {
  * 清空指定聊天的所有记忆
  */
 export async function clearMemories(chatId) {
-    await saveMemories(chatId, []);
+    await saveMemoriesData(chatId, []);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -521,7 +542,7 @@ export async function decayMemories(chatId) {
         }
     }
 
-    await saveMemories(chatId, memories);
+    await saveMemoriesData(chatId, memories);
 }
 
 export async function reinforceMemory(chatId, memoryId) {
@@ -533,7 +554,7 @@ export async function reinforceMemory(chatId, memoryId) {
     entry.accessCount = (entry.accessCount || 0) + 1;
     entry.lastAccessedAt = Date.now();
 
-    await saveMemories(chatId, memories);
+    await saveMemoriesData(chatId, memories);
 }
 
 export async function reinforceMemories(chatId, memoryIds) {
@@ -551,7 +572,7 @@ export async function reinforceMemories(chatId, memoryIds) {
         }
     }
 
-    await saveMemories(chatId, memories);
+    await saveMemoriesData(chatId, memories);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -601,7 +622,7 @@ export async function importMemories(chatId, jsonString) {
         count++;
     }
 
-    await saveMemories(chatId, memories);
+    await saveMemoriesData(chatId, memories);
     return count;
 }
 
@@ -647,7 +668,7 @@ export async function migrateFromSettings() {
         }
 
         if (totalMigrated > 0) {
-            await saveMemories(chatId, existing);
+            await saveMemoriesData(chatId, existing);
         }
     }
 

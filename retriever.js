@@ -33,9 +33,9 @@ const NPC_RESIDENT_ORDER = { core: 4, important: 3, minor: 2, background: 1 };
 // ═══════════════════════════════════════════════════════════
 
 const SCORE_WEIGHTS = {
-    keyword:        0.22,
-    tag:            0.15,
-    embedding:      0.00,   // 预留：接入 embedding 后改为 0.15~0.20
+    keyword:        0.20,
+    tag:            0.14,
+    embedding:      0.18,   // v4.0.0: 语义向量相似度
     importance:     0.12,
     emotionalWeight:0.08,
     strength:       0.15,
@@ -89,15 +89,16 @@ function extractTokens(text) {
  * @param {object} memory - 记忆条目
  * @param {string} query - 用户当前消息
  * @param {object} context - 可选上下文 { recentActors, recentLocations, chatHistory }
+ * @param {number[]|null} queryEmbedding - 查询向量
  */
-export function calculateMemoryScore(memory, query, context = {}) {
+export function calculateMemoryScore(memory, query, context = {}, queryEmbedding = null) {
     const queryTokens = extractTokens(query);
     const now = Date.now();
 
     const breakdown = {
         keyword:         computeKeywordScore(memory, queryTokens),
         tag:             computeTagScore(memory.tags, queryTokens),
-        embedding:       computeEmbeddingScore(memory, query),
+        embedding:       computeEmbeddingScore(memory, queryEmbedding),
         importance:      memory.importance ?? 0.5,
         emotionalWeight: memory.emotionalWeight ?? 0.0,
         strength:        memory.strength ?? 1.0,
@@ -168,11 +169,28 @@ function computeTagScore(tags, queryTokens) {
 }
 
 /**
- * 预留：embedding 相似度评分。
- * 当接入 embedding API 后，在此计算余弦相似度。
+ * v4.0.0: 余弦相似度计算
  */
-function computeEmbeddingScore(_memory, _query) {
-    return 0;
+function cosineSimilarity(a, b) {
+    let dot = 0;
+    let normA = 0;
+    let normB = 0;
+    for (let i = 0; i < a.length; i++) {
+        dot += a[i] * b[i];
+        normA += a[i] * a[i];
+        normB += b[i] * b[i];
+    }
+    const denom = Math.sqrt(normA) * Math.sqrt(normB);
+    return denom === 0 ? 0 : Math.max(0, dot / denom);
+}
+
+/**
+ * v4.0.0: embedding 语义相似度评分。
+ * 传入查询向量与记忆向量，计算余弦相似度。
+ */
+function computeEmbeddingScore(memory, queryEmbedding) {
+    if (!queryEmbedding || !memory.embedding) return 0;
+    return cosineSimilarity(memory.embedding, queryEmbedding);
 }
 
 /**
@@ -335,6 +353,7 @@ export function getRelevantMemories(memories, queryText, options = {}) {
         enabledTypes = null,
         context = {},
         useFuse = true,
+        queryEmbedding = null,
     } = options;
 
     if (!memories.length || !queryText.trim()) return [];
@@ -376,7 +395,7 @@ export function getRelevantMemories(memories, queryText, options = {}) {
     const scored = [];
     for (const memory of candidates) {
         const queryMatched = memoryMatchesQueryEntities(memory, queryText);
-        const { total, breakdown } = calculateMemoryScore(memory, queryText, context);
+        const { total, breakdown } = calculateMemoryScore(memory, queryText, context, queryEmbedding);
         const fuseBoost = fuseBoostMap.get(memory.id) || 0;
         let finalScore = Math.min(1.0, total + fuseBoost);
         finalScore = Math.min(1.0, finalScore * tierScoreMultiplier(memory, queryMatched));
@@ -398,7 +417,7 @@ export function getRelevantMemories(memories, queryText, options = {}) {
 /**
  * 在本轮检索结果基础上，合并「用户提到的实体」的关联记忆（按需展开），便于拉高注入档位。
  */
-export function mergeExpandedRelevantResults(memories, queryText, relevantResults, residentMemories, context = {}, expandLimit = 12) {
+export function mergeExpandedRelevantResults(memories, queryText, relevantResults, residentMemories, context = {}, expandLimit = 12, queryEmbedding = null) {
     const excludeIds = new Set(residentMemories.map(m => m.id));
     for (const r of relevantResults) excludeIds.add(r.memory.id);
 
@@ -407,7 +426,7 @@ export function mergeExpandedRelevantResults(memories, queryText, relevantResult
 
     for (const m of expanded) {
         const queryMatched = true;
-        const { total, breakdown } = calculateMemoryScore(m, queryText, context);
+        const { total, breakdown } = calculateMemoryScore(m, queryText, context, queryEmbedding);
         let score = Math.min(1.0, Math.max(total, 0.55));
         score = Math.min(1.0, score * tierScoreMultiplier(m, queryMatched));
         merged.push({
