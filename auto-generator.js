@@ -503,6 +503,9 @@ function onMessageReceived(_messageIndex) {
     const chatId = getChatId();
     if (!chatId) return;
 
+    // 首次加载时的积压检查使用较短防抖
+    const debounceMs = (_messageIndex === -1) ? 500 : 2500;
+
     if (processingTimer) clearTimeout(processingTimer);
     processingTimer = setTimeout(async () => {
         try {
@@ -550,7 +553,13 @@ function onMessageReceived(_messageIndex) {
 
             console.log(`[BB-Memory] 滑动窗口检查: ${visibleExchanges.length} 可见 / 窗口${windowSize}`);
             if (debug) {
-                console.log(`[BB-Memory] 滑动窗口详情：${visibleExchanges.length} 个可见 exchange，窗口大小 ${windowSize}`);
+                console.log(`[BB-Memory] 自动提取状态:`, {
+                    chatId,
+                    visibleExchanges: visibleExchanges.length,
+                    windowSize,
+                    confirmMode,
+                    willExtract: visibleExchanges.length >= windowSize,
+                });
             }
 
             // ═══ 若可见 exchange 达到窗口大小，提取最旧的 ═══
@@ -613,14 +622,28 @@ function onMessageReceived(_messageIndex) {
 
             if (visibleExchanges.length >= windowSize) {
                 reportProgress('done', 1, 1);
+            } else {
+                reportProgress('idle', 0, 0);
             }
         } catch (error) {
             console.error('[BB-Memory] 滑动窗口处理出错:', error);
+            const dbgSettings = getSettings();
+            if (dbgSettings.debugLogging) {
+                console.error('[BB-Memory] 错误详情:', {
+                    message: error.message,
+                    stack: error.stack,
+                    chatId: getChatId(),
+                });
+            }
             if (typeof toastr !== 'undefined') {
-                toastr.warning('自动提取记忆失败，请检查 API 配置', 'BB-Memory', { timeOut: 5000 });
+                toastr.warning(
+                    `自动提取记忆失败: ${error.message || '请检查 API 配置'}`,
+                    'BB-Memory',
+                    { timeOut: 5000 },
+                );
             }
         }
-    }, 2500);
+    }, debounceMs);
 }
 
 /**
@@ -864,12 +887,42 @@ let eventBound = false;
 export function initAutoGenerator() {
     if (eventBound) return;
 
-    const ctx = SillyTavern.getContext();
-    const ev = ctx.event_types ?? ctx.eventTypes;
-    ctx.eventSource.on(ev.MESSAGE_RECEIVED, onMessageReceived);
-    eventBound = true;
+    try {
+        const ctx = SillyTavern.getContext();
+        if (!ctx || !ctx.eventSource) {
+            console.error('[BB-Memory] 无法获取 SillyTavern 上下文，自动生成模块初始化失败');
+            if (typeof toastr !== 'undefined') {
+                toastr.warning('BB-Memory 自动提取初始化失败：无法获取上下文', 'BB-Memory');
+            }
+            return;
+        }
+        const ev = ctx.event_types ?? ctx.eventTypes;
+        if (!ev || !ev.MESSAGE_RECEIVED) {
+            console.error('[BB-Memory] 无法获取事件类型，自动生成模块初始化失败');
+            return;
+        }
+        ctx.eventSource.on(ev.MESSAGE_RECEIVED, onMessageReceived);
+        eventBound = true;
 
-    console.log('[BB-Memory] AI 自动生成模块已初始化');
+        console.log('[BB-Memory] AI 自动生成模块已初始化');
+
+        const settings = getSettings();
+        if (settings.debugLogging) {
+            console.log('[BB-Memory] 自动提取配置:', {
+                contextWindowExchanges: settings.contextWindowExchanges ?? 5,
+                extractionConfirmMode: settings.extractionConfirmMode || 'semi',
+                autoGenEnabled: settings.autoGenEnabled,
+            });
+        }
+
+        // 首次启用时触发积压检查
+        onMessageReceived(-1);
+    } catch (err) {
+        console.error('[BB-Memory] 自动生成模块初始化失败:', err);
+        if (typeof toastr !== 'undefined') {
+            toastr.warning('BB-Memory 自动提取初始化失败，请检查设置', 'BB-Memory');
+        }
+    }
 }
 
 /**

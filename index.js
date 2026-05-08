@@ -193,59 +193,6 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// ═══ 提取进度浮动弹窗 ═══
-
-let progressToastEl = null;
-
-function showProgressToast(message, current, total) {
-    // 移除旧弹窗
-    if (progressToastEl) {
-        progressToastEl.remove();
-        progressToastEl = null;
-    }
-
-    const pct = total > 0 ? Math.round((current / total) * 100) : 0;
-    const toast = document.createElement('div');
-    toast.className = 'bb-extract-toast';
-    toast.innerHTML = `
-        <div class="bb-extract-toast-header">
-            <i class="fa-solid fa-brain"></i> BB-Memory 提取
-        </div>
-        <div class="bb-extract-toast-progress">
-            <div class="bb-extract-toast-bar">
-                <div class="bb-extract-toast-fill" style="width:${pct}%"></div>
-            </div>
-            <span class="bb-extract-toast-text">${message} ${current}/${total}</span>
-        </div>
-    `;
-    document.body.appendChild(toast);
-    progressToastEl = toast;
-}
-
-function dismissProgressToast(delay = 2500) {
-    if (!progressToastEl) return;
-    const toast = progressToastEl;
-    toast.classList.add('bb-extract-done');
-    const header = toast.querySelector('.bb-extract-toast-header');
-    if (header) header.innerHTML = `<i class="fa-solid fa-check-circle"></i> 提取完成`;
-    setTimeout(() => {
-        if (toast.parentNode) toast.remove();
-        if (progressToastEl === toast) progressToastEl = null;
-    }, delay);
-}
-
-function showProgressError(message) {
-    if (!progressToastEl) return;
-    const toast = progressToastEl;
-    toast.classList.add('bb-extract-error');
-    const header = toast.querySelector('.bb-extract-toast-header');
-    if (header) header.innerHTML = `<i class="fa-solid fa-exclamation-circle"></i> ${escapeHtml(message)}`;
-    setTimeout(() => {
-        if (toast.parentNode) toast.remove();
-        if (progressToastEl === toast) progressToastEl = null;
-    }, 3000);
-}
-
 // ═══════════════════════════════════════════════════════════
 //  生成拦截器（核心功能）
 // ═══════════════════════════════════════════════════════════
@@ -1727,8 +1674,6 @@ async function handleAiExtract(managerOverlay, chatId) {
             </div>`;
         }
 
-        showProgressToast('正在分析对话', 0, 1);
-
         try {
             const {
                 memories: candidates,
@@ -1739,7 +1684,6 @@ async function handleAiExtract(managerOverlay, chatId) {
 
             // v3.0.0: 逐层提取模式 — 已直接保存，无需审核
             if (_directSaved !== undefined) {
-                dismissProgressToast(1500);
                 if (listEl) listEl.innerHTML = oldHTML;
                 await rerenderManagerList(managerOverlay, chatId);
                 if (_directSaved > 0) {
@@ -1751,10 +1695,7 @@ async function handleAiExtract(managerOverlay, chatId) {
                 return;
             }
 
-            showProgressToast('正在分析对话', 1, 1);
-
             if (!candidates || !candidates.length) {
-                dismissProgressToast(2000);
                 const skipMsg = skippedCount > 0 ? `（跳过 ${skippedCount} 个已提取交换）` : '';
                 if (listEl) listEl.innerHTML = `<div class="bb-mem-empty">AI 未发现值得记忆的内容${skipMsg}</div>`;
                 setTimeout(() => { if (listEl) listEl.innerHTML = oldHTML; }, 2000);
@@ -1783,24 +1724,17 @@ async function handleAiExtract(managerOverlay, chatId) {
 
             if (confirmMode === 'auto') {
                 // 自动模式：直接保存，跳过审核
-                dismissProgressToast(1500);
                 const selected = candidates.map(m => ({ ...m, _selected: true }));
-                showProgressToast('正在保存记忆', 0, selected.length);
-                const savedCount = await saveExtractedMemories(chatId, selected,
-                    (cur, total) => showProgressToast('正在保存记忆', cur, total),
-                );
-                dismissProgressToast(2000);
+                const savedCount = await saveExtractedMemories(chatId, selected, null);
                 toastr.success(`自动保存了 ${savedCount} 条记忆`, DISPLAY_NAME);
                 await markAndHideExchanges();
                 await restoreManagerUI(managerOverlay, chatId);
             } else {
                 // semi 或 active 模式：显示审核面板
-                dismissProgressToast(1500);
                 showExtractReviewPanel(managerOverlay, chatId, candidates, skippedCount, processedExchanges);
             }
         } catch (err) {
             console.error('[BB-Memory] AI提取失败:', err);
-            showProgressError(err.message);
             if (listEl) listEl.innerHTML = oldHTML;
             toastr.error(`AI提取失败：${err.message}`, DISPLAY_NAME);
         }
@@ -1901,11 +1835,7 @@ async function showFloatingReviewPanel(chatId, candidates) {
             const data = collectCandidateData(overlay);
             const selected = data.filter(d => d._selected);
             if (!selected.length) { toastr.info('未选择任何记忆', DISPLAY_NAME); return; }
-            showProgressToast('正在保存记忆', 0, selected.length);
-            const savedCount = await saveExtractedMemories(chatId, selected,
-                (cur, total) => showProgressToast('正在保存记忆', cur, total),
-            );
-            dismissProgressToast(2000);
+            const savedCount = await saveExtractedMemories(chatId, selected, null);
             toastr.success(`保存了 ${savedCount} 条记忆`, DISPLAY_NAME);
             overlay.remove();
             refreshSidebar();
@@ -2088,12 +2018,8 @@ function bindReviewFooterEvents(footerEl, managerOverlay, chatId, candidates, pr
             toastr.info('未选择任何记忆', DISPLAY_NAME);
             return;
         }
-        showProgressToast('正在保存记忆', 0, selected.length);
         try {
-            const count = await saveExtractedMemories(chatId, updated, (current, total) => {
-                showProgressToast('正在保存记忆', current, total);
-            });
-            dismissProgressToast(2000);
+            const count = await saveExtractedMemories(chatId, updated, null);
             if (count > 0) {
                 toastr.success(`已保存 ${count} 条记忆`, DISPLAY_NAME);
             }
@@ -2105,7 +2031,7 @@ function bindReviewFooterEvents(footerEl, managerOverlay, chatId, candidates, pr
                 }
             }
         } catch (err) {
-            showProgressError(err.message);
+            console.error('[BB-Memory] 保存记忆失败:', err);
         }
         await restoreManagerUI(managerOverlay, chatId);
     });
@@ -3329,9 +3255,9 @@ function injectFloatingHub() {
                 <i class="fa-solid fa-chevron-down" style="margin-left:auto;font-size:0.7em;opacity:0.5;"></i>
             </div>
             <div id="bb_hub_hit_list" style="display:none;"></div>
-            <div class="bb-floating-menu-item" id="bb_hub_extract_progress" style="display:none;">
-                <i class="fa-solid fa-spinner fa-spin"></i>
-                <span>提取中... <strong id="bb_hub_extract_pct">0%</strong></span>
+            <div class="bb-floating-menu-item" id="bb_hub_extract_progress" style="display:flex;">
+                <i class="fa-solid fa-moon"></i>
+                <span>空闲 <strong id="bb_hub_extract_pct"></strong></span>
             </div>
             <div class="bb-floating-menu-item bb-floating-menu-action" data-action="toggle_visibility">
                 <i class="fa-solid fa-eye-slash"></i>
@@ -3462,13 +3388,15 @@ function toggleFloatingMenu() {
         const gap = 56;          // distance from hub center to menu edge
         const edgeMargin = 16;   // min distance from viewport edge
 
-        // 水平方向：悬浮球靠右 → 菜单向左展开
+        // 水平方向：右侧空间不足 → 菜单向左展开；空间足够 → 向右展开
         if (hubRect.right + menuWidth > window.innerWidth - edgeMargin) {
-            menu.style.right = 'auto';
-            menu.style.left = '0';
-        } else {
+            // 右侧空间不足，菜单向左展开
             menu.style.left = 'auto';
             menu.style.right = '0';
+        } else {
+            // 右侧空间足够，菜单向右展开
+            menu.style.right = 'auto';
+            menu.style.left = '0';
         }
 
         // 垂直方向：悬浮球靠上 → 菜单向下展开
@@ -3816,27 +3744,24 @@ async function init() {
     setAutoExtractProgressCallback((phase, current, total) => {
         const progRow = document.getElementById('bb_hub_extract_progress');
         const pctEl = document.getElementById('bb_hub_extract_pct');
+        if (!progRow) return;
+
         if (phase === 'done') {
-            dismissProgressToast(3000);
-            setTimeout(() => refreshExtractionMarkers(), 500);
-            // 悬浮菜单进度行 — 显示完成
-            if (progRow) {
-                progRow.style.display = 'flex';
-                const icon = progRow.querySelector('i');
-                if (icon) { icon.className = 'fa-solid fa-check-circle'; icon.style.color = '#4caf50'; }
-                if (pctEl) pctEl.textContent = '完成';
-                setTimeout(() => { if (progRow) progRow.style.display = 'none'; }, 2500);
-            }
+            // 完成：显示绿色勾，不自动隐藏
+            const icon = progRow.querySelector('i');
+            if (icon) { icon.className = 'fa-solid fa-check-circle'; icon.style.color = '#4caf50'; }
+            if (pctEl) pctEl.textContent = '完成';
+        } else if (phase === 'idle') {
+            // 空闲：显示月亮图标
+            const icon = progRow.querySelector('i');
+            if (icon) { icon.className = 'fa-solid fa-moon'; icon.style.color = ''; }
+            if (pctEl) pctEl.textContent = '';
         } else {
-            showProgressToast('正在提取记忆', current, total);
-            // 悬浮菜单进度行 — 显示进度
-            if (progRow) {
-                progRow.style.display = 'flex';
-                const icon = progRow.querySelector('i');
-                if (icon) { icon.className = 'fa-solid fa-spinner fa-spin'; icon.style.color = ''; }
-                const pct = total > 0 ? Math.round((current / total) * 100) : 0;
-                if (pctEl) pctEl.textContent = pct + '%';
-            }
+            // 提取中：显示 spinner 和百分比
+            const icon = progRow.querySelector('i');
+            if (icon) { icon.className = 'fa-solid fa-spinner fa-spin'; icon.style.color = ''; }
+            const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+            if (pctEl) pctEl.textContent = pct + '%';
         }
     });
 
