@@ -44,7 +44,6 @@ import {
     reinforceMemories,
     migrateFromSettings,
     getMemoryStats,
-    getMemories,
 } from './memory-store.js';
 
 import {
