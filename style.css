@@ -294,6 +294,24 @@
     flex-shrink: 0;
 }
 
+/* --- 管理面板 flex 布局（桌面端 + 移动端通用） --- */
+
+.bb-mgr-panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+    min-height: 0;
+}
+.bb-mgr-panel .bb-mem-list {
+    flex: 1;
+    max-height: none;
+    overflow-y: auto;
+}
+.bb-mgr-panel .bb-mem-footer {
+    flex-shrink: 0;
+}
+
 .bb-mem-footer .menu_button {
     flex: 1;
     font-size: 0.82em;
@@ -2184,25 +2202,10 @@
 }
 
 /* ═══════════════════════════════════════════════════════
-   v2.9.9: 管理面板 flex 布局修复（手机端列表占满空间）
+   v2.9.9: 管理面板移动端覆盖（flex 布局已提取为基类）
    ═══════════════════════════════════════════════════════ */
 
 @media (max-width: 768px) {
-    .bb-mgr-panel {
-        display: flex;
-        flex-direction: column;
-        flex: 1;
-        overflow: hidden;
-        min-height: 0;
-    }
-    .bb-mgr-panel .bb-mem-list {
-        flex: 1;
-        max-height: none;
-        overflow-y: auto;
-    }
-    .bb-mgr-panel .bb-mem-footer {
-        flex-shrink: 0;
-    }
     .bb-mem-popup-header {
         padding: 8px 12px;
     }
@@ -2297,17 +2300,13 @@
     justify-content: center;
     cursor: pointer;
     font-size: 1.1em;
-    transition: transform 0.2s, box-shadow 0.2s;
+    transition: box-shadow 0.2s;
     user-select: none;
     -webkit-user-select: none;
 }
 .bb-floating-hub:hover {
     box-shadow: 0 6px 24px rgba(102, 126, 234, 0.55);
 }
-.bb-floating-hub:active {
-    transform: scale(0.95);
-}
-
 .bb-hub-badge {
     position: absolute;
     top: -4px;
@@ -2415,7 +2414,8 @@
     .bb-floating-hub {
         width: 44px;
         height: 44px;
-        bottom: 90px;
+        top: 120px;
+        bottom: auto;
         right: 10px;
         z-index: 100000;
         font-size: 1em;

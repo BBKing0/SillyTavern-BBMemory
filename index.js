@@ -44,6 +44,7 @@ import {
     reinforceMemories,
     migrateFromSettings,
     getMemoryStats,
+    getMemories,
 } from './memory-store.js';
 
 import {
@@ -409,6 +410,13 @@ async function refreshSidebar() {
 
     // v2.9.5：刷新命中记忆显示
     renderHitDisplay();
+
+    // v3.3: 同步侧边栏楼层可见按钮图标
+    const visIcon = document.querySelector('#bb_memory_toggle_vis_btn i');
+    if (visIcon) {
+        const showing = document.body.classList.contains('bb-show-extracted');
+        visIcon.className = showing ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash';
+    }
 }
 
 /**
@@ -531,30 +539,58 @@ async function bindHitItemClicks(listEl) {
 }
 
 // v3.1: 渲染悬浮窗命中记忆列表（紧凑版）
-function renderHubHitList(listEl) {
+// v3.3: 追加展示概率最高但未命中的 5 条记忆
+function renderHubHitItem(h, typeIcons, levelColors, dimmed) {
+    const icon = typeIcons[h.cognitiveType] || 'fa-circle';
+    const color = levelColors[h.level] || '#888';
+    const scorePct = Math.round(h.score * 100);
+    const shortTitle = (h.title || '').length > 14
+        ? escapeHtml(h.title.slice(0, 14)) + '...'
+        : escapeHtml(h.title);
+    const opacityStyle = dimmed ? 'opacity:0.55;' : '';
+    return `<div class="bb-hub-hit-item" title="${escapeHtml(h.title)}" style="${opacityStyle}">
+        <i class="fa-solid ${icon}" style="color:${color};font-size:0.7em;"></i>
+        <span class="bb-hub-hit-title">${shortTitle}</span>
+        <span class="bb-hub-hit-level" style="color:${color}">${h.level}</span>
+        <span class="bb-hub-hit-score">${scorePct}%</span>
+    </div>`;
+}
+
+async function renderHubHitList(listEl, chatId) {
     const result = lastRetrievalResult;
+    const typeIcons = { fact: 'fa-lightbulb', episode: 'fa-film', emotion: 'fa-heart', habit: 'fa-repeat' };
+    const levelColors = { L4: '#ce93d8', L3: '#4fc3f7', L2: '#ffb74d', L1: '#9e9e9e' };
+
     if (!result.hits || !result.hits.length) {
         listEl.innerHTML = '<div class="bb-hub-hit-item" style="opacity:0.5;justify-content:center;">暂无命中记忆</div>';
         return;
     }
 
-    const typeIcons = { fact: 'fa-lightbulb', episode: 'fa-film', emotion: 'fa-heart', habit: 'fa-repeat' };
-    const levelColors = { L4: '#ce93d8', L3: '#4fc3f7', L2: '#ffb74d', L1: '#9e9e9e' };
+    let html = result.hits.map(h => renderHubHitItem(h, typeIcons, levelColors, false)).join('');
 
-    listEl.innerHTML = result.hits.map(h => {
-        const icon = typeIcons[h.cognitiveType] || 'fa-circle';
-        const color = levelColors[h.level] || '#888';
-        const scorePct = Math.round(h.score * 100);
-        const shortTitle = (h.title || '').length > 14
-            ? escapeHtml(h.title.slice(0, 14)) + '...'
-            : escapeHtml(h.title);
-        return `<div class="bb-hub-hit-item" title="${escapeHtml(h.title)}">
-            <i class="fa-solid ${icon}" style="color:${color};font-size:0.7em;"></i>
-            <span class="bb-hub-hit-title">${shortTitle}</span>
-            <span class="bb-hub-hit-level" style="color:${color}">${h.level}</span>
-            <span class="bb-hub-hit-score">${scorePct}%</span>
-        </div>`;
-    }).join('');
+    // v3.3: 追加概率最高但未命中的 5 条记忆
+    try {
+        const allMemories = await getMemories(chatId);
+        const hitIds = new Set(result.hits.map(h => h.id));
+        const nonHitMemories = allMemories.filter(m => !hitIds.has(m.id));
+        nonHitMemories.sort((a, b) => (b.strength || 0) * (b.importance || 0) - (a.strength || 0) * (a.importance || 0));
+        const top5 = nonHitMemories.slice(0, 5);
+        if (top5.length > 0) {
+            const typeHint = { fact: 'fact', episode: 'episode', emotion: 'emotion', habit: 'habit' };
+            html += '<div class="bb-hub-hit-item" style="opacity:0.4;justify-content:center;font-size:0.7em;border-top:1px solid var(--SmartThemeBorderColor,#444);margin-top:2px;padding-top:4px;">— 未命中高分记忆 —</div>';
+            html += top5.map(m => renderHubHitItem({
+                id: m.id,
+                title: m.title || m.content.slice(0, 30),
+                cognitiveType: m.cognitiveType || typeHint[m.type] || 'fact',
+                score: (m.strength || 0) * (m.importance || 0),
+                level: m.resident ? 'L4' : 'L1',
+            }, typeIcons, levelColors, true)).join('');
+        }
+    } catch (e) {
+        // 获取全量记忆失败时忽略，不影响命中列表主流程
+    }
+
+    listEl.innerHTML = html;
 }
 
 function bindSidebarEvents() {
@@ -754,6 +790,51 @@ function bindSidebarEvents() {
     // 打开记忆管理助手
     document.getElementById('bb_memory_manage_btn')?.addEventListener('click', () => {
         openMemoryManager();
+    });
+
+    // v3.3: 侧边栏手动提取
+    document.getElementById('bb_memory_extract_btn')?.addEventListener('click', async () => {
+        const chatId = getChatId();
+        if (chatId) {
+            try { await import('./auto-generator.js').then(m => m.autoExtractOnce?.(chatId)); } catch {}
+        }
+        if (typeof handleAiExtract === 'function') {
+            handleAiExtract(chatId);
+        } else {
+            toastr.info('请使用管理面板中的"AI提取"按钮', DISPLAY_NAME);
+        }
+    });
+
+    // v3.3: 侧边栏标记最后消息
+    document.getElementById('bb_memory_meta_btn')?.addEventListener('click', () => {
+        const ctx = SillyTavern.getContext();
+        const chat = ctx.chat;
+        if (!chat || chat.length < 2) {
+            toastr.warning('聊天消息不足', DISPLAY_NAME);
+            return;
+        }
+        let aiIdx = -1;
+        for (let i = chat.length - 1; i >= 0; i--) {
+            if (!chat[i].is_user && !chat[i].is_system) { aiIdx = i; break; }
+        }
+        if (aiIdx === -1) { toastr.warning('未找到 AI 消息', DISPLAY_NAME); return; }
+        chat[aiIdx]._bbmem_meta_marker = !chat[aiIdx]._bbmem_meta_marker;
+        try { ctx.saveChatDebounced(); } catch {}
+        setTimeout(() => { if (typeof refreshExtractionMarkers === 'function') refreshExtractionMarkers(); }, 100);
+        const label = chat[aiIdx]._bbmem_meta_marker ? '🤖 已标记为元指令（不提取）' : '🗃️ 已标记为可提取';
+        toastr.info(label, DISPLAY_NAME, { timeOut: 1500 });
+    });
+
+    // v3.3: 侧边栏切换楼层可见
+    document.getElementById('bb_memory_toggle_vis_btn')?.addEventListener('click', () => {
+        document.body.classList.toggle('bb-show-extracted');
+        const showing = document.body.classList.contains('bb-show-extracted');
+        toastr.info(showing ? '已显示被隐藏的楼层' : '已隐藏已提取的楼层', DISPLAY_NAME, { timeOut: 1500 });
+        // 更新按钮图标
+        const icon = document.querySelector('#bb_memory_toggle_vis_btn i');
+        if (icon) {
+            icon.className = showing ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash';
+        }
     });
 
     // 世界书导入按钮
@@ -2451,6 +2532,12 @@ function buildManagerHTML(memories, chatId) {
             <div class="bb-mem-toolbar">
                 <input type="text" class="bb-mem-search text_pole"
                        placeholder="搜索记忆..." id="bb_mgr_search" />
+                <select id="bb_mgr_sort" class="text_pole" style="width:auto;min-width:120px;">
+                    <option value="created_desc" selected>创建时间 ↓</option>
+                    <option value="created_asc">创建时间 ↑</option>
+                    <option value="updated_desc">修改时间 ↓</option>
+                    <option value="updated_asc">修改时间 ↑</option>
+                </select>
                 <button class="menu_button bb-mem-toolbar-btn" id="bb_mgr_add">
                     <i class="fa-solid fa-plus"></i> 添加
                 </button>
@@ -2797,6 +2884,18 @@ function bindManagerEvents(overlay, chatId) {
         renderMemoryList(overlay, results, chatId);
     });
 
+    // v3.3: 排序切换
+    overlay.querySelector('#bb_mgr_sort')?.addEventListener('change', async () => {
+        const memories = await getMemories(chatId);
+        const searchQuery = overlay.querySelector('#bb_mgr_search')?.value?.trim() || '';
+        if (searchQuery) {
+            const results = simpleSearch(memories, searchQuery, 100);
+            renderMemoryList(overlay, results, chatId);
+        } else {
+            renderMemoryList(overlay, memories, chatId);
+        }
+    });
+
     // 导出
     overlay.querySelector('#bb_mgr_export')?.addEventListener('click', async () => {
         const json = await exportMemories(chatId);
@@ -2945,15 +3044,29 @@ function updateBatchUI(overlay) {
     });
 }
 
+function sortMemories(memories, sortMode) {
+    const sorted = [...memories];
+    switch (sortMode) {
+        case 'created_asc':  sorted.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)); break;
+        case 'updated_desc': sorted.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)); break;
+        case 'updated_asc':  sorted.sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0)); break;
+        default:             sorted.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)); break; // created_desc
+    }
+    return sorted;
+}
+
 function renderMemoryList(overlay, memories, chatId) {
+    const sortEl = overlay.querySelector('#bb_mgr_sort');
+    const sortMode = sortEl ? sortEl.value : 'created_desc';
+    const sorted = sortMemories(memories, sortMode);
     const listEl = overlay.querySelector('#bb_mgr_list');
     if (listEl) {
-        listEl.innerHTML = memories.length
-            ? memories.map(m => buildMemoryItemHTML(m)).join('')
+        listEl.innerHTML = sorted.length
+            ? sorted.map(m => buildMemoryItemHTML(m)).join('')
             : '<div class="bb-mem-empty">未找到匹配的记忆</div>';
     }
     const statsEl = overlay.querySelector('.bb-mem-stats');
-    if (statsEl) statsEl.innerHTML = `共 <strong>${memories.length}</strong> 条记忆`;
+    if (statsEl) statsEl.innerHTML = `共 <strong>${sorted.length}</strong> 条记忆`;
     rebindItemActions(overlay, chatId);
 }
 
@@ -3459,7 +3572,8 @@ async function refreshFloatingHubData() {
     // v3.1: 命中列表展开时同步刷新
     const hitList = document.getElementById('bb_hub_hit_list');
     if (hitList && hitList.style.display !== 'none') {
-        renderHubHitList(hitList);
+        const chatId = getChatId();
+        if (chatId) renderHubHitList(hitList, chatId);
     }
 }
 
@@ -3512,7 +3626,7 @@ async function handleFloatingMenuAction(action) {
             if (!hitList || !hitRow) return;
             const chevron = hitRow.querySelector('.fa-chevron-down, .fa-chevron-up');
             if (hitList.style.display === 'none') {
-                renderHubHitList(hitList);
+                renderHubHitList(hitList, chatId);
                 hitList.style.display = '';
                 if (chevron) {
                     chevron.className = 'fa-solid fa-chevron-up';
@@ -3740,28 +3854,43 @@ async function init() {
         initAutoGenerator();
     }
 
-    // 设置自动提取进度回调（v3.0.0: 同步更新悬浮菜单进度行）
+    // 设置自动提取进度回调（v3.0.0: 同步更新悬浮菜单进度行；v3.3: 同步侧边栏）
     setAutoExtractProgressCallback((phase, current, total) => {
-        const progRow = document.getElementById('bb_hub_extract_progress');
-        const pctEl = document.getElementById('bb_hub_extract_pct');
-        if (!progRow) return;
+        const updateUI = (rowId, pctId) => {
+            const progRow = document.getElementById(rowId);
+            if (!progRow) return;
+            const pctEl = document.getElementById(pctId);
+            const icon = progRow.querySelector('i');
 
-        if (phase === 'done') {
-            // 完成：显示绿色勾，不自动隐藏
-            const icon = progRow.querySelector('i');
-            if (icon) { icon.className = 'fa-solid fa-check-circle'; icon.style.color = '#4caf50'; }
-            if (pctEl) pctEl.textContent = '完成';
-        } else if (phase === 'idle') {
-            // 空闲：显示月亮图标
-            const icon = progRow.querySelector('i');
-            if (icon) { icon.className = 'fa-solid fa-moon'; icon.style.color = ''; }
-            if (pctEl) pctEl.textContent = '';
-        } else {
-            // 提取中：显示 spinner 和百分比
-            const icon = progRow.querySelector('i');
-            if (icon) { icon.className = 'fa-solid fa-spinner fa-spin'; icon.style.color = ''; }
-            const pct = total > 0 ? Math.round((current / total) * 100) : 0;
-            if (pctEl) pctEl.textContent = pct + '%';
+            if (phase === 'done') {
+                if (icon) { icon.className = 'fa-solid fa-check-circle'; icon.style.color = '#4caf50'; }
+                if (pctEl) pctEl.textContent = '完成';
+            } else if (phase === 'idle') {
+                if (icon) { icon.className = 'fa-solid fa-moon'; icon.style.color = ''; }
+                if (pctEl) pctEl.textContent = '';
+            } else {
+                if (icon) { icon.className = 'fa-solid fa-spinner fa-spin'; icon.style.color = ''; }
+                const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+                if (pctEl) pctEl.textContent = pct + '%';
+            }
+        };
+        updateUI('bb_hub_extract_progress', 'bb_hub_extract_pct');
+        // v3.3: 同步侧边栏进度
+        const sidebarRow = document.getElementById('bb_sidebar_extract_progress');
+        if (sidebarRow) {
+            const icon = sidebarRow.querySelector('i');
+            const strong = sidebarRow.querySelector('strong');
+            if (phase === 'done') {
+                if (icon) { icon.className = 'fa-solid fa-check-circle'; icon.style.color = '#4caf50'; }
+                if (strong) strong.textContent = '完成';
+            } else if (phase === 'idle') {
+                if (icon) { icon.className = 'fa-solid fa-moon'; icon.style.color = ''; }
+                if (strong) strong.textContent = '空闲';
+            } else {
+                if (icon) { icon.className = 'fa-solid fa-spinner fa-spin'; icon.style.color = ''; }
+                const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+                if (strong) strong.textContent = pct + '%';
+            }
         }
     });
 

@@ -25,6 +25,21 @@
                 <button id="bb_memory_manage_btn" class="menu_button" title="打开记忆管理面板">
                     <i class="fa-solid fa-list"></i> 管理记忆
                 </button>
+                <button id="bb_memory_extract_btn" class="menu_button" title="手动触发AI提取记忆">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> 手动提取
+                </button>
+                <button id="bb_memory_meta_btn" class="menu_button" title="标记/取消最后一条AI消息为元指令">
+                    <i class="fa-solid fa-tag"></i> 标记消息
+                </button>
+                <button id="bb_memory_toggle_vis_btn" class="menu_button" title="显示/隐藏已提取的聊天楼层">
+                    <i class="fa-solid fa-eye-slash"></i> 楼层可见
+                </button>
+            </div>
+
+            <!-- v3.3: 提取进度 -->
+            <div class="bb-mem-sidebar-info" id="bb_sidebar_extract_progress" style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+                <i class="fa-solid fa-moon" style="font-size:0.85em;opacity:0.6;"></i>
+                <span style="font-size:0.85em;">提取状态: <strong>空闲</strong></span>
             </div>
 
             <!-- ═══ 命中记忆 ═══ -->
