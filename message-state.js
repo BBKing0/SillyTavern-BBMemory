@@ -320,6 +320,7 @@ export function refreshExtractionMarkers() {
     const chat = ctx.chat;
     if (!chat) return;
 
+    let changed = false;
     const msgBlocks = document.querySelectorAll('.mes');
     msgBlocks.forEach(block => {
         // 移除旧标记
@@ -374,8 +375,16 @@ export function refreshExtractionMarkers() {
             if (!block.classList.contains('bb-extracted-hidden')) {
                 block.classList.add('bb-extracted-hidden');
             }
+            // v4.2.0: 数据级隐藏 — 确保 AI 上下文也不可见
+            if (!msg.is_hidden) {
+                msg.is_hidden = true;
+                msg._bbmem_hideSource = 'plugin';
+                changed = true;
+            }
         } else {
             block.classList.remove('bb-extracted-hidden');
         }
     });
+
+    if (changed) saveChat();
 }

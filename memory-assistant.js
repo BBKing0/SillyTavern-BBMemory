@@ -40,7 +40,7 @@ let currentChatId = null;
 /**
  * 打开记忆管理助手（悬浮窗）
  */
-export async function openAssistant(chatId) {
+export async function openAssistant(chatId, initialTab = 'dashboard') {
     if (assistantWindow) {
         assistantWindow.remove();
     }
@@ -62,7 +62,7 @@ export async function openAssistant(chatId) {
 
     initDrag(assistantWindow);
     bindAssistantEvents(assistantWindow, chatId);
-    switchTab(assistantWindow, 'dashboard');
+    switchTab(assistantWindow, initialTab);
 }
 
 /**
@@ -106,6 +106,9 @@ function buildAssistantHTML(memories, stats) {
             <button class="bb-assistant-tab" data-tab="batch">
                 <i class="fa-solid fa-list-check"></i> 批量
             </button>
+            <button class="bb-assistant-tab" data-tab="timeline">
+                <i class="fa-solid fa-timeline"></i> 时间线
+            </button>
         </div>
 
         <div class="bb-assistant-body">
@@ -127,6 +130,11 @@ function buildAssistantHTML(memories, stats) {
             <!-- 批量操作 -->
             <div class="bb-assistant-panel" data-panel="batch" style="display:none;">
                 ${buildBatchHTML(memories)}
+            </div>
+
+            <!-- 时间线 -->
+            <div class="bb-assistant-panel" data-panel="timeline" style="display:none;">
+                ${buildTimelineHTML(memories)}
             </div>
         </div>
     `;
@@ -192,6 +200,12 @@ function buildBrowseHTML(memories) {
         <div class="bb-browse-search">
             <input type="text" class="text_pole" id="bb_assistant_browse_search"
                    placeholder="搜索记忆内容..." />
+            <select id="bb_assistant_browse_sort" class="text_pole" style="width:auto;margin-left:4px;">
+                <option value="created_desc">创建时间 ▼</option>
+                <option value="created_asc">创建时间 ▲</option>
+                <option value="story_desc">故事时间 ▼</option>
+                <option value="story_asc">故事时间 ▲</option>
+            </select>
         </div>
         <div class="bb-browse-list" id="bb_assistant_browse_list">
             <div class="bb-mem-empty">选择左侧类型查看记忆</div>
@@ -308,6 +322,7 @@ function bindAssistantEvents(window, chatId) {
                 <div class="bb-assistant-panel" data-panel="browse" style="display:none;">${buildBrowseHTML(memories)}</div>
                 <div class="bb-assistant-panel" data-panel="health" style="display:none;">${buildHealthHTML(memories)}</div>
                 <div class="bb-assistant-panel" data-panel="batch" style="display:none;">${buildBatchHTML(memories)}</div>
+                <div class="bb-assistant-panel" data-panel="timeline" style="display:none;">${buildTimelineHTML(memories)}</div>
             `;
             bindBrowseEvents(window, chatId);
             bindBatchEvents(window, chatId);
@@ -331,32 +346,84 @@ function bindAssistantEvents(window, chatId) {
 }
 
 function bindBrowseEvents(window, chatId) {
+    let currentType = null;
+    let currentSearch = '';
+
+    function sortMemories(memories, sortMode) {
+        const sorted = [...memories];
+        switch (sortMode) {
+            case 'created_asc':
+                sorted.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+                break;
+            case 'story_desc':
+                sorted.sort((a, b) => {
+                    const sa = a.storyTimeSort ?? -Infinity;
+                    const sb = b.storyTimeSort ?? -Infinity;
+                    if (sa === -Infinity && sb === -Infinity) return (b.createdAt || 0) - (a.createdAt || 0);
+                    return sb - sa;
+                });
+                break;
+            case 'story_asc':
+                sorted.sort((a, b) => {
+                    const sa = a.storyTimeSort ?? Infinity;
+                    const sb = b.storyTimeSort ?? Infinity;
+                    if (sa === Infinity && sb === Infinity) return (a.createdAt || 0) - (b.createdAt || 0);
+                    return sa - sb;
+                });
+                break;
+            case 'created_desc':
+            default:
+                sorted.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+                break;
+        }
+        return sorted;
+    }
+
+    function getSortMode() {
+        const sel = window.querySelector('#bb_assistant_browse_sort');
+        return sel ? sel.value : 'created_desc';
+    }
+
+    async function renderFiltered() {
+        const memories = await getMemories(chatId);
+        let filtered;
+        if (currentSearch) {
+            filtered = simpleSearch(memories, currentSearch, 50);
+        } else if (currentType) {
+            filtered = memories.filter(m => (m.cognitiveType || m.type) === currentType);
+        } else {
+            filtered = memories.slice(0, 50);
+        }
+        const sorted = sortMemories(filtered, getSortMode());
+        const listEl = window.querySelector('#bb_assistant_browse_list');
+        if (listEl) {
+            listEl.innerHTML = sorted.length
+                ? sorted.map(m => buildBrowseItemHTML(m)).join('')
+                : '<div class="bb-mem-empty">暂无匹配记忆</div>';
+        }
+    }
+
     // 类型按钮
     window.querySelectorAll('.bb-browse-type-btn').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            const type = btn.dataset.browseType;
-            const memories = await getMemories(chatId);
-            const filtered = memories.filter(m => (m.cognitiveType || m.type) === type);
-            const listEl = window.querySelector('#bb_assistant_browse_list');
-            if (listEl) {
-                listEl.innerHTML = filtered.length
-                    ? filtered.map(m => buildBrowseItemHTML(m)).join('')
-                    : '<div class="bb-mem-empty">该类型暂无记忆</div>';
-            }
+        btn.addEventListener('click', () => {
+            currentType = btn.dataset.browseType;
+            currentSearch = '';
+            const searchEl = window.querySelector('#bb_assistant_browse_search');
+            if (searchEl) searchEl.value = '';
+            renderFiltered();
         });
     });
 
     // 搜索
-    window.querySelector('#bb_assistant_browse_search')?.addEventListener('input', async (e) => {
-        const query = e.target.value.trim();
-        const memories = await getMemories(chatId);
-        const results = query ? simpleSearch(memories, query, 50) : memories.slice(0, 50);
-        const listEl = window.querySelector('#bb_assistant_browse_list');
-        if (listEl) {
-            listEl.innerHTML = results.length
-                ? results.map(m => buildBrowseItemHTML(m)).join('')
-                : '<div class="bb-mem-empty">未找到匹配记忆</div>';
-        }
+    window.querySelector('#bb_assistant_browse_search')?.addEventListener('input', (e) => {
+        currentSearch = e.target.value.trim();
+        if (currentSearch) currentType = null;
+        renderFiltered();
+    });
+
+    // v4.2.0: 排序
+    window.querySelector('#bb_assistant_browse_sort')?.addEventListener('change', () => {
+        renderFiltered();
     });
 }
 
@@ -404,6 +471,80 @@ function bindBatchEvents(window, chatId) {
     });
 }
 
+function buildTimelineHTML(memories) {
+    // 按 storyTimeSort 分组
+    const withTime = memories.filter(m => m.storyTimeSort != null);
+    const withoutTime = memories.filter(m => m.storyTimeSort == null);
+
+    // 按 storyTimeSort 降序排列
+    withTime.sort((a, b) => (b.storyTimeSort ?? 0) - (a.storyTimeSort ?? 0));
+
+    // 按 storyTime 分组（简单按天/时期聚合）
+    const groups = [];
+    let currentGroup = null;
+    for (const m of withTime) {
+        const timeKey = m.storyTime || '?';
+        if (!currentGroup || currentGroup.key !== timeKey) {
+            currentGroup = { key: timeKey, sort: m.storyTimeSort, items: [] };
+            groups.push(currentGroup);
+        }
+        currentGroup.items.push(m);
+    }
+
+    const groupHTML = groups.map(g => {
+        const typeDef = getTypeDefinition(g.items[0].cognitiveType || g.items[0].type);
+        return `
+            <div class="bb-timeline-group">
+                <div class="bb-timeline-time">
+                    <i class="fa-solid fa-clock"></i> ${escapeHtml(g.key)}
+                </div>
+                <div class="bb-timeline-items">
+                    ${g.items.map(m => {
+                        const td = getTypeDefinition(m.cognitiveType || m.type);
+                        const tagsHTML = (m.tags || []).slice(0, 3)
+                            .map(t => `<span class="bb-mem-tag">${escapeHtml(typeof t === 'string' ? t : t.name)}</span>`)
+                            .join('');
+                        return `
+                            <div class="bb-timeline-item">
+                                <div class="bb-timeline-item-header">
+                                    <span style="color: ${td.color}"><i class="${td.icon}"></i> ${td.label}</span>
+                                    <span class="bb-timeline-title">${escapeHtml(m.title || m.content.slice(0, 30))}</span>
+                                </div>
+                                <div class="bb-timeline-summary">${escapeHtml(m.summary || m.content.slice(0, 80))}</div>
+                                <div class="bb-timeline-tags">${tagsHTML}</div>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    const noTimeHTML = withoutTime.length > 0 ? `
+        <details class="bb-timeline-no-time">
+            <summary>无故事时间的记忆 (${withoutTime.length} 条)</summary>
+            <div class="bb-timeline-items">
+                ${withoutTime.sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt)).slice(0, 30).map(m => {
+                    const td = getTypeDefinition(m.cognitiveType || m.type);
+                    return `
+                        <div class="bb-timeline-item">
+                            <div class="bb-timeline-item-header">
+                                <span style="color: ${td.color}"><i class="${td.icon}"></i></span>
+                                <span class="bb-timeline-title">${escapeHtml(m.title || m.content.slice(0, 30))}</span>
+                            </div>
+                            <div class="bb-timeline-summary">${escapeHtml(m.summary || m.content.slice(0, 60))}</div>
+                        </div>
+                    `;
+                }).join('') || '<div class="bb-mem-empty">暂无记忆</div>'}
+            </div>
+        </details>
+    ` : '';
+
+    return groupHTML
+        ? `<div class="bb-timeline">${groupHTML}${noTimeHTML}</div>`
+        : `<div class="bb-timeline">${noTimeHTML || '<div class="bb-mem-empty">暂无带故事时间的记忆。请在设置中配置日历描述，AI 会自动提取故事时间。</div>'}</div>`;
+}
+
 function buildBrowseItemHTML(m) {
     const typeDef = getTypeDefinition(m.cognitiveType || m.type);
     const createdDate = new Date(m.createdAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -424,12 +565,17 @@ function buildBrowseItemHTML(m) {
         ? `<span class="bb-browse-note-icon" title="${noteCount} 条隐藏备注"><i class="fa-solid fa-eye"></i> ${noteCount}</span>`
         : '';
 
+    const storyTimeStr = m.storyTime
+        ? `<span class="bb-browse-story-time" title="故事时间"><i class="fa-solid fa-clock"></i> ${escapeHtml(m.storyTime)}</span>`
+        : '';
+
     return `
         <div class="bb-browse-item">
             <div class="bb-browse-item-header">
                 <span style="color: ${typeDef.color}"><i class="${typeDef.icon}"></i> ${typeDef.label}</span>
                 ${truthBadge}
                 ${noteIcon}
+                ${storyTimeStr}
                 <span class="bb-browse-item-date"><i class="fa-solid fa-calendar-plus" style="font-size:0.85em;"></i> ${createdDate}${updatedStr}</span>
             </div>
             <div class="bb-browse-item-content">${escapeHtml(m.content)}</div>
@@ -441,6 +587,10 @@ function buildBrowseItemHTML(m) {
 // ═══ Tab 切换 ═══
 
 function switchTab(window, tabName) {
+    // v4.2.0: 同步标签按钮 active 状态
+    window.querySelectorAll('.bb-assistant-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.tab === tabName);
+    });
     window.querySelectorAll('.bb-assistant-panel').forEach(panel => {
         panel.style.display = panel.dataset.panel === tabName ? 'block' : 'none';
     });

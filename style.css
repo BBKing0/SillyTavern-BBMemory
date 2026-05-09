@@ -2429,3 +2429,87 @@
         font-size: 0.85em;
     }
 }
+
+/* ═══ v4.2.0: 时间线视图 ═══ */
+
+.bb-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.bb-timeline-group {
+    border-left: 3px solid var(--SmartThemeQuoteColor, #4caf50);
+    padding-left: 12px;
+    margin-left: 8px;
+}
+
+.bb-timeline-time {
+    font-weight: bold;
+    font-size: 0.95em;
+    color: var(--SmartThemeQuoteColor, #4caf50);
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.bb-timeline-items {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.bb-timeline-item {
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.03));
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+}
+
+.bb-timeline-item-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85em;
+    margin-bottom: 2px;
+}
+
+.bb-timeline-title {
+    font-weight: 600;
+    color: var(--SmartThemeBodyColor, #ddd);
+}
+
+.bb-timeline-summary {
+    font-size: 0.82em;
+    color: var(--SmartThemeEmColor, #999);
+    margin-bottom: 2px;
+}
+
+.bb-timeline-tags {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+.bb-timeline-no-time {
+    margin-top: 12px;
+    padding: 8px;
+    border-top: 1px dashed var(--SmartThemeBorderColor, #444);
+}
+
+.bb-timeline-no-time > summary {
+    cursor: pointer;
+    font-size: 0.9em;
+    color: var(--SmartThemeEmColor, #888);
+    user-select: none;
+}
+
+/* 故事时间在浏览列表中的显示 */
+.bb-browse-story-time {
+    font-size: 0.82em;
+    color: var(--SmartThemeQuoteColor, #4caf50);
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}

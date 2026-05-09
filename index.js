@@ -84,6 +84,7 @@ import {
     restoreMemory,
     buildMaintenanceHTML,
 } from './memory-maintainer.js';
+import { openAssistant } from './memory-assistant.js';
 
 // ST 核心模块 API 通过 SillyTavern.getContext() 获取，不使用静态导入
 // 参见官方文档: https://docs.sillytavern.app/for-contributors/writing-extensions
@@ -214,6 +215,14 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     const userMessage = getLastUserMessage(chat);
     if (!userMessage) return chat;
 
+    // v4.2.0: 安全兜底 — 确保所有 _bbmem_extracted 消息对 AI 上下文不可见
+    for (const msg of chat) {
+        if ((msg._bbmem_extracted || msg._bbmem_meta_marker) && !msg.is_hidden) {
+            msg.is_hidden = true;
+            msg._bbmem_hideSource = 'plugin';
+        }
+    }
+
     const memories = await getMemories(chatId);
     if (!memories.length) {
         clearInjection();
@@ -262,6 +271,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         residentMemories,
         context,
         12,
+        settings.maxResults || DEFAULT_SETTINGS.maxResults,
         queryEmbedding,
     );
 
@@ -411,6 +421,10 @@ async function refreshSidebar() {
     const contextWindowEl = document.getElementById('bb_memory_context_window');
     if (contextWindowEl) contextWindowEl.value = String(getSettings().contextWindowExchanges ?? 5);
 
+    // v4.2.0: 每次提取最大记忆数
+    const maxPerExEl = document.getElementById('bb_memory_max_per_exchange');
+    if (maxPerExEl) maxPerExEl.value = String(getSettings().maxMemoriesPerExchange ?? 3);
+
     // v2.9.9: 总结模式
     const summaryModeEl = document.getElementById('bb_memory_summary_mode');
     if (summaryModeEl) summaryModeEl.value = getSettings().summaryMode || 'roleplay';
@@ -421,6 +435,10 @@ async function refreshSidebar() {
     // v3.0.0: 批量提取模式
     const extractionBatchModeEl = document.getElementById('bb_memory_extraction_batch_mode');
     if (extractionBatchModeEl) extractionBatchModeEl.value = getSettings().extractionBatchMode || 'single';
+
+    // v4.2.0: 恢复日历描述
+    const calDescEl = document.getElementById('bb_memory_calendar_description');
+    if (calDescEl) calDescEl.value = getSettings().calendarDescription || '';
 
     restoreApiSettings(getSettings());
 
@@ -749,6 +767,12 @@ function bindSidebarEvents() {
     // v4.1.0: 故事日历设置
     document.getElementById('bb_memory_calendar_description')?.addEventListener('change', (e) => {
         updateSettings({ calendarDescription: e.target.value });
+    });
+
+    // v4.2.0: 每次提取最大记忆数
+    document.getElementById('bb_memory_max_per_exchange')?.addEventListener('change', (e) => {
+        const val = parseInt(e.target.value);
+        if (val >= 1 && val <= 8) updateSettings({ maxMemoriesPerExchange: val });
     });
 
     // v4.1.0: 语义去重设置
@@ -3535,6 +3559,31 @@ function registerSlashCommands() {
         console.warn(`[${DISPLAY_NAME}] bb-cluster 命令注册失败`, err);
         if (typeof ctx.registerSlashCommand === 'function') {
             ctx.registerSlashCommand('bb-cluster', clusterCallback, [], '手动触发BB-Memory标签聚类');
+        }
+    }
+
+    // v4.2.0: /bb-timeline 打开时间线视图
+    const timelineCallback = async () => {
+        const chatId = getChatId();
+        if (!chatId) return '请先打开一个聊天';
+        await openAssistant(chatId, 'timeline');
+        return '';
+    };
+    try {
+        if (typeof ctx.SlashCommandParser?.addCommandObject === 'function' && typeof ctx.SlashCommand?.fromProps === 'function') {
+            ctx.SlashCommandParser.addCommandObject(ctx.SlashCommand.fromProps({
+                name: 'bb-timeline',
+                callback: timelineCallback,
+                aliases: [],
+                helpString: '打开 BB-Memory 时间线视图，按故事时间查看记忆。',
+            }));
+        } else if (typeof ctx.registerSlashCommand === 'function') {
+            ctx.registerSlashCommand('bb-timeline', timelineCallback, [], '打开BB-Memory时间线视图');
+        }
+    } catch (err) {
+        console.warn(`[${DISPLAY_NAME}] bb-timeline 命令注册失败`, err);
+        if (typeof ctx.registerSlashCommand === 'function') {
+            ctx.registerSlashCommand('bb-timeline', timelineCallback, [], '打开BB-Memory时间线视图');
         }
     }
 }

@@ -228,6 +228,16 @@
                        placeholder="如：路人甲, 酒保, 门卫" />
             </div>
 
+            <!-- v4.2.0: 每次提取最大记忆数 -->
+            <div class="bb-mem-sidebar-section">
+                <label for="bb_memory_max_per_exchange">
+                    每次提取最大记忆数
+                    <small class="bb-mem-hint">每次 exchange 提取的记忆条数上限（1-8，默认3）。降低可减缓记忆膨胀速度</small>
+                </label>
+                <input id="bb_memory_max_per_exchange" type="number" class="text_pole"
+                       min="1" max="8" value="3" />
+            </div>
+
             <!-- v3.0.0: 批量提取模式 -->
             <div class="bb-mem-sidebar-section">
                 <label for="bb_memory_extraction_batch_mode">

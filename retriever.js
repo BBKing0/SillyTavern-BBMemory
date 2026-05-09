@@ -420,7 +420,7 @@ export function getRelevantMemories(memories, queryText, options = {}) {
 /**
  * 在本轮检索结果基础上，合并「用户提到的实体」的关联记忆（按需展开），便于拉高注入档位。
  */
-export function mergeExpandedRelevantResults(memories, queryText, relevantResults, residentMemories, context = {}, expandLimit = 12, queryEmbedding = null) {
+export function mergeExpandedRelevantResults(memories, queryText, relevantResults, residentMemories, context = {}, expandLimit = 12, maxResults = 10, queryEmbedding = null) {
     const excludeIds = new Set(residentMemories.map(m => m.id));
     for (const r of relevantResults) excludeIds.add(r.memory.id);
 
@@ -441,7 +441,9 @@ export function mergeExpandedRelevantResults(memories, queryText, relevantResult
     }
 
     merged.sort((a, b) => b.score - a.score);
-    return merged;
+    // v4.2.0: 截断为 maxResults + 30% 扩展上限，防止注入条目过多
+    const ceiling = Math.min(maxResults + Math.ceil(maxResults * 0.3), merged.length);
+    return merged.slice(0, ceiling);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -586,8 +588,12 @@ export function buildMemoryInjectionPrompt({ residentMemories, relevantResults, 
     // ── 区块 2：本轮相关记忆（按等级分组）──
     const enabledTypes = settings.typeEnabled || {};
     const relevantLines = [];
+    // v4.2.0: 硬上限防注入条目过多
+    const MAX_INJECT = (settings.maxResults || 10) + 4;
+    let injectedCount = 0;
 
     for (const { memory, level } of relevantResults) {
+        if (injectedCount >= MAX_INJECT) break;
         const cogType = resolveMemoryType(memory);
         if (enabledTypes[cogType] === false) continue;
 
@@ -597,6 +603,7 @@ export function buildMemoryInjectionPrompt({ residentMemories, relevantResults, 
 
         relevantLines.push(line);
         tokenUsed += cost;
+        injectedCount++;
         stats[level === 'L3' ? 'l3' : level === 'L2' ? 'l2' : 'l1']++;
 
         const noteText = formatNoteLines(memory);

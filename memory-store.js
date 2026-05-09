@@ -45,6 +45,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     calendarDescription: '',
     autoGenContextPrompt: '',
     autoGenMaxExchanges: 3,
+    maxMemoriesPerExchange: 3,
     // v2.9.8: 提取确认模式与滑动窗口
     extractionConfirmMode: 'semi',       // 'active' | 'semi' | 'auto'
     activeConfirmStyle: 'popup',         // 'popup' | 'toast'（仅 active 模式有效）

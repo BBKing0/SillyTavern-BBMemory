@@ -38,11 +38,14 @@ import {
 
 // ═══ v4.1.0: 语义去重 ═══
 
-const DEDUP = {
-    mergeThreshold: 0.85,    // 相似度 >= 此值 → 合并
-    reduceThreshold: 0.60,   // 相似度 >= 此值 → 降低重要性
-    minSimilarity: 0.50,     // 低于此值不返回匹配
-};
+function getDedupConfig() {
+    const s = getSettings();
+    return {
+        mergeThreshold: s.mergeSimilarityThreshold ?? 0.85,
+        reduceThreshold: s.reduceSimilarityThreshold ?? 0.60,
+        minSimilarity: 0.50,
+    };
+}
 
 /**
  * v4.1.0: 余弦相似度（本地副本，纯数学运算）
@@ -69,7 +72,7 @@ function findMostSimilarMemory(newEmbedding, existingMemories) {
         if (!mem.embedding) continue;
         if (mem.status === 'archived' || mem.status === 'deleted') continue;
         const sim = cosineSimilarity(newEmbedding, mem.embedding);
-        if (sim >= DEDUP.minSimilarity && (!best || sim > best.similarity)) {
+        if (sim >= getDedupConfig().minSimilarity && (!best || sim > best.similarity)) {
             best = { memory: mem, similarity: sim };
         }
     }
@@ -124,13 +127,13 @@ item.ownership | item.key | item.clue | item.quest | location.state | episode.ev
 episode.secret | episode.dialogue | episode.combat | emotion.bond | emotion.trauma | emotion.desire |
 habit.routine | habit.preference | habit.speech
 
-NPC 分级 npcTier（事实类/档案类条目填写，路人片段填 background）：
+NPC 分级 npcTier（**每条记忆必须填写**，有角色时必须标注对应分级；无角色时留空 ""）：
 - core: 核心角色（长跑剧情）
 - important: 重要配角
 - minor: 普通配角
 - background: 路人（尽量不单独建档）
 
-物品分级 itemTier（物品相关条目填写）：
+物品分级 itemTier（**涉及重要物品时必须填写**，无物品时留空 ""）：
 - key: 关键剧情物品
 - equipped: 当前持有/装备
 - clue: 线索物
@@ -240,6 +243,9 @@ function buildSummaryInstructions() {
     if (settings.calendarDescription && settings.calendarDescription.trim()) {
         parts.push(`【故事日历】${settings.calendarDescription.trim()}\n请在每条记忆的 st 字段中填写故事发生时间（人类可读格式），在 ss 字段中填写对应的排序用数字时间戳。无法确定时间时，st 和 ss 可留空。`);
     }
+
+    // v4.2.0: 实体标注规则
+    parts.push(`【实体标注规则】每条记忆的 s（subject）字段必须填写涉及的主要实体名。有实体名时必须填写对应 nt（npcTier）或 it（itemTier），不可留空。`);
 
     return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';
 }
@@ -519,9 +525,40 @@ export function parseAiResponse(responseText) {
                     relatedMemoryIds: Array.isArray(m.relatedMemoryIds)
                         ? m.relatedMemoryIds.map(String).filter(Boolean)
                         : [],
-                    // v4.1.0: 新增字段（故事时间）
                     storyTime: typeof m.storyTime === 'string' ? m.storyTime.trim() : '',
                     storyTimeSort: typeof m.storyTimeSort === 'number' ? m.storyTimeSort : null,
+                    // v4.2.0: 启发式回退占位
+                    _fallbackNpc: null,
+                    _fallbackItem: null,
+                };
+            })
+            // v4.2.0: 应用启发式回退
+            .map(entry => {
+                if (!entry.npcTier && entry.subject && !(entry.categoryPath || '').startsWith('item.')) {
+                    entry.npcTier = 'minor';
+                }
+                if (!entry.itemTier && entry.subject && (entry.categoryPath || '').startsWith('item.')) {
+                    entry.itemTier = 'consumable';
+                }
+                return {
+                    cognitiveType: entry.cognitiveType,
+                    categoryPath: entry.categoryPath,
+                    title: entry.title,
+                    content: entry.content,
+                    summary: entry.summary,
+                    verbatim: entry.verbatim,
+                    tags: entry.tags,
+                    importance: entry.importance,
+                    emotionalWeight: entry.emotionalWeight,
+                    subject: entry.subject,
+                    target: entry.target,
+                    npcTier: entry.npcTier,
+                    itemTier: entry.itemTier,
+                    standaloneArchive: entry.standaloneArchive,
+                    indexCard: entry.indexCard,
+                    relatedMemoryIds: entry.relatedMemoryIds,
+                    storyTime: entry.storyTime,
+                    storyTimeSort: entry.storyTimeSort,
                 };
             });
     } catch (e) {
@@ -545,7 +582,9 @@ async function extractFromExchange(chatId, userMessage, aiMessage) {
         responseText = await callMainApi(prompt);
     }
 
-    const memories = parseAiResponse(responseText);
+    // v4.2.0: 每轮提取上限
+    const maxPerExchange = settings.maxMemoriesPerExchange ?? 3;
+    const memories = parseAiResponse(responseText).slice(0, maxPerExchange);
     let addedCount = 0;
     let mergedCount = 0;
 
@@ -564,7 +603,7 @@ async function extractFromExchange(chatId, userMessage, aiMessage) {
 
         // v4.1.0: 语义去重检查
         const match = findMostSimilarMemory(embedding, existingMemories);
-        if (match && match.similarity >= DEDUP.mergeThreshold) {
+        if (match && match.similarity >= getDedupConfig().mergeThreshold) {
             // 合并：更新旧记忆，不新建
             const updates = mergeMemoryFields(match.memory, mem);
             await updateMemory(chatId, match.memory.id, updates);
@@ -577,7 +616,7 @@ async function extractFromExchange(chatId, userMessage, aiMessage) {
 
         // 中等相似度：降低重要性
         let adjustedImportance = mem.importance;
-        if (match && match.similarity >= DEDUP.reduceThreshold) {
+        if (match && match.similarity >= getDedupConfig().reduceThreshold) {
             adjustedImportance = Math.max(0.3, mem.importance - 0.15);
         }
 
@@ -597,6 +636,8 @@ async function extractFromExchange(chatId, userMessage, aiMessage) {
             indexCard: mem.indexCard || undefined,
             relatedMemoryIds: mem.relatedMemoryIds?.length ? mem.relatedMemoryIds : undefined,
             embedding,
+            storyTime: mem.storyTime || '',
+            storyTimeSort: mem.storyTimeSort ?? null,
         });
         addedCount++;
         // 新记忆的 embedding 加入比较池（防止同一轮内重复提取）
@@ -931,8 +972,8 @@ episode.event | episode.promise | episode.secret | episode.dialogue | episode.co
 emotion.bond | emotion.trauma | emotion.desire |
 habit.routine | habit.preference | habit.speech
 
-NPC 分级 npcTier：core / important / minor / background
-物品分级 itemTier：key / equipped / clue / consumable / background
+NPC 分级 npcTier（**每条记忆必须填写**，有角色时必须标注；无角色留空 ""）：core / important / minor / background
+物品分级 itemTier（**涉及重要物品时必须填写**，无物品留空 ""）：key / equipped / clue / consumable / background
 
 以纯JSON数组格式返回（不要包含markdown代码块标记），使用短码字段名减少 token。
 短码：t=cognitiveType p=categoryPath n=title c=content m=summary v=verbatim g=tags s=subject a=target i=importance e=emotionalWeight nt=npcTier it=itemTier sa=standaloneArchive ic=indexCard ri=relatedMemoryIds st=storyTime ss=storyTimeSort
@@ -1091,7 +1132,7 @@ export async function saveExtractedMemories(chatId, candidateMemories, onProgres
 
         // v4.1.0: 语义去重检查
         const match = findMostSimilarMemory(embedding, existingMemories);
-        if (match && match.similarity >= DEDUP.mergeThreshold) {
+        if (match && match.similarity >= getDedupConfig().mergeThreshold) {
             const updates = mergeMemoryFields(match.memory, mem);
             await updateMemory(chatId, match.memory.id, updates);
             mergedCount++;
@@ -1101,7 +1142,7 @@ export async function saveExtractedMemories(chatId, candidateMemories, onProgres
         }
 
         let adjustedImportance = mem.importance;
-        if (match && match.similarity >= DEDUP.reduceThreshold) {
+        if (match && match.similarity >= getDedupConfig().reduceThreshold) {
             adjustedImportance = Math.max(0.3, mem.importance - 0.15);
         }
 
@@ -1121,6 +1162,8 @@ export async function saveExtractedMemories(chatId, candidateMemories, onProgres
             indexCard: mem.indexCard || undefined,
             relatedMemoryIds: mem.relatedMemoryIds?.length ? mem.relatedMemoryIds : undefined,
             embedding,
+            storyTime: mem.storyTime || '',
+            storyTimeSort: mem.storyTimeSort ?? null,
         });
         count++;
         existingMemories.push({ embedding, status: 'active' });
