@@ -374,12 +374,83 @@
                 <small id="bb_memory_reindex_result" style="display:block;margin-top:4px;font-size:0.8em;"></small>
             </div>
 
+            </div>
+
+            <!-- ═══ v4.1.0: 故事日历设置 ═══ -->
+            <div class="bb-settings-section" style="margin-top: 12px;">
+                <div class="bb-settings-section-header" data-section="calendar">
+                    <span><i class="fa-solid fa-calendar-days"></i> 故事日历</span>
+                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                </div>
+                <div class="bb-settings-section-body">
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_memory_calendar_description">
+                            日历描述
+                            <small class="bb-mem-hint">
+                                描述你的奇幻世界日历规则，AI 提取记忆时会据此估算故事时间。<br />
+                                例如："本世界一年3季（泛滥季、播种季、收获季），每季4个月，每月30天。请将故事时间折算为故事开始以来的总天数存入 storyTimeSort。"
+                            </small>
+                        </label>
+                        <textarea id="bb_memory_calendar_description" class="text_pole" rows="3"
+                                  placeholder="留空则使用真实时间..."></textarea>
+                    </div>
                 </div>
             </div>
 
-            <hr />
+        </div>
+    </div>
 
-            <!-- ═══ 记忆衰减设置 ═══ -->
+    <hr />
+
+    <!-- ═══ v4.1.0: 语义去重与聚类设置 ═══ -->
+    <div class="bb-settings-section">
+        <div class="bb-settings-section-header" data-section="dedup">
+            <span><i class="fa-solid fa-object-group"></i> 语义去重与聚类</span>
+            <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+        </div>
+        <div class="bb-settings-section-body">
+
+            <label class="checkbox_label" style="margin: 8px 0;">
+                <input id="bb_memory_dedup_enabled" type="checkbox" checked />
+                <span>启用语义去重（提取新记忆时自动合并相似条目）</span>
+            </label>
+
+            <div class="bb-mem-sidebar-section">
+                <label for="bb_memory_merge_similarity">
+                    合并阈值：<span id="bb_memory_merge_similarity_value">0.85</span>
+                    <small class="bb-mem-hint">相似度 >= 此值时合并到已有记忆（0.75~0.95）</small>
+                </label>
+                <input id="bb_memory_merge_similarity" type="range" min="0.70" max="0.95" step="0.01" value="0.85" />
+            </div>
+
+            <hr style="margin: 8px 0;" />
+
+            <label class="checkbox_label" style="margin: 8px 0;">
+                <input id="bb_memory_cluster_enabled" type="checkbox" checked />
+                <span>启用标签聚类（同标签记忆过多时自动生成合集摘要）</span>
+            </label>
+
+            <div class="bb-mem-sidebar-section">
+                <label for="bb_memory_cluster_threshold">
+                    聚类触发阈值：<span id="bb_memory_cluster_threshold_value">8</span>
+                    <small class="bb-mem-hint">同标签关联的记忆数 >= 此值时触发聚类（5~20）</small>
+                </label>
+                <input id="bb_memory_cluster_threshold" type="range" min="5" max="20" step="1" value="8" />
+            </div>
+
+            <div class="bb-mem-sidebar-section" style="margin-top: 8px;">
+                <button id="bb_memory_cluster_btn" class="menu_button" style="width:100%;">
+                    <i class="fa-solid fa-layer-group"></i> 手动执行标签聚类
+                </button>
+                <small id="bb_memory_cluster_result" style="display:block;margin-top:4px;font-size:0.8em;"></small>
+            </div>
+
+        </div>
+    </div>
+
+    <hr />
+
+    <!-- ═══ 记忆衰减设置 ═══ -->
             <div class="bb-settings-section">
                 <div class="bb-settings-section-header" data-section="decay">
                     <span><i class="fa-solid fa-brain"></i> 记忆衰减（模拟遗忘）</span>

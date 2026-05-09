@@ -35,6 +35,14 @@ export const DEFAULT_SETTINGS = Object.freeze({
     embeddingEndpoint: '',
     embeddingApiKey: '',
     embeddingModel: 'text-embedding-3-small',
+    // v4.1.0: 语义去重与聚类
+    dedupEnabled: true,
+    mergeSimilarityThreshold: 0.85,
+    reduceSimilarityThreshold: 0.60,
+    clusterEnabled: true,
+    clusterTagThreshold: 8,
+    // v4.1.0: 故事时间
+    calendarDescription: '',
     autoGenContextPrompt: '',
     autoGenMaxExchanges: 3,
     // v2.9.8: 提取确认模式与滑动窗口
@@ -261,6 +269,17 @@ function migrateToVEmbedding(entry) {
     return false;
 }
 
+function migrateToV41(entry) {
+    let changed = false;
+    if (entry.storyTime === undefined) { entry.storyTime = ''; changed = true; }
+    if (entry.storyTimeSort === undefined) { entry.storyTimeSort = null; changed = true; }
+    if (entry.isClusterSummary === undefined) { entry.isClusterSummary = false; changed = true; }
+    if (entry.clusterTag === undefined) { entry.clusterTag = ''; changed = true; }
+    if (entry.clusterChildIds === undefined) { entry.clusterChildIds = []; changed = true; }
+    if (entry.clusterParentId === undefined) { entry.clusterParentId = ''; changed = true; }
+    return changed;
+}
+
 // ═══════════════════════════════════════════════════════════
 //  记忆读取（含惰性迁移）
 // ═══════════════════════════════════════════════════════════
@@ -289,6 +308,9 @@ export async function getMemories(chatId) {
             needsMigration = true;
         }
         if (migrateToVEmbedding(entry)) {
+            needsMigration = true;
+        }
+        if (migrateToV41(entry)) {
             needsMigration = true;
         }
         return entry;
@@ -369,6 +391,14 @@ export async function addMemory(chatId, content, cognitiveType = 'episode', sour
         standaloneArchive: options.standaloneArchive !== undefined ? options.standaloneArchive : true,
         // ── v4.0.0: 语义向量 ──
         embedding: options.embedding ?? null,
+        // ── v4.1.0: 故事时间 ──
+        storyTime: options.storyTime || '',
+        storyTimeSort: options.storyTimeSort ?? null,
+        // ── v4.1.0: 标签聚类 ──
+        isClusterSummary: options.isClusterSummary || false,
+        clusterTag: options.clusterTag || '',
+        clusterChildIds: Array.isArray(options.clusterChildIds) ? options.clusterChildIds : [],
+        clusterParentId: options.clusterParentId || '',
         // ── 来源 ──
         source,
         sourceMessageIds: options.sourceMessageIds || [],

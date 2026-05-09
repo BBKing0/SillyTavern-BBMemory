@@ -1,4 +1,4 @@
-/**
+﻿/**
  * auto-generator.js —— BB-Memory 的"自动速记员"
  *
  * ═══════════════════════════════════════════════════════════
@@ -27,7 +27,7 @@
  * ═══════════════════════════════════════════════════════════
  */
 
-import { getSettings, addMemory } from './memory-store.js';
+import { getSettings, getMemories, addMemory, updateMemory } from './memory-store.js';
 import { getExtractableExchanges, markExchangeExtracted, isExchangeProcessed, computeExchangeHash, hideExchange } from './message-state.js';
 import {
     normalizeNpcTier,
@@ -35,6 +35,68 @@ import {
     applyStandaloneArchivePolicy,
     inferStandaloneArchive,
 } from './entity-tiers.js';
+
+// ═══ v4.1.0: 语义去重 ═══
+
+const DEDUP = {
+    mergeThreshold: 0.85,    // 相似度 >= 此值 → 合并
+    reduceThreshold: 0.60,   // 相似度 >= 此值 → 降低重要性
+    minSimilarity: 0.50,     // 低于此值不返回匹配
+};
+
+/**
+ * v4.1.0: 余弦相似度（本地副本，纯数学运算）
+ */
+function cosineSimilarity(a, b) {
+    let dot = 0, normA = 0, normB = 0;
+    for (let i = 0; i < a.length; i++) {
+        dot += a[i] * b[i];
+        normA += a[i] * a[i];
+        normB += b[i] * b[i];
+    }
+    const denom = Math.sqrt(normA) * Math.sqrt(normB);
+    return denom === 0 ? 0 : Math.max(0, dot / denom);
+}
+
+/**
+ * v4.1.0: 在现有记忆中寻找与新记忆语义最相似的记忆
+ * @returns {{ memory, similarity } | null}
+ */
+function findMostSimilarMemory(newEmbedding, existingMemories) {
+    if (!newEmbedding) return null;
+    let best = null;
+    for (const mem of existingMemories) {
+        if (!mem.embedding) continue;
+        if (mem.status === 'archived' || mem.status === 'deleted') continue;
+        const sim = cosineSimilarity(newEmbedding, mem.embedding);
+        if (sim >= DEDUP.minSimilarity && (!best || sim > best.similarity)) {
+            best = { memory: mem, similarity: sim };
+        }
+    }
+    return best;
+}
+
+/**
+ * v4.1.0: 合并新旧记忆字段。新信息追加到旧记忆，不改变创建时间。
+ */
+function mergeMemoryFields(existing, incoming) {
+    const updates = {
+        content: existing.content + '\n[更新] ' + incoming.content,
+        summary: incoming.summary || existing.summary,
+        verbatim: incoming.verbatim || existing.verbatim,
+        importance: Math.min(1.0, Math.max(existing.importance || 0.5, incoming.importance || 0.5) + 0.05),
+        emotionalWeight: Math.max(existing.emotionalWeight || 0, incoming.emotionalWeight || 0),
+        updatedAt: Date.now(),
+    };
+    // 追加关联 ID
+    if (incoming.id) {
+        const existingRelated = Array.isArray(existing.relatedMemoryIds) ? existing.relatedMemoryIds : [];
+        if (!existingRelated.includes(incoming.id)) {
+            updates.relatedMemoryIds = [...existingRelated, incoming.id];
+        }
+    }
+    return updates;
+}
 
 // ═══ 默认提示词模板 ═══
 
@@ -75,24 +137,35 @@ NPC 分级 npcTier（事实类/档案类条目填写，路人片段填 backgroun
 - consumable: 消耗品
 - background: 背景道具
 
-以纯JSON数组格式返回（不要包含markdown代码块标记），每条包含：
-- cognitiveType: "fact"|"episode"|"emotion"|"habit"
-- categoryPath: 分类路径（从上方列表选择）
-- title: 简短标题（3-8字）
-- content: 完整记忆内容
-- summary: 一句话摘要（10-20字）
-- verbatim: 重要原话（无则 ""）
-- tags: 标签数组（2-5个关键词）
-- subject: 主要实体名（NPC或物品名，无则 ""）
-- target: 关联对象名（无则 ""）
-- importance: 重要性(0-1)
-- emotionalWeight: 情感强度(0-1)
-- npcTier: "core"|"important"|"minor"|"background"|"" （非 NPC 可 ""）
-- itemTier: "key"|"equipped"|"clue"|"consumable"|"background"|"" （非物品可 ""）
-- standaloneArchive: true/false —— false 表示「不要单独 NPC 档案」（路人），插件会改为情景记忆
-- indexCard: 可选，一行常驻索引卡（短摘要+状态，不要写完整生平；无则 ""）
-- relatedMemoryIds: 可选，关联的其它记忆 id 数组（通常留 []）
+以纯JSON数组格式返回（不要包含markdown代码块标记），使用以下短码字段名以减少 token：
 
+短码对照（必用短码，不要用全名）：
+t=cognitiveType | p=categoryPath | n=title | c=content | m=summary | v=verbatim
+g=tags | s=subject | a=target | i=importance | e=emotionalWeight
+nt=npcTier | it=itemTier | sa=standaloneArchive | ic=indexCard | ri=relatedMemoryIds
+st=storyTime | ss=storyTimeSort
+
+字段说明：
+- t: "fact"|"episode"|"emotion"|"habit"
+- p: 分类路径（从上方列表选择）
+- n: 简短标题（3-8字）
+- c: 完整记忆内容
+- m: 一句话摘要（10-20字）
+- v: 重要原话（无则 ""）
+- g: 标签数组（前3个为结构标签用于聚类如"北境战争"，后7个为自由标签用于交叉索引如"背叛"；上限10个）
+- s: 主要实体名（NPC或物品名，无则 ""）
+- a: 关联对象名（无则 ""）
+- i: 重要性(0-1)
+- e: 情感强度(0-1)
+- nt: "core"|"important"|"minor"|"background"|"" （非NPC可""）
+- it: "key"|"equipped"|"clue"|"consumable"|"background"|"" （非物品可""）
+- sa: true/false —— false表示「不要单独NPC档案」（路人），插件会改为情景记忆
+- ic: 可选，一行常驻索引卡（短摘要+状态，无则 ""）
+- ri: 可选，关联的其它记忆id数组（通常留 []）
+- st: 可选，故事发生时间（人类可读格式，无则 ""）
+- ss: 可选，排序用数字时间戳（按用户日历规则折算，无则 null）
+
+示例：[{"t":"episode","p":"episode.event","n":"北境宣战","c":"雅赫摩斯在北境会议上正式宣战","m":"雅赫摩斯向北境诸邦宣战","v":"从今日起，北境诸邦即为吾敌","g":["北境战争","雅赫摩斯"],"s":"雅赫摩斯","a":"北境诸邦","i":0.8,"e":0.6,"nt":"core","it":"","sa":false,"ic":"","ri":[]}]
 [当前对话]
 用户: {{userMessage}}
 角色: {{aiMessage}}`;
@@ -163,7 +236,34 @@ function buildSummaryInstructions() {
         }
     }
 
+    // v4.1.0: 故事日历规则
+    if (settings.calendarDescription && settings.calendarDescription.trim()) {
+        parts.push(`【故事日历】${settings.calendarDescription.trim()}\n请在每条记忆的 st 字段中填写故事发生时间（人类可读格式），在 ss 字段中填写对应的排序用数字时间戳。无法确定时间时，st 和 ss 可留空。`);
+    }
+
     return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';
+}
+
+/**
+ * v4.1.0: 清洗 AI 消息，只保留正文内容
+ * - 如果有 &lt;content&gt; 标签 → 只提取其内容
+ * - 否则移除 &lt;think&gt; 块和状态栏，保留剩余文本
+ */
+function cleanAiMessage(text) {
+    if (!text) return '';
+    let cleaned = text;
+
+    // 优先提取 <content>...</content>
+    const contentMatch = cleaned.match(/<content>([\s\S]*?)<\/content>/i);
+    if (contentMatch) {
+        return contentMatch[1].trim();
+    }
+
+    // 移除 <think>...</think> 块
+    cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, '');
+    // 移除常见状态栏格式（如 [HP:100/100] 等）
+    cleaned = cleaned.replace(/\[[\w\s:/.-]+\]/g, '');
+    return cleaned.trim();
 }
 
 /**
@@ -174,7 +274,7 @@ function buildPrompt(userMessage, aiMessage) {
     const instructions = buildSummaryInstructions();
     return (template + instructions)
         .replace('{{userMessage}}', userMessage || '(无)')
-        .replace('{{aiMessage}}', aiMessage || '(无)');
+        .replace('{{aiMessage}}', cleanAiMessage(aiMessage) || '(无)');
 }
 
 /**
@@ -329,6 +429,39 @@ async function embedMemoryEntry(mem) {
     }
 }
 
+// ═══ v4.1.0: 短码 JSON 映射 ═══
+
+const SHORT_CODE_MAP = {
+    t: 'cognitiveType',     p: 'categoryPath',
+    n: 'title',             c: 'content',
+    m: 'summary',           v: 'verbatim',
+    g: 'tags',              s: 'subject',
+    a: 'target',            i: 'importance',
+    e: 'emotionalWeight',   nt: 'npcTier',
+    it: 'itemTier',         sa: 'standaloneArchive',
+    ic: 'indexCard',        ri: 'relatedMemoryIds',
+    st: 'storyTime',        ss: 'storyTimeSort',
+};
+
+const REVERSE_SHORT_CODE_MAP = Object.fromEntries(
+    Object.entries(SHORT_CODE_MAP).map(([k, v]) => [v, k])
+);
+
+/**
+ * v4.1.0: 将短码 JSON 还原为完整字段名，兼容混合格式
+ */
+function expandShortCodes(item) {
+    if (!item || typeof item !== 'object') return item;
+    // 如果已经是全名格式（有 cognitiveType 或 title），直接返回
+    if ('cognitiveType' in item || 'title' in item) return item;
+    const expanded = {};
+    for (const [key, value] of Object.entries(item)) {
+        const fullKey = SHORT_CODE_MAP[key] || key;
+        expanded[fullKey] = value;
+    }
+    return expanded;
+}
+
 /**
  * 解析 AI 返回的 JSON 文本为记忆条目数组
  */
@@ -353,37 +486,44 @@ export function parseAiResponse(responseText) {
         const VALID_COG_TYPES = ['fact', 'episode', 'emotion', 'habit'];
 
         return parsed
-            .filter(item => item && item.content && typeof item.content === 'string')
-            .map(item => ({
-                cognitiveType: VALID_COG_TYPES.includes(item.cognitiveType)
-                    ? item.cognitiveType
-                    : 'episode',
-                categoryPath: item.categoryPath || '',
-                title: typeof item.title === 'string' ? item.title.trim() : '',
-                content: item.content.trim(),
-                summary: typeof item.summary === 'string' ? item.summary.trim() : '',
-                verbatim: typeof item.verbatim === 'string' ? item.verbatim.trim() : '',
-                tags: Array.isArray(item.tags)
-                    ? item.tags.map(t => ({ name: String(t), weight: 0.6 }))
-                    : [],
-                importance: typeof item.importance === 'number'
-                    ? Math.max(0, Math.min(1, item.importance))
-                    : 0.5,
-                emotionalWeight: typeof item.emotionalWeight === 'number'
-                    ? Math.max(0, Math.min(1, item.emotionalWeight))
-                    : 0.0,
-                subject: typeof item.subject === 'string' ? item.subject.trim() : '',
-                target: typeof item.target === 'string' ? item.target.trim() : '',
-                npcTier: normalizeNpcTier(item.npcTier),
-                itemTier: normalizeItemTier(item.itemTier),
-                standaloneArchive: typeof item.standaloneArchive === 'boolean'
-                    ? item.standaloneArchive
-                    : undefined,
-                indexCard: typeof item.indexCard === 'string' ? item.indexCard.trim() : '',
-                relatedMemoryIds: Array.isArray(item.relatedMemoryIds)
-                    ? item.relatedMemoryIds.map(String).filter(Boolean)
-                    : [],
-            }));
+            .filter(item => item && (item.content || item.c) && typeof (item.content || item.c) === 'string')
+            .map(item => {
+                // v4.1.0: 短码 → 全名映射
+                const m = expandShortCodes(item);
+                return {
+                    cognitiveType: VALID_COG_TYPES.includes(m.cognitiveType)
+                        ? m.cognitiveType
+                        : 'episode',
+                    categoryPath: m.categoryPath || '',
+                    title: typeof m.title === 'string' ? m.title.trim() : '',
+                    content: (typeof m.content === 'string' ? m.content : '').trim(),
+                    summary: typeof m.summary === 'string' ? m.summary.trim() : '',
+                    verbatim: typeof m.verbatim === 'string' ? m.verbatim.trim() : '',
+                    tags: Array.isArray(m.tags)
+                        ? m.tags.map(t => ({ name: String(t), weight: 0.6 }))
+                        : [],
+                    importance: typeof m.importance === 'number'
+                        ? Math.max(0, Math.min(1, m.importance))
+                        : 0.5,
+                    emotionalWeight: typeof m.emotionalWeight === 'number'
+                        ? Math.max(0, Math.min(1, m.emotionalWeight))
+                        : 0.0,
+                    subject: typeof m.subject === 'string' ? m.subject.trim() : '',
+                    target: typeof m.target === 'string' ? m.target.trim() : '',
+                    npcTier: normalizeNpcTier(m.npcTier),
+                    itemTier: normalizeItemTier(m.itemTier),
+                    standaloneArchive: typeof m.standaloneArchive === 'boolean'
+                        ? m.standaloneArchive
+                        : undefined,
+                    indexCard: typeof m.indexCard === 'string' ? m.indexCard.trim() : '',
+                    relatedMemoryIds: Array.isArray(m.relatedMemoryIds)
+                        ? m.relatedMemoryIds.map(String).filter(Boolean)
+                        : [],
+                    // v4.1.0: 新增字段（故事时间）
+                    storyTime: typeof m.storyTime === 'string' ? m.storyTime.trim() : '',
+                    storyTimeSort: typeof m.storyTimeSort === 'number' ? m.storyTimeSort : null,
+                };
+            });
     } catch (e) {
         console.warn('[BB-Memory] AI 返回内容解析失败:', e.message, text.slice(0, 200));
         return [];
@@ -407,6 +547,12 @@ async function extractFromExchange(chatId, userMessage, aiMessage) {
 
     const memories = parseAiResponse(responseText);
     let addedCount = 0;
+    let mergedCount = 0;
+
+    // v4.1.0: 加载现有活跃记忆用于语义去重
+    const existingMemories = (await getMemories(chatId)).filter(
+        m => m.status === 'active' && m.embedding
+    );
 
     for (const mem of memories) {
         if (mem.standaloneArchive === undefined) {
@@ -416,13 +562,32 @@ async function extractFromExchange(chatId, userMessage, aiMessage) {
 
         const embedding = await embedMemoryEntry(mem);
 
+        // v4.1.0: 语义去重检查
+        const match = findMostSimilarMemory(embedding, existingMemories);
+        if (match && match.similarity >= DEDUP.mergeThreshold) {
+            // 合并：更新旧记忆，不新建
+            const updates = mergeMemoryFields(match.memory, mem);
+            await updateMemory(chatId, match.memory.id, updates);
+            mergedCount++;
+            if (settings.debugLogging) {
+                console.log(`[BB-Memory] 语义合并: "${mem.title}" → "${match.memory.title}" (sim=${match.similarity.toFixed(2)})`);
+            }
+            continue;
+        }
+
+        // 中等相似度：降低重要性
+        let adjustedImportance = mem.importance;
+        if (match && match.similarity >= DEDUP.reduceThreshold) {
+            adjustedImportance = Math.max(0.3, mem.importance - 0.15);
+        }
+
         await addMemory(chatId, mem.content, mem.cognitiveType || 'episode', 'auto', {
             categoryPath: mem.categoryPath,
             title: mem.title,
             summary: mem.summary,
             verbatim: mem.verbatim,
             tags: mem.tags,
-            importance: mem.importance,
+            importance: adjustedImportance,
             emotionalWeight: mem.emotionalWeight,
             subject: mem.subject,
             target: mem.target,
@@ -434,10 +599,15 @@ async function extractFromExchange(chatId, userMessage, aiMessage) {
             embedding,
         });
         addedCount++;
+        // 新记忆的 embedding 加入比较池（防止同一轮内重复提取）
+        existingMemories.push({ embedding, status: 'active' });
     }
 
-    if (addedCount > 0) {
-        console.log(`[BB-Memory] 从 exchange 提取了 ${addedCount} 条记忆`);
+    if (addedCount > 0 || mergedCount > 0) {
+        const parts = [];
+        if (addedCount > 0) parts.push(`新增 ${addedCount} 条`);
+        if (mergedCount > 0) parts.push(`合并 ${mergedCount} 条`);
+        console.log(`[BB-Memory] 从 exchange 提取: ${parts.join('，')}`);
     }
 
     return addedCount;
@@ -764,23 +934,8 @@ habit.routine | habit.preference | habit.speech
 NPC 分级 npcTier：core / important / minor / background
 物品分级 itemTier：key / equipped / clue / consumable / background
 
-以纯JSON数组格式返回（不要包含markdown代码块标记），每条包含：
-- cognitiveType: "fact"|"episode"|"emotion"|"habit"
-- categoryPath: 分类路径
-- title: 简短标题（3-8字）
-- content: 完整记忆内容
-- summary: 一句话摘要
-- verbatim: 重要原话（无则 ""）
-- tags: 标签数组（2-5个关键词）
-- subject: 主要实体名
-- target: 关联对象名
-- importance: 重要性(0-1)
-- emotionalWeight: 情感强度(0-1)
-- npcTier: 可选
-- itemTier: 可选
-- standaloneArchive: true/false（路人设 false）
-- indexCard: 可选，一行常驻索引卡
-
+以纯JSON数组格式返回（不要包含markdown代码块标记），使用短码字段名减少 token。
+短码：t=cognitiveType p=categoryPath n=title c=content m=summary v=verbatim g=tags s=subject a=target i=importance e=emotionalWeight nt=npcTier it=itemTier sa=standaloneArchive ic=indexCard ri=relatedMemoryIds st=storyTime ss=storyTimeSort
 以下是要分析的对话：
 {{conversation}}`;
 
@@ -915,8 +1070,15 @@ export async function extractFromContext(chatId, messageCount = 12, startFloor =
  */
 export async function saveExtractedMemories(chatId, candidateMemories, onProgress) {
     let count = 0;
+    let mergedCount = 0;
     const selected = candidateMemories.filter(m => m._selected);
     const total = selected.length;
+
+    // v4.1.0: 加载现有活跃记忆用于语义去重
+    const existingMemories = (await getMemories(chatId)).filter(
+        m => m.status === 'active' && m.embedding
+    );
+
     for (const mem of candidateMemories) {
         if (!mem._selected) continue;
 
@@ -925,13 +1087,31 @@ export async function saveExtractedMemories(chatId, candidateMemories, onProgres
         }
         applyStandaloneArchivePolicy(mem);
 
+        const embedding = mem._embedding ?? null;
+
+        // v4.1.0: 语义去重检查
+        const match = findMostSimilarMemory(embedding, existingMemories);
+        if (match && match.similarity >= DEDUP.mergeThreshold) {
+            const updates = mergeMemoryFields(match.memory, mem);
+            await updateMemory(chatId, match.memory.id, updates);
+            mergedCount++;
+            count++;
+            if (typeof onProgress === 'function') onProgress(count, total);
+            continue;
+        }
+
+        let adjustedImportance = mem.importance;
+        if (match && match.similarity >= DEDUP.reduceThreshold) {
+            adjustedImportance = Math.max(0.3, mem.importance - 0.15);
+        }
+
         await addMemory(chatId, mem.content, mem.cognitiveType || 'episode', 'auto', {
             categoryPath: mem.categoryPath,
             title: mem.title,
             summary: mem.summary,
             verbatim: mem.verbatim,
             tags: mem.tags,
-            importance: mem.importance,
+            importance: adjustedImportance,
             emotionalWeight: mem.emotionalWeight,
             subject: mem.subject,
             target: mem.target,
@@ -940,12 +1120,17 @@ export async function saveExtractedMemories(chatId, candidateMemories, onProgres
             standaloneArchive: mem.standaloneArchive,
             indexCard: mem.indexCard || undefined,
             relatedMemoryIds: mem.relatedMemoryIds?.length ? mem.relatedMemoryIds : undefined,
-            embedding: mem._embedding ?? null,
+            embedding,
         });
         count++;
+        existingMemories.push({ embedding, status: 'active' });
+
         if (typeof onProgress === 'function') {
             onProgress(count, total);
         }
+    }
+    if (mergedCount > 0) {
+        console.log(`[BB-Memory] 审核保存: 新增 ${count - mergedCount} 条，合并 ${mergedCount} 条`);
     }
     return count;
 }

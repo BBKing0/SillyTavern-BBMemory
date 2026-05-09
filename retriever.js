@@ -121,7 +121,10 @@ export function calculateMemoryScore(memory, query, context = {}, queryEmbedding
     // pinned 记忆获得固定底分加成
     const pinBonus = memory.pinned ? 0.15 : 0;
 
-    const total = Math.min(1.0, normalized + recencyBonus + pinBonus);
+    // v4.1.0: 合集记忆获得小幅加分（浓缩多条记忆信息）
+    const clusterBonus = memory.isClusterSummary ? 0.05 : 0;
+
+    const total = Math.min(1.0, normalized + recencyBonus + pinBonus + clusterBonus);
 
     return { total, breakdown };
 }

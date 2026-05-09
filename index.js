@@ -70,6 +70,7 @@ import {
     expandMemoriesForEntityKeyword,
 } from './entity-tiers.js';
 import { initAutoGenerator, stopAutoGenerator, extractFromContext, saveExtractedMemories, normalizeEndpoint, setAutoExtractProgressCallback, getPendingAutoCandidates, clearPendingAutoCandidates, callEmbeddingApi, embedExistingMemories } from './auto-generator.js';
+import { checkAndClusterByTags, scheduleClusterCheck } from './memory-cluster.js';
 import { syncMessageVisibility, refreshExtractionMarkers, markExchangeExtracted, hideExchange } from './message-state.js';
 import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot } from './memory-slots.js';
 import { getPersistentMemories, addPersistentMemory, updatePersistentMemory, removePersistentMemory } from './persistent-memory.js';
@@ -320,6 +321,9 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
             clearPendingAutoCandidates();
         }
     }
+
+    // v4.1.0: 异步触发标签聚类检查（不阻塞注入）
+    scheduleClusterCheck(chatId);
 
     return chat;
 };
@@ -733,6 +737,52 @@ function bindSidebarEvents() {
             }
             if (typeof toastr !== 'undefined') {
                 toastr.info(`向量化完成: ${count} 条`, 'BB-Memory', { timeOut: 3000 });
+            }
+        } catch (e) {
+            if (resultEl) {
+                resultEl.style.color = '#f44336';
+                resultEl.innerHTML = `<i class="fa-solid fa-times-circle"></i> 失败: ${e.message}`;
+            }
+        }
+    });
+
+    // v4.1.0: 故事日历设置
+    document.getElementById('bb_memory_calendar_description')?.addEventListener('change', (e) => {
+        updateSettings({ calendarDescription: e.target.value });
+    });
+
+    // v4.1.0: 语义去重设置
+    document.getElementById('bb_memory_dedup_enabled')?.addEventListener('change', (e) => {
+        updateSettings({ dedupEnabled: e.target.checked });
+    });
+    const mergeSlider = document.getElementById('bb_memory_merge_similarity');
+    mergeSlider?.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        document.getElementById('bb_memory_merge_similarity_value').textContent = val.toFixed(2);
+        updateSettings({ mergeSimilarityThreshold: val });
+    });
+    document.getElementById('bb_memory_cluster_enabled')?.addEventListener('change', (e) => {
+        updateSettings({ clusterEnabled: e.target.checked });
+    });
+    const clusterThreshSlider = document.getElementById('bb_memory_cluster_threshold');
+    clusterThreshSlider?.addEventListener('input', (e) => {
+        const val = parseInt(e.target.value);
+        document.getElementById('bb_memory_cluster_threshold_value').textContent = val;
+        updateSettings({ clusterTagThreshold: val });
+    });
+    document.getElementById('bb_memory_cluster_btn')?.addEventListener('click', async () => {
+        const resultEl = document.getElementById('bb_memory_cluster_result');
+        const chatId = getChatId();
+        if (!chatId) {
+            if (resultEl) resultEl.innerHTML = '<i class="fa-solid fa-times-circle"></i> 请先打开一个聊天';
+            return;
+        }
+        if (resultEl) resultEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在聚类...';
+        try {
+            const result = await checkAndClusterByTags(chatId);
+            if (resultEl) {
+                resultEl.style.color = '#4caf50';
+                resultEl.innerHTML = `<i class="fa-solid fa-check-circle"></i> ${result.summary}`;
             }
         } catch (e) {
             if (resultEl) {
@@ -3453,6 +3503,38 @@ function registerSlashCommands() {
         console.warn(`[${DISPLAY_NAME}] bb-reindex 命令注册失败`, err);
         if (typeof ctx.registerSlashCommand === 'function') {
             ctx.registerSlashCommand('bb-reindex', reindexCallback, [], '为BB-Memory已有记忆批量生成语义向量');
+        }
+    }
+
+    // v4.1.0: bb-cluster —— 手动触发标签聚类
+    const clusterCallback = async (_namedArgs, _unnamedArgs) => {
+        const chatId = getChatId();
+        if (!chatId) return '请先打开一个聊天';
+        const settings = getSettings();
+        if (!settings.clusterEnabled) return '聚类功能未启用，请先在设置中开启';
+        try {
+            const result = await checkAndClusterByTags(chatId);
+            return `标签聚类完成: ${result.summary}`;
+        } catch (e) {
+            return `聚类失败: ${e.message}`;
+        }
+    };
+
+    try {
+        if (typeof ctx.SlashCommandParser?.addCommandObject === 'function' && typeof ctx.SlashCommand?.fromProps === 'function') {
+            ctx.SlashCommandParser.addCommandObject(ctx.SlashCommand.fromProps({
+                name: 'bb-cluster',
+                callback: clusterCallback,
+                aliases: [],
+                helpString: '手动触发 BB-Memory 标签聚类：将同标签的过多记忆合并为合集摘要。',
+            }));
+        } else if (typeof ctx.registerSlashCommand === 'function') {
+            ctx.registerSlashCommand('bb-cluster', clusterCallback, [], '手动触发BB-Memory标签聚类');
+        }
+    } catch (err) {
+        console.warn(`[${DISPLAY_NAME}] bb-cluster 命令注册失败`, err);
+        if (typeof ctx.registerSlashCommand === 'function') {
+            ctx.registerSlashCommand('bb-cluster', clusterCallback, [], '手动触发BB-Memory标签聚类');
         }
     }
 }
