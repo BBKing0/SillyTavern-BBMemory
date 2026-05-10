@@ -14,9 +14,11 @@ import {
     getSettings,
     updateSettings,
     getMemories,
+    addMemory,
     updateMemory,
 } from './memory-store.js';
 import { resolveMemoryType } from './memory-types.js';
+import { callMainApi, callCustomApi } from './auto-generator.js';
 
 // ═══════════════════════════════════════════════════════════
 //  维护阈值与配置
@@ -422,4 +424,147 @@ export function buildMaintenanceHTML(result) {
                 </button>
             </div>
         </div>`;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  v4.4.0: 每日时间线记忆总结
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 按故事时间分组记忆，每组调用 AI 生成阶段总结
+ * 分组策略：相邻记忆 storyTimeSort 差值 < 500 → 同组
+ * 回退：无 storyTimeSort 则按 createdAt 的天数分组
+ */
+export async function generateTimelineSummary(chatId, options = {}) {
+    const memories = await getMemories(chatId);
+    const activeMemories = memories.filter(m =>
+        m.status === 'active' && !m.isTimelineSummary
+    );
+
+    if (activeMemories.length < 3) {
+        return { summaryCount: 0, mergedCount: 0, errors: ['活跃记忆不足（至少需3条）'] };
+    }
+
+    const sorted = [...activeMemories].sort((a, b) => {
+        const sa = a.storyTimeSort ?? (a.createdAt || 0);
+        const sb = b.storyTimeSort ?? (b.createdAt || 0);
+        return sa - sb;
+    });
+
+    const GAP_THRESHOLD = options.gapThreshold ?? 500;
+    const groups = [];
+    let currentGroup = [sorted[0]];
+
+    for (let i = 1; i < sorted.length; i++) {
+        const prev = sorted[i - 1];
+        const curr = sorted[i];
+        const prevSort = prev.storyTimeSort ?? (prev.createdAt || 0);
+        const currSort = curr.storyTimeSort ?? (curr.createdAt || 0);
+
+        if (currSort - prevSort < GAP_THRESHOLD) {
+            currentGroup.push(curr);
+        } else {
+            groups.push(currentGroup);
+            currentGroup = [curr];
+        }
+    }
+    groups.push(currentGroup);
+
+    let summaryCount = 0;
+    let mergedCount = 0;
+    const errors = [];
+
+    for (const group of groups) {
+        if (group.length < 2) continue;
+        try {
+            const result = await generateGroupSummary(chatId, group, options);
+            if (result) {
+                if (result.merged) mergedCount++;
+                else summaryCount++;
+            }
+        } catch (e) {
+            errors.push(`${group[0]?.storyTime || '?'} ~ ${group[group.length - 1]?.storyTime || '?'}: ${e.message}`);
+        }
+    }
+
+    return { summaryCount, mergedCount, errors };
+}
+
+/**
+ * 为一个分组调用 AI 生成时段总结
+ */
+async function generateGroupSummary(chatId, group, options = {}) {
+    const settings = getSettings();
+
+    const memoryTexts = group.map(m =>
+        `[${m.storyTime || '未知时间'}] ${m.title || ''}: ${m.summary || m.content.slice(0, 100)}`
+    );
+
+    const prompt = `你是一个记忆总结助手。请根据以下时间段内的记忆条目，总结这段时间发生了什么重要事件。
+
+时间段：${group[0]?.storyTime || '开始'} 到 ${group[group.length - 1]?.storyTime || '结束'}
+
+记忆条目：
+${memoryTexts.map((t, i) => `${i + 1}. ${t}`).join('\n')}
+
+请返回纯JSON对象（不要markdown标记，不要代码块）：
+{"n":"时段标题（简短）","c":"本时段总结（2-3句话，概括关键事件和变化）","m":"一句话摘要","i":0.7}`;
+
+    let responseText;
+    if (settings.autoGenMode === 'custom' && settings.autoGenEndpoint) {
+        responseText = await callCustomApi(prompt);
+    } else {
+        responseText = await callMainApi(prompt);
+    }
+
+    let parsed;
+    try {
+        let text = responseText.trim();
+        text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+        const objMatch = text.match(/\{[\s\S]*\}/);
+        if (objMatch) text = objMatch[0];
+        parsed = JSON.parse(text);
+    } catch {
+        return null;
+    }
+
+    const startTime = group[0]?.storyTime || '';
+    const startSort = group[0]?.storyTimeSort ?? null;
+    const endSort = group[group.length - 1]?.storyTimeSort ?? null;
+    const groupKey = startTime ? `day_${startSort ?? startTime}` : `group_${Date.now()}`;
+
+    // 检查是否已有该组的总结
+    const existingSummaries = (await getMemories(chatId)).filter(m =>
+        m.isTimelineSummary && m.timelineGroupKey === groupKey
+    );
+    if (existingSummaries.length > 0) {
+        await updateMemory(chatId, existingSummaries[0].id, {
+            content: parsed.c || parsed.content || '',
+            summary: parsed.m || parsed.summary || '',
+            title: parsed.n || parsed.title || '',
+            updatedAt: Date.now(),
+        });
+        return { merged: true };
+    }
+
+    await addMemory(chatId,
+        parsed.c || parsed.content || memoryTexts.join('\n'),
+        'episode',
+        'auto',
+        {
+            cognitiveType: 'episode',
+            categoryPath: 'episode.event',
+            title: parsed.n || parsed.title || `总结: ${startTime}`,
+            summary: parsed.m || parsed.summary || '',
+            importance: parsed.i || 0.7,
+            emotionalWeight: 0.3,
+            isTimelineSummary: true,
+            timelineGroupKey: groupKey,
+            timelineDayStart: startSort,
+            timelineDayEnd: endSort,
+            storyTime: startTime,
+            storyTimeSort: startSort,
+        }
+    );
+    return { merged: false };
 }

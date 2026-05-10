@@ -45,6 +45,8 @@ import {
     reinforceMemories,
     migrateFromSettings,
     getMemoryStats,
+    exportMemoriesToChatMetadata,
+    importMemoriesFromChatMetadata,
 } from './memory-store.js';
 
 import {
@@ -83,6 +85,7 @@ import {
     archiveMemory,
     restoreMemory,
     buildMaintenanceHTML,
+    generateTimelineSummary,
 } from './memory-maintainer.js';
 import { openAssistant } from './memory-assistant.js';
 
@@ -407,6 +410,12 @@ async function refreshSidebar() {
     const debugLogEl = document.getElementById('bb_memory_debug_logging');
     if (debugLogEl) debugLogEl.checked = getSettings().debugLogging;
 
+    const tlSummaryEl = document.getElementById('bb_memory_timeline_summary');
+    if (tlSummaryEl) tlSummaryEl.checked = getSettings().timelineSummaryEnabled !== false;
+
+    const autoBackupEl = document.getElementById('bb_memory_auto_backup');
+    if (autoBackupEl) autoBackupEl.checked = getSettings().autoBackupEnabled || false;
+
     const maxExchangesEl = document.getElementById('bb_memory_auto_max_exchanges');
     if (maxExchangesEl) maxExchangesEl.value = String(getSettings().autoGenMaxExchanges ?? 3);
 
@@ -665,6 +674,38 @@ function bindSidebarEvents() {
     document.getElementById('bb_memory_maint_threshold')?.addEventListener('change', (e) => {
         const val = parseInt(e.target.value, 10);
         if (!isNaN(val) && val >= 10) updateSettings({ maintenanceThreshold: val });
+    });
+
+    // v4.4.0: 时间线总结开关
+    document.getElementById('bb_memory_timeline_summary')?.addEventListener('change', (e) => {
+        updateSettings({ timelineSummaryEnabled: e.target.checked });
+    });
+
+    // v4.4.0: 自动备份开关
+    document.getElementById('bb_memory_auto_backup')?.addEventListener('change', (e) => {
+        updateSettings({ autoBackupEnabled: e.target.checked });
+    });
+
+    // v4.4.0: 立即备份按钮
+    document.getElementById('bb_memory_backup_now')?.addEventListener('click', async () => {
+        const chatId = getChatId();
+        if (!chatId) { toastr.warning('请先打开一个聊天', DISPLAY_NAME); return; }
+        const result = await exportMemoriesToChatMetadata(chatId);
+        toastr.success(`已备份 ${result.count} 条记忆 (${(result.size / 1024).toFixed(1)} KB)`, DISPLAY_NAME);
+    });
+
+    // v4.4.0: 恢复备份按钮
+    document.getElementById('bb_memory_restore_now')?.addEventListener('click', async () => {
+        const chatId = getChatId();
+        if (!chatId) { toastr.warning('请先打开一个聊天', DISPLAY_NAME); return; }
+        const result = await importMemoriesFromChatMetadata(chatId);
+        if (result.restored > 0) {
+            toastr.success(`恢复完成: ${result.restored} 条新增, ${result.skipped} 条已存在`, DISPLAY_NAME);
+        } else if (result.skipped > 0) {
+            toastr.info(`无新增记忆（${result.skipped} 条已存在）`, DISPLAY_NAME);
+        } else {
+            toastr.info('未找到可恢复的备份数据', DISPLAY_NAME);
+        }
     });
 
     document.getElementById('bb_memory_template')?.addEventListener('change', (e) => {
@@ -3950,6 +3991,36 @@ function onChatChanged() {
         // 延迟检查维护需求和刷新提取标记，避免阻塞聊天切换
         setTimeout(() => triggerMaintenanceCheck(), 3000);
         setTimeout(() => refreshExtractionMarkers(), 800);
+
+        // v4.4.0: 自动恢复其他设备的备份
+        if (settings.autoBackupEnabled) {
+            const chatId = getChatId();
+            setTimeout(async () => {
+                try {
+                    const { restored } = await importMemoriesFromChatMetadata(chatId);
+                    if (restored > 0 && typeof toastr !== 'undefined') {
+                        toastr.info(`从其他设备恢复了 ${restored} 条记忆`, DISPLAY_NAME);
+                    }
+                } catch (e) {
+                    console.warn('[BB-Memory] 恢复备份检查失败:', e);
+                }
+            }, 5000);
+        }
+
+        // v4.4.0: 触发时间线总结检查
+        if (settings.timelineSummaryEnabled !== false) {
+            const chatId = getChatId();
+            setTimeout(async () => {
+                try {
+                    const result = await generateTimelineSummary(chatId);
+                    if (result.summaryCount > 0) {
+                        console.log(`[BB-Memory] 时间线总结: 新增 ${result.summaryCount} 条`);
+                    }
+                } catch (e) {
+                    console.warn('[BB-Memory] 时间线总结失败:', e);
+                }
+            }, 8000);
+        }
     }
 }
 

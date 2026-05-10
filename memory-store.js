@@ -74,6 +74,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
     messageCountSinceDecay: 0,
     // 调试
     debugLogging: false,
+    // v4.4.0: 时间线总结
+    timelineSummaryEnabled: true,
+    // v4.4.0: 自动备份
+    autoBackupEnabled: false,
+    lastBackupTimestamp: 0,
 });
 
 // ═══ SillyTavern 接口 ═══
@@ -281,6 +286,15 @@ function migrateToV41(entry) {
     return changed;
 }
 
+function migrateToV44(entry) {
+    let changed = false;
+    if (entry.isTimelineSummary === undefined) { entry.isTimelineSummary = false; changed = true; }
+    if (entry.timelineGroupKey === undefined) { entry.timelineGroupKey = ''; changed = true; }
+    if (entry.timelineDayStart === undefined) { entry.timelineDayStart = null; changed = true; }
+    if (entry.timelineDayEnd === undefined) { entry.timelineDayEnd = null; changed = true; }
+    return changed;
+}
+
 // ═══════════════════════════════════════════════════════════
 //  记忆读取（含惰性迁移）
 // ═══════════════════════════════════════════════════════════
@@ -312,6 +326,9 @@ export async function getMemories(chatId) {
             needsMigration = true;
         }
         if (migrateToV41(entry)) {
+            needsMigration = true;
+        }
+        if (migrateToV44(entry)) {
             needsMigration = true;
         }
         return entry;
@@ -400,6 +417,11 @@ export async function addMemory(chatId, content, cognitiveType = 'episode', sour
         clusterTag: options.clusterTag || '',
         clusterChildIds: Array.isArray(options.clusterChildIds) ? options.clusterChildIds : [],
         clusterParentId: options.clusterParentId || '',
+        // ── v4.4.0: 时间线总结 ──
+        isTimelineSummary: options.isTimelineSummary || false,
+        timelineGroupKey: options.timelineGroupKey || '',
+        timelineDayStart: options.timelineDayStart ?? null,
+        timelineDayEnd: options.timelineDayEnd ?? null,
         // ── 来源 ──
         source,
         sourceMessageIds: options.sourceMessageIds || [],
@@ -416,6 +438,7 @@ export async function addMemory(chatId, content, cognitiveType = 'episode', sour
 
     memories.push(entry);
     await saveMemoriesData(chatId, memories);
+    scheduleAutoBackup(chatId);
     return entry;
 }
 
@@ -428,6 +451,7 @@ export async function removeMemory(chatId, memoryId) {
 
     if (filtered.length < memories.length) {
         await saveMemoriesData(chatId, filtered);
+        scheduleAutoBackup(chatId);
         return true;
     }
     return false;
@@ -457,6 +481,7 @@ export async function updateMemory(chatId, memoryId, updates) {
 
     entry.updatedAt = Date.now();
     await saveMemoriesData(chatId, memories);
+    scheduleAutoBackup(chatId);
     return entry;
 }
 
@@ -491,6 +516,7 @@ export async function updateFactContent(chatId, memoryId, newContent, options = 
     entry.updatedAt = Date.now();
 
     await saveMemoriesData(chatId, memories);
+    scheduleAutoBackup(chatId);
     return entry;
 }
 
@@ -548,6 +574,7 @@ export async function removeHiddenNote(chatId, memoryId, noteId) {
  */
 export async function clearMemories(chatId) {
     await saveMemoriesData(chatId, []);
+    scheduleAutoBackup(chatId);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -654,6 +681,7 @@ export async function importMemories(chatId, jsonString) {
     }
 
     await saveMemoriesData(chatId, memories);
+    scheduleAutoBackup(chatId);
     return count;
 }
 
@@ -743,4 +771,99 @@ export async function getMemoryStats(chatId) {
     stats.avgImportance = importanceSum / memories.length;
 
     return stats;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  v4.4.0: 自动备份（跨设备同步）
+// ═══════════════════════════════════════════════════════════
+
+const BACKUP_METADATA_KEY = 'bb_memory_backup';
+let backupTimer = null;
+
+/**
+ * 将当前聊天记忆导出到 chatMetadata（ST 服务器存储，跨设备可用）
+ */
+export async function exportMemoriesToChatMetadata(chatId) {
+    if (!chatId) return { count: 0, size: 0 };
+
+    const memories = await getMemories(chatId);
+    const json = JSON.stringify(memories);
+    const size = new TextEncoder().encode(json).length;
+
+    try {
+        const ctx = SillyTavern.getContext();
+        if (ctx.chatMetadata) {
+            ctx.chatMetadata[BACKUP_METADATA_KEY] = json;
+        }
+
+        const settings = getSettings();
+        settings.lastBackupTimestamp = Date.now();
+        SillyTavern.getContext().saveSettingsDebounced();
+
+        if (settings.debugLogging) {
+            console.log(`[BB-Memory] 备份到 chatMetadata: ${memories.length} 条, ${(size / 1024).toFixed(1)} KB`);
+        }
+    } catch (e) {
+        console.warn('[BB-Memory] 备份到 chatMetadata 失败:', e);
+    }
+
+    return { count: memories.length, size };
+}
+
+/**
+ * 从 chatMetadata 恢复记忆（启动时检查其他设备同步的数据）
+ */
+export async function importMemoriesFromChatMetadata(chatId) {
+    if (!chatId) return { restored: 0, skipped: 0 };
+
+    try {
+        const ctx = SillyTavern.getContext();
+        const backupJson = ctx.chatMetadata?.[BACKUP_METADATA_KEY];
+        if (!backupJson) return { restored: 0, skipped: 0 };
+
+        const backupMemories = JSON.parse(backupJson);
+        if (!Array.isArray(backupMemories)) return { restored: 0, skipped: 0 };
+
+        const existing = await getMemories(chatId);
+        const existingIds = new Set(existing.map(m => m.id));
+
+        let restored = 0;
+        let skipped = 0;
+
+        for (const mem of backupMemories) {
+            if (!mem.id || !mem.content) continue;
+            if (existingIds.has(mem.id)) {
+                skipped++;
+                continue;
+            }
+            existing.push(mem);
+            restored++;
+        }
+
+        if (restored > 0) {
+            await saveMemoriesData(chatId, existing);
+            console.log(`[BB-Memory] 从 chatMetadata 恢复: ${restored} 条新记忆, ${skipped} 条已存在`);
+        }
+
+        return { restored, skipped };
+    } catch (e) {
+        console.warn('[BB-Memory] 从 chatMetadata 恢复失败:', e);
+        return { restored: 0, skipped: 0 };
+    }
+}
+
+/**
+ * 安排延迟自动备份（记忆变更后 5 秒触发）
+ */
+export function scheduleAutoBackup(chatId) {
+    const settings = getSettings();
+    if (!settings.autoBackupEnabled) return;
+    if (!chatId) return;
+
+    if (backupTimer) clearTimeout(backupTimer);
+    backupTimer = setTimeout(() => {
+        exportMemoriesToChatMetadata(chatId).catch(e => {
+            console.warn('[BB-Memory] 自动备份失败:', e);
+        });
+    }, 5000);
 }
