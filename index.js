@@ -227,13 +227,150 @@ function escapeHtml(text) {
 function getExtensionFolder() {
     try {
         const ctx = SillyTavern.getContext();
-        const ext = ctx.extensions?.find(e => e.name === 'BB-Memory');
+        // 方法1：通过 extensions API
+        if (typeof ctx.findExtension === 'function') {
+            const ext = ctx.findExtension('BB-Memory');
+            if (ext) return ext;
+        }
+        // 方法2：遍历 extensions 数组
+        const ext = ctx.extensions?.find(e => e.name === 'BB-Memory' || e.display_name === 'BB-Memory');
         if (ext) {
             if (typeof ext.getFolder === 'function') return ext.getFolder();
             return ext.baseFolder || ext.folder || '';
         }
     } catch { /* ignore */ }
     return 'scripts/extensions/third-party/BB-Memory';
+}
+
+// ═══════════════════════════════════════════════════════════
+//  可折叠设置面板
+// ═══════════════════════════════════════════════════════════
+
+function initCollapsibleSettings() {
+    document.querySelectorAll('.bb-settings-section-header').forEach(header => {
+        header.addEventListener('click', () => {
+            const section = header.closest('.bb-settings-section');
+            const body = section?.querySelector('.bb-settings-section-body');
+            const chevron = header.querySelector('.bb-settings-chevron i');
+            if (body) {
+                const isHidden = body.style.display === 'none';
+                body.style.display = isHidden ? '' : 'none';
+                if (chevron) {
+                    chevron.className = isHidden ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-right';
+                }
+            }
+        });
+    });
+}
+
+// ═══════════════════════════════════════════════════════════
+//  浮动控制中心
+// ═══════════════════════════════════════════════════════════
+
+let floatingHub = null;
+
+function injectFloatingHub() {
+    if (floatingHub) return;
+    floatingHub = document.createElement('div');
+    floatingHub.id = 'bb_floating_hub';
+    floatingHub.innerHTML = `
+        <div class="bb-hub-btn" id="bb_hub_toggle" title="BB-Memory 控制中心">
+            <i class="fa-solid fa-brain"></i>
+        </div>
+        <div class="bb-hub-menu" id="bb_hub_menu" style="display:none;">
+            <button id="bb_hub_manage" title="记忆管家"><i class="fa-solid fa-list"></i> 记忆管家</button>
+            <button id="bb_hub_init" title="初始化记忆"><i class="fa-solid fa-rocket"></i> 初始化</button>
+            <button id="bb_hub_backup" title="备份"><i class="fa-solid fa-cloud-upload"></i> 备份</button>
+            <button id="bb_hub_restore" title="恢复"><i class="fa-solid fa-cloud-download"></i> 恢复</button>
+            <button id="bb_hub_maintenance" title="维护"><i class="fa-solid fa-broom"></i> 维护</button>
+            <button id="bb_hub_stats" title="统计"><i class="fa-solid fa-chart-bar"></i> 统计</button>
+        </div>`;
+
+    Object.assign(floatingHub.style, {
+        position: 'fixed', bottom: '80px', right: '24px', zIndex: '9999',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px',
+    });
+
+    document.body.appendChild(floatingHub);
+
+    // 切换菜单
+    floatingHub.querySelector('#bb_hub_toggle').addEventListener('click', () => {
+        const menu = floatingHub.querySelector('#bb_hub_menu');
+        menu.style.display = menu.style.display === 'none' ? 'flex' : 'none';
+    });
+
+    // 点击外部关闭
+    document.addEventListener('click', (e) => {
+        if (!floatingHub?.contains(e.target)) {
+            const menu = floatingHub?.querySelector('#bb_hub_menu');
+            if (menu) menu.style.display = 'none';
+        }
+    });
+
+    // 按钮事件
+    floatingHub.querySelector('#bb_hub_manage').addEventListener('click', () => {
+        const chatId = getChatId();
+        if (chatId) openAssistant(chatId, 'dashboard');
+    });
+    floatingHub.querySelector('#bb_hub_init').addEventListener('click', async () => {
+        const chatId = getChatId();
+        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        try {
+            const results = await handleInitMemory(chatId);
+            showToast(`初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 记忆 ${results.memories}`, 'success');
+        } catch (e) {
+            showToast(`初始化失败: ${e.message}`, 'error');
+        }
+    });
+    floatingHub.querySelector('#bb_hub_backup').addEventListener('click', async () => {
+        const chatId = getChatId();
+        if (!chatId) return;
+        const result = await exportMemoriesToChatMetadata(chatId);
+        showToast(`备份完成：${result.count} 条`, 'success');
+    });
+    floatingHub.querySelector('#bb_hub_restore').addEventListener('click', async () => {
+        const chatId = getChatId();
+        if (!chatId) return;
+        const result = await importMemoriesFromChatMetadata(chatId);
+        showToast(`恢复：${result.restored} 条新增`, 'success');
+    });
+    floatingHub.querySelector('#bb_hub_maintenance').addEventListener('click', async () => {
+        const chatId = getChatId();
+        if (!chatId) return;
+        const result = await checkMaintenanceNeeded(chatId);
+        if (result.needed) {
+            showMaintenancePopup(chatId, buildMaintenanceHTML(result));
+        } else {
+            showToast('当前无需维护', 'info');
+        }
+    });
+    floatingHub.querySelector('#bb_hub_stats').addEventListener('click', async () => {
+        const chatId = getChatId();
+        if (!chatId) return;
+        const stats = await getMemoryStats(chatId);
+        showToast(`NPC: ${stats.npc.total} | 物品: ${stats.items.total} | 时间线: ${stats.timeline.total} | 记忆: ${stats.memories.total}`, 'info');
+    });
+
+    // 拖拽
+    let isDragging = false, startX, startY, origLeft, origTop;
+    const hubBtn = floatingHub.querySelector('#bb_hub_toggle');
+    hubBtn.addEventListener('mousedown', (e) => {
+        if (e.target.tagName === 'BUTTON') return;
+        isDragging = true;
+        startX = e.clientX; startY = e.clientY;
+        origLeft = floatingHub.offsetLeft; origTop = floatingHub.offsetTop;
+        hubBtn.style.cursor = 'grabbing';
+    });
+    document.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        floatingHub.style.left = (origLeft + e.clientX - startX) + 'px';
+        floatingHub.style.top = (origTop + e.clientY - startY) + 'px';
+        floatingHub.style.right = 'auto';
+        floatingHub.style.bottom = 'auto';
+    });
+    document.addEventListener('mouseup', () => {
+        if (isDragging) { isDragging = false; hubBtn.style.cursor = ''; }
+    });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -728,14 +865,20 @@ async function init() {
         const ctx = SillyTavern.getContext();
         if (typeof ctx.renderExtensionTemplateAsync === 'function') {
             const html = await ctx.renderExtensionTemplateAsync(folder, 'settings');
-            mountExtensionSettingsHtml(html);
-            restoreApiSettings(getSettings());
-            bindSidebarEvents();
-            settingsPanelMounted = true;
+            if (html && typeof html === 'string' && html.trim()) {
+                mountExtensionSettingsHtml(html);
+                restoreApiSettings(getSettings());
+                bindSidebarEvents();
+                initCollapsibleSettings();
+                settingsPanelMounted = true;
+            }
         }
     } catch (e) {
         console.warn('[BB-Memory] 设置面板挂载失败:', e.message);
     }
+
+    // 注入浮动控制中心
+    injectFloatingHub();
 
     // 初始化自动生成器
     if (getSettings().autoGenEnabled) {
