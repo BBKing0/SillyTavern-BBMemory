@@ -215,9 +215,13 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     const userMessage = getLastUserMessage(chat);
     if (!userMessage) return chat;
 
-    // v4.2.0: 安全兜底 — 确保所有 _bbmem_extracted 消息对 AI 上下文不可见
+    // v4.3.0: 扩展安全兜底 — 确保已提取/隐藏的消息对 AI 上下文不可见
+    // 同时检查 _bbmem_hideSource，覆盖预先隐藏但提取尚未完成的竞态窗口
     for (const msg of chat) {
-        if ((msg._bbmem_extracted || msg._bbmem_meta_marker) && !msg.is_hidden) {
+        const shouldBeHidden = msg._bbmem_extracted
+            || msg._bbmem_meta_marker
+            || msg._bbmem_hideSource === 'plugin';
+        if (shouldBeHidden && !msg.is_hidden) {
             msg.is_hidden = true;
             msg._bbmem_hideSource = 'plugin';
         }
@@ -1078,6 +1082,16 @@ function buildAddMemoryFormHTML() {
                         <input type="text" class="text_pole" id="bb_form_summary" placeholder="一句话总结" />
                     </div>
                 </div>
+                <div class="bb-mem-form-row">
+                    <div class="bb-mem-form-group">
+                        <label>故事时间 <span class="bb-mem-form-hint">如"第1天上午"</span></label>
+                        <input type="text" class="text_pole" id="bb_form_story_time" placeholder="故事中的发生时间" />
+                    </div>
+                    <div class="bb-mem-form-group">
+                        <label>排序值 <span class="bb-mem-form-hint">如 100</span></label>
+                        <input type="number" class="text_pole" id="bb_form_story_sort" placeholder="递增数字排序" />
+                    </div>
+                </div>
                 <div class="bb-mem-form-group">
                     <label>原话 <span class="bb-mem-form-hint">重要的角色原话/引用</span></label>
                     <input type="text" class="text_pole" id="bb_form_verbatim" placeholder="「...」" />
@@ -1279,6 +1293,11 @@ function bindAddMemoryFormEvents(overlay, chatId, onSaved) {
         const npcTier = overlay.querySelector('#bb_form_npc_tier')?.value || '';
         const itemTier = overlay.querySelector('#bb_form_item_tier')?.value || '';
         const resident = overlay.querySelector('#bb_form_resident')?.checked || false;
+        const storyTime = overlay.querySelector('#bb_form_story_time')?.value?.trim() || '';
+        const storyTimeSort = (() => {
+            const v = overlay.querySelector('#bb_form_story_sort')?.value;
+            return v !== '' && v != null ? parseInt(v, 10) : null;
+        })();
 
         const tags = tagsRaw
             ? tagsRaw.split(/[,，]/).map(t => t.trim()).filter(Boolean).map(t => ({ name: t, weight: 0.6 }))
@@ -1299,6 +1318,8 @@ function bindAddMemoryFormEvents(overlay, chatId, onSaved) {
             npcTier: npcTier || undefined,
             itemTier: itemTier || undefined,
             resident,
+            storyTime,
+            storyTimeSort,
         });
 
         toastr.success('记忆已添加', DISPLAY_NAME);
@@ -1375,6 +1396,16 @@ function buildEditMemoryFormHTML(memory) {
                     <div class="bb-mem-form-group">
                         <label>摘要 <span class="bb-mem-form-hint">一句话</span></label>
                         <input type="text" class="text_pole" id="bb_edit_form_summary" value="${escapeHtml(memory.summary || '')}" placeholder="一句话总结" />
+                    </div>
+                </div>
+                <div class="bb-mem-form-row">
+                    <div class="bb-mem-form-group">
+                        <label>故事时间 <span class="bb-mem-form-hint">如"第1天上午"</span></label>
+                        <input type="text" class="text_pole" id="bb_edit_form_story_time" value="${escapeHtml(memory.storyTime || '')}" placeholder="故事中的发生时间" />
+                    </div>
+                    <div class="bb-mem-form-group">
+                        <label>排序值 <span class="bb-mem-form-hint">如 100</span></label>
+                        <input type="number" class="text_pole" id="bb_edit_form_story_sort" value="${memory.storyTimeSort != null ? memory.storyTimeSort : ''}" placeholder="递增数字排序" />
                     </div>
                 </div>
                 <div class="bb-mem-form-group">
@@ -1579,6 +1610,11 @@ function bindEditMemoryFormEvents(overlay, chatId, memory, onSaved) {
             npcTier: overlay.querySelector('#bb_edit_form_npc_tier')?.value || '',
             itemTier: overlay.querySelector('#bb_edit_form_item_tier')?.value || '',
             resident: overlay.querySelector('#bb_edit_form_resident')?.checked || false,
+            storyTime: overlay.querySelector('#bb_edit_form_story_time')?.value?.trim() || '',
+            storyTimeSort: (() => {
+                const v = overlay.querySelector('#bb_edit_form_story_sort')?.value;
+                return v !== '' && v != null ? parseInt(v, 10) : null;
+            })(),
         };
 
         const tagsRaw = overlay.querySelector('#bb_edit_form_tags')?.value?.trim() || '';

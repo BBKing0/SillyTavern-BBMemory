@@ -168,7 +168,9 @@ st=storyTime | ss=storyTimeSort
 - st: 可选，故事发生时间（人类可读格式，无则 ""）
 - ss: 可选，排序用数字时间戳（按用户日历规则折算，无则 null）
 
-示例：[{"t":"episode","p":"episode.event","n":"北境宣战","c":"雅赫摩斯在北境会议上正式宣战","m":"雅赫摩斯向北境诸邦宣战","v":"从今日起，北境诸邦即为吾敌","g":["北境战争","雅赫摩斯"],"s":"雅赫摩斯","a":"北境诸邦","i":0.8,"e":0.6,"nt":"core","it":"","sa":false,"ic":"","ri":[]}]
+示例1（含NPC分级）：[{"t":"episode","p":"episode.event","n":"北境宣战","c":"雅赫摩斯在北境会议上正式宣战","m":"雅赫摩斯向北境诸邦宣战","v":"从今日起，北境诸邦即为吾敌","g":["北境战争","雅赫摩斯"],"s":"雅赫摩斯","a":"北境诸邦","i":0.8,"e":0.6,"nt":"core","it":"","sa":false,"ic":"","ri":[]}]
+示例2（NPC记忆-必填nt）：[{"t":"fact","p":"npc.profile","n":"旅行商人科尔","c":"科尔是一个来自南方的旅行商人，专营稀有魔法材料","m":"旅行商人科尔专营稀有魔法材料","v":"","g":["科尔","商人","南方"],"s":"科尔","a":"","i":0.7,"e":0.1,"nt":"important","it":"","sa":true,"ic":"南方的稀有材料商人，性格精明","ri":[]}]
+示例3（物品记忆-必填it）：[{"t":"fact","p":"item.key","n":"辉月之剑","c":"辉月之剑是一把传说中的圣剑，曾属于古代英雄阿尔托","m":"辉月之剑是传说中的圣剑","v":"","g":["辉月之剑","圣剑","古代遗物"],"s":"辉月之剑","a":"","i":0.9,"e":0.3,"nt":"","it":"key","sa":true,"ic":"传说中的圣剑","ri":[]}]
 [当前对话]
 用户: {{userMessage}}
 角色: {{aiMessage}}`;
@@ -242,10 +244,19 @@ function buildSummaryInstructions() {
     // v4.1.0: 故事日历规则
     if (settings.calendarDescription && settings.calendarDescription.trim()) {
         parts.push(`【故事日历】${settings.calendarDescription.trim()}\n请在每条记忆的 st 字段中填写故事发生时间（人类可读格式），在 ss 字段中填写对应的排序用数字时间戳。无法确定时间时，st 和 ss 可留空。`);
+    } else {
+        // v4.3.0: 无自定义日历时，给 AI 默认时间推断规则
+        parts.push(`【时间推断规则】对话未配置故事日历。请基于对话内容推断故事时间：根据事件顺序推测大致时间（如"第1天上午"、"次日傍晚"、"三天后"），填入 st 字段。ss 填写递增排序数字：每个对话 exchange 推进约 +20，跨天 +100（如 100, 120, 200, 220...）。无法确定时间时留空。`);
     }
 
-    // v4.2.0: 实体标注规则
-    parts.push(`【实体标注规则】每条记忆的 s（subject）字段必须填写涉及的主要实体名。有实体名时必须填写对应 nt（npcTier）或 it（itemTier），不可留空。`);
+    // v4.3.0: 强化实体标注规则
+    parts.push(`【实体标注规则-严格执行】每条记忆的 s（subject）必须填写涉及的主要实体名。有实体名时必须填写 nt（npcTier）或 it（itemTier），不可留空。
+具体要求：
+- NPC记忆（categoryPath 以 npc. 开头）：s填角色名，nt必填(core/important/minor/background)
+- 物品记忆（categoryPath 以 item. 开头）：s填物品名，it必填(key/equipped/clue/consumable/background)
+- 其他记忆（地点/事件/情感/习惯）：有实体则标注，无实体可留空
+分级速查：core=核心角色 | important=重要配角 | minor=普通配角 | background=路人
+         key=关键剧情物 | equipped=持有装备 | clue=线索物 | consumable=消耗品 | background=背景物`);
 
     return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';
 }
@@ -536,9 +547,11 @@ export function parseAiResponse(responseText) {
             .map(entry => {
                 if (!entry.npcTier && entry.subject && !(entry.categoryPath || '').startsWith('item.')) {
                     entry.npcTier = 'minor';
+                    if (getSettings().debugLogging) console.log('[BB-Memory] 启发式回退 NPC:', entry.subject, '→ minor');
                 }
                 if (!entry.itemTier && entry.subject && (entry.categoryPath || '').startsWith('item.')) {
                     entry.itemTier = 'consumable';
+                    if (getSettings().debugLogging) console.log('[BB-Memory] 启发式回退 Item:', entry.subject, '→ consumable');
                 }
                 return {
                     cognitiveType: entry.cognitiveType,
@@ -852,6 +865,12 @@ function onMessageReceived(_messageIndex) {
                 const alreadyDone = await isExchangeProcessed(chatId, oldest.hash);
 
                 if (!alreadyDone) {
+                    // v4.3.0: semi/auto 模式先隐藏再提取，避免竞态条件导致 AI 上下文泄漏
+                    if (confirmMode !== 'active') {
+                        hideExchange(oldest.userIndex, oldest.aiIndex);
+                        if (debug) console.log('[BB-Memory] 滑动窗口：已预先隐藏最旧 exchange（提取前）');
+                    }
+
                     reportProgress('正在提取记忆', 0, 1);
 
                     if (confirmMode === 'active') {
@@ -881,10 +900,12 @@ function onMessageReceived(_messageIndex) {
                     }
 
                     await markExchangeExtracted(oldest.aiIndex, oldest.hash);
-                }
 
-                // 隐藏最旧的 exchange
-                hideExchange(oldest.userIndex, oldest.aiIndex);
+                    // active 模式：提取并审核后才隐藏
+                    if (confirmMode === 'active') {
+                        hideExchange(oldest.userIndex, oldest.aiIndex);
+                    }
+                }
 
                 if (debug) console.log('[BB-Memory] 滑动窗口：已隐藏最旧 exchange');
             }
