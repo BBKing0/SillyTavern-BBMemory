@@ -238,8 +238,92 @@ let _hubExtractStatus = '空闲';
 let _hubExtractPct = '';
 console.log('[BB-Memory] ✅ TEST 5B-1 — Hub variables');
 
-// TEST 5B-2: 最小 injectFloatingHub
-function injectFloatingHub() {
-    console.log('[BB-Memory] injectFloatingHub called');
+// TEST 5B-3: setHubExtractStatus + 完整 injectFloatingHub（单行HTML，无模板字面量）
+function setHubExtractStatus(status, pct) {
+    _hubExtractStatus = status;
+    _hubExtractPct = pct;
+    const statusEl = document.getElementById('bb_hub_extract_status');
+    const pctEl = document.getElementById('bb_hub_extract_pct');
+    if (statusEl) statusEl.textContent = status;
+    if (pctEl) pctEl.textContent = pct ? ' ' + pct : '';
 }
-console.log('[BB-Memory] ✅ TEST 5B-2 — stub injectFloatingHub');
+
+function injectFloatingHub() {
+    if (document.getElementById('bb_floating_hub')) return;
+    const hub = document.createElement('div');
+    hub.id = 'bb_floating_hub';
+    hub.className = 'bb-floating-hub';
+    hub.innerHTML = '<i class="fa-solid fa-brain"></i><span class="bb-hub-badge" id="bb_hub_badge" style="display:none;">0</span>';
+    const menu = document.createElement('div');
+    menu.id = 'bb_floating_menu';
+    menu.className = 'bb-floating-menu';
+    menu.style.display = 'none';
+    menu.innerHTML = '<div class="bb-floating-menu-header"><i class="fa-solid fa-brain"></i> BB-Memory v5.0</div><div class="bb-floating-menu-body"><div class="bb-floating-menu-item" id="bb_hub_slot_info"><i class="fa-solid fa-floppy-disk"></i><span>存档: <strong>default</strong> - <strong>0</strong> 条</span></div><div class="bb-floating-menu-item bb-floating-menu-action" id="bb_hub_hit_info" data-action="toggle_hit_list"><i class="fa-solid fa-bullseye"></i><span>命中: <strong id="bb_hub_hit_count">-</strong> 条</span><i class="fa-solid fa-chevron-down" style="margin-left:auto;font-size:0.7em;opacity:0.5;"></i></div><div id="bb_hub_hit_list" style="display:none;"></div><div class="bb-floating-menu-item" id="bb_hub_extract_progress"><i class="fa-solid fa-robot"></i><span id="bb_hub_extract_status">空闲</span><strong id="bb_hub_extract_pct"></strong></div><div style="border-top:1px solid var(--SmartThemeBorderColor,#444);margin:4px 0;"></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_manager"><i class="fa-solid fa-list"></i><span>记忆管家</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="init_memory"><i class="fa-solid fa-rocket"></i><span>初始化记忆</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="backup"><i class="fa-solid fa-cloud-upload"></i><span>备份</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="restore"><i class="fa-solid fa-cloud-download"></i><span>恢复</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="maintenance"><i class="fa-solid fa-broom"></i><span>维护</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="stats"><i class="fa-solid fa-chart-bar"></i><span>统计</span></div><div style="border-top:1px solid var(--SmartThemeBorderColor,#444);margin:4px 0;"></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="toggle_visibility"><i class="fa-solid fa-eye-slash"></i><span>切换楼层可见</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="meta_last"><i class="fa-solid fa-tag"></i><span>标记最后消息</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="manual_extract"><i class="fa-solid fa-wand-magic-sparkles"></i><span>手动提取</span></div></div>';
+    hub.appendChild(menu);
+    document.body.appendChild(hub);
+    let dragging = false, startX = 0, startY = 0, startLeft = 0, startTop = 0, hasMoved = false;
+    hub.addEventListener('mousedown', function (e) {
+        if (e.button !== 0) return;
+        dragging = true; hasMoved = false;
+        startX = e.clientX; startY = e.clientY;
+        var rect = hub.getBoundingClientRect();
+        startLeft = rect.left; startTop = rect.top;
+        hub.style.transition = 'none';
+        e.preventDefault();
+    });
+    hub.addEventListener('touchstart', function (e) {
+        dragging = true; hasMoved = false;
+        var t = e.touches[0];
+        startX = t.clientX; startY = t.clientY;
+        var rect = hub.getBoundingClientRect();
+        startLeft = rect.left; startTop = rect.top;
+        hub.style.transition = 'none';
+    }, { passive: false });
+    document.addEventListener('mousemove', function (e) {
+        if (!dragging) return;
+        var dx = e.clientX - startX, dy = e.clientY - startY;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) hasMoved = true;
+        var l = startLeft + dx, t = startTop + dy;
+        l = Math.max(0, Math.min(window.innerWidth - hub.offsetWidth, l));
+        t = Math.max(0, Math.min(window.innerHeight - hub.offsetHeight, t));
+        hub.style.left = l + 'px'; hub.style.top = t + 'px';
+    });
+    document.addEventListener('touchmove', function (e) {
+        if (!dragging) return;
+        var t = e.touches[0];
+        var dx = t.clientX - startX, dy = t.clientY - startY;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) hasMoved = true;
+        var l = startLeft + dx, t = startTop + dy;
+        l = Math.max(0, Math.min(window.innerWidth - hub.offsetWidth, l));
+        t = Math.max(0, Math.min(window.innerHeight - hub.offsetHeight, t));
+        hub.style.left = l + 'px'; hub.style.top = t + 'px';
+    }, { passive: false });
+    var endDrag = function () { dragging = false; hub.style.transition = ''; };
+    document.addEventListener('mouseup', endDrag);
+    document.addEventListener('touchend', endDrag);
+    hub.addEventListener('click', function (e) {
+        if (hasMoved) { e.preventDefault(); e.stopPropagation(); return; }
+        if (menu.contains(e.target)) return;
+        toggleFloatingMenu();
+    });
+    menu.addEventListener('click', async function (e) {
+        var actionItem = e.target.closest('.bb-floating-menu-action');
+        if (!actionItem) return;
+        var action = actionItem.dataset.action;
+        await handleFloatingMenuAction(action);
+        if (action !== 'toggle_hit_list') menu.style.display = 'none';
+    });
+    document.addEventListener('click', function (e) {
+        if (!menu.contains(e.target) && e.target !== hub && !hub.contains(e.target)) {
+            menu.style.display = 'none';
+        }
+    });
+    setInterval(function () { refreshFloatingHubData(); }, 5000);
+}
+
+// 占位桩函数（injectFloatingHub 引用但稍后完整定义）
+function toggleFloatingMenu() {}
+async function refreshFloatingHubData() {}
+async function handleFloatingMenuAction(action) {}
+
+console.log('[BB-Memory] ✅ TEST 5B-3 — injectFloatingHub (no template literals, no arrow funcs)');
