@@ -1235,15 +1235,22 @@ globalThis.bbMemoryDebug = {
 
 // ═══ 启动 ═══
 (function startup() {
-    const ctx = SillyTavern.getContext();
-    const ev = ctx.event_types ?? ctx.eventTypes;
+    console.log('[BB-Memory] 模块已加载，等待初始化...');
+    try {
+        const ctx = SillyTavern.getContext();
+        const ev = ctx.event_types ?? ctx.eventTypes;
 
-    if (ctx.eventSource && ev?.APP_READY) {
-        // 用 on() 而非 once()：APP_READY 是 sticky 事件，on() 在事件已触发后仍会立即执行回调
-        ctx.eventSource.on(ev.APP_READY, () => init());
-    } else if (document.readyState === 'complete' || document.readyState === 'interactive') {
-        init();
-    } else {
-        window.addEventListener('load', () => init());
+        if (ctx.eventSource && ev?.APP_READY) {
+            // 用 on() 而非 once()：APP_READY 是 sticky 事件，on() 在事件已触发后仍会立即执行回调
+            ctx.eventSource.on(ev.APP_READY, () => init());
+        } else if (document.readyState === 'complete' || document.readyState === 'interactive') {
+            init();
+        } else {
+            window.addEventListener('load', () => init());
+        }
+    } catch (e) {
+        console.error('[BB-Memory] 启动失败:', e);
+        if (document.readyState === 'complete' || document.readyState === 'interactive') init();
+        else window.addEventListener('load', () => init());
     }
 })();
