@@ -4,9 +4,9 @@
     "js": "index.js",
     "css": "style.css",
     "author": "BB-Memory Dev",
-    "version": "4.4.3",
+    "version": "5.0.0",
     "homePage": "",
     "auto_update": true,
     "generate_interceptor": "bbMemoryInterceptor",
-    "description": "智能长期记忆扩展 - 时间线总结、跨设备备份、竞态修复、实体提取强化"
+    "description": "智能长期记忆扩展 v5.0 - 四柱架构：NPC档案/物品栏/时间线/记忆条目，升降格系统，记忆维护"
 }

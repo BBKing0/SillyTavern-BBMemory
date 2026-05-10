@@ -1,63 +1,42 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory</b>
+            <b>BB-Memory v5.0</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
 
-            <!-- 启用开关 -->
             <label class="checkbox_label" style="margin: 8px 0;">
                 <input id="bb_memory_enabled" type="checkbox" checked />
                 <span>启用 BB-Memory</span>
             </label>
 
-            <!-- 记忆数量 -->
             <div class="bb-mem-sidebar-info">
-                当前聊天记忆数：<strong id="bb_memory_count">0</strong>
+                当前记忆数：<strong id="bb_memory_count">0</strong>
             </div>
 
             <!-- 快捷按钮 -->
             <div class="bb-mem-sidebar-buttons">
-                <button id="bb_memory_add_btn" class="menu_button" title="添加一条新记忆">
-                    <i class="fa-solid fa-plus"></i> 添加记忆
+                <button id="bb_init_memory_btn" class="menu_button" title="从角色卡+世界书+对话初始化记忆">
+                    <i class="fa-solid fa-rocket"></i> 初始化记忆
                 </button>
-                <button id="bb_memory_manage_btn" class="menu_button" title="打开记忆管理面板">
-                    <i class="fa-solid fa-list"></i> 管理记忆
+                <button id="bb_memory_manage_btn" class="menu_button" title="打开记忆管家面板">
+                    <i class="fa-solid fa-list"></i> 记忆管家
                 </button>
-                <button id="bb_memory_extract_btn" class="menu_button" title="手动触发AI提取记忆">
-                    <i class="fa-solid fa-wand-magic-sparkles"></i> 手动提取
+                <button id="bb_memory_maintenance_btn" class="menu_button" title="打开记忆维护面板">
+                    <i class="fa-solid fa-broom"></i> 记忆维护
                 </button>
-                <button id="bb_memory_meta_btn" class="menu_button" title="标记/取消最后一条AI消息为元指令">
-                    <i class="fa-solid fa-tag"></i> 标记消息
+                <button id="bb_memory_backup_now" class="menu_button" title="立即备份">
+                    <i class="fa-solid fa-cloud-upload"></i> 备份
                 </button>
-                <button id="bb_memory_toggle_vis_btn" class="menu_button" title="显示/隐藏已提取的聊天楼层">
-                    <i class="fa-solid fa-eye-slash"></i> 楼层可见
+                <button id="bb_memory_restore_now" class="menu_button" title="恢复备份">
+                    <i class="fa-solid fa-cloud-download"></i> 恢复
                 </button>
-            </div>
-
-            <!-- v3.3: 提取进度 -->
-            <div class="bb-mem-sidebar-info" id="bb_sidebar_extract_progress" style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
-                <i class="fa-solid fa-moon" style="font-size:0.85em;opacity:0.6;"></i>
-                <span style="font-size:0.85em;">提取状态: <strong>空闲</strong></span>
-            </div>
-
-            <!-- ═══ 命中记忆 ═══ -->
-            <div class="bb-settings-section">
-                <div class="bb-settings-section-header" data-section="hits">
-                    <span><i class="fa-solid fa-bullseye"></i> 命中记忆 <small id="bb_hit_timestamp" style="font-size:0.7em;opacity:0.5;margin-left:6px;"></small></span>
-                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
-                </div>
-                <div class="bb-settings-section-body">
-                    <div class="bb-hit-list" id="bb_hit_list">
-                        <div class="bb-mem-empty">等待下一次 AI 生成...</div>
-                    </div>
-                </div>
             </div>
 
             <hr />
 
-            <!-- ═══ 注入设置 ═══ -->
+            <!-- 注入设置 -->
             <div class="bb-settings-section">
                 <div class="bb-settings-section-header" data-section="injection">
                     <span><i class="fa-solid fa-syringe"></i> 注入设置</span>
@@ -65,299 +44,138 @@
                 </div>
                 <div class="bb-settings-section-body">
 
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_depth">
-                    注入深度
-                    <small class="bb-mem-hint">记忆插入到聊天历史中的位置（0 = 最末尾）</small>
-                </label>
-                <input id="bb_memory_depth" type="number" class="text_pole"
-                       min="0" max="100" value="4" />
-            </div>
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_max_results">最大检索数</label>
+                        <input id="bb_max_results" type="number" class="text_pole" min="1" max="30" value="10" />
+                    </div>
 
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_max_results">
-                    最大检索数
-                    <small class="bb-mem-hint">每次生成时最多检索多少条相关记忆</small>
-                </label>
-                <input id="bb_memory_max_results" type="number" class="text_pole"
-                       min="1" max="30" value="10" />
-            </div>
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_token_budget">Token 预算</label>
+                        <input id="bb_token_budget" type="number" class="text_pole" min="100" max="4000" step="50" value="800" />
+                    </div>
 
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_token_budget">
-                    Token 预算
-                    <small class="bb-mem-hint">注入记忆的最大 token 数，防止上下文溢出</small>
-                </label>
-                <input id="bb_memory_token_budget" type="number" class="text_pole"
-                       min="100" max="4000" step="50" value="800" />
-            </div>
-
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_template">
-                    注入模板
-                    <small class="bb-mem-hint">用 {{memories}} 代表记忆内容</small>
-                </label>
-                <textarea id="bb_memory_template" class="text_pole bb-mem-textarea" rows="3">[角色长期记忆]
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_injection_template">注入模板 <small>用 {{memories}} 代表记忆内容</small></label>
+                        <textarea id="bb_injection_template" class="text_pole bb-mem-textarea" rows="2">[BB-Memory 长期记忆]
 {{memories}}</textarea>
-            </div>
+                    </div>
 
                 </div>
             </div>
 
             <hr />
 
-            <!-- ═══ 记忆维护设置 ═══ -->
+            <!-- 升降格与维护设置 -->
             <div class="bb-settings-section">
-                <div class="bb-settings-section-header" data-section="maintenance">
-                    <span><i class="fa-solid fa-toolbox"></i> 记忆维护</span>
+                <div class="bb-settings-section-header" data-section="tier">
+                    <span><i class="fa-solid fa-layer-group"></i> 升降格与维护</span>
                     <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
                 </div>
                 <div class="bb-settings-section-body">
 
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_maint_threshold">
-                    维护提醒阈值
-                    <small class="bb-mem-hint">当活跃记忆数超过此值时，提示整理建议</small>
-                </label>
-                <input id="bb_memory_maint_threshold" type="number" class="text_pole"
-                       min="10" max="500" step="10" value="50" />
-            </div>
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_maintenance_mem_threshold">记忆维护阈值</label>
+                        <small class="bb-mem-hint">记忆数超过此值时提示维护（默认20）</small>
+                        <input id="bb_maintenance_mem_threshold" type="number" class="text_pole" min="5" max="200" value="20" />
+                    </div>
 
-            <label class="checkbox_label" style="margin: 8px 0;">
-                <input id="bb_memory_timeline_summary" type="checkbox" checked />
-                <span>启用时间线记忆总结</span>
-                <small class="bb-mem-hint">AI 自动按故事时间生成每日/阶段总结</small>
-            </label>
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_maintenance_npc_threshold">NPC 维护阈值</label>
+                        <small class="bb-mem-hint">NPC数超过此值时提示维护（默认5）</small>
+                        <input id="bb_maintenance_npc_threshold" type="number" class="text_pole" min="2" max="50" value="5" />
+                    </div>
 
-            <div class="bb-mem-sidebar-section">
-                <label class="checkbox_label" style="margin: 8px 0;">
-                    <input id="bb_memory_auto_backup" type="checkbox" />
-                    <span>启用自动备份（跨设备同步）</span>
-                    <small class="bb-mem-hint">记忆变更后自动备份到 ST 服务器，多端可恢复</small>
-                </label>
-            </div>
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_maintenance_item_threshold">物品维护阈值</label>
+                        <small class="bb-mem-hint">物品数超过此值时提示维护（默认20）</small>
+                        <input id="bb_maintenance_item_threshold" type="number" class="text_pole" min="5" max="200" value="20" />
+                    </div>
 
-            <div style="display:flex;gap:4px;margin-top:6px;">
-                <button id="bb_memory_backup_now" class="menu_button" title="立即备份当前聊天记忆">
-                    <i class="fa-solid fa-cloud-upload"></i> 立即备份
-                </button>
-                <button id="bb_memory_restore_now" class="menu_button" title="从 ST 服务器恢复记忆">
-                    <i class="fa-solid fa-cloud-download"></i> 恢复备份
-                </button>
-            </div>
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_diversity_limit">多样性限制</label>
+                        <small class="bb-mem-hint">同一标签最多允许多少条核心记忆（默认5）</small>
+                        <input id="bb_diversity_limit" type="number" class="text_pole" min="2" max="20" value="5" />
+                    </div>
+
+                    <label class="checkbox_label" style="margin: 8px 0;">
+                        <input id="bb_timeline_summary_enabled" type="checkbox" checked />
+                        <span>启用时间线总结</span>
+                    </label>
+
+                    <label class="checkbox_label" style="margin: 8px 0;">
+                        <input id="bb_auto_backup_enabled" type="checkbox" />
+                        <span>启用自动备份（跨设备同步）</span>
+                    </label>
 
                 </div>
             </div>
 
             <hr />
 
-            <!-- ═══ AI 自动生成设置 ═══ -->
+            <!-- AI 自动生成设置 -->
             <div class="bb-settings-section">
                 <div class="bb-settings-section-header" data-section="autogen">
-                    <span><i class="fa-solid fa-robot"></i> AI 自动生成</span>
+                    <span><i class="fa-solid fa-robot"></i> AI 自动提取</span>
                     <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
                 </div>
                 <div class="bb-settings-section-body">
 
-            <label class="checkbox_label" style="margin: 8px 0;">
-                <input id="bb_memory_auto_gen" type="checkbox" />
-                <span>启用 AI 自动提取记忆</span>
-            </label>
-            <small class="bb-mem-hint" style="display: block; margin-bottom: 8px;">
-                开启后，每当 AI 回复时会自动提取值得记忆的信息
-            </small>
-
-            <label class="checkbox_label" style="margin: 8px 0;">
-                <input id="bb_memory_debug_logging" type="checkbox" />
-                <span>调试日志</span>
-            </label>
-            <small class="bb-mem-hint" style="display: block; margin-bottom: 8px;">
-                开启后在浏览器控制台输出详细提取日志，用于排查自动提取问题
-            </small>
-
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_auto_max_exchanges">
-                    每轮最大提取数
-                    <small class="bb-mem-hint">每次AI响应后最多向后扫描多少个交换（1-20，默认3）</small>
-                </label>
-                <input id="bb_memory_auto_max_exchanges" type="number" class="text_pole"
-                       min="1" max="20" value="3" />
-            </div>
-
-            <!-- v2.9.8: 确认模式 -->
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_extract_confirm_mode">
-                    提取确认模式
-                    <small class="bb-mem-hint">
-                        <strong>主动</strong>：所有提取都需确认；
-                        <strong>半自动</strong>：仅手动提取需确认（默认）；
-                        <strong>自动</strong>：全部直接保存
-                    </small>
-                </label>
-                <select id="bb_memory_extract_confirm_mode" class="text_pole">
-                    <option value="active">主动 - 所有提取需确认</option>
-                    <option value="semi" selected>半自动 - 手动提取需确认</option>
-                    <option value="auto">自动 - 全部直接保存</option>
-                </select>
-            </div>
-
-            <!-- v2.9.8: active 模式的子选项 -->
-            <div class="bb-mem-sidebar-section" id="bb_active_confirm_style_section" style="display:none;">
-                <label for="bb_memory_active_confirm_style">
-                    主动模式通知方式
-                    <small class="bb-mem-hint">
-                        <strong>浮动弹窗</strong>：直接在聊天界面弹出审核窗口；
-                        <strong>通知提示</strong>：仅显示提示，需手动打开管理面板
-                    </small>
-                </label>
-                <select id="bb_memory_active_confirm_style" class="text_pole">
-                    <option value="popup" selected>浮动弹窗</option>
-                    <option value="toast">通知提示</option>
-                </select>
-            </div>
-
-            <!-- v2.9.8: 上下文窗口大小 -->
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_context_window">
-                    上下文窗口大小
-                    <small class="bb-mem-hint">保留最近 N 个 exchange 在上下文可见，超出后提取最旧的（2-20，默认5）</small>
-                </label>
-                <input id="bb_memory_context_window" type="number" class="text_pole"
-                       min="2" max="20" value="5" />
-            </div>
-
-            <!-- v2.9.9: 总结模式 -->
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_summary_mode">
-                    总结模式
-                    <small class="bb-mem-hint">
-                        <strong>扮演式</strong>：从用户输入+AI回复中综合提取用户信息；
-                        <strong>代入式</strong>：仅从用户输入中提取用户信息
-                    </small>
-                </label>
-                <select id="bb_memory_summary_mode" class="text_pole">
-                    <option value="roleplay" selected>扮演式 - 综合提取</option>
-                    <option value="self">代入式 - 仅用户输入</option>
-                </select>
-            </div>
-
-            <!-- v2.9.9: 排除 NPC -->
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_excluded_npcs">
-                    不总结的 NPC
-                    <small class="bb-mem-hint">逗号分隔 NPC 名称，这些 NPC 的信息不会被提取为独立记忆</small>
-                </label>
-                <input id="bb_memory_excluded_npcs" type="text" class="text_pole"
-                       placeholder="如：路人甲, 酒保, 门卫" />
-            </div>
-
-            <!-- v4.2.0: 每次提取最大记忆数 -->
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_max_per_exchange">
-                    每次提取最大记忆数
-                    <small class="bb-mem-hint">每次 exchange 提取的记忆条数上限（1-8，默认3）。降低可减缓记忆膨胀速度</small>
-                </label>
-                <input id="bb_memory_max_per_exchange" type="number" class="text_pole"
-                       min="1" max="8" value="3" />
-            </div>
-
-            <!-- v3.0.0: 批量提取模式 -->
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_extraction_batch_mode">
-                    手动提取模式
-                    <small class="bb-mem-hint">
-                        <strong>逐层</strong>：每层独立提取，更省 token 但耗时长；
-                        <strong>批量</strong>：所有楼层打包一次提取
-                    </small>
-                </label>
-                <select id="bb_memory_extraction_batch_mode" class="text_pole">
-                    <option value="single" selected>逐层提取 - 每层独立提取</option>
-                    <option value="batch">批量提取 - 所有楼层打包</option>
-                </select>
-            </div>
-
-            <!-- 自定义提取提示词 -->
-            <div class="bb-mem-section-title" style="margin-top:12px;">
-                <i class="fa-solid fa-pen-to-square"></i> 自定义提示词
-            </div>
-
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_auto_prompt">
-                    对话提取提示词
-                    <small class="bb-mem-hint">
-                        变量：<code>{<!-- -->{userMessage}}</code> <code>{<!-- -->{aiMessage}}</code>
-                        <br /><a id="bb_memory_reset_auto_prompt" href="javascript:void(0)" style="font-size:0.9em;opacity:0.7;">恢复默认</a>
-                    </small>
-                </label>
-                <textarea id="bb_memory_auto_prompt" class="text_pole bb-mem-textarea" rows="6"
-                          placeholder="留空使用默认"></textarea>
-            </div>
-
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_context_prompt">
-                    上下文提取提示词（手动提取时使用）
-                    <small class="bb-mem-hint">
-                        变量：<code>{<!-- -->{conversation}}</code>
-                        <br /><a id="bb_memory_reset_context_prompt" href="javascript:void(0)" style="font-size:0.9em;opacity:0.7;">恢复默认</a>
-                    </small>
-                </label>
-                <textarea id="bb_memory_context_prompt" class="text_pole bb-mem-textarea" rows="6"
-                          placeholder="留空使用默认"></textarea>
-            </div>
-
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_api_mode">
-                    API 模式
-                    <small class="bb-mem-hint">选择用于记忆提取的 AI 接口</small>
-                </label>
-                <select id="bb_memory_api_mode" class="text_pole">
-                    <option value="main">使用主 API（推荐）</option>
-                    <option value="custom">自定义 API 端点</option>
-                </select>
-            </div>
-
-            <div id="bb_memory_custom_api_section" style="display: none;">
-                <div class="bb-mem-sidebar-section">
-                    <label for="bb_memory_api_endpoint">
-                        API 端点
-                        <small class="bb-mem-hint">OpenAI 兼容格式，只需输入基础地址（自动补全 /v1/chat/completions）</small>
+                    <label class="checkbox_label" style="margin: 8px 0;">
+                        <input id="bb_auto_gen_enabled" type="checkbox" />
+                        <span>启用 AI 自动提取</span>
                     </label>
-                    <input id="bb_memory_api_endpoint" type="text" class="text_pole"
-                           placeholder="https://api.example.com" />
-                </div>
 
-                <div class="bb-mem-sidebar-section">
-                    <label for="bb_memory_api_key">
-                        API Key
-                        <small class="bb-mem-hint">你的 API 密钥</small>
+                    <label class="checkbox_label" style="margin: 8px 0;">
+                        <input id="bb_debug_logging" type="checkbox" />
+                        <span>调试日志</span>
                     </label>
-                    <input id="bb_memory_api_key" type="password" class="text_pole"
-                           placeholder="sk-..." />
-                </div>
 
-                <div class="bb-mem-sidebar-section">
-                    <label for="bb_memory_api_model">
-                        模型名称
-                        <small class="bb-mem-hint">例如 gpt-4o-mini, claude-3-haiku</small>
-                    </label>
-                    <input id="bb_memory_api_model" type="text" class="text_pole"
-                           placeholder="gpt-4o-mini" />
-                </div>
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_auto_gen_mode">API 模式</label>
+                        <select id="bb_auto_gen_mode" class="text_pole">
+                            <option value="main">主 API</option>
+                            <option value="custom">自定义 API</option>
+                        </select>
+                    </div>
 
-                <div class="bb-mem-sidebar-section" style="margin-top: 8px;">
-                    <button id="bb_memory_test_api" class="menu_button" style="width:100%;">
-                        <i class="fa-solid fa-plug"></i> 测试连接
-                    </button>
-                    <small id="bb_memory_test_result" style="display:block;margin-top:4px;font-size:0.8em;"></small>
-                </div>
-            </div>
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_extraction_confirm_mode">提取确认模式</label>
+                        <select id="bb_extraction_confirm_mode" class="text_pole">
+                            <option value="active">主动确认</option>
+                            <option value="semi" selected>半自动</option>
+                            <option value="auto">全自动</option>
+                        </select>
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_active_confirm_style">确认通知方式</label>
+                        <select id="bb_active_confirm_style" class="text_pole">
+                            <option value="popup" selected>浮动弹窗</option>
+                            <option value="toast">通知提示</option>
+                        </select>
+                    </div>
+
+                    <div id="bb_memory_custom_api_section">
+                        <div class="bb-mem-sidebar-section">
+                            <label for="bb_auto_gen_endpoint">自定义 API 端点</label>
+                            <input id="bb_auto_gen_endpoint" type="text" class="text_pole" placeholder="https://api.example.com" />
+                        </div>
+                        <div class="bb-mem-sidebar-section">
+                            <label for="bb_auto_gen_api_key">API Key</label>
+                            <input id="bb_auto_gen_api_key" type="password" class="text_pole" placeholder="sk-..." />
+                        </div>
+                        <div class="bb-mem-sidebar-section">
+                            <label for="bb_auto_gen_model">模型</label>
+                            <input id="bb_auto_gen_model" type="text" class="text_pole" placeholder="gpt-4o-mini" />
+                        </div>
+                    </div>
 
                 </div>
             </div>
 
             <hr />
 
-            <!-- ═══ v4.0.0: 语义向量设置 ═══ -->
+            <!-- 语义向量设置 -->
             <div class="bb-settings-section">
                 <div class="bb-settings-section-header" data-section="embedding">
                     <span><i class="fa-solid fa-vector-square"></i> 语义向量</span>
@@ -365,173 +183,72 @@
                 </div>
                 <div class="bb-settings-section-body">
 
-            <label class="checkbox_label" style="margin: 8px 0;">
-                <input id="bb_memory_embedding_enabled" type="checkbox" checked />
-                <span>启用语义向量检索</span>
-            </label>
-            <small class="bb-mem-hint" style="display: block; margin-bottom: 8px;">
-                使用 Embedding API 对记忆进行语义向量化，提升检索准确度。禁用后回退为纯关键词匹配。
-            </small>
+                    <label class="checkbox_label" style="margin: 8px 0;">
+                        <input id="bb_embedding_enabled" type="checkbox" />
+                        <span>启用语义向量检索</span>
+                    </label>
 
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_embedding_endpoint">
-                    Embedding API 端点
-                    <small class="bb-mem-hint">OpenAI 兼容格式（自动补全 /v1/embeddings）</small>
-                </label>
-                <input id="bb_memory_embedding_endpoint" type="text" class="text_pole"
-                       placeholder="https://api.example.com" />
-            </div>
-
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_embedding_key">
-                    Embedding API Key
-                    <small class="bb-mem-hint">可复用对话 API 的 key</small>
-                </label>
-                <input id="bb_memory_embedding_key" type="password" class="text_pole"
-                       placeholder="sk-..." />
-            </div>
-
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_embedding_model">
-                    Embedding 模型
-                    <small class="bb-mem-hint">如 text-embedding-3-small、bge-large-zh 等</small>
-                </label>
-                <input id="bb_memory_embedding_model" type="text" class="text_pole"
-                       placeholder="text-embedding-3-small" />
-            </div>
-
-            <div class="bb-mem-sidebar-section" style="margin-top: 8px;">
-                <button id="bb_memory_reindex_btn" class="menu_button" style="width:100%;">
-                    <i class="fa-solid fa-rotate"></i> 重建语义索引
-                </button>
-                <small id="bb_memory_reindex_result" style="display:block;margin-top:4px;font-size:0.8em;"></small>
-            </div>
-
-            </div>
-            </div>
-
-            <!-- ═══ v4.1.0: 故事日历设置 ═══ -->
-            <div class="bb-settings-section" style="margin-top: 12px;">
-                <div class="bb-settings-section-header" data-section="calendar">
-                    <span><i class="fa-solid fa-calendar-days"></i> 故事日历</span>
-                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
-                </div>
-                <div class="bb-settings-section-body">
                     <div class="bb-mem-sidebar-section">
-                        <label for="bb_memory_calendar_description">
-                            日历描述
-                            <small class="bb-mem-hint">
-                                描述你的奇幻世界日历规则，AI 提取记忆时会据此估算故事时间。<br />
-                                例如："本世界一年3季（泛滥季、播种季、收获季），每季4个月，每月30天。请将故事时间折算为故事开始以来的总天数存入 storyTimeSort。"
-                            </small>
-                        </label>
-                        <textarea id="bb_memory_calendar_description" class="text_pole" rows="3"
-                                  placeholder="留空则使用真实时间..."></textarea>
+                        <label for="bb_embedding_endpoint">Embedding API 端点</label>
+                        <input id="bb_embedding_endpoint" type="text" class="text_pole" placeholder="https://api.example.com" />
                     </div>
-                </div>
-            </div>
-
-
-    <hr />
-
-    <!-- ═══ v4.1.0: 语义去重与聚类设置 ═══ -->
-    <div class="bb-settings-section">
-        <div class="bb-settings-section-header" data-section="dedup">
-            <span><i class="fa-solid fa-object-group"></i> 语义去重与聚类</span>
-            <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
-        </div>
-        <div class="bb-settings-section-body">
-
-            <label class="checkbox_label" style="margin: 8px 0;">
-                <input id="bb_memory_dedup_enabled" type="checkbox" checked />
-                <span>启用语义去重（提取新记忆时自动合并相似条目）</span>
-            </label>
-
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_merge_similarity">
-                    合并阈值：<span id="bb_memory_merge_similarity_value">0.85</span>
-                    <small class="bb-mem-hint">相似度 >= 此值时合并到已有记忆（0.75~0.95）</small>
-                </label>
-                <input id="bb_memory_merge_similarity" type="range" min="0.70" max="0.95" step="0.01" value="0.85" />
-            </div>
-
-            <hr style="margin: 8px 0;" />
-
-            <label class="checkbox_label" style="margin: 8px 0;">
-                <input id="bb_memory_cluster_enabled" type="checkbox" checked />
-                <span>启用标签聚类（同标签记忆过多时自动生成合集摘要）</span>
-            </label>
-
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_cluster_threshold">
-                    聚类触发阈值：<span id="bb_memory_cluster_threshold_value">8</span>
-                    <small class="bb-mem-hint">同标签关联的记忆数 >= 此值时触发聚类（5~20）</small>
-                </label>
-                <input id="bb_memory_cluster_threshold" type="range" min="5" max="20" step="1" value="8" />
-            </div>
-
-            <div class="bb-mem-sidebar-section" style="margin-top: 8px;">
-                <button id="bb_memory_cluster_btn" class="menu_button" style="width:100%;">
-                    <i class="fa-solid fa-layer-group"></i> 手动执行标签聚类
-                </button>
-                <small id="bb_memory_cluster_result" style="display:block;margin-top:4px;font-size:0.8em;"></small>
-            </div>
-
-        </div>
-    </div>
-
-    <hr />
-
-    <!-- ═══ 记忆衰减设置 ═══ -->
-            <div class="bb-settings-section">
-                <div class="bb-settings-section-header" data-section="decay">
-                    <span><i class="fa-solid fa-brain"></i> 记忆衰减（模拟遗忘）</span>
-                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
-                </div>
-                <div class="bb-settings-section-body">
-
-            <label class="checkbox_label" style="margin: 8px 0;">
-                <input id="bb_memory_decay_enabled" type="checkbox" checked />
-                <span>启用记忆衰减</span>
-            </label>
-            <small class="bb-mem-hint" style="display: block; margin-bottom: 8px;">
-                模拟人脑的遗忘曲线，不重要的记忆会逐渐变淡
-            </small>
-
-            <div class="bb-mem-sidebar-section">
-                <label for="bb_memory_decay_rate">
-                    衰减速率
-                    <small class="bb-mem-hint">每次衰减减少的强度值（0.01~0.2）</small>
-                </label>
-                <input id="bb_memory_decay_rate" type="number" class="text_pole"
-                       min="0.01" max="0.2" step="0.01" value="0.05" />
-            </div>
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_embedding_api_key">API Key</label>
+                        <input id="bb_embedding_api_key" type="password" class="text_pole" />
+                    </div>
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_embedding_model">模型</label>
+                        <input id="bb_embedding_model" type="text" class="text_pole" placeholder="text-embedding-3-small" />
+                    </div>
+                    <button id="bb_embedding_reindex_btn" class="menu_button" style="margin-top:8px;">
+                        <i class="fa-solid fa-rotate"></i> 重建语义索引
+                    </button>
 
                 </div>
             </div>
 
             <hr />
 
-            <!-- ═══ 世界书导入 ═══ -->
+            <!-- 故事日历 & 去重 -->
+            <div class="bb-settings-section">
+                <div class="bb-settings-section-header" data-section="calendar">
+                    <span><i class="fa-solid fa-calendar-days"></i> 故事日历</span>
+                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                </div>
+                <div class="bb-settings-section-body">
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_calendar_description">日历描述 <small>描述你的奇幻世界日历规则</small></label>
+                        <textarea id="bb_calendar_description" class="text_pole" rows="2" placeholder="留空使用默认时间推断..."></textarea>
+                    </div>
+
+                    <label class="checkbox_label" style="margin: 8px 0;">
+                        <input id="bb_dedup_enabled" type="checkbox" checked />
+                        <span>启用语义去重</span>
+                    </label>
+                    <label class="checkbox_label" style="margin: 8px 0;">
+                        <input id="bb_cluster_enabled" type="checkbox" checked />
+                        <span>启用标签聚类</span>
+                    </label>
+                </div>
+            </div>
+
+            <hr />
+
+            <!-- 世界书导入 -->
             <div class="bb-settings-section">
                 <div class="bb-settings-section-header" data-section="worldbook">
                     <span><i class="fa-solid fa-book-atlas"></i> 世界书导入</span>
                     <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
                 </div>
                 <div class="bb-settings-section-body">
-
-            <div class="bb-mem-sidebar-buttons">
-                <button id="bb_memory_import_wb_btn" class="menu_button" title="从世界书JSON文件逐条导入">
-                    <i class="fa-solid fa-file-import"></i> 导入世界书
-                </button>
-                <button id="bb_memory_import_wb_ai_btn" class="menu_button" title="先由AI整理总结世界书内容再导入">
-                    <i class="fa-solid fa-robot"></i> AI摘要导入
-                </button>
-            </div>
-            <small class="bb-mem-hint" style="display: block; margin-top: 4px;">
-                直接导入逐条创建记忆，AI摘要先由AI总结后再导入
-            </small>
-
+                    <div class="bb-mem-sidebar-buttons">
+                        <button id="bb_memory_import_wb_btn" class="menu_button" title="从世界书JSON文件逐条导入">
+                            <i class="fa-solid fa-file-import"></i> 直接导入
+                        </button>
+                        <button id="bb_memory_import_wb_ai_btn" class="menu_button" title="AI整理后导入">
+                            <i class="fa-solid fa-robot"></i> AI 摘要导入
+                        </button>
+                    </div>
                 </div>
             </div>
 

@@ -1,701 +1,492 @@
 /**
- * memory-assistant.js —— BB-Memory 的"记忆管家"
+ * memory-assistant.js —— BB-Memory v5.0 记忆管家面板
  *
- * ═══════════════════════════════════════════════════════════
- *  代码小课堂
- * ═══════════════════════════════════════════════════════════
- *
- * 这个文件是什么？
- *   想象一个专业的图书管理员，它有一个独立的工作台（悬浮窗），
- *   可以帮你分析、整理、优化所有的记忆。
- *   比如告诉你哪些记忆太旧了、哪些可能重复、哪些最重要。
- *
- * 用了哪些编程概念？
- *   - DOM 操作：创建和操控页面上的元素（悬浮窗、按钮等）
- *   - 拖拽(Drag)：让悬浮窗可以被鼠标拖动
- *   - Tab 切换：类似浏览器标签页，切换不同视图
- *   - 统计计算：遍历数据并汇总信息
- *   - 事件委托：在父元素上监听子元素的事件
- *
- * 功能：
- *   1. 仪表盘：记忆总览（数量、类型分布、平均强度等）
- *   2. 分类浏览：按类型（事件/NPC/物品等）分标签查看
- *   3. 健康分析：检测弱记忆、可能重复的记忆
- *   4. 批量操作：多选删除、批量调整
- *   5. AI 整理：一键让 AI 分析并建议优化
- *
- * ═══════════════════════════════════════════════════════════
+ * 四柱浏览：NPC档案 / 物品栏 / 时间线 / 记忆条目 + 仪表盘。
  */
 
-import { getMemories, removeMemory, getMemoryStats, updateMemory } from './memory-store.js';
-import { MEMORY_TYPES, TRUTH_STATUS, HIDDEN_NOTE_TYPES, getTypeDefinition } from './memory-types.js';
+import { MEMORY_TYPES } from './memory-types.js';
+import { NPC_TIERS, ITEM_TIERS } from './entity-tiers.js';
+import {
+    getNpcProfiles, getItems, getTimeline, getMemories,
+    removeNpcProfile, removeItem, removeTimelineEntry, removeMemory,
+    updateNpcProfile, updateItem, updateTimelineEntry, updateMemory,
+    getMemoryStats,
+} from './memory-store.js';
 import { simpleSearch } from './retriever.js';
 
-// ═══ 状态 ═══
-let assistantWindow = null;
+// ═══════════════════════════════════════════════════════════
+//  窗口管理
+// ═══════════════════════════════════════════════════════════
+
+let currentWindow = null;
 let currentChatId = null;
+let currentTab = 'dashboard';
 
-// ═══ 公共接口 ═══
-
-/**
- * 打开记忆管理助手（悬浮窗）
- */
 export async function openAssistant(chatId, initialTab = 'dashboard') {
-    if (assistantWindow) {
-        assistantWindow.remove();
-    }
-
+    if (currentWindow) closeAssistant();
+    if (!chatId) { console.warn('[BB-Memory] 无 chatId，无法打开记忆管家'); return; }
     currentChatId = chatId;
+    currentTab = initialTab;
 
-    if (!chatId) {
-        toastr.warning('请先选择一个角色并开始聊天', 'BB-Memory');
-        return;
-    }
+    const [npc, items, timeline, memories] = await Promise.all([
+        getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+    ]);
 
-    const memories = await getMemories(chatId);
-    const stats = await getMemoryStats(chatId);
+    currentWindow = document.createElement('div');
+    currentWindow.className = 'bb-assistant-window';
+    currentWindow.innerHTML = buildAssistantHTML(npc, items, timeline, memories);
+    document.body.appendChild(currentWindow);
 
-    assistantWindow = document.createElement('div');
-    assistantWindow.className = 'bb-assistant-window';
-    assistantWindow.innerHTML = buildAssistantHTML(memories, stats);
-    document.body.appendChild(assistantWindow);
-
-    initDrag(assistantWindow);
-    bindAssistantEvents(assistantWindow, chatId);
-    switchTab(assistantWindow, initialTab);
+    initDrag(currentWindow);
+    bindAssistantEvents(currentWindow, chatId);
+    switchTab(currentWindow, initialTab);
 }
 
-/**
- * 关闭助手窗口
- */
 export function closeAssistant() {
-    if (assistantWindow) {
-        assistantWindow.remove();
-        assistantWindow = null;
-    }
+    if (currentWindow) { currentWindow.remove(); currentWindow = null; }
 }
 
-// ═══ 构建 HTML ═══
+// ═══════════════════════════════════════════════════════════
+//  主 HTML
+// ═══════════════════════════════════════════════════════════
 
-function buildAssistantHTML(memories, stats) {
-    return `
-        <div class="bb-assistant-header" id="bb_assistant_drag_handle">
-            <div class="bb-assistant-title">
-                <i class="fa-solid fa-brain"></i> 记忆管家
-            </div>
-            <div class="bb-assistant-controls">
-                <button class="bb-assistant-btn" id="bb_assistant_refresh" title="刷新">
-                    <i class="fa-solid fa-refresh"></i>
-                </button>
-                <button class="bb-assistant-btn bb-assistant-close" id="bb_assistant_close" title="关闭">
-                    <i class="fa-solid fa-xmark"></i>
-                </button>
-            </div>
+function buildAssistantHTML(npc, items, timeline, memories) {
+    return `<div class="bb-assistant-header" id="bb_assistant_drag_handle">
+        <span>记忆管家</span>
+        <div class="bb-assistant-header-btns">
+            <button id="bb_assistant_refresh" title="刷新">↻</button>
+            <button id="bb_assistant_close" title="关闭">×</button>
         </div>
-
-        <div class="bb-assistant-tabs">
-            <button class="bb-assistant-tab active" data-tab="dashboard">
-                <i class="fa-solid fa-gauge"></i> 仪表盘
-            </button>
-            <button class="bb-assistant-tab" data-tab="browse">
-                <i class="fa-solid fa-folder-open"></i> 浏览
-            </button>
-            <button class="bb-assistant-tab" data-tab="health">
-                <i class="fa-solid fa-heart-pulse"></i> 健康
-            </button>
-            <button class="bb-assistant-tab" data-tab="batch">
-                <i class="fa-solid fa-list-check"></i> 批量
-            </button>
-            <button class="bb-assistant-tab" data-tab="timeline">
-                <i class="fa-solid fa-timeline"></i> 时间线
-            </button>
+    </div>
+    <div class="bb-assistant-tabs">
+        <button class="bb-assistant-tab active" data-tab="dashboard">仪表盘</button>
+        <button class="bb-assistant-tab" data-tab="npc">NPC档案 <span class="bb-tab-count">${npc.length}</span></button>
+        <button class="bb-assistant-tab" data-tab="items">物品栏 <span class="bb-tab-count">${items.length}</span></button>
+        <button class="bb-assistant-tab" data-tab="timeline">时间线 <span class="bb-tab-count">${timeline.length}</span></button>
+        <button class="bb-assistant-tab" data-tab="memories">记忆条目 <span class="bb-tab-count">${memories.length}</span></button>
+    </div>
+    <div class="bb-assistant-panels">
+        <div class="bb-assistant-panel" data-panel="dashboard" style="display:block">
+            ${buildDashboardHTML(npc, items, timeline, memories)}
         </div>
-
-        <div class="bb-assistant-body">
-            <!-- 仪表盘 -->
-            <div class="bb-assistant-panel" data-panel="dashboard">
-                ${buildDashboardHTML(memories, stats)}
-            </div>
-
-            <!-- 分类浏览 -->
-            <div class="bb-assistant-panel" data-panel="browse" style="display:none;">
-                ${buildBrowseHTML(memories)}
-            </div>
-
-            <!-- 健康分析 -->
-            <div class="bb-assistant-panel" data-panel="health" style="display:none;">
-                ${buildHealthHTML(memories)}
-            </div>
-
-            <!-- 批量操作 -->
-            <div class="bb-assistant-panel" data-panel="batch" style="display:none;">
-                ${buildBatchHTML(memories)}
-            </div>
-
-            <!-- 时间线 -->
-            <div class="bb-assistant-panel" data-panel="timeline" style="display:none;">
-                ${buildTimelineHTML(memories)}
-            </div>
+        <div class="bb-assistant-panel" data-panel="npc" style="display:none">
+            ${buildNpcBrowseHTML(npc)}
         </div>
-    `;
+        <div class="bb-assistant-panel" data-panel="items" style="display:none">
+            ${buildItemsBrowseHTML(items)}
+        </div>
+        <div class="bb-assistant-panel" data-panel="timeline" style="display:none">
+            ${buildTimelineBrowseHTML(timeline)}
+        </div>
+        <div class="bb-assistant-panel" data-panel="memories" style="display:none">
+            ${buildMemoriesBrowseHTML(memories)}
+        </div>
+    </div>`;
 }
 
-function buildDashboardHTML(memories, stats) {
-    const typeCards = Object.entries(stats.byType || {}).map(([type, count]) => {
-        const typeDef = getTypeDefinition(type);
-        return `<div class="bb-dash-type-card" style="border-color: ${typeDef.color}">
-            <i class="${typeDef.icon}" style="color: ${typeDef.color}"></i>
-            <span class="bb-dash-type-count">${count}</span>
-            <span class="bb-dash-type-label">${typeDef.label}</span>
-        </div>`;
-    }).join('');
+// ═══════════════════════════════════════════════════════════
+//  仪表盘
+// ═══════════════════════════════════════════════════════════
 
-    const strengthPercent = ((stats.avgStrength || 0) * 100).toFixed(0);
-    const importancePercent = ((stats.avgImportance || 0) * 100).toFixed(0);
+function buildDashboardHTML(npc, items, timeline, memories) {
+    const byTier = (arr) => {
+        const c = { transient: 0, stable: 0, core: 0, eternal: 0 };
+        for (const e of arr) { const t = e.memoryTier || 'transient'; if (c[t] !== undefined) c[t]++; }
+        return c;
+    };
+    const npcTiers = byTier(npc);
+    const itemTiers = byTier(items);
+    const tlTiers = byTier(timeline);
+    const memTiers = byTier(memories);
 
-    return `
-        <div class="bb-dash-summary">
-            <div class="bb-dash-stat">
-                <div class="bb-dash-stat-value">${stats.total}</div>
-                <div class="bb-dash-stat-label">总记忆数</div>
+    return `<div class="bb-dashboard">
+        <div class="bb-dash-cards">
+            <div class="bb-dash-card npc">
+                <div class="bb-dash-num">${npc.length}</div><div>NPC档案</div>
+                <div class="bb-dash-detail">核心:${npcTiers.core} 稳定:${npcTiers.stable} 瞬时:${npcTiers.transient}</div>
             </div>
-            <div class="bb-dash-stat">
-                <div class="bb-dash-stat-value">${strengthPercent}%</div>
-                <div class="bb-dash-stat-label">平均强度</div>
+            <div class="bb-dash-card items">
+                <div class="bb-dash-num">${items.length}</div><div>物品</div>
+                <div class="bb-dash-detail">核心:${itemTiers.core} 稳定:${itemTiers.stable} 瞬时:${itemTiers.transient}</div>
             </div>
-            <div class="bb-dash-stat">
-                <div class="bb-dash-stat-value">${importancePercent}%</div>
-                <div class="bb-dash-stat-label">平均重要性</div>
+            <div class="bb-dash-card timeline">
+                <div class="bb-dash-num">${timeline.length}</div><div>时间线</div>
+                <div class="bb-dash-detail">进行中:${timeline.filter(t=>t.isActive).length} 已结束:${timeline.filter(t=>!t.isActive).length}</div>
+            </div>
+            <div class="bb-dash-card memories">
+                <div class="bb-dash-num">${memories.length}</div><div>记忆条目</div>
+                <div class="bb-dash-detail">核心:${memTiers.core} 稳定:${memTiers.stable} 瞬时:${memTiers.transient}</div>
             </div>
         </div>
-
-        <div class="bb-dash-section-title">按类型分布</div>
-        <div class="bb-dash-type-grid">
-            ${typeCards || '<div class="bb-mem-empty">暂无记忆</div>'}
-        </div>
-
-        <div class="bb-dash-section-title">最近记忆</div>
         <div class="bb-dash-recent">
-            ${memories.slice(-5).reverse().map(m => {
-                const typeDef = getTypeDefinition(m.cognitiveType || m.type);
-                return `<div class="bb-dash-recent-item">
-                    <i class="${typeDef.icon}" style="color: ${typeDef.color}"></i>
-                    <span>${escapeHtml(m.content.slice(0, 60))}${m.content.length > 60 ? '...' : ''}</span>
-                </div>`;
-            }).join('') || '<div class="bb-mem-empty">暂无记忆</div>'}
+            <h4>最近记忆</h4>
+            ${memories.slice(-5).reverse().map(m => `<div class="bb-dash-mem-item">
+                <span class="bb-dash-mem-type" style="color:${MEMORY_TYPES[m.type]?.color||'#999'}">${MEMORY_TYPES[m.type]?.label||m.type}</span>
+                <span>${escapeHtml((m.title || m.content || '').slice(0, 60))}</span>
+                <span class="bb-dash-mem-tier">${m.memoryTier}</span>
+            </div>`).join('')}
         </div>
-    `;
+    </div>`;
 }
 
-function buildBrowseHTML(memories) {
-    const typeButtons = Object.values(MEMORY_TYPES).map(t =>
-        `<button class="bb-browse-type-btn" data-browse-type="${t.id}" style="color: ${t.color}">
-            <i class="${t.icon}"></i> ${t.label}
-            <span class="bb-browse-count">${memories.filter(m => (m.cognitiveType || m.type) === t.id).length}</span>
-        </button>`
-    ).join('');
+// ═══════════════════════════════════════════════════════════
+//  NPC 浏览
+// ═══════════════════════════════════════════════════════════
 
-    return `
-        <div class="bb-browse-types">${typeButtons}</div>
-        <div class="bb-browse-search">
-            <input type="text" class="text_pole" id="bb_assistant_browse_search"
-                   placeholder="搜索记忆内容..." />
-            <select id="bb_assistant_browse_sort" class="text_pole" style="width:auto;margin-left:4px;">
-                <option value="created_desc">创建时间 ▼</option>
-                <option value="created_asc">创建时间 ▲</option>
-                <option value="story_desc">故事时间 ▼</option>
-                <option value="story_asc">故事时间 ▲</option>
-            </select>
+function buildNpcBrowseHTML(npc) {
+    const tierFilter = ['core', 'important', 'minor', 'background'];
+    return `<div class="bb-browse-controls">
+        <div class="bb-browse-filters">
+            ${tierFilter.map(t => `<button class="bb-browse-filter-btn" data-filter="${t}">${NPC_TIERS[t]?.label || t}</button>`).join('')}
+            <button class="bb-browse-filter-btn active" data-filter="all">全部</button>
         </div>
-        <div class="bb-browse-list" id="bb_assistant_browse_list">
-            <div class="bb-mem-empty">选择左侧类型查看记忆</div>
-        </div>
-    `;
+        <input type="text" class="bb-browse-search" placeholder="搜索NPC..." id="bb_npc_search">
+    </div>
+    <div class="bb-browse-list" id="bb_npc_list">
+        ${npc.map(n => buildNpcItemHTML(n)).join('')}
+    </div>`;
 }
 
-function buildHealthHTML(memories) {
-    // 分析记忆健康状况
-    const weakMemories = memories.filter(m => (m.strength || 1) < 0.3);
-    const oldMemories = memories.filter(m => {
-        const age = Date.now() - (m.createdAt || 0);
-        return age > 30 * 24 * 60 * 60 * 1000; // 超过30天
+function buildNpcItemHTML(n) {
+    return `<div class="bb-browse-item npc-item" data-id="${n.id}" data-tier="${n.npcTier}">
+        <div class="bb-browse-item-header">
+            <span class="bb-tier-badge" style="background:${NPC_TIERS[n.npcTier]?.color||'#999'}">${NPC_TIERS[n.npcTier]?.label||n.npcTier}</span>
+            <strong>${escapeHtml(n.name)}</strong>
+            <span class="bb-mtier-badge">${n.memoryTier}</span>
+        </div>
+        <div class="bb-browse-item-body">
+            <div>身份：${escapeHtml(n.role || '?')} | 状态：${escapeHtml(n.status || '?')} | 位置：${escapeHtml(n.location || '?')}</div>
+            <div>性格：${escapeHtml(n.personality || '?')}</div>
+            <div>外貌：${escapeHtml(n.appearance || '?')}</div>
+            ${n.relationships?.length ? `<div>关系：${n.relationships.map(r => `${r.name}(${r.type})`).join(', ')}</div>` : ''}
+            ${n.indexCard ? `<div class="bb-index-card">索引卡：${escapeHtml(n.indexCard)}</div>` : ''}
+        </div>
+        <div class="bb-browse-item-actions">
+            <button class="bb-item-btn edit" data-action="edit">编辑</button>
+            <button class="bb-item-btn delete" data-action="delete">删除</button>
+        </div>
+    </div>`;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  物品浏览
+// ═══════════════════════════════════════════════════════════
+
+function buildItemsBrowseHTML(items) {
+    const tierFilter = ['key', 'equipped', 'clue', 'consumable', 'background'];
+    return `<div class="bb-browse-controls">
+        <div class="bb-browse-filters">
+            ${tierFilter.map(t => `<button class="bb-browse-filter-btn" data-filter="${t}">${ITEM_TIERS[t]?.label || t}</button>`).join('')}
+            <button class="bb-browse-filter-btn active" data-filter="all">全部</button>
+        </div>
+        <input type="text" class="bb-browse-search" placeholder="搜索物品..." id="bb_item_search">
+    </div>
+    <div class="bb-browse-list" id="bb_item_list">
+        ${items.map(i => buildItemHTML(i)).join('')}
+    </div>`;
+}
+
+function buildItemHTML(i) {
+    const statusLabel = { held: '持有中', used: '已使用', lost: '已失去', destroyed: '已销毁' }[i.status] || i.status;
+    return `<div class="bb-browse-item item-item" data-id="${i.id}" data-tier="${i.itemTier}">
+        <div class="bb-browse-item-header">
+            <span class="bb-tier-badge" style="background:${ITEM_TIERS[i.itemTier]?.color||'#999'}">${ITEM_TIERS[i.itemTier]?.label||i.itemTier}</span>
+            <strong>${escapeHtml(i.name)}</strong>
+            <span class="bb-status-badge">${statusLabel}</span>
+            ${i.keepPermanent ? '<span class="bb-kp-badge">永久</span>' : ''}
+            <span class="bb-mtier-badge">${i.memoryTier}</span>
+        </div>
+        <div class="bb-browse-item-body">
+            <div>持有者：${escapeHtml(i.owner || '?')} | 意义：${escapeHtml((i.significance || '').slice(0, 60))}</div>
+        </div>
+        <div class="bb-browse-item-actions">
+            <button class="bb-item-btn edit" data-action="edit">编辑</button>
+            <button class="bb-item-btn delete" data-action="delete">删除</button>
+        </div>
+    </div>`;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  时间线浏览
+// ═══════════════════════════════════════════════════════════
+
+function buildTimelineBrowseHTML(timeline) {
+    const statuses = ['ongoing', 'ended', 'foreshadow'];
+    const statusLabels = { ongoing: '进行中', ended: '已结束', foreshadow: '伏笔' };
+    return `<div class="bb-browse-controls">
+        <div class="bb-browse-filters">
+            ${statuses.map(s => `<button class="bb-browse-filter-btn" data-filter="${s}">${statusLabels[s]}</button>`).join('')}
+            <button class="bb-browse-filter-btn active" data-filter="all">全部</button>
+        </div>
+        <select class="bb-browse-sort" id="bb_timeline_sort">
+            <option value="story_asc">按故事时间升序</option>
+            <option value="story_desc">按故事时间降序</option>
+            <option value="created_desc">按创建时间降序</option>
+        </select>
+    </div>
+    <div class="bb-browse-list" id="bb_timeline_list">
+        ${timeline.map(t => buildTimelineItemHTML(t)).join('')}
+    </div>`;
+}
+
+function buildTimelineItemHTML(t) {
+    const statusLabel = { ongoing: '进行中', ended: '已结束', foreshadow: '伏笔' }[t.status] || t.status;
+    return `<div class="bb-browse-item tl-item" data-id="${t.id}" data-status="${t.status}">
+        <div class="bb-browse-item-header">
+            <span class="bb-status-badge ${t.status}">${statusLabel}</span>
+            <strong>${escapeHtml(t.event)}</strong>
+            ${t.storyTime ? `<span class="bb-time-badge">${escapeHtml(t.storyTime)}</span>` : ''}
+            <span class="bb-mtier-badge">${t.memoryTier}</span>
+        </div>
+        <div class="bb-browse-item-body">
+            <div>${escapeHtml(t.summary)}</div>
+            ${t.participants?.length ? `<div>参与者：${t.participants.join(', ')}</div>` : ''}
+            ${t.location ? `<div>地点：${escapeHtml(t.location)}</div>` : ''}
+            ${t.impact ? `<div>影响：${escapeHtml(t.impact)}</div>` : ''}
+        </div>
+        <div class="bb-browse-item-actions">
+            <button class="bb-item-btn edit" data-action="edit">编辑</button>
+            <button class="bb-item-btn toggle-active" data-action="toggle">${t.isActive ? '结束' : '恢复'}</button>
+            <button class="bb-item-btn delete" data-action="delete">删除</button>
+        </div>
+    </div>`;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  记忆条目浏览
+// ═══════════════════════════════════════════════════════════
+
+function buildMemoriesBrowseHTML(memories) {
+    const types = Object.values(MEMORY_TYPES);
+    return `<div class="bb-browse-controls">
+        <div class="bb-browse-filters">
+            ${types.map(t => `<button class="bb-browse-filter-btn" data-filter="${t.id}">${t.label}</button>`).join('')}
+            <button class="bb-browse-filter-btn active" data-filter="all">全部</button>
+        </div>
+        <input type="text" class="bb-browse-search" placeholder="搜索记忆..." id="bb_mem_search">
+        <select class="bb-browse-sort" id="bb_mem_sort">
+            <option value="created_desc">创建时间↓</option>
+            <option value="created_asc">创建时间↑</option>
+            <option value="story_desc">故事时间↓</option>
+            <option value="story_asc">故事时间↑</option>
+            <option value="importance_desc">重要性↓</option>
+        </select>
+    </div>
+    <div class="bb-browse-list" id="bb_mem_list">
+        ${memories.map(m => buildMemoryItemHTML(m)).join('')}
+    </div>`;
+}
+
+function buildMemoryItemHTML(m) {
+    const typeDef = MEMORY_TYPES[m.type];
+    return `<div class="bb-browse-item mem-item" data-id="${m.id}" data-type="${m.type}">
+        <div class="bb-browse-item-header">
+            <span class="bb-type-badge" style="color:${typeDef?.color||'#999'}">${typeDef?.label||m.type}</span>
+            <strong>${escapeHtml(m.title || m.summary?.slice(0, 30) || '(无标题)')}</strong>
+            <span class="bb-mtier-badge">${m.memoryTier}</span>
+            <span class="bb-imp-badge">重要度:${(m.importance*100).toFixed(0)}%</span>
+        </div>
+        <div class="bb-browse-item-body">
+            <div>${escapeHtml(m.summary || m.content?.slice(0, 100) || '')}</div>
+            ${m.verbatim ? `<div class="bb-verbatim">原话：「${escapeHtml(m.verbatim)}」</div>` : ''}
+            ${m.subject ? `<span class="bb-subject">主体:${escapeHtml(m.subject)}</span>` : ''}
+            ${m.target ? `<span class="bb-target">→ ${escapeHtml(m.target)}</span>` : ''}
+            ${m.storyTime ? `<span class="bb-time-badge">${escapeHtml(m.storyTime)}</span>` : ''}
+        </div>
+        <div class="bb-browse-item-actions">
+            <button class="bb-item-btn edit" data-action="edit">编辑</button>
+            <button class="bb-item-btn delete" data-action="delete">删除</button>
+        </div>
+    </div>`;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  事件绑定
+// ═══════════════════════════════════════════════════════════
+
+function bindAssistantEvents(win, chatId) {
+    win.querySelector('#bb_assistant_close')?.addEventListener('click', closeAssistant);
+    win.querySelector('#bb_assistant_refresh')?.addEventListener('click', async () => {
+        const [npc, items, timeline, memories] = await Promise.all([
+            getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+        ]);
+        const panels = win.querySelector('.bb-assistant-panels');
+        panels.querySelector('[data-panel="dashboard"]').innerHTML = buildDashboardHTML(npc, items, timeline, memories);
+        panels.querySelector('[data-panel="npc"]').innerHTML = buildNpcBrowseHTML(npc);
+        panels.querySelector('[data-panel="items"]').innerHTML = buildItemsBrowseHTML(items);
+        panels.querySelector('[data-panel="timeline"]').innerHTML = buildTimelineBrowseHTML(timeline);
+        panels.querySelector('[data-panel="memories"]').innerHTML = buildMemoriesBrowseHTML(memories);
+        // 更新 tab 计数
+        const tabs = win.querySelectorAll('.bb-assistant-tab .bb-tab-count');
+        if (tabs[0]) tabs[0].textContent = npc.length;
+        if (tabs[1]) tabs[1].textContent = items.length;
+        if (tabs[2]) tabs[2].textContent = timeline.length;
+        if (tabs[3]) tabs[3].textContent = memories.length;
+        bindBrowseEvents(win, chatId);
+        switchTab(win, currentTab);
     });
-    const lowImportance = memories.filter(m => (m.importance || 0.5) < 0.3);
 
-    // 简单重复检测（内容相似度）
-    const possibleDuplicates = findPossibleDuplicates(memories);
-
-    return `
-        <div class="bb-health-section">
-            <div class="bb-health-card ${weakMemories.length ? 'bb-health-warning' : 'bb-health-ok'}">
-                <i class="fa-solid fa-battery-quarter"></i>
-                <div>
-                    <strong>弱记忆</strong>
-                    <p>${weakMemories.length} 条记忆强度低于 30%，可能即将被遗忘</p>
-                </div>
-            </div>
-
-            <div class="bb-health-card ${possibleDuplicates.length ? 'bb-health-warning' : 'bb-health-ok'}">
-                <i class="fa-solid fa-clone"></i>
-                <div>
-                    <strong>疑似重复</strong>
-                    <p>发现 ${possibleDuplicates.length} 组可能重复的记忆</p>
-                </div>
-            </div>
-
-            <div class="bb-health-card ${oldMemories.length > 10 ? 'bb-health-info' : 'bb-health-ok'}">
-                <i class="fa-solid fa-clock"></i>
-                <div>
-                    <strong>老旧记忆</strong>
-                    <p>${oldMemories.length} 条记忆超过 30 天未被访问</p>
-                </div>
-            </div>
-
-            <div class="bb-health-card ${lowImportance.length > 5 ? 'bb-health-info' : 'bb-health-ok'}">
-                <i class="fa-solid fa-circle-exclamation"></i>
-                <div>
-                    <strong>低重要性</strong>
-                    <p>${lowImportance.length} 条记忆重要性较低</p>
-                </div>
-            </div>
-        </div>
-
-        ${weakMemories.length ? `
-        <div class="bb-health-detail">
-            <div class="bb-dash-section-title">弱记忆列表（可考虑删除或强化）</div>
-            ${weakMemories.slice(0, 10).map(m => `
-                <div class="bb-health-mem-item">
-                    <span>${escapeHtml(m.content.slice(0, 50))}</span>
-                    <span class="bb-health-strength">强度: ${((m.strength || 0) * 100).toFixed(0)}%</span>
-                </div>
-            `).join('')}
-        </div>` : ''}
-    `;
-}
-
-function buildBatchHTML(memories) {
-    return `
-        <div class="bb-batch-tools">
-            <button class="menu_button" id="bb_batch_select_all">
-                <i class="fa-solid fa-check-double"></i> 全选
-            </button>
-            <button class="menu_button" id="bb_batch_select_none">
-                <i class="fa-solid fa-xmark"></i> 取消全选
-            </button>
-            <button class="menu_button" id="bb_batch_select_weak">
-                <i class="fa-solid fa-filter"></i> 选择弱记忆
-            </button>
-            <button class="menu_button menu_button_danger" id="bb_batch_delete">
-                <i class="fa-solid fa-trash"></i> 删除选中
-            </button>
-        </div>
-        <div class="bb-batch-list" id="bb_batch_list">
-            ${memories.map(m => {
-                const typeDef = getTypeDefinition(m.cognitiveType || m.type);
-                return `<label class="bb-batch-item">
-                    <input type="checkbox" data-id="${m.id}" class="bb-batch-checkbox" />
-                    <i class="${typeDef.icon}" style="color: ${typeDef.color}"></i>
-                    <span class="bb-batch-content">${escapeHtml(m.content.slice(0, 60))}</span>
-                    <span class="bb-batch-strength">${((m.strength || 1) * 100).toFixed(0)}%</span>
-                </label>`;
-            }).join('') || '<div class="bb-mem-empty">暂无记忆</div>'}
-        </div>
-    `;
-}
-
-// ═══ 事件绑定 ═══
-
-function bindAssistantEvents(window, chatId) {
-    // 关闭
-    window.querySelector('#bb_assistant_close')?.addEventListener('click', closeAssistant);
-
-    // 刷新
-    window.querySelector('#bb_assistant_refresh')?.addEventListener('click', async () => {
-        const memories = await getMemories(chatId);
-        const stats = await getMemoryStats(chatId);
-        const body = window.querySelector('.bb-assistant-body');
-        if (body) {
-            const panels = body.querySelectorAll('.bb-assistant-panel');
-            panels.forEach(p => p.remove());
-            body.innerHTML = `
-                <div class="bb-assistant-panel" data-panel="dashboard">${buildDashboardHTML(memories, stats)}</div>
-                <div class="bb-assistant-panel" data-panel="browse" style="display:none;">${buildBrowseHTML(memories)}</div>
-                <div class="bb-assistant-panel" data-panel="health" style="display:none;">${buildHealthHTML(memories)}</div>
-                <div class="bb-assistant-panel" data-panel="batch" style="display:none;">${buildBatchHTML(memories)}</div>
-                <div class="bb-assistant-panel" data-panel="timeline" style="display:none;">${buildTimelineHTML(memories)}</div>
-            `;
-            bindBrowseEvents(window, chatId);
-            bindBatchEvents(window, chatId);
-        }
-        const activeTab = window.querySelector('.bb-assistant-tab.active')?.dataset.tab || 'dashboard';
-        switchTab(window, activeTab);
-        toastr.info('已刷新', 'BB-Memory');
-    });
-
-    // Tab 切换
-    window.querySelectorAll('.bb-assistant-tab').forEach(tab => {
+    win.querySelectorAll('.bb-assistant-tab').forEach(tab => {
         tab.addEventListener('click', () => {
-            window.querySelectorAll('.bb-assistant-tab').forEach(t => t.classList.remove('active'));
-            tab.classList.add('active');
-            switchTab(window, tab.dataset.tab);
+            currentTab = tab.dataset.tab;
+            switchTab(win, currentTab);
         });
     });
 
-    bindBrowseEvents(window, chatId);
-    bindBatchEvents(window, chatId);
+    bindBrowseEvents(win, chatId);
 }
 
-function bindBrowseEvents(window, chatId) {
-    let currentType = null;
-    let currentSearch = '';
-
-    function sortMemories(memories, sortMode) {
-        const sorted = [...memories];
-        switch (sortMode) {
-            case 'created_asc':
-                sorted.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-                break;
-            case 'story_desc':
-                sorted.sort((a, b) => {
-                    const sa = a.storyTimeSort ?? -Infinity;
-                    const sb = b.storyTimeSort ?? -Infinity;
-                    if (sa === -Infinity && sb === -Infinity) return (b.createdAt || 0) - (a.createdAt || 0);
-                    return sb - sa;
-                });
-                break;
-            case 'story_asc':
-                sorted.sort((a, b) => {
-                    const sa = a.storyTimeSort ?? Infinity;
-                    const sb = b.storyTimeSort ?? Infinity;
-                    if (sa === Infinity && sb === Infinity) return (a.createdAt || 0) - (b.createdAt || 0);
-                    return sa - sb;
-                });
-                break;
-            case 'created_desc':
-            default:
-                sorted.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-                break;
-        }
-        return sorted;
-    }
-
-    function getSortMode() {
-        const sel = window.querySelector('#bb_assistant_browse_sort');
-        return sel ? sel.value : 'created_desc';
-    }
-
-    async function renderFiltered() {
-        const memories = await getMemories(chatId);
-        let filtered;
-        if (currentSearch) {
-            filtered = simpleSearch(memories, currentSearch, 50);
-        } else if (currentType) {
-            filtered = memories.filter(m => (m.cognitiveType || m.type) === currentType);
-        } else {
-            filtered = memories.slice(0, 50);
-        }
-        const sorted = sortMemories(filtered, getSortMode());
-        const listEl = window.querySelector('#bb_assistant_browse_list');
-        if (listEl) {
-            listEl.innerHTML = sorted.length
-                ? sorted.map(m => buildBrowseItemHTML(m)).join('')
-                : '<div class="bb-mem-empty">暂无匹配记忆</div>';
-        }
-    }
-
-    // 类型按钮
-    window.querySelectorAll('.bb-browse-type-btn').forEach(btn => {
+function bindBrowseEvents(win, chatId) {
+    // Filter buttons
+    win.querySelectorAll('.bb-browse-filter-btn').forEach(btn => {
         btn.addEventListener('click', () => {
-            currentType = btn.dataset.browseType;
-            currentSearch = '';
-            const searchEl = window.querySelector('#bb_assistant_browse_search');
-            if (searchEl) searchEl.value = '';
-            renderFiltered();
+            const panel = btn.closest('.bb-assistant-panel');
+            const filter = btn.dataset.filter;
+            // Update active
+            panel.querySelectorAll('.bb-browse-filter-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            // Filter items
+            const items = panel.querySelectorAll('.bb-browse-item');
+            items.forEach(item => {
+                if (filter === 'all') { item.style.display = ''; return; }
+                const match = item.dataset.tier === filter || item.dataset.status === filter || item.dataset.type === filter;
+                item.style.display = match ? '' : 'none';
+            });
         });
     });
 
-    // 搜索
-    window.querySelector('#bb_assistant_browse_search')?.addEventListener('input', (e) => {
-        currentSearch = e.target.value.trim();
-        if (currentSearch) currentType = null;
-        renderFiltered();
-    });
-
-    // v4.2.0: 排序
-    window.querySelector('#bb_assistant_browse_sort')?.addEventListener('change', () => {
-        renderFiltered();
-    });
-
-    // v4.4.2: 初始渲染 — 不依赖用户点击类型，直接显示记忆列表
-    renderFiltered();
-}
-
-function bindBatchEvents(window, chatId) {
-    window.querySelector('#bb_batch_select_all')?.addEventListener('click', () => {
-        window.querySelectorAll('.bb-batch-checkbox').forEach(cb => cb.checked = true);
-    });
-
-    window.querySelector('#bb_batch_select_none')?.addEventListener('click', () => {
-        window.querySelectorAll('.bb-batch-checkbox').forEach(cb => cb.checked = false);
-    });
-
-    window.querySelector('#bb_batch_select_weak')?.addEventListener('click', async () => {
-        const memories = await getMemories(chatId);
-        const weakIds = new Set(memories.filter(m => (m.strength || 1) < 0.3).map(m => m.id));
-        window.querySelectorAll('.bb-batch-checkbox').forEach(cb => {
-            cb.checked = weakIds.has(cb.dataset.id);
+    // Search inputs
+    ['bb_npc_search', 'bb_item_search', 'bb_mem_search'].forEach(id => {
+        const input = win.querySelector('#' + id);
+        if (!input) return;
+        input.addEventListener('input', () => {
+            const panel = input.closest('.bb-assistant-panel');
+            const q = input.value.toLowerCase();
+            panel.querySelectorAll('.bb-browse-item').forEach(item => {
+                item.style.display = item.textContent.toLowerCase().includes(q) ? '' : 'none';
+            });
         });
     });
 
-    window.querySelector('#bb_batch_delete')?.addEventListener('click', async () => {
-        const selected = [...window.querySelectorAll('.bb-batch-checkbox:checked')].map(cb => cb.dataset.id);
-        if (!selected.length) {
-            toastr.warning('未选择任何记忆', 'BB-Memory');
-            return;
-        }
+    // Sort
+    win.querySelector('#bb_timeline_sort')?.addEventListener('change', (e) => {
+        sortTimeline(win, e.target.value);
+    });
+    win.querySelector('#bb_mem_sort')?.addEventListener('change', (e) => {
+        sortMemories(win, e.target.value);
+    });
 
-        const ctx = SillyTavern.getContext();
-        const ok = await ctx.Popup.show.confirm('批量删除', `确定删除选中的 ${selected.length} 条记忆吗？`);
-        const affirmative = ctx.POPUP_RESULT?.AFFIRMATIVE ?? 1;
-        if (ok !== affirmative) return;
+    // Delete buttons
+    win.querySelectorAll('.bb-item-btn.delete').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const item = btn.closest('.bb-browse-item');
+            const id = item.dataset.id;
+            const panelName = getPanelName(item);
+            const removeFn = { npc: removeNpcProfile, items: removeItem, timeline: removeTimelineEntry, memories: removeMemory }[panelName];
+            if (removeFn && confirm('确定删除？')) {
+                await removeFn(chatId, id);
+                item.remove();
+            }
+        });
+    });
 
-        for (const id of selected) {
-            await removeMemory(chatId, id);
-        }
-
-        toastr.success(`已删除 ${selected.length} 条记忆`, 'BB-Memory');
-
-        // 刷新批量列表
-        const memories = await getMemories(chatId);
-        const batchList = window.querySelector('#bb_batch_list');
-        if (batchList) {
-            batchList.innerHTML = buildBatchHTML(memories).match(/<div class="bb-batch-list"[^>]*>([\s\S]*)<\/div>/)?.[1] || '';
-        }
+    // Toggle active (timeline)
+    win.querySelectorAll('.bb-item-btn.toggle-active').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const item = btn.closest('.bb-browse-item');
+            const id = item.dataset.id;
+            const timeline = await getTimeline(chatId);
+            const entry = timeline.find(t => t.id === id);
+            if (entry) {
+                await updateTimelineEntry(chatId, id, {
+                    isActive: !entry.isActive,
+                    status: entry.isActive ? 'ended' : 'ongoing',
+                });
+                btn.textContent = entry.isActive ? '恢复' : '结束';
+            }
+        });
     });
 }
 
-function buildTimelineHTML(memories) {
-    // 按 storyTimeSort 分组
-    const withTime = memories.filter(m => m.storyTimeSort != null);
-    const withoutTime = memories.filter(m => m.storyTimeSort == null);
+function getPanelName(item) {
+    if (item.classList.contains('npc-item')) return 'npc';
+    if (item.classList.contains('item-item')) return 'items';
+    if (item.classList.contains('tl-item')) return 'timeline';
+    if (item.classList.contains('mem-item')) return 'memories';
+    return 'memories';
+}
 
-    // 按 storyTimeSort 降序排列
-    withTime.sort((a, b) => (b.storyTimeSort ?? 0) - (a.storyTimeSort ?? 0));
+function sortTimeline(win, mode) {
+    const list = win.querySelector('#bb_timeline_list');
+    if (!list) return;
+    const items = [...list.querySelectorAll('.bb-browse-item')];
+    items.sort((a, b) => {
+        const getVal = (el) => el.querySelector('.bb-time-badge')?.textContent || '';
+        if (mode === 'story_asc') return getVal(a).localeCompare(getVal(b));
+        if (mode === 'story_desc') return getVal(b).localeCompare(getVal(a));
+        return 0;
+    });
+    items.forEach(item => list.appendChild(item));
+}
 
-    // 按 storyTime 分组（简单按天/时期聚合）
-    const groups = [];
-    let currentGroup = null;
-    for (const m of withTime) {
-        const timeKey = m.storyTime || '?';
-        if (!currentGroup || currentGroup.key !== timeKey) {
-            currentGroup = { key: timeKey, sort: m.storyTimeSort, items: [] };
-            groups.push(currentGroup);
+function sortMemories(win, mode) {
+    const list = win.querySelector('#bb_mem_list');
+    if (!list) return;
+    const items = [...list.querySelectorAll('.bb-browse-item')];
+    items.sort((a, b) => {
+        if (mode === 'importance_desc') {
+            const ia = parseFloat(a.querySelector('.bb-imp-badge')?.textContent?.replace('重要度:', '')?.replace('%', '') || '0');
+            const ib = parseFloat(b.querySelector('.bb-imp-badge')?.textContent?.replace('重要度:', '')?.replace('%', '') || '0');
+            return ib - ia;
         }
-        currentGroup.items.push(m);
-    }
-
-    const groupHTML = groups.map(g => {
-        const typeDef = getTypeDefinition(g.items[0].cognitiveType || g.items[0].type);
-        return `
-            <div class="bb-timeline-group">
-                <div class="bb-timeline-time">
-                    <i class="fa-solid fa-clock"></i> ${escapeHtml(g.key)}
-                </div>
-                <div class="bb-timeline-items">
-                    ${g.items.map(m => {
-                        const td = getTypeDefinition(m.cognitiveType || m.type);
-                        const tagsHTML = (m.tags || []).slice(0, 3)
-                            .map(t => `<span class="bb-mem-tag">${escapeHtml(typeof t === 'string' ? t : t.name)}</span>`)
-                            .join('');
-                        return `
-                            <div class="bb-timeline-item">
-                                <div class="bb-timeline-item-header">
-                                    <span style="color: ${td.color}"><i class="${td.icon}"></i> ${td.label}</span>
-                                    <span class="bb-timeline-title">${escapeHtml(m.title || m.content.slice(0, 30))}</span>
-                                </div>
-                                <div class="bb-timeline-summary">${escapeHtml(m.summary || m.content.slice(0, 80))}</div>
-                                <div class="bb-timeline-tags">${tagsHTML}</div>
-                            </div>
-                        `;
-                    }).join('')}
-                </div>
-            </div>
-        `;
-    }).join('');
-
-    const noTimeHTML = withoutTime.length > 0 ? `
-        <details class="bb-timeline-no-time">
-            <summary>无故事时间的记忆 (${withoutTime.length} 条)</summary>
-            <div class="bb-timeline-items">
-                ${withoutTime.sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt)).slice(0, 30).map(m => {
-                    const td = getTypeDefinition(m.cognitiveType || m.type);
-                    return `
-                        <div class="bb-timeline-item">
-                            <div class="bb-timeline-item-header">
-                                <span style="color: ${td.color}"><i class="${td.icon}"></i></span>
-                                <span class="bb-timeline-title">${escapeHtml(m.title || m.content.slice(0, 30))}</span>
-                            </div>
-                            <div class="bb-timeline-summary">${escapeHtml(m.summary || m.content.slice(0, 60))}</div>
-                        </div>
-                    `;
-                }).join('') || '<div class="bb-mem-empty">暂无记忆</div>'}
-            </div>
-        </details>
-    ` : '';
-
-    return groupHTML
-        ? `<div class="bb-timeline">${groupHTML}${noTimeHTML}</div>`
-        : `<div class="bb-timeline">${noTimeHTML || '<div class="bb-mem-empty">暂无带故事时间的记忆。请在设置中配置日历描述，AI 会自动提取故事时间。</div>'}</div>`;
-}
-
-function buildBrowseItemHTML(m) {
-    const typeDef = getTypeDefinition(m.cognitiveType || m.type);
-    const createdDate = new Date(m.createdAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    const updatedStr = (m.updatedAt && m.updatedAt !== m.createdAt)
-        ? ` <span title="最后编辑" style="opacity:0.6;"><i class="fa-solid fa-pen" style="font-size:0.8em;"></i> ${new Date(m.updatedAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>`
-        : '';
-    const tagsHTML = (m.tags || []).slice(0, 4)
-        .map(t => `<span class="bb-mem-tag">${escapeHtml(typeof t === 'string' ? t : t.name)}</span>`)
-        .join('');
-
-    const tsDef = TRUTH_STATUS[m.truthStatus];
-    const truthBadge = m.truthStatus && m.truthStatus !== 'true' && tsDef
-        ? `<span class="bb-truth-badge" style="background: ${tsDef.color}">${tsDef.label}</span>`
-        : '';
-
-    const noteCount = Array.isArray(m.hiddenNotes) ? m.hiddenNotes.length : 0;
-    const noteIcon = noteCount > 0
-        ? `<span class="bb-browse-note-icon" title="${noteCount} 条隐藏备注"><i class="fa-solid fa-eye"></i> ${noteCount}</span>`
-        : '';
-
-    const storyTimeStr = m.storyTime
-        ? `<span class="bb-browse-story-time" title="故事时间"><i class="fa-solid fa-clock"></i> ${escapeHtml(m.storyTime)}</span>`
-        : '';
-
-    return `
-        <div class="bb-browse-item">
-            <div class="bb-browse-item-header">
-                <span style="color: ${typeDef.color}"><i class="${typeDef.icon}"></i> ${typeDef.label}</span>
-                ${truthBadge}
-                ${noteIcon}
-                ${storyTimeStr}
-                <span class="bb-browse-item-date"><i class="fa-solid fa-calendar-plus" style="font-size:0.85em;"></i> ${createdDate}${updatedStr}</span>
-            </div>
-            <div class="bb-browse-item-content">${escapeHtml(m.content)}</div>
-            <div class="bb-browse-item-tags">${tagsHTML}</div>
-        </div>
-    `;
-}
-
-// ═══ Tab 切换 ═══
-
-function switchTab(window, tabName) {
-    // v4.2.0: 同步标签按钮 active 状态
-    window.querySelectorAll('.bb-assistant-tab').forEach(tab => {
-        tab.classList.toggle('active', tab.dataset.tab === tabName);
+        return 0;
     });
-    window.querySelectorAll('.bb-assistant-panel').forEach(panel => {
-        panel.style.display = panel.dataset.panel === tabName ? 'block' : 'none';
-    });
+    items.forEach(item => list.appendChild(item));
 }
 
-// ═══ 拖拽功能 ═══
+// ═══════════════════════════════════════════════════════════
+//  Tab 切换
+// ═══════════════════════════════════════════════════════════
 
-function initDrag(window) {
-    const handle = window.querySelector('#bb_assistant_drag_handle');
+function switchTab(win, tabName) {
+    win.querySelectorAll('.bb-assistant-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabName));
+    win.querySelectorAll('.bb-assistant-panel').forEach(p => {
+        p.style.display = p.dataset.panel === tabName ? 'block' : 'none';
+    });
+    currentTab = tabName;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  拖拽
+// ═══════════════════════════════════════════════════════════
+
+function initDrag(win) {
+    const handle = win.querySelector('#bb_assistant_drag_handle');
     if (!handle) return;
+    let isDragging = false, startX, startY, origLeft, origTop;
 
-    let isDragging = false;
-    let startX, startY, startLeft, startTop;
-
-    function onStart(e) {
-        if (e.target.closest('button')) return;
+    handle.addEventListener('mousedown', (e) => {
+        if (e.target.tagName === 'BUTTON') return;
         isDragging = true;
-        const point = e.touches ? e.touches[0] : e;
-        startX = point.clientX;
-        startY = point.clientY;
-        const rect = window.getBoundingClientRect();
-        startLeft = rect.left;
-        startTop = rect.top;
-        handle.style.cursor = 'grabbing';
-        e.preventDefault();
-    }
+        startX = e.clientX; startY = e.clientY;
+        origLeft = parseInt(win.style.left || win.offsetLeft || 0);
+        origTop = parseInt(win.style.top || win.offsetTop || 0);
+        win.style.cursor = 'grabbing';
+    });
 
-    function onMove(e) {
+    document.addEventListener('mousemove', (e) => {
         if (!isDragging) return;
-        const point = e.touches ? e.touches[0] : e;
-        const dx = point.clientX - startX;
-        const dy = point.clientY - startY;
-        window.style.left = `${startLeft + dx}px`;
-        window.style.top = `${startTop + dy}px`;
-        window.style.right = 'auto';
-        window.style.bottom = 'auto';
-    }
+        win.style.left = (origLeft + e.clientX - startX) + 'px';
+        win.style.top = (origTop + e.clientY - startY) + 'px';
+    });
 
-    function onEnd() {
-        if (isDragging) {
-            isDragging = false;
-            handle.style.cursor = 'grab';
-        }
-    }
-
-    handle.addEventListener('mousedown', onStart);
-    handle.addEventListener('touchstart', onStart, { passive: false });
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('touchmove', onMove, { passive: false });
-    document.addEventListener('mouseup', onEnd);
-    document.addEventListener('touchend', onEnd);
+    document.addEventListener('mouseup', () => {
+        if (isDragging) { isDragging = false; win.style.cursor = ''; }
+    });
 }
-
-// ═══ 工具函数 ═══
 
 function escapeHtml(text) {
     const div = document.createElement('div');
-    div.textContent = text;
+    div.textContent = String(text || '');
     return div.innerHTML;
-}
-
-/**
- * 简单的重复检测（基于文本相似度）
- */
-function findPossibleDuplicates(memories) {
-    const duplicates = [];
-    const checked = new Set();
-
-    for (let i = 0; i < memories.length; i++) {
-        if (checked.has(i)) continue;
-        const group = [i];
-
-        for (let j = i + 1; j < memories.length; j++) {
-            if (checked.has(j)) continue;
-            if (isSimilar(memories[i].content, memories[j].content)) {
-                group.push(j);
-                checked.add(j);
-            }
-        }
-
-        if (group.length > 1) {
-            duplicates.push(group.map(idx => memories[idx]));
-            checked.add(i);
-        }
-    }
-
-    return duplicates;
-}
-
-function isSimilar(text1, text2) {
-    if (!text1 || !text2) return false;
-    const a = text1.toLowerCase().trim();
-    const b = text2.toLowerCase().trim();
-
-    // 完全包含
-    if (a.includes(b) || b.includes(a)) return true;
-
-    // 简单的 Jaccard 相似度
-    const setA = new Set(a.split(/\s+/));
-    const setB = new Set(b.split(/\s+/));
-    const intersection = [...setA].filter(x => setB.has(x)).length;
-    const union = new Set([...setA, ...setB]).size;
-
-    return union > 0 && (intersection / union) > 0.7;
 }

@@ -1,46 +1,35 @@
 /**
- * retriever.js —— BB-Memory 的"搜索引擎 + 注入调度器"
+ * retriever.js —— BB-Memory v5.0 检索与注入系统
  *
- * v2.4 重写：
- *   - 8 维综合评分 calculateMemoryScore()
- *   - 分等级注入 L1/L2/L3/L4
- *   - 常驻记忆 getResidentMemories()
- *   - token 预算控制
- *   - buildMemoryInjectionPrompt() 统一输出
- * v2.6：NPC/物品分级 + 按需展开 mergeExpandedRelevantResults()
+ * 四柱架构注入格式：角色档案 / 重要物品 / 故事时间线 / 相关记忆。
+ * 简化为 5 维评分 + 实体展开。
  */
 
-import {
-    TRUTH_STATUS,
-    HIDDEN_NOTE_TYPES,
-    resolveMemoryType,
-    getCategoryLabel,
-} from './memory-types.js';
-
+import { MEMORY_TYPES, TRUTH_STATUS } from './memory-types.js';
 import {
     tierScoreMultiplier,
+    buildNpcIndexCard,
+    buildItemIndexCard,
+    buildDefaultIndexCard,
     memoryMatchesQueryEntities,
     expandEntityMemories,
-    buildDefaultIndexCard,
-    normalizeNpcTier,
-    normalizeItemTier,
+    NPC_TIERS,
+    ITEM_TIERS,
 } from './entity-tiers.js';
-
-const NPC_RESIDENT_ORDER = { core: 4, important: 3, minor: 2, background: 1 };
+import {
+    getNpcProfiles, getItems, getTimeline, getMemories,
+} from './memory-store.js';
 
 // ═══════════════════════════════════════════════════════════
-//  评分权重（可调参，总和不强制为 1，最终会归一化）
+//  评分权重（简化为 5 维）
 // ═══════════════════════════════════════════════════════════
 
 const SCORE_WEIGHTS = {
-    keyword:        0.20,
-    tag:            0.14,
-    embedding:      0.18,   // v4.0.0: 语义向量相似度
-    importance:     0.12,
-    emotionalWeight:0.08,
-    strength:       0.15,
-    scene:          0.15,
-    relation:       0.13,
+    keyword:    0.25,
+    embedding:  0.25,
+    importance: 0.20,
+    recency:    0.18,
+    tier:       0.12,
 };
 
 const RECENCY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -50,134 +39,40 @@ const RECENCY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 // ═══════════════════════════════════════════════════════════
 
 export const INJECTION_LEVELS = Object.freeze({
-    L4: { id: 'L4', label: '常驻',   tokenCost: 'minimal', description: '每轮注入的索引卡' },
-    L3: { id: 'L3', label: '完整',   tokenCost: 'high',    description: '完整内容 + 原话' },
-    L2: { id: 'L2', label: '摘要',   tokenCost: 'medium',  description: '摘要级别' },
-    L1: { id: 'L1', label: '标签',   tokenCost: 'low',     description: '仅标题/标签' },
+    L4: { id: 'L4', label: '常驻',   tokenCost: 'minimal' },
+    L3: { id: 'L3', label: '完整',   tokenCost: 'high' },
+    L2: { id: 'L2', label: '摘要',   tokenCost: 'medium' },
+    L1: { id: 'L1', label: '标签',   tokenCost: 'low' },
 });
-
-// 大致 token 估算：1 个汉字 ≈ 1.5 token，1 个英文单词 ≈ 1 token
-function estimateTokens(text) {
-    if (!text) return 0;
-    const cjk = text.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g);
-    const cjkTokens = cjk ? cjk.length * 1.5 : 0;
-    const rest = text.replace(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g, '');
-    const wordTokens = rest.split(/\s+/).filter(Boolean).length;
-    return Math.ceil(cjkTokens + wordTokens);
-}
 
 // ═══════════════════════════════════════════════════════════
 //  文本分词
 // ═══════════════════════════════════════════════════════════
 
 function extractTokens(text) {
+    if (!text) return [];
     return text
         .toLowerCase()
-        .split(/[\s,，。！？!?、；;：:""''（）()\[\]{}·\n\r\t]+/)
+        .split(/[\s,，。！？!?、；;：:""''「」（）()\[\]{}·\n\r\t]+/)
         .map(t => t.trim())
         .filter(t => t.length >= 2);
 }
 
+function estimateTokens(text) {
+    if (!text) return 0;
+    const cjk = text.match(/[一-鿿぀-ヿ가-힯]/g);
+    const cjkTokens = cjk ? cjk.length * 1.5 : 0;
+    const rest = text.replace(/[一-鿿぀-ヿ가-힯]/g, '');
+    const wordTokens = rest.split(/\s+/).filter(Boolean).length;
+    return Math.ceil(cjkTokens + wordTokens);
+}
+
 // ═══════════════════════════════════════════════════════════
-//  8 维综合评分
+//  5 维评分
 // ═══════════════════════════════════════════════════════════
 
-/**
- * 对单条记忆进行 8 维综合评分。
- * 返回 { total, breakdown } — breakdown 包含每个维度的原始分。
- *
- * @param {object} memory - 记忆条目
- * @param {string} query - 用户当前消息
- * @param {object} context - 可选上下文 { recentActors, recentLocations, chatHistory }
- * @param {number[]|null} queryEmbedding - 查询向量
- */
-export function calculateMemoryScore(memory, query, context = {}, queryEmbedding = null) {
-    const queryTokens = extractTokens(query);
-    const now = Date.now();
-
-    const breakdown = {
-        keyword:         computeKeywordScore(memory, queryTokens),
-        tag:             computeTagScore(memory.tags, queryTokens),
-        embedding:       computeEmbeddingScore(memory, queryEmbedding),
-        importance:      memory.importance ?? 0.5,
-        emotionalWeight: memory.emotionalWeight ?? 0.0,
-        strength:        memory.strength ?? 1.0,
-        scene:           computeSceneScore(memory, queryTokens, context),
-        relation:        computeRelationScore(memory, queryTokens, context),
-    };
-
-    // 加权求和
-    let weightedSum = 0;
-    let weightTotal = 0;
-    for (const [dim, weight] of Object.entries(SCORE_WEIGHTS)) {
-        weightedSum += (breakdown[dim] || 0) * weight;
-        weightTotal += weight;
-    }
-    const normalized = weightTotal > 0 ? weightedSum / weightTotal : 0;
-
-    // 时效性作为小幅修正（不是主维度，避免过度惩罚旧记忆）
-    const recencyBonus = computeRecency(memory.createdAt, now) * 0.1;
-
-    // pinned 记忆获得固定底分加成
-    const pinBonus = memory.pinned ? 0.15 : 0;
-
-    // v4.1.0: 合集记忆获得小幅加分（浓缩多条记忆信息）
-    const clusterBonus = memory.isClusterSummary ? 0.05 : 0;
-
-    const total = Math.min(1.0, normalized + recencyBonus + pinBonus + clusterBonus);
-
-    return { total, breakdown };
-}
-
-// ═══ 各维度计算 ═══
-
-function computeKeywordScore(memory, queryTokens) {
-    if (!queryTokens.length) return 0;
-
-    const searchTarget = [
-        memory.content,
-        memory.title || '',
-        memory.summary || '',
-        memory.subject || '',
-        memory.target || '',
-        (memory.keywords || []).join(' '),
-    ].join(' ').toLowerCase();
-
-    let matchCount = 0;
-    for (const token of queryTokens) {
-        if (searchTarget.includes(token)) matchCount++;
-    }
-    return matchCount / queryTokens.length;
-}
-
-function computeTagScore(tags, queryTokens) {
-    if (!tags?.length || !queryTokens.length) return 0;
-
-    let totalWeight = 0;
-    let matchedWeight = 0;
-
-    for (const tag of tags) {
-        const tagName = (tag.name || '').toLowerCase();
-        const tagWeight = tag.weight || 0.5;
-        totalWeight += tagWeight;
-
-        for (const token of queryTokens) {
-            if (tagName.includes(token) || token.includes(tagName)) {
-                matchedWeight += tagWeight;
-                break;
-            }
-        }
-    }
-    return totalWeight > 0 ? matchedWeight / totalWeight : 0;
-}
-
-/**
- * v4.0.0: 余弦相似度计算
- */
 function cosineSimilarity(a, b) {
-    let dot = 0;
-    let normA = 0;
-    let normB = 0;
+    let dot = 0, normA = 0, normB = 0;
     for (let i = 0; i < a.length; i++) {
         dot += a[i] * b[i];
         normA += a[i] * a[i];
@@ -187,218 +82,101 @@ function cosineSimilarity(a, b) {
     return denom === 0 ? 0 : Math.max(0, dot / denom);
 }
 
-/**
- * v4.0.0: embedding 语义相似度评分。
- * 传入查询向量与记忆向量，计算余弦相似度。
- */
-function computeEmbeddingScore(memory, queryEmbedding) {
-    if (!queryEmbedding || !memory.embedding) return 0;
-    return cosineSimilarity(memory.embedding, queryEmbedding);
-}
+const TIER_SCORE = { eternal: 1.0, core: 0.8, stable: 0.5, transient: 0.3 };
 
-/**
- * 场景相关度：检查当前消息是否提到了记忆中的地点或情景关键词。
- */
-function computeSceneScore(memory, queryTokens, context) {
-    if (!queryTokens.length) return 0;
-    let score = 0;
-    let checks = 0;
+export function calculateMemoryScore(memory, query, context = {}, queryEmbedding = null) {
+    const queryTokens = extractTokens(query);
+    const now = Date.now();
 
-    // 地点匹配
-    if (memory.location) {
-        checks++;
-        const loc = memory.location.toLowerCase();
-        if (queryTokens.some(t => loc.includes(t) || t.includes(loc))) score += 1;
-    }
-
-    // context 中的近期地点匹配
-    if (context.recentLocations?.length && memory.location) {
-        checks++;
-        const loc = memory.location.toLowerCase();
-        if (context.recentLocations.some(l => l.toLowerCase().includes(loc) || loc.includes(l.toLowerCase()))) {
-            score += 1;
+    // 关键词
+    let keywordScore = 0;
+    if (queryTokens.length) {
+        const searchTarget = [
+            memory.content, memory.title || '', memory.summary || '',
+            memory.subject || '', memory.target || '',
+        ].join(' ').toLowerCase();
+        let matchCount = 0;
+        for (const t of queryTokens) {
+            if (searchTarget.includes(t)) matchCount++;
         }
+        keywordScore = matchCount / queryTokens.length;
     }
 
-    // categoryPath 中的场景类提升
-    if (memory.categoryPath?.startsWith('episode.') || memory.categoryPath?.startsWith('location.')) {
-        checks++;
-        if (queryTokens.length > 0) score += 0.3;
+    // 语义
+    const embeddingScore = (queryEmbedding && memory.embedding)
+        ? cosineSimilarity(queryEmbedding, memory.embedding) : 0;
+
+    // 重要性
+    const importanceScore = memory.importance ?? 0.5;
+
+    // 时效性
+    const age = now - (memory.lastHitAt || memory.createdAt || now);
+    let recencyScore;
+    if (age <= 0) recencyScore = 1.0;
+    else if (age >= RECENCY_WINDOW_MS) recencyScore = Math.max(0.1, 1 - Math.log10(age / RECENCY_WINDOW_MS + 1) * 0.5);
+    else recencyScore = 1 - (age / RECENCY_WINDOW_MS) * 0.5;
+
+    // 层级
+    const tierScore = TIER_SCORE[memory.memoryTier] || 0.3;
+
+    let weightedSum = 0, weightTotal = 0;
+    const dims = { keyword: keywordScore, embedding: embeddingScore, importance: importanceScore, recency: recencyScore, tier: tierScore };
+    for (const [dim, weight] of Object.entries(SCORE_WEIGHTS)) {
+        weightedSum += (dims[dim] || 0) * weight;
+        weightTotal += weight;
     }
+    const normalized = weightTotal > 0 ? weightedSum / weightTotal : 0;
+    const total = Math.min(1.0, normalized);
 
-    return checks > 0 ? Math.min(1, score / checks) : 0;
-}
-
-/**
- * 关系相关度：检查当前消息是否提到了记忆中的人物。
- */
-function computeRelationScore(memory, queryTokens, context) {
-    if (!queryTokens.length) return 0;
-    let score = 0;
-    let checks = 0;
-
-    const actorNames = [
-        memory.subject,
-        memory.target,
-        ...(memory.actors || []),
-    ].filter(Boolean).map(n => n.toLowerCase());
-
-    if (actorNames.length) {
-        checks++;
-        for (const name of actorNames) {
-            if (queryTokens.some(t => name.includes(t) || t.includes(name))) {
-                score += 1;
-                break;
-            }
-        }
-    }
-
-    // context 中的近期角色匹配
-    if (context.recentActors?.length && actorNames.length) {
-        checks++;
-        for (const name of actorNames) {
-            if (context.recentActors.some(a => a.toLowerCase().includes(name) || name.includes(a.toLowerCase()))) {
-                score += 1;
-                break;
-            }
-        }
-    }
-
-    // NPC / 关系类记忆基础加成
-    if (memory.categoryPath?.startsWith('npc.')) {
-        checks++;
-        score += 0.3;
-    }
-
-    return checks > 0 ? Math.min(1, score / checks) : 0;
-}
-
-function computeRecency(createdAt, now) {
-    if (!createdAt) return 0.5;
-    const age = now - createdAt;
-    if (age <= 0) return 1.0;
-    if (age >= RECENCY_WINDOW_MS) {
-        return Math.max(0.1, 1 - Math.log10(age / RECENCY_WINDOW_MS + 1) * 0.5);
-    }
-    return 1 - (age / RECENCY_WINDOW_MS) * 0.5;
+    return { total, breakdown: dims };
 }
 
 // ═══════════════════════════════════════════════════════════
 //  注入等级选择
 // ═══════════════════════════════════════════════════════════
 
-/**
- * 根据记忆属性、评分与「本轮是否命中实体」决定注入等级。
- *   L4 = 常驻（resident === true）
- *   L3 = 高分或（命中实体时的原话）
- *   路人/背景物在未命中时降级，避免占满 token
- */
 export function chooseInjectionLevel(memory, score, queryMatched = false) {
-    if (memory.resident) return 'L4';
-
-    const nt = normalizeNpcTier(memory.npcTier);
-    const it = normalizeItemTier(memory.itemTier);
-    const verbatimStrong = memory.verbatim && (
-        queryMatched || nt === 'core' || it === 'key'
-    );
-
-    let level;
-    if (score >= 0.55 || verbatimStrong) level = 'L3';
-    else if (score >= 0.30) level = 'L2';
-    else level = 'L1';
-
-    if (!queryMatched) {
-        if (nt === 'background' || it === 'background') {
-            if (level === 'L3') level = 'L2';
-            if (score < 0.42) level = 'L1';
-        }
-        if ((nt === 'minor' || it === 'consumable') && level === 'L3' && score < 0.62) {
-            level = 'L2';
-        }
-    }
-
-    return level;
+    if (memory.memoryTier === 'eternal' || memory.memoryTier === 'core') return 'L4';
+    if (score >= 0.55 || (memory.verbatim && queryMatched)) return 'L3';
+    if (score >= 0.30) return 'L2';
+    return 'L1';
 }
 
 // ═══════════════════════════════════════════════════════════
-//  常驻记忆
+//  记忆检索
 // ═══════════════════════════════════════════════════════════
 
-/**
- * 从记忆列表中提取常驻记忆（resident === true）。
- * 常驻记忆按 importance 降序排列。
- */
-export function getResidentMemories(memories) {
-    return memories
-        .filter(m => m.resident === true && m.status !== 'archived' && m.status !== 'deleted')
-        .sort((a, b) => {
-            const na = NPC_RESIDENT_ORDER[normalizeNpcTier(a.npcTier)] ?? 2;
-            const nb = NPC_RESIDENT_ORDER[normalizeNpcTier(b.npcTier)] ?? 2;
-            if (nb !== na) return nb - na;
-            return (b.importance || 0) - (a.importance || 0);
-        });
-}
-
-// ═══════════════════════════════════════════════════════════
-//  智能检索
-// ═══════════════════════════════════════════════════════════
-
-/**
- * 在记忆中搜索与查询最相关的条目。
- * 返回带评分的数组 [{ memory, score, breakdown, level }]
- */
 export function getRelevantMemories(memories, queryText, options = {}) {
     const {
-        maxResults = 10,
-        minScore = 0.05,
-        typeFilter = null,
-        minStrength = 0,
-        enabledTypes = null,
-        context = {},
-        useFuse = true,
-        queryEmbedding = null,
+        maxResults = 10, minScore = 0.05, queryEmbedding = null,
     } = options;
 
     if (!memories.length || !queryText.trim()) return [];
 
-    // 过滤
-    let candidates = memories.filter(m => {
-        if (m.resident) return false;       // 常驻记忆单独处理
-        if (m.status === 'archived' || m.status === 'deleted') return false;
-        if (typeFilter && (m.cognitiveType || m.type) !== typeFilter) return false;
-        if (minStrength > 0 && (m.strength ?? 1.0) < minStrength) return false;
-        if (enabledTypes) {
-            const ct = resolveMemoryType(m);
-            if (!enabledTypes[ct]) return false;
-        }
-        return true;
-    });
+    let candidates = memories.filter(m => m.status !== 'archived' && m.status !== 'deleted');
 
     if (!candidates.length) return [];
 
-    // Fuse 模糊匹配加成
+    // Fuse 模糊匹配
     let fuseBoostMap = new Map();
-    if (useFuse) {
-        try {
-            const Fuse = SillyTavern.libs.Fuse;
-            if (Fuse) {
-                const fuse = new Fuse(candidates, {
-                    keys: ['content', 'title', 'summary', 'keywords', 'subject', 'target'],
-                    threshold: 0.4,
-                    includeScore: true,
-                });
-                for (const result of fuse.search(queryText)) {
-                    fuseBoostMap.set(result.item.id, (1 - (result.score || 0)) * 0.15);
-                }
+    try {
+        const Fuse = SillyTavern.libs.Fuse;
+        if (Fuse) {
+            const fuse = new Fuse(candidates, {
+                keys: ['content', 'title', 'summary', 'subject', 'target'],
+                threshold: 0.4,
+                includeScore: true,
+            });
+            for (const result of fuse.search(queryText)) {
+                fuseBoostMap.set(result.item.id, (1 - (result.score || 0)) * 0.15);
             }
-        } catch { /* Fuse 不可用 */ }
-    }
+        }
+    } catch { /* Fuse 不可用 */ }
 
-    // 评分
     const scored = [];
     for (const memory of candidates) {
         const queryMatched = memoryMatchesQueryEntities(memory, queryText);
-        const { total, breakdown } = calculateMemoryScore(memory, queryText, context, queryEmbedding);
+        const { total, breakdown } = calculateMemoryScore(memory, queryText, {}, queryEmbedding);
         const fuseBoost = fuseBoostMap.get(memory.id) || 0;
         let finalScore = Math.min(1.0, total + fuseBoost);
         finalScore = Math.min(1.0, finalScore * tierScoreMultiplier(memory, queryMatched));
@@ -418,261 +196,251 @@ export function getRelevantMemories(memories, queryText, options = {}) {
 }
 
 /**
- * 在本轮检索结果基础上，合并「用户提到的实体」的关联记忆（按需展开），便于拉高注入档位。
+ * 实体展开：合并关联记忆
  */
-export function mergeExpandedRelevantResults(memories, queryText, relevantResults, residentMemories, context = {}, expandLimit = 12, maxResults = 10, queryEmbedding = null) {
-    const excludeIds = new Set(residentMemories.map(m => m.id));
-    for (const r of relevantResults) excludeIds.add(r.memory.id);
-
+export function mergeExpandedRelevantResults(memories, queryText, relevantResults, excludeIds, expandLimit = 12, maxResults = 10, queryEmbedding = null) {
     const expanded = expandEntityMemories(memories, queryText, excludeIds, expandLimit);
     const merged = [...relevantResults];
 
     for (const m of expanded) {
         const queryMatched = true;
-        const { total, breakdown } = calculateMemoryScore(m, queryText, context, queryEmbedding);
+        const { total } = calculateMemoryScore(m, queryText, {}, queryEmbedding);
         let score = Math.min(1.0, Math.max(total, 0.55));
         score = Math.min(1.0, score * tierScoreMultiplier(m, queryMatched));
         merged.push({
             memory: m,
             score,
-            breakdown,
             level: chooseInjectionLevel(m, score, queryMatched),
         });
     }
 
     merged.sort((a, b) => b.score - a.score);
-    // v4.2.0: 截断为 maxResults + 30% 扩展上限，防止注入条目过多
     const ceiling = Math.min(maxResults + Math.ceil(maxResults * 0.3), merged.length);
     return merged.slice(0, ceiling);
 }
 
 // ═══════════════════════════════════════════════════════════
-//  分等级格式化
+//  各支柱检索
 // ═══════════════════════════════════════════════════════════
 
 /**
- * 按注入等级格式化一条记忆为文本行。
- *   L1 → 标签/标题
- *   L2 → 摘要
- *   L3 → 完整内容 + 原话
- *   L4 → 常驻索引卡
+ * NPC 档案：core+important 全注入，minor 按命中
  */
-function formatByLevel(memory, level) {
-    const titlePart = memory.title ? `[${memory.title}]` : '';
-    const catPart = getCategoryLabel(memory.categoryPath);
-    const catLabel = catPart ? `(${catPart})` : '';
-
-    // truthStatus 标记
-    let truthMark = '';
-    if (memory.truthStatus && memory.truthStatus !== 'true') {
-        const ts = TRUTH_STATUS[memory.truthStatus];
-        if (ts) truthMark = `{${ts.label}} `;
-    }
-
-    switch (level) {
-        case 'L4': {
-            const card = buildDefaultIndexCard(memory);
-            const tagStr = (memory.tags || []).slice(0, 3).map(t => t.name || t).join('/');
-            return `◆ ${card}${tagStr ? ` [${tagStr}]` : ''}`;
-        }
-        case 'L1': {
-            const tagStr = (memory.tags || []).slice(0, 4).map(t => t.name || t).join(', ');
-            return `${titlePart}${catLabel} ${truthMark}${tagStr || memory.content.slice(0, 30)}`;
-        }
-        case 'L2': {
-            const text = memory.summary || memory.content.slice(0, 80);
-            return `${titlePart}${catLabel} ${truthMark}${text}`;
-        }
-        case 'L3':
-        default: {
-            const parts = [];
-            if (titlePart) parts.push(titlePart);
-            if (catLabel) parts.push(catLabel);
-            if (truthMark) parts.push(truthMark);
-            parts.push(memory.summary || memory.content);
-            if (memory.verbatim) parts.push(`「${memory.verbatim}」`);
-            if (memory.subject && memory.target) {
-                parts.push(`(${memory.subject} → ${memory.target})`);
-            } else if (memory.subject) {
-                parts.push(`(${memory.subject})`);
-            }
-            return parts.join(' ');
+export function getNpcForInjection(npcProfiles, queryText) {
+    const result = [];
+    for (const npc of npcProfiles) {
+        if (npc.npcTier === 'core' || npc.npcTier === 'important' || npc.memoryTier === 'eternal') {
+            result.push(npc);
+        } else if (npc.npcTier === 'minor' && memoryMatchesQueryEntities(npc, queryText)) {
+            result.push(npc);
         }
     }
+    // 排序：tier 优先
+    const tierOrder = { core: 0, important: 1, minor: 2, background: 3 };
+    result.sort((a, b) => (tierOrder[a.npcTier] || 2) - (tierOrder[b.npcTier] || 2));
+    return result.slice(0, 8);
 }
 
 /**
- * 格式化 hiddenNotes 行
+ * 物品栏：key+equipped+kp 全注入，其余按命中
  */
-function formatNoteLines(memory) {
-    if (!Array.isArray(memory.hiddenNotes)) return '';
-    const notes = memory.hiddenNotes.filter(n => n.allowInjection !== false);
-    if (!notes.length) return '';
-    return notes.map(n => {
-        const typeLabel = HIDDEN_NOTE_TYPES[n.type]?.label || '备注';
-        return `   [隐·${typeLabel}] ${n.content}`;
-    }).join('\n');
+export function getItemsForInjection(items, queryText) {
+    const result = [];
+    for (const item of items) {
+        if (item.itemTier === 'key' || item.itemTier === 'equipped' || item.keepPermanent || item.memoryTier === 'eternal') {
+            result.push(item);
+        } else if (memoryMatchesQueryEntities(item, queryText)) {
+            result.push(item);
+        }
+    }
+    const tierOrder = { key: 0, equipped: 1, clue: 2, consumable: 3, background: 4 };
+    result.sort((a, b) => (tierOrder[a.itemTier] || 3) - (tierOrder[b.itemTier] || 3));
+    return result.slice(0, 5);
+}
+
+/**
+ * 时间线：ongoing 全注入，最近 ended 3 条
+ */
+export function getTimelineForInjection(timeline) {
+    const ongoing = timeline.filter(t => t.isActive && t.status === 'ongoing');
+    const ended = timeline
+        .filter(t => !t.isActive || t.status === 'ended')
+        .sort((a, b) => (b.storyTimeSort ?? b.updatedAt ?? 0) - (a.storyTimeSort ?? a.updatedAt ?? 0))
+        .slice(0, 3);
+    const foreshadow = timeline.filter(t => t.status === 'foreshadow');
+    return { ongoing, ended, foreshadow };
 }
 
 // ═══════════════════════════════════════════════════════════
-//  统一注入 Prompt 构建
+//  格式化
+// ═══════════════════════════════════════════════════════════
+
+function formatNpcLine(npc) {
+    const parts = [npc.name, npc.role, npc.personality, npc.appearance, npc.status].filter(Boolean);
+    const line = '◆ ' + parts.join(' | ');
+    const relLines = (npc.relationships || []).map(r =>
+        `  关系：${r.name ? '与' + r.name : ''}${r.type || ''}${r.attitude ? '（' + r.attitude + '）' : ''}`
+    );
+    return line + (relLines.length ? '\n' + relLines.join('\n') : '');
+}
+
+function formatItemLine(item) {
+    const statusLabel = { held: '持有中', used: '已使用', lost: '已失去', destroyed: '已销毁' }[item.status] || item.status;
+    const parts = [
+        '◆ ' + item.name,
+        item.owner ? '持有者：' + item.owner : '',
+        '状态：' + statusLabel,
+        item.significance || '',
+        item.keepPermanent ? '（永久保留）' : '',
+    ].filter(Boolean);
+    return parts.join(' | ');
+}
+
+function formatTimelineLine(t) {
+    const timeStr = t.storyTime || '';
+    const activeMark = t.status === 'ongoing' ? '（进行中）' :
+                       t.status === 'foreshadow' ? '【伏笔】' : '（已结束）';
+    return `▸ ${timeStr} ${t.event} ${activeMark}\n  ${t.summary}${t.impact ? ' — ' + t.impact : ''}`;
+}
+
+function formatMemoryLine(m) {
+    const parts = [];
+    if (m.title) parts.push(`[${m.title}]`);
+    const typeLabel = MEMORY_TYPES[m.type]?.label || '';
+    if (typeLabel) parts.push(`(${typeLabel})`);
+    if (m.truthStatus && m.truthStatus !== 'true') {
+        const ts = TRUTH_STATUS[m.truthStatus];
+        if (ts) parts.push(`{${ts.label}}`);
+    }
+    parts.push(m.summary || m.content);
+    if (m.verbatim) parts.push(`「${m.verbatim}」`);
+    if (m.subject && m.target) parts.push(`(${m.subject} → ${m.target})`);
+    else if (m.subject) parts.push(`(${m.subject})`);
+    return parts.join(' ');
+}
+
+// ═══════════════════════════════════════════════════════════
+//  统一注入构建
 // ═══════════════════════════════════════════════════════════
 
 /**
- * 构建完整的记忆注入文本，分三个区块：
- *   [常驻记忆]   — L4 常驻索引卡
- *   [本轮相关记忆] — L1~L3 分等级注入
- *   [隐藏备注]   — hiddenNotes（含常驻 + 相关）
- *
+ * 构建四柱注入文本
  * @param {object} params
- * @param {Array} params.residentMemories - getResidentMemories() 的结果
- * @param {Array} params.relevantResults  - getRelevantMemories() 的结果
- * @param {object} params.settings        - 用户设置
+ * @param {Array} params.npcProfiles - getNpcForInjection 结果
+ * @param {Array} params.items - getItemsForInjection 结果
+ * @param {object} params.timeline - getTimelineForInjection 结果
+ * @param {Array} params.relevantResults - getRelevantMemories 结果
+ * @param {object} params.settings
  * @returns {{ text: string, tokenEstimate: number, stats: object }}
  */
-export function buildMemoryInjectionPrompt({ residentMemories, relevantResults, settings, persistentMemories = [] }) {
+export function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, relevantResults, settings }) {
     const tokenBudget = settings.tokenBudget || 800;
     let tokenUsed = 0;
-    const stats = { persistentCount: 0, residentCount: 0, l3: 0, l2: 0, l1: 0, totalMemories: 0, hiddenNoteCount: 0 };
+    const stats = { npcCount: 0, itemCount: 0, timelineCount: 0, memoryCount: 0 };
 
     const sections = [];
-    const allHiddenLines = [];
 
-    // ── 区块 0：常驻档案（NPC/物品/时间线）──
-    if (persistentMemories.length) {
-        const byCategory = { npc: [], item: [], timeline: [] };
-        for (const pm of persistentMemories) {
-            if (byCategory[pm.category]) byCategory[pm.category].push(pm);
+    // ── 区块 1：角色档案 ──
+    if (npcProfiles?.length) {
+        const lines = ['【角色档案】'];
+        for (const npc of npcProfiles) {
+            const line = formatNpcLine(npc);
+            if (tokenUsed + estimateTokens(line) > tokenBudget * 0.3) break;
+            lines.push(line);
+            tokenUsed += estimateTokens(line);
+            stats.npcCount++;
         }
-        const catLabels = { npc: 'NPC档案', item: '物品', timeline: '时间线' };
-        const archiveLines = [];
-        for (const [cat, items] of Object.entries(byCategory)) {
-            if (!items.length) continue;
-            archiveLines.push(`[${catLabels[cat]}]`);
-            for (const item of items) {
-                const line = `- ${item.name}: ${item.content}`;
-                const cost = estimateTokens(line);
-                if (tokenUsed + cost > tokenBudget * 0.35) break;
-                archiveLines.push(line);
-                tokenUsed += cost;
-                stats.persistentCount++;
+        if (lines.length > 1) sections.push(lines.join('\n'));
+    }
+
+    // ── 区块 2：重要物品 ──
+    if (items?.length) {
+        const lines = ['【重要物品】'];
+        for (const item of items) {
+            const line = formatItemLine(item);
+            if (tokenUsed + estimateTokens(line) > tokenBudget * 0.2) break;
+            lines.push(line);
+            tokenUsed += estimateTokens(line);
+            stats.itemCount++;
+        }
+        if (lines.length > 1) sections.push(lines.join('\n'));
+    }
+
+    // ── 区块 3：故事时间线 ──
+    if (timeline) {
+        const { ongoing, ended, foreshadow } = timeline;
+        const all = [...foreshadow, ...ongoing, ...ended];
+        if (all.length) {
+            const lines = ['【故事时间线】'];
+            for (const t of all) {
+                const line = formatTimelineLine(t);
+                if (tokenUsed + estimateTokens(line) > tokenBudget * 0.25) break;
+                lines.push(line);
+                tokenUsed += estimateTokens(line);
+                stats.timelineCount++;
             }
-        }
-        if (archiveLines.length) {
-            sections.push(`[常驻档案]\n${archiveLines.join('\n')}`);
+            if (lines.length > 1) sections.push(lines.join('\n'));
         }
     }
 
-    // ── 区块 1：常驻记忆 ──
-    if (residentMemories.length) {
-        const residentLines = [];
-        for (const m of residentMemories) {
-            const line = formatByLevel(m, 'L4');
-            const cost = estimateTokens(line);
-            if (tokenUsed + cost > tokenBudget * 0.3) break; // 常驻最多占预算 30%
-            residentLines.push(line);
-            tokenUsed += cost;
-            stats.residentCount++;
-
-            const noteText = formatNoteLines(m);
-            if (noteText) {
-                allHiddenLines.push(noteText);
-                stats.hiddenNoteCount++;
-            }
+    // ── 区块 4：相关记忆 ──
+    if (relevantResults?.length) {
+        const lines = ['【相关记忆】'];
+        const MAX_MEM = (settings.maxResults || 10) + 4;
+        let count = 0;
+        for (const { memory, level } of relevantResults) {
+            if (count >= MAX_MEM) break;
+            const line = (count + 1) + '. ' + formatMemoryLine(memory);
+            if (tokenUsed + estimateTokens(line) > tokenBudget * 0.7) break;
+            lines.push(line);
+            tokenUsed += estimateTokens(line);
+            count++;
+            stats.memoryCount++;
         }
-        if (residentLines.length) {
-            sections.push(`[常驻记忆]\n${residentLines.join('\n')}`);
-        }
+        if (lines.length > 1) sections.push(lines.join('\n'));
     }
 
-    // ── 区块 2：本轮相关记忆（按等级分组）──
-    const enabledTypes = settings.typeEnabled || {};
-    const relevantLines = [];
-    // v4.2.0: 硬上限防注入条目过多
-    const MAX_INJECT = (settings.maxResults || 10) + 4;
-    let injectedCount = 0;
-
-    for (const { memory, level } of relevantResults) {
-        if (injectedCount >= MAX_INJECT) break;
-        const cogType = resolveMemoryType(memory);
-        if (enabledTypes[cogType] === false) continue;
-
-        const line = formatByLevel(memory, level);
-        const cost = estimateTokens(line);
-        if (tokenUsed + cost > tokenBudget) break;
-
-        relevantLines.push(line);
-        tokenUsed += cost;
-        injectedCount++;
-        stats[level === 'L3' ? 'l3' : level === 'L2' ? 'l2' : 'l1']++;
-
-        const noteText = formatNoteLines(memory);
-        if (noteText) {
-            allHiddenLines.push(noteText);
-            stats.hiddenNoteCount++;
-        }
-    }
-
-    if (relevantLines.length) {
-        sections.push(`[本轮相关记忆]\n${relevantLines.map((l, i) => `${i + 1}. ${l}`).join('\n')}`);
-    }
-
-    // ── 区块 3：隐藏备注 ──
-    if (allHiddenLines.length) {
-        sections.unshift('（标记为[隐]的信息仅供你塑造角色行为和推进剧情，绝不要在对话中直接透露。）');
-        sections.push(`[隐藏备注]\n${allHiddenLines.join('\n')}`);
-    }
-
-    stats.totalMemories = stats.persistentCount + stats.residentCount + stats.l3 + stats.l2 + stats.l1;
     const text = sections.join('\n\n');
-    const tokenEstimate = estimateTokens(text);
+    const tokenEstimate = tokenUsed;
 
     return { text, tokenEstimate, stats };
 }
 
 // ═══════════════════════════════════════════════════════════
-//  向后兼容：旧版 searchMemories / simpleSearch
+//  兼容旧接口
 // ═══════════════════════════════════════════════════════════
 
 /**
- * 兼容旧版调用（返回记忆数组而非带评分的结果）
+ * searchMemories — 兼容旧签名
  */
 export function searchMemories(memories, queryText, options = {}) {
-    const {
-        maxResults = 5,
-        minStrength = 0,
-    } = typeof options === 'number' ? { maxResults: options } : options;
-
-    const results = getRelevantMemories(memories, queryText, {
-        maxResults,
-        minStrength,
-    });
-
+    const maxResults = typeof options === 'number' ? options : (options.maxResults || 10);
+    const results = getRelevantMemories(memories, queryText, { maxResults });
     return results.map(r => r.memory);
 }
 
 /**
- * 简单文本搜索（管理面板搜索框用）
+ * simpleSearch — 简单字符串匹配搜索
  */
-/** 按需展开 API（再导出，便于外部统一从 retriever 引用） */
-export { expandEntityMemories, expandMemoriesForEntityKeyword } from './entity-tiers.js';
-
-export function simpleSearch(memories, queryText, maxResults = 100) {
-    if (!memories.length || !queryText.trim()) return memories.slice(0, maxResults);
-
-    const queryLower = queryText.toLowerCase();
-    const tokens = extractTokens(queryText);
-
-    const results = memories.filter(m => {
-        const target = [
-            m.content, m.title || '', m.summary || '',
-            m.subject || '', m.target || '',
-            (m.keywords || []).join(' '),
+export function simpleSearch(items, queryText, maxResults = 100) {
+    if (!items?.length || !queryText?.trim()) return [];
+    const q = queryText.toLowerCase();
+    return items.filter(item => {
+        const pool = [
+            item.content, item.title || '', item.summary || '',
+            item.subject || '', item.target || '',
+            item.name || '', item.event || '', item.significance || '',
         ].join(' ').toLowerCase();
+        return pool.includes(q) || extractTokens(q).some(t => pool.includes(t));
+    }).slice(0, maxResults);
+}
 
-        if (target.includes(queryLower)) return true;
-        return tokens.some(t => target.includes(t));
-    });
-
-    return results.slice(0, maxResults);
+/**
+ * getResidentMemories — v5 中 memoryTier=core/eternal 即为常驻
+ */
+export function getResidentMemories(memories) {
+    return memories.filter(m =>
+        (m.memoryTier === 'core' || m.memoryTier === 'eternal') &&
+        m.status !== 'archived' && m.status !== 'deleted'
+    );
 }
