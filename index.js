@@ -247,13 +247,16 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     // 提取近期角色和地点作为检索上下文
     const context = extractRecentContext(chat);
 
-    // v4.0.0: 生成查询向量用于语义检索
+    // v4.4.1: 查询向量（3 秒超时，不阻塞生成管线）
     let queryEmbedding = null;
     if (settings.embeddingEnabled && settings.embeddingEndpoint) {
         try {
-            queryEmbedding = await callEmbeddingApi(userMessage);
+            queryEmbedding = await callEmbeddingApi(userMessage, 3000);
         } catch (e) {
-            console.warn('[BB-Memory] 查询向量化失败，使用纯关键词检索:', e.message);
+            // 超时或失败都静默回退到关键词检索，不阻塞 AI 生成
+            if (settings.debugLogging) {
+                console.warn('[BB-Memory] 查询向量化跳过（超时/失败），使用纯关键词检索:', e.message);
+            }
         }
     }
 

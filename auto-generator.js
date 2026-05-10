@@ -340,7 +340,7 @@ export async function callCustomApi(prompt) {
         console.log('[BB-Memory] 副API请求端点:', endpoint);
     }
 
-    const response = await fetch(endpoint, {
+    const response = await fetchWithTimeout(endpoint, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -361,7 +361,7 @@ export async function callCustomApi(prompt) {
             temperature: 0.3,
             max_tokens: 1000,
         }),
-    });
+    }, 30000);
 
     if (!response.ok) {
         throw new Error(`API 请求失败: ${response.status} ${response.statusText}`);
@@ -378,6 +378,15 @@ export async function callCustomApi(prompt) {
 }
 
 /**
+ * v4.4.1: 带超时的 fetch 包装。浏览器 fetch 无默认超时，可能永久挂起。
+ */
+function fetchWithTimeout(url, options, timeoutMs = 10000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
+/**
  * v4.0.0: 规范化 Embedding API 端点 URL
  */
 function normalizeEmbeddingEndpoint(url) {
@@ -389,8 +398,9 @@ function normalizeEmbeddingEndpoint(url) {
 
 /**
  * v4.0.0: 调用 Embedding API 生成向量
+ * v4.4.1: 添加 10 秒超时保护
  */
-export async function callEmbeddingApi(text) {
+export async function callEmbeddingApi(text, timeoutMs = 10000) {
     const settings = getSettings();
     const { embeddingEndpoint, embeddingApiKey, embeddingModel } = settings;
 
@@ -404,7 +414,7 @@ export async function callEmbeddingApi(text) {
         console.log('[BB-Memory] Embedding API 请求端点:', endpoint, '模型:', embeddingModel);
     }
 
-    const response = await fetch(endpoint, {
+    const response = await fetchWithTimeout(endpoint, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -414,7 +424,7 @@ export async function callEmbeddingApi(text) {
             model: embeddingModel,
             input: text,
         }),
-    });
+    }, timeoutMs);
 
     if (!response.ok) {
         const errText = await response.text().catch(() => '');
@@ -439,7 +449,7 @@ async function embedMemoryEntry(mem) {
     const text = mem.summary || mem.content?.slice(0, 100) || '';
     if (!text) return null;
     try {
-        return await callEmbeddingApi(text);
+        return await callEmbeddingApi(text, 8000);
     } catch (e) {
         console.warn('[BB-Memory] 向量化失败，将跳过此条:', e.message);
         return null;

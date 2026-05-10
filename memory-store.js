@@ -30,8 +30,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     autoGenApiKey: '',
     autoGenModel: '',
     autoGenPrompt: '',
-    // v4.0.0: 向量化语义检索
-    embeddingEnabled: true,
+    // v4.0.0: 向量化语义检索（需配置独立的 Embedding API，默认关闭）
+    embeddingEnabled: false,
     embeddingEndpoint: '',
     embeddingApiKey: '',
     embeddingModel: 'text-embedding-3-small',
