@@ -225,21 +225,24 @@ function escapeHtml(text) {
 }
 
 function getExtensionFolder() {
+    // 从 import.meta.url 解析扩展目录路径，不依赖 ST 核心模块
+    try {
+        const url = String(import.meta.url);
+        let m = url.match(/\/scripts\/extensions\/(.+?)\/index\.mjs(?:\?|[#]|$)/i);
+        if (!m) m = url.match(/\/scripts\/extensions\/(.+?)\/index\.js(?:\?|[#]|$)/i);
+        if (!m) m = url.match(/\/scripts\/extensions\/(.+?)\/[^/]+\.(?:js|mjs)(?:\?|[#]|$)/i);
+        if (m?.[1]) return m[1];
+    } catch { /* ignore */ }
+    // 回退：ST API
     try {
         const ctx = SillyTavern.getContext();
-        // 方法1：通过 extensions API
-        if (typeof ctx.findExtension === 'function') {
-            const ext = ctx.findExtension('BB-Memory');
-            if (ext) return ext;
-        }
-        // 方法2：遍历 extensions 数组
         const ext = ctx.extensions?.find(e => e.name === 'BB-Memory' || e.display_name === 'BB-Memory');
         if (ext) {
             if (typeof ext.getFolder === 'function') return ext.getFolder();
             return ext.baseFolder || ext.folder || '';
         }
     } catch { /* ignore */ }
-    return 'scripts/extensions/third-party/BB-Memory';
+    return 'third-party/BB-Memory';
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -264,113 +267,386 @@ function initCollapsibleSettings() {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  浮动控制中心
+//  浮动控制中心（v5.0 合并版：旧版状态 + 新版功能）
 // ═══════════════════════════════════════════════════════════
 
-let floatingHub = null;
+let _hubExtractStatus = '空闲';
+let _hubExtractPct = '';
+
+function setHubExtractStatus(status, pct) {
+    _hubExtractStatus = status;
+    _hubExtractPct = pct;
+    const statusEl = document.getElementById('bb_hub_extract_status');
+    const pctEl = document.getElementById('bb_hub_extract_pct');
+    if (statusEl) statusEl.textContent = status;
+    if (pctEl) pctEl.textContent = pct ? ` ${pct}` : '';
+}
 
 function injectFloatingHub() {
-    if (floatingHub) return;
-    floatingHub = document.createElement('div');
-    floatingHub.id = 'bb_floating_hub';
-    floatingHub.innerHTML = `
-        <div class="bb-hub-btn" id="bb_hub_toggle" title="BB-Memory 控制中心">
-            <i class="fa-solid fa-brain"></i>
+    if (document.getElementById('bb_floating_hub')) return;
+
+    const hub = document.createElement('div');
+    hub.id = 'bb_floating_hub';
+    hub.className = 'bb-floating-hub';
+    hub.innerHTML = '<i class="fa-solid fa-brain"></i><span class="bb-hub-badge" id="bb_hub_badge" style="display:none;">0</span>';
+
+    // 菜单面板
+    const menu = document.createElement('div');
+    menu.id = 'bb_floating_menu';
+    menu.className = 'bb-floating-menu';
+    menu.style.display = 'none';
+    menu.innerHTML = `
+        <div class="bb-floating-menu-header">
+            <i class="fa-solid fa-brain"></i> BB-Memory v5.0
         </div>
-        <div class="bb-hub-menu" id="bb_hub_menu" style="display:none;">
-            <button id="bb_hub_manage" title="记忆管家"><i class="fa-solid fa-list"></i> 记忆管家</button>
-            <button id="bb_hub_init" title="初始化记忆"><i class="fa-solid fa-rocket"></i> 初始化</button>
-            <button id="bb_hub_backup" title="备份"><i class="fa-solid fa-cloud-upload"></i> 备份</button>
-            <button id="bb_hub_restore" title="恢复"><i class="fa-solid fa-cloud-download"></i> 恢复</button>
-            <button id="bb_hub_maintenance" title="维护"><i class="fa-solid fa-broom"></i> 维护</button>
-            <button id="bb_hub_stats" title="统计"><i class="fa-solid fa-chart-bar"></i> 统计</button>
+        <div class="bb-floating-menu-body">
+            <div class="bb-floating-menu-item" id="bb_hub_slot_info">
+                <i class="fa-solid fa-floppy-disk"></i>
+                <span>存档: <strong>default</strong> · <strong>0</strong> 条</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" id="bb_hub_hit_info" data-action="toggle_hit_list">
+                <i class="fa-solid fa-bullseye"></i>
+                <span>命中: <strong id="bb_hub_hit_count">-</strong> 条</span>
+                <i class="fa-solid fa-chevron-down" style="margin-left:auto;font-size:0.7em;opacity:0.5;"></i>
+            </div>
+            <div id="bb_hub_hit_list" style="display:none;"></div>
+            <div class="bb-floating-menu-item" id="bb_hub_extract_progress">
+                <i class="fa-solid fa-robot"></i>
+                <span id="bb_hub_extract_status">空闲</span><strong id="bb_hub_extract_pct"></strong>
+            </div>
+            <div style="border-top:1px solid var(--SmartThemeBorderColor,#444);margin:4px 0;"></div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_manager">
+                <i class="fa-solid fa-list"></i>
+                <span>记忆管家</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="init_memory">
+                <i class="fa-solid fa-rocket"></i>
+                <span>初始化记忆</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="backup">
+                <i class="fa-solid fa-cloud-upload"></i>
+                <span>备份</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="restore">
+                <i class="fa-solid fa-cloud-download"></i>
+                <span>恢复</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="maintenance">
+                <i class="fa-solid fa-broom"></i>
+                <span>维护</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="stats">
+                <i class="fa-solid fa-chart-bar"></i>
+                <span>统计</span>
+            </div>
+            <div style="border-top:1px solid var(--SmartThemeBorderColor,#444);margin:4px 0;"></div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="toggle_visibility">
+                <i class="fa-solid fa-eye-slash"></i>
+                <span>切换楼层可见</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="meta_last">
+                <i class="fa-solid fa-tag"></i>
+                <span>标记最后消息</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="manual_extract">
+                <i class="fa-solid fa-wand-magic-sparkles"></i>
+                <span>手动提取</span>
+            </div>
         </div>`;
 
-    Object.assign(floatingHub.style, {
-        position: 'fixed', bottom: '80px', right: '24px', zIndex: '9999',
-        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px',
+    hub.appendChild(menu);
+    document.body.appendChild(hub);
+
+    // ── 拖拽逻辑 ──
+    let dragging = false, startX = 0, startY = 0, startLeft = 0, startTop = 0;
+    let hasMoved = false;
+
+    hub.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        dragging = true; hasMoved = false;
+        startX = e.clientX; startY = e.clientY;
+        const rect = hub.getBoundingClientRect();
+        startLeft = rect.left; startTop = rect.top;
+        hub.style.transition = 'none';
+        e.preventDefault();
+    });
+    hub.addEventListener('touchstart', (e) => {
+        dragging = true; hasMoved = false;
+        const t = e.touches[0];
+        startX = t.clientX; startY = t.clientY;
+        const rect = hub.getBoundingClientRect();
+        startLeft = rect.left; startTop = rect.top;
+        hub.style.transition = 'none';
+    }, { passive: false });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!dragging) return;
+        const dx = e.clientX - startX, dy = e.clientY - startY;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) hasMoved = true;
+        let l = startLeft + dx, t = startTop + dy;
+        l = Math.max(0, Math.min(window.innerWidth - hub.offsetWidth, l));
+        t = Math.max(0, Math.min(window.innerHeight - hub.offsetHeight, t));
+        hub.style.left = l + 'px'; hub.style.top = t + 'px';
+    });
+    document.addEventListener('touchmove', (e) => {
+        if (!dragging) return;
+        const t = e.touches[0];
+        const dx = t.clientX - startX, dy = t.clientY - startY;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) hasMoved = true;
+        let l = startLeft + dx, t = startTop + dy;
+        l = Math.max(0, Math.min(window.innerWidth - hub.offsetWidth, l));
+        t = Math.max(0, Math.min(window.innerHeight - hub.offsetHeight, t));
+        hub.style.left = l + 'px'; hub.style.top = t + 'px';
+    }, { passive: false });
+
+    const endDrag = () => { dragging = false; hub.style.transition = ''; };
+    document.addEventListener('mouseup', endDrag);
+    document.addEventListener('touchend', endDrag);
+
+    // 点击：无拖拽则展开菜单
+    hub.addEventListener('click', (e) => {
+        if (hasMoved) { e.preventDefault(); e.stopPropagation(); return; }
+        if (menu.contains(e.target)) return;
+        toggleFloatingMenu();
     });
 
-    document.body.appendChild(floatingHub);
-
-    // 切换菜单
-    floatingHub.querySelector('#bb_hub_toggle').addEventListener('click', () => {
-        const menu = floatingHub.querySelector('#bb_hub_menu');
-        menu.style.display = menu.style.display === 'none' ? 'flex' : 'none';
+    // 菜单项点击
+    menu.addEventListener('click', async (e) => {
+        const actionItem = e.target.closest('.bb-floating-menu-action');
+        if (!actionItem) return;
+        const action = actionItem.dataset.action;
+        await handleFloatingMenuAction(action);
+        if (action !== 'toggle_hit_list') {
+            menu.style.display = 'none';
+        }
     });
 
     // 点击外部关闭
     document.addEventListener('click', (e) => {
-        if (!floatingHub?.contains(e.target)) {
-            const menu = floatingHub?.querySelector('#bb_hub_menu');
-            if (menu) menu.style.display = 'none';
+        if (!menu.contains(e.target) && e.target !== hub && !hub.contains(e.target)) {
+            menu.style.display = 'none';
         }
     });
 
-    // 按钮事件
-    floatingHub.querySelector('#bb_hub_manage').addEventListener('click', () => {
-        const chatId = getChatId();
-        if (chatId) openAssistant(chatId, 'dashboard');
-    });
-    floatingHub.querySelector('#bb_hub_init').addEventListener('click', async () => {
-        const chatId = getChatId();
-        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
-        try {
-            const results = await handleInitMemory(chatId);
-            showToast(`初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 记忆 ${results.memories}`, 'success');
-        } catch (e) {
-            showToast(`初始化失败: ${e.message}`, 'error');
-        }
-    });
-    floatingHub.querySelector('#bb_hub_backup').addEventListener('click', async () => {
-        const chatId = getChatId();
-        if (!chatId) return;
-        const result = await exportMemoriesToChatMetadata(chatId);
-        showToast(`备份完成：${result.count} 条`, 'success');
-    });
-    floatingHub.querySelector('#bb_hub_restore').addEventListener('click', async () => {
-        const chatId = getChatId();
-        if (!chatId) return;
-        const result = await importMemoriesFromChatMetadata(chatId);
-        showToast(`恢复：${result.restored} 条新增`, 'success');
-    });
-    floatingHub.querySelector('#bb_hub_maintenance').addEventListener('click', async () => {
-        const chatId = getChatId();
-        if (!chatId) return;
-        const result = await checkMaintenanceNeeded(chatId);
-        if (result.needed) {
-            showMaintenancePopup(chatId, buildMaintenanceHTML(result));
+    // 定期刷新状态
+    setInterval(() => refreshFloatingHubData(), 5000);
+}
+
+// ── 菜单切换 ──
+function toggleFloatingMenu() {
+    const menu = document.getElementById('bb_floating_menu');
+    const hub = document.getElementById('bb_floating_hub');
+    if (!menu || !hub) return;
+    if (menu.style.display === 'none') {
+        const hubRect = hub.getBoundingClientRect();
+        const menuWidth = 268, menuMaxHeight = 320, gap = 56, edgeMargin = 16;
+        if (hubRect.right + menuWidth > window.innerWidth - edgeMargin) {
+            menu.style.left = 'auto'; menu.style.right = '0';
         } else {
-            showToast('当前无需维护', 'info');
+            menu.style.right = 'auto'; menu.style.left = '0';
         }
-    });
-    floatingHub.querySelector('#bb_hub_stats').addEventListener('click', async () => {
-        const chatId = getChatId();
-        if (!chatId) return;
-        const stats = await getMemoryStats(chatId);
-        showToast(`NPC: ${stats.npc.total} | 物品: ${stats.items.total} | 时间线: ${stats.timeline.total} | 记忆: ${stats.memories.total}`, 'info');
-    });
+        if (hubRect.top - menuMaxHeight - gap < edgeMargin) {
+            menu.style.bottom = 'auto'; menu.style.top = gap + 'px';
+        } else {
+            menu.style.top = 'auto'; menu.style.bottom = gap + 'px';
+        }
+        menu.style.display = 'block';
+        refreshFloatingHubData();
+    } else {
+        menu.style.display = 'none';
+    }
+}
 
-    // 拖拽
-    let isDragging = false, startX, startY, origLeft, origTop;
-    const hubBtn = floatingHub.querySelector('#bb_hub_toggle');
-    hubBtn.addEventListener('mousedown', (e) => {
-        if (e.target.tagName === 'BUTTON') return;
-        isDragging = true;
-        startX = e.clientX; startY = e.clientY;
-        origLeft = floatingHub.offsetLeft; origTop = floatingHub.offsetTop;
-        hubBtn.style.cursor = 'grabbing';
-    });
-    document.addEventListener('mousemove', (e) => {
-        if (!isDragging) return;
-        floatingHub.style.left = (origLeft + e.clientX - startX) + 'px';
-        floatingHub.style.top = (origTop + e.clientY - startY) + 'px';
-        floatingHub.style.right = 'auto';
-        floatingHub.style.bottom = 'auto';
-    });
-    document.addEventListener('mouseup', () => {
-        if (isDragging) { isDragging = false; hubBtn.style.cursor = ''; }
-    });
+// ── 状态刷新 ──
+async function refreshFloatingHubData() {
+    const chatId = getChatId();
+    if (!chatId) return;
+
+    // 更新存档信息
+    const slotInfo = document.getElementById('bb_hub_slot_info');
+    if (slotInfo) {
+        try {
+            const mems = await getMemories(chatId);
+            const settings = getSettings();
+            const slotName = settings.currentSlotName || 'default';
+            slotInfo.innerHTML = `<i class="fa-solid fa-floppy-disk"></i> <span>存档: <strong>${escapeHtml(slotName)}</strong> · <strong>${mems.length}</strong> 条</span>`;
+        } catch { /* ignore */ }
+    }
+
+    // 更新命中数
+    const hitCountEl = document.getElementById('bb_hub_hit_count');
+    const badge = document.getElementById('bb_hub_badge');
+    if (hitCountEl || badge) {
+        const result = lastRetrievalResult;
+        const count = result?.hits?.length || 0;
+        if (hitCountEl) hitCountEl.textContent = String(count);
+        if (badge) {
+            badge.textContent = count > 99 ? '99+' : String(count);
+            badge.style.display = count > 0 ? 'flex' : 'none';
+        }
+    }
+
+    // 更新可见性图标
+    const toggleItem = document.querySelector('.bb-floating-menu-action[data-action="toggle_visibility"] i');
+    if (toggleItem) {
+        const showing = document.body.classList.contains('bb-show-extracted');
+        toggleItem.className = showing ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash';
+    }
+
+    // 命中列表展开时同步刷新
+    const hitList = document.getElementById('bb_hub_hit_list');
+    if (hitList && hitList.style.display !== 'none') {
+        renderHubHitList(hitList, chatId);
+    }
+}
+
+// ── 命中列表渲染 ──
+function renderHubHitItem(h, typeIcons, levelColors, dimmed) {
+    const icon = typeIcons[h.type] || typeIcons[h.cognitiveType] || 'fa-circle';
+    const color = levelColors[h.level] || '#888';
+    const scorePct = Math.round((h.score || 0) * 100);
+    const shortTitle = (h.title || '').length > 14
+        ? escapeHtml(h.title.slice(0, 14)) + '...'
+        : escapeHtml(h.title);
+    const opacityStyle = dimmed ? 'opacity:0.55;' : '';
+    return `<div class="bb-hub-hit-item" title="${escapeHtml(h.title)}" style="${opacityStyle}">
+        <i class="fa-solid ${icon}" style="color:${color};font-size:0.7em;"></i>
+        <span class="bb-hub-hit-title">${shortTitle}</span>
+        <span class="bb-hub-hit-level" style="color:${color}">${h.level || ''}</span>
+        <span class="bb-hub-hit-score">${scorePct}%</span>
+    </div>`;
+}
+
+async function renderHubHitList(listEl, chatId) {
+    const result = lastRetrievalResult;
+    const typeIcons = { event: 'fa-film', emotion: 'fa-heart', habit: 'fa-repeat', fact: 'fa-lightbulb' };
+    const levelColors = { core: '#ce93d8', eternal: '#ce93d8', stable: '#4fc3f7', transient: '#9e9e9e' };
+
+    if (!result?.hits?.length) {
+        listEl.innerHTML = '<div class="bb-hub-hit-item" style="opacity:0.5;justify-content:center;">暂无命中记忆</div>';
+        return;
+    }
+
+    let html = result.hits.map(h => renderHubHitItem(h, typeIcons, levelColors, false)).join('');
+
+    // 追加未命中的高分记忆
+    try {
+        const allMemories = await getMemories(chatId);
+        const hitIds = new Set(result.hits.map(h => h.id));
+        const nonHitMemories = allMemories.filter(m => !hitIds.has(m.id));
+        nonHitMemories.sort((a, b) => (b.importance || 0) * (b.hitCount || 0) - (a.importance || 0) * (a.hitCount || 0));
+        const top5 = nonHitMemories.slice(0, 5);
+        if (top5.length > 0) {
+            html += '<div class="bb-hub-hit-item" style="opacity:0.4;justify-content:center;font-size:0.7em;border-top:1px solid var(--SmartThemeBorderColor,#444);margin-top:2px;padding-top:4px;">— 未命中高分记忆 —</div>';
+            html += top5.map(m => renderHubHitItem({
+                id: m.id, title: m.title || (m.content || '').slice(0, 30),
+                type: m.type || 'fact',
+                score: (m.importance || 0) * ((m.hitCount || 0) / 10),
+                level: m.memoryTier || 'transient',
+            }, typeIcons, levelColors, true)).join('');
+        }
+    } catch { /* ignore */ }
+
+    listEl.innerHTML = html;
+}
+
+// ── 菜单动作处理 ──
+async function handleFloatingMenuAction(action) {
+    const chatId = getChatId();
+    switch (action) {
+        case 'toggle_visibility': {
+            document.body.classList.toggle('bb-show-extracted');
+            const showing = document.body.classList.contains('bb-show-extracted');
+            showToast(showing ? '已显示被隐藏的楼层' : '已隐藏已提取的楼层', 'info');
+            break;
+        }
+        case 'meta_last': {
+            const ctx = SillyTavern.getContext();
+            const chat = ctx.chat;
+            if (!chat || chat.length < 2) {
+                showToast('聊天消息不足', 'warning');
+                return;
+            }
+            let aiIdx = -1;
+            for (let i = chat.length - 1; i >= 0; i--) {
+                if (!chat[i].is_user && !chat[i].is_system) { aiIdx = i; break; }
+            }
+            if (aiIdx === -1) { showToast('未找到 AI 消息', 'warning'); return; }
+            chat[aiIdx]._bbmem_meta_marker = !chat[aiIdx]._bbmem_meta_marker;
+            try { ctx.saveChatDebounced(); } catch {}
+            setTimeout(() => refreshExtractionMarkers(), 100);
+            showToast(chat[aiIdx]._bbmem_meta_marker ? '已标记为元指令（不提取）' : '已标记为可提取', 'info');
+            break;
+        }
+        case 'manual_extract': {
+            if (!chatId) return;
+            showToast('手动提取功能开发中，请使用记忆管家面板', 'info');
+            break;
+        }
+        case 'open_manager': {
+            if (chatId) openAssistant(chatId, 'dashboard');
+            break;
+        }
+        case 'init_memory': {
+            if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+            try {
+                const results = await handleInitMemory(chatId);
+                showToast(`初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 记忆 ${results.memories}`, 'success');
+            } catch (e) {
+                showToast(`初始化失败: ${e.message}`, 'error');
+            }
+            break;
+        }
+        case 'backup': {
+            if (!chatId) return;
+            const result = await exportMemoriesToChatMetadata(chatId);
+            showToast(`备份完成：${result.count} 条`, 'success');
+            break;
+        }
+        case 'restore': {
+            if (!chatId) return;
+            const result = await importMemoriesFromChatMetadata(chatId);
+            showToast(`恢复：${result.restored} 条新增，${result.skipped} 条跳过`, 'success');
+            break;
+        }
+        case 'maintenance': {
+            if (!chatId) return;
+            const result = await checkMaintenanceNeeded(chatId);
+            if (result.needed) {
+                showMaintenancePopup(chatId, buildMaintenanceHTML(result));
+            } else {
+                showToast('当前无需维护', 'info');
+            }
+            break;
+        }
+        case 'stats': {
+            if (!chatId) return;
+            const stats = await getMemoryStats(chatId);
+            showToast(`NPC: ${stats.npc.total} | 物品: ${stats.items.total} | 时间线: ${stats.timeline.total} | 记忆: ${stats.memories.total}`, 'info');
+            break;
+        }
+        case 'toggle_hit_list': {
+            const hitList = document.getElementById('bb_hub_hit_list');
+            const hitRow = document.getElementById('bb_hub_hit_info');
+            if (!hitList || !hitRow) return;
+            const chevron = hitRow.querySelector('.fa-chevron-down, .fa-chevron-up');
+            if (hitList.style.display === 'none') {
+                renderHubHitList(hitList, chatId);
+                hitList.style.display = '';
+                if (chevron) {
+                    chevron.className = 'fa-solid fa-chevron-up';
+                    chevron.style.cssText = 'margin-left:auto;font-size:0.7em;opacity:0.5;';
+                }
+            } else {
+                hitList.style.display = 'none';
+                if (chevron) {
+                    chevron.className = 'fa-solid fa-chevron-down';
+                    chevron.style.cssText = 'margin-left:auto;font-size:0.7em;opacity:0.5;';
+                }
+            }
+            break;
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -474,29 +750,27 @@ function showToast(msg, type = 'info') {
 //  设置面板绑定
 // ═══════════════════════════════════════════════════════════
 
-function mountExtensionSettingsHtml(html) {
-    const selectors = ['#extensions_settings2', '#extensions_settings'];
-    let attempts = 0;
-    function tryMount() {
-        for (const sel of selectors) {
-            const container = document.querySelector(sel);
-            if (container) {
-                const existing = container.querySelector('#bb_memory_settings');
-                if (existing) existing.remove();
-                const wrapper = document.createElement('div');
-                wrapper.id = 'bb_memory_settings';
-                wrapper.innerHTML = html;
-                container.appendChild(wrapper);
-                return true;
-            }
+function pickExtensionsSettingsContainer() {
+    return document.getElementById('extensions_settings2')
+        || document.getElementById('extensions_settings')
+        || document.querySelector('#extensionsPane #extensions_settings2')
+        || document.querySelector('#extensionsPane #extensions_settings');
+}
+
+async function mountExtensionSettingsHtml(html, maxAttempts = 50, delayMs = 100) {
+    for (let i = 0; i < maxAttempts; i++) {
+        const container = pickExtensionsSettingsContainer();
+        if (container) {
+            // 移除旧面板（如果存在）
+            const existing = container.querySelector('#bb_memory_root');
+            if (existing) existing.remove();
+            container.insertAdjacentHTML('beforeend', html);
+            return true;
         }
-        return false;
+        await new Promise(r => setTimeout(r, delayMs));
     }
-    if (tryMount()) return;
-    const interval = setInterval(() => {
-        attempts++;
-        if (tryMount() || attempts > 50) clearInterval(interval);
-    }, 100);
+    console.warn('[BB-Memory] 未找到扩展设置容器');
+    return false;
 }
 
 function restoreApiSettings(settings) {
@@ -866,11 +1140,13 @@ async function init() {
         if (typeof ctx.renderExtensionTemplateAsync === 'function') {
             const html = await ctx.renderExtensionTemplateAsync(folder, 'settings');
             if (html && typeof html === 'string' && html.trim()) {
-                mountExtensionSettingsHtml(html);
-                restoreApiSettings(getSettings());
-                bindSidebarEvents();
-                initCollapsibleSettings();
-                settingsPanelMounted = true;
+                const mounted = await mountExtensionSettingsHtml(html);
+                if (mounted) {
+                    restoreApiSettings(getSettings());
+                    bindSidebarEvents();
+                    initCollapsibleSettings();
+                    settingsPanelMounted = true;
+                }
             }
         }
     } catch (e) {
@@ -885,8 +1161,9 @@ async function init() {
         initAutoGenerator();
     }
 
-    // 进度回调
+    // 进度回调（同时更新悬浮球状态）
     setAutoExtractProgressCallback((info) => {
+        setHubExtractStatus(info.phase || '提取中...', info.progress || '');
         if (getSettings().debugLogging) {
             console.log(`[BB-Memory] 提取进度: ${info.phase} ${info.current}/${info.total}`);
         }
