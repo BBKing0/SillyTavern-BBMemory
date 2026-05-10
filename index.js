@@ -1127,7 +1127,11 @@ function onNewMessage() {
 //  初始化
 // ═══════════════════════════════════════════════════════════
 
+let _bbInitialized = false;
+
 async function init() {
+    if (_bbInitialized) return;
+    _bbInitialized = true;
     console.log('[BB-Memory] v5.0 初始化开始...');
 
     // 确保默认设置
@@ -1230,18 +1234,16 @@ globalThis.bbMemoryDebug = {
 };
 
 // ═══ 启动 ═══
-try {
+(function startup() {
     const ctx = SillyTavern.getContext();
-    const evType = ctx.eventTypes?.APP_READY || ctx.event_types?.APP_READY;
-    if (evType && ctx.eventSource) {
-        ctx.eventSource.once(evType, init);
+    const ev = ctx.event_types ?? ctx.eventTypes;
+
+    if (ctx.eventSource && ev?.APP_READY) {
+        // 用 on() 而非 once()：APP_READY 是 sticky 事件，on() 在事件已触发后仍会立即执行回调
+        ctx.eventSource.on(ev.APP_READY, () => init());
+    } else if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        init();
     } else {
-        // 降级：DOM ready 后初始化
-        if (document.readyState === 'complete') init();
-        else window.addEventListener('load', init);
+        window.addEventListener('load', () => init());
     }
-} catch (e) {
-    console.error('[BB-Memory] 启动失败:', e);
-    if (document.readyState === 'complete') init();
-    else window.addEventListener('load', init);
-}
+})();
