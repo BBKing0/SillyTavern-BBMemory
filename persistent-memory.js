@@ -18,7 +18,7 @@ function getLocalForage() {
 const PERSISTENT_PREFIX = 'bb_memory_persistent_';
 
 function persistentKey(chatId) {
-    return `${PERSISTENT_PREFIX}${chatId}`;
+    return String(PERSISTENT_PREFIX) + (chatId);
 }
 
 // ═══ CRUD ═══
@@ -53,7 +53,7 @@ export async function addPersistentMemory(chatId, category, name, content, order
     const all = await getPersistentMemories(chatId);
     const now = Date.now();
     const entry = {
-        id: `p_${now}_${Math.random().toString(36).slice(2, 7)}`,
+        id: "p_" + (now) + "_" + (Math.random().toString(36).slice(2, 7)),
         category,
         name: name.trim(),
         content: content.trim(),

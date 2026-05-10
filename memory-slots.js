@@ -19,11 +19,11 @@ const STORAGE_PREFIX = 'bb_memory_chat_';
 const SLOT_PREFIX = 'bb_memory_slot_';
 
 function chatStorageKey(chatId) {
-    return `${STORAGE_PREFIX}${chatId}`;
+    return String(STORAGE_PREFIX) + (chatId);
 }
 
 function slotKey(charId, slotName) {
-    return `${SLOT_PREFIX}${charId}_${slotName}`;
+    return String(SLOT_PREFIX) + (charId) + "_" + (slotName);
 }
 
 // ═══ 直接读写 localforage ═══
@@ -62,7 +62,7 @@ export function getCharacterId() {
 export async function listSlots(charId) {
     if (!charId) return [];
     const lf = getLocalForage();
-    const prefix = `${SLOT_PREFIX}${charId}_`;
+    const prefix = String(SLOT_PREFIX) + (charId) + "_";
     const slots = [];
 
     try {
@@ -133,7 +133,7 @@ export async function loadFromSlot(charId, chatId, slotName) {
     // 重新生成ID避免冲突后写入
     const migrated = memories.map((m, i) => ({
         ...m,
-        id: `bb_${Date.now() + i}_${Math.random().toString(36).slice(2, 7)}`,
+        id: "bb_" + (Date.now() + i) + "_" + (Math.random().toString(36).slice(2, 7)),
     }));
     await writeChatMemories(chatId, migrated);
 
@@ -151,7 +151,7 @@ export async function createEmptySlot(charId, slotName) {
     const lf = getLocalForage();
     const existing = await lf.getItem(slotKey(charId, name));
     if (existing !== null) {
-        throw new Error(`存档 "${name}" 已存在`);
+        throw new Error("存档 \"" + (name) + "\" 已存在");
     }
 
     await lf.setItem(slotKey(charId, name), []);

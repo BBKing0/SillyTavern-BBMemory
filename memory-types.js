@@ -101,19 +101,19 @@ export function getTierDefinition(tierId) {
  */
 export function formatMemoryLine(m) {
     const parts = [];
-    if (m.title) parts.push(`[${m.title}]`);
+    if (m.title) parts.push("[" + (m.title) + "]");
     const typeLabel = MEMORY_TYPES[m.type]?.label || '';
-    if (typeLabel) parts.push(`(${typeLabel})`);
+    if (typeLabel) parts.push("(" + (typeLabel) + ")");
     if (m.truthStatus && m.truthStatus !== 'true') {
         const ts = TRUTH_STATUS[m.truthStatus];
-        if (ts) parts.push(`{${ts.label}}`);
+        if (ts) parts.push("{" + (ts.label) + "}");
     }
     parts.push(m.summary || m.content);
-    if (m.verbatim) parts.push(`「${m.verbatim}」`);
+    if (m.verbatim) parts.push("「" + (m.verbatim) + "」");
     if (m.subject && m.target) {
-        parts.push(`(${m.subject} → ${m.target})`);
+        parts.push("(" + (m.subject) + " → " + (m.target) + ")");
     } else if (m.subject) {
-        parts.push(`(${m.subject})`);
+        parts.push("(" + (m.subject) + ")");
     }
     return parts.join(' ');
 }
@@ -134,6 +134,6 @@ export function formatHiddenNotes(memory) {
     if (!notes.length) return '';
     return notes.map(n => {
         const typeLabel = HIDDEN_NOTE_TYPES[n.type]?.label || '备注';
-        return `   [隐·${typeLabel}] ${n.content}`;
+        return "   [隐·" + (typeLabel) + "] " + (n.content);
     }).join('\n');
 }

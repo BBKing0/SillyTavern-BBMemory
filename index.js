@@ -153,7 +153,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     ctx.setExtensionPrompt(INJECTION_KEY, injectionText, POSITION_IN_CHAT, 4, ROLE_SYSTEM);
 
     if (settings.debugLogging) {
-        console.log(`[BB-Memory] 注入: NPC${stats.npcCount} 物品${stats.itemCount} 时间线${stats.timelineCount} 记忆${stats.memoryCount} | ~${tokenEstimate} tokens`);
+        console.log("[BB-Memory] 注入: NPC" + (stats.npcCount) + " 物品" + (stats.itemCount) + " 时间线" + (stats.timelineCount) + " 记忆" + (stats.memoryCount) + " | ~" + (tokenEstimate) + " tokens");
     }
 
     // 11. 存储命中追踪
@@ -204,10 +204,10 @@ function showFloatingReviewPanel(chatId, candidates) {
     // 简化实现：使用 ST 的确认弹窗
     const ctx = SillyTavern.getContext();
     const lines = candidates.slice(0, 5).map((c, i) =>
-        `${i + 1}. [${c.type || 'event'}] ${c.title || c.summary?.slice(0, 40) || '(无标题)'}`
+        String(i + 1) + ". [" + (c.type || 'event') + "] " + (c.title || c.summary?.slice(0, 40) || '(无标题)')
     ).join('\n');
     if (typeof ctx.callPopup === 'function') {
-        ctx.callPopup(`[BB-Memory] 提取到 ${candidates.length} 条候选记忆：\n${lines}\n是否保存？`, 'confirm')
+        ctx.callPopup("[BB-Memory] 提取到 " + (candidates.length) + " 条候选记忆：\\n" + (lines) + "\\n是否保存？", 'confirm')
             .then(result => {
                 if (result) saveExtractedMemories(chatId, candidates.map(c => ({ ...c, _selected: true })));
             });
@@ -279,7 +279,7 @@ function setHubExtractStatus(status, pct) {
     const statusEl = document.getElementById('bb_hub_extract_status');
     const pctEl = document.getElementById('bb_hub_extract_pct');
     if (statusEl) statusEl.textContent = status;
-    if (pctEl) pctEl.textContent = pct ? ` ${pct}` : '';
+    if (pctEl) pctEl.textContent = pct ? " " + (pct) : '';
 }
 
 function injectFloatingHub() {
@@ -295,7 +295,7 @@ function injectFloatingHub() {
     menu.id = 'bb_floating_menu';
     menu.className = 'bb-floating-menu';
     menu.style.display = 'none';
-    menu.innerHTML = '<div class="bb-floating-menu-header"><i class="fa-solid fa-brain"></i> BB-Memory v5.0</div><div class="bb-floating-menu-body"><div class="bb-floating-menu-item" id="bb_hub_slot_info"><i class="fa-solid fa-floppy-disk"></i><span>存档: <strong>default</strong> - <strong>0</strong> 条</span></div><div class="bb-floating-menu-item bb-floating-menu-action" id="bb_hub_hit_info" data-action="toggle_hit_list"><i class="fa-solid fa-bullseye"></i><span>命中: <strong id="bb_hub_hit_count">-</strong> 条</span><i class="fa-solid fa-chevron-down" style="margin-left:auto;font-size:0.7em;opacity:0.5;"></i></div><div id="bb_hub_hit_list" style="display:none;"></div><div class="bb-floating-menu-item" id="bb_hub_extract_progress"><i class="fa-solid fa-robot"></i><span id="bb_hub_extract_status">空闲</span><strong id="bb_hub_extract_pct"></strong></div><div style="border-top:1px solid var(--SmartThemeBorderColor,#444);margin:4px 0;"></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_manager"><i class="fa-solid fa-list"></i><span>记忆管家</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="init_memory"><i class="fa-solid fa-rocket"></i><span>初始化记忆</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="backup"><i class="fa-solid fa-cloud-upload"></i><span>备份</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="restore"><i class="fa-solid fa-cloud-download"></i><span>恢复</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="maintenance"><i class="fa-solid fa-broom"></i><span>维护</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="stats"><i class="fa-solid fa-chart-bar"></i><span>统计</span></div><div style="border-top:1px solid var(--SmartThemeBorderColor,#444);margin:4px 0;"></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="toggle_visibility"><i class="fa-solid fa-eye-slash"></i><span>切换楼层可见</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="meta_last"><i class="fa-solid fa-tag"></i><span>标记最后消息</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="manual_extract"><i class="fa-solid fa-wand-magic-sparkles"></i><span>手动提取</span></div></div>';
+    menu.innerHTML = "\n        <div class=\"bb-floating-menu-header\">\n            <i class=\"fa-solid fa-brain\"></i> BB-Memory v5.0\n        </div>\n        <div class=\"bb-floating-menu-body\">\n            <div class=\"bb-floating-menu-item\" id=\"bb_hub_slot_info\">\n                <i class=\"fa-solid fa-floppy-disk\"></i>\n                <span>存档: <strong>default</strong> · <strong>0</strong> 条</span>\n            </div>\n            <div class=\"bb-floating-menu-item bb-floating-menu-action\" id=\"bb_hub_hit_info\" data-action=\"toggle_hit_list\">\n                <i class=\"fa-solid fa-bullseye\"></i>\n                <span>命中: <strong id=\"bb_hub_hit_count\">-</strong> 条</span>\n                <i class=\"fa-solid fa-chevron-down\" style=\"margin-left:auto;font-size:0.7em;opacity:0.5;\"></i>\n            </div>\n            <div id=\"bb_hub_hit_list\" style=\"display:none;\"></div>\n            <div class=\"bb-floating-menu-item\" id=\"bb_hub_extract_progress\">\n                <i class=\"fa-solid fa-robot\"></i>\n                <span id=\"bb_hub_extract_status\">空闲</span><strong id=\"bb_hub_extract_pct\"></strong>\n            </div>\n            <div style=\"border-top:1px solid var(--SmartThemeBorderColor,#444);margin:4px 0;\"></div>\n            <div class=\"bb-floating-menu-item bb-floating-menu-action\" data-action=\"open_manager\">\n                <i class=\"fa-solid fa-list\"></i>\n                <span>记忆管家</span>\n            </div>\n            <div class=\"bb-floating-menu-item bb-floating-menu-action\" data-action=\"init_memory\">\n                <i class=\"fa-solid fa-rocket\"></i>\n                <span>初始化记忆</span>\n            </div>\n            <div class=\"bb-floating-menu-item bb-floating-menu-action\" data-action=\"backup\">\n                <i class=\"fa-solid fa-cloud-upload\"></i>\n                <span>备份</span>\n            </div>\n            <div class=\"bb-floating-menu-item bb-floating-menu-action\" data-action=\"restore\">\n                <i class=\"fa-solid fa-cloud-download\"></i>\n                <span>恢复</span>\n            </div>\n            <div class=\"bb-floating-menu-item bb-floating-menu-action\" data-action=\"maintenance\">\n                <i class=\"fa-solid fa-broom\"></i>\n                <span>维护</span>\n            </div>\n            <div class=\"bb-floating-menu-item bb-floating-menu-action\" data-action=\"stats\">\n                <i class=\"fa-solid fa-chart-bar\"></i>\n                <span>统计</span>\n            </div>\n            <div style=\"border-top:1px solid var(--SmartThemeBorderColor,#444);margin:4px 0;\"></div>\n            <div class=\"bb-floating-menu-item bb-floating-menu-action\" data-action=\"toggle_visibility\">\n                <i class=\"fa-solid fa-eye-slash\"></i>\n                <span>切换楼层可见</span>\n            </div>\n            <div class=\"bb-floating-menu-item bb-floating-menu-action\" data-action=\"meta_last\">\n                <i class=\"fa-solid fa-tag\"></i>\n                <span>标记最后消息</span>\n            </div>\n            <div class=\"bb-floating-menu-item bb-floating-menu-action\" data-action=\"manual_extract\">\n                <i class=\"fa-solid fa-wand-magic-sparkles\"></i>\n                <span>手动提取</span>\n            </div>\n        </div>";
 
     hub.appendChild(menu);
     document.body.appendChild(hub);
@@ -412,7 +412,7 @@ async function refreshFloatingHubData() {
             const mems = await getMemories(chatId);
             const settings = getSettings();
             const slotName = settings.currentSlotName || 'default';
-            slotInfo.innerHTML = `<i class="fa-solid fa-floppy-disk"></i> <span>存档: <strong>${escapeHtml(slotName)}</strong> · <strong>${mems.length}</strong> 条</span>`;
+            slotInfo.innerHTML = "<i class=\"fa-solid fa-floppy-disk\"></i> <span>存档: <strong>" + (escapeHtml(slotName)) + "</strong> · <strong>" + (mems.length) + "</strong> 条</span>";
         } catch { /* ignore */ }
     }
 
@@ -452,7 +452,7 @@ function renderHubHitItem(h, typeIcons, levelColors, dimmed) {
         ? escapeHtml(h.title.slice(0, 14)) + '...'
         : escapeHtml(h.title);
     const opacityStyle = dimmed ? 'opacity:0.55;' : '';
-    return '<div class="bb-hub-hit-item" title="' + escapeHtml(h.title) + '" style="' + opacityStyle + '"><i class="fa-solid ' + icon + '" style="color:' + color + ';font-size:0.7em;"></i><span class="bb-hub-hit-title">' + shortTitle + '</span><span class="bb-hub-hit-level" style="color:' + color + '">' + (h.level || '') + '</span><span class="bb-hub-hit-score">' + scorePct + '%</span></div>';
+    return "<div class=\"bb-hub-hit-item\" title=\"" + (escapeHtml(h.title)) + "\" style=\"" + (opacityStyle) + "\">\n        <i class=\"fa-solid " + (icon) + "\" style=\"color:" + (color) + ";font-size:0.7em;\"></i>\n        <span class=\"bb-hub-hit-title\">" + (shortTitle) + "</span>\n        <span class=\"bb-hub-hit-level\" style=\"color:" + (color) + "\">" + (h.level || '') + "</span>\n        <span class=\"bb-hub-hit-score\">" + (scorePct) + "%</span>\n    </div>";
 }
 
 async function renderHubHitList(listEl, chatId) {
@@ -529,22 +529,22 @@ async function handleFloatingMenuAction(action) {
             if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
             try {
                 const results = await handleInitMemory(chatId);
-                showToast(`初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 记忆 ${results.memories}`, 'success');
+                showToast("初始化完成！NPC " + (results.npc) + " / 物品 " + (results.items) + " / 时间线 " + (results.timeline) + " / 记忆 " + (results.memories), 'success');
             } catch (e) {
-                showToast(`初始化失败: ${e.message}`, 'error');
+                showToast("初始化失败: " + (e.message), 'error');
             }
             break;
         }
         case 'backup': {
             if (!chatId) return;
             const result = await exportMemoriesToChatMetadata(chatId);
-            showToast(`备份完成：${result.count} 条`, 'success');
+            showToast("备份完成：" + (result.count) + " 条", 'success');
             break;
         }
         case 'restore': {
             if (!chatId) return;
             const result = await importMemoriesFromChatMetadata(chatId);
-            showToast(`恢复：${result.restored} 条新增，${result.skipped} 条跳过`, 'success');
+            showToast("恢复：" + (result.restored) + " 条新增，" + (result.skipped) + " 条跳过", 'success');
             break;
         }
         case 'maintenance': {
@@ -560,7 +560,7 @@ async function handleFloatingMenuAction(action) {
         case 'stats': {
             if (!chatId) return;
             const stats = await getMemoryStats(chatId);
-            showToast(`NPC: ${stats.npc.total} | 物品: ${stats.items.total} | 时间线: ${stats.timeline.total} | 记忆: ${stats.memories.total}`, 'info');
+            showToast("NPC: " + (stats.npc.total) + " | 物品: " + (stats.items.total) + " | 时间线: " + (stats.timeline.total) + " | 记忆: " + (stats.memories.total), 'info');
             break;
         }
         case 'toggle_hit_list': {
@@ -616,10 +616,10 @@ async function handleInitMemory(chatId) {
         if (ctx.characters && ctx.characterId !== undefined) {
             const char = ctx.characters[ctx.characterId];
             if (char) {
-                contextText += `【角色卡】\n角色名：${char.name || ''}\n`;
-                if (char.description) contextText += `描述：${char.description}\n`;
-                if (char.personality) contextText += `性格：${char.personality}\n`;
-                if (char.first_mes) contextText += `开场白：${char.first_mes}\n`;
+                contextText += "【角色卡】\\n角色名：" + (char.name || '') + "\\n";
+                if (char.description) contextText += "描述：" + (char.description) + "\\n";
+                if (char.personality) contextText += "性格：" + (char.personality) + "\\n";
+                if (char.first_mes) contextText += "开场白：" + (char.first_mes) + "\\n";
                 contextText += '\n';
             }
         }
@@ -629,7 +629,7 @@ async function handleInitMemory(chatId) {
     try {
         if (ctx.worldInfo && ctx.worldInfo.entries) {
             const entries = Object.values(ctx.worldInfo.entries);
-            contextText += `【世界书】\n${entries.map(e => `${e.key?.join(',') || ''}: ${e.content}`).join('\n')}\n\n`;
+            contextText += "【世界书】\\n" + (entries.map(e =>)${e.key?.join(',') || ''}: ${e.content}").join('\\n')}\\n\\n";
         }
     } catch { /* ignore */ }
 
@@ -638,7 +638,7 @@ async function handleInitMemory(chatId) {
         const chat = ctx.chat || [];
         const recent = chat.filter(m => m.mes?.trim()).slice(-8);
         if (recent.length) {
-            contextText += `【最近对话】\n${recent.map(m => `${m.is_user ? '用户' : m.name || '角色'}: ${m.mes}`).join('\n')}`;
+            contextText += "【最近对话】\\n" + (recent.map(m =>)${m.is_user ? '用户' : m.name || '角色'}: ${m.mes}").join('\\n')}";
         }
     } catch { /* ignore */ }
 
@@ -650,14 +650,14 @@ async function handleInitMemory(chatId) {
     const settings = getSettings();
     const progressEl = createProgressToast('初始化记忆');
     const updateProgress = (info) => {
-        if (progressEl) progressEl.textContent = `初始化记忆: ${info.progress || ''}`;
+        if (progressEl) progressEl.textContent = "初始化记忆: " + (info.progress || '');
     };
 
     const results = await extractFromContext(chatId, contextText, { onProgress: updateProgress });
 
     if (progressEl) progressEl.remove();
 
-    const msg = `初始化完成：\nNPC: ${results.npc} 个\n物品: ${results.items} 个\n时间线: ${results.timeline} 条\n记忆: ${results.memories} 条`;
+    const msg = "初始化完成：\\nNPC: " + (results.npc) + " 个\\n物品: " + (results.items) + " 个\\n时间线: " + (results.timeline) + " 条\\n记忆: " + (results.memories) + " 条";
     showToast(msg, 'success');
     return results;
 }
@@ -759,22 +759,22 @@ function bindSidebarEvents() {
         const chatId = getChatId();
         if (!chatId) return;
         const result = await exportMemoriesToChatMetadata(chatId);
-        showToast(`备份完成：${result.count} 条`, 'success');
+        showToast("备份完成：" + (result.count) + " 条", 'success');
     });
     document.querySelector('#bb_memory_restore_now')?.addEventListener('click', async () => {
         const chatId = getChatId();
         if (!chatId) return;
         const result = await importMemoriesFromChatMetadata(chatId);
-        showToast(`恢复：${result.restored} 条新增，${result.skipped} 条跳过`, 'success');
+        showToast("恢复：" + (result.restored) + " 条新增，" + (result.skipped) + " 条跳过", 'success');
     });
     document.querySelector('#bb_init_memory_btn')?.addEventListener('click', async () => {
         const chatId = getChatId();
         if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
         try {
             const results = await handleInitMemory(chatId);
-            showToast(`初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 记忆 ${results.memories}`, 'success');
+            showToast("初始化完成！NPC " + (results.npc) + " / 物品 " + (results.items) + " / 时间线 " + (results.timeline) + " / 记忆 " + (results.memories), 'success');
         } catch (e) {
-            showToast(`初始化失败: ${e.message}`, 'error');
+            showToast("初始化失败: " + (e.message), 'error');
         }
     });
     document.querySelector('#bb_memory_import_wb_btn')?.addEventListener('click', () => {
@@ -782,7 +782,7 @@ function bindSidebarEvents() {
             const chatId = getChatId();
             if (!chatId) return;
             const count = await handleWorldBookImport(chatId, text);
-            showToast(`直接导入：${count} 条`, 'success');
+            showToast("直接导入：" + (count) + " 条", 'success');
         });
     });
     document.querySelector('#bb_memory_import_wb_ai_btn')?.addEventListener('click', () => {
@@ -791,9 +791,9 @@ function bindSidebarEvents() {
             if (!chatId) return;
             try {
                 const count = await handleWorldBookImportWithAI(chatId, text);
-                showToast(`AI 导入：${count} 条`, 'success');
+                showToast("AI 导入：" + (count) + " 条", 'success');
             } catch (e) {
-                showToast(`AI 导入失败: ${e.message}`, 'error');
+                showToast("AI 导入失败: " + (e.message), 'error');
             }
         });
     });
@@ -817,9 +817,9 @@ function bindSidebarEvents() {
         if (!chatId) return;
         const memories = await getMemories(chatId);
         await embedExistingMemories(memories, (done, total) => {
-            if (done % 10 === 0) console.log(`[BB-Memory] Reindex: ${done}/${total}`);
+            if (done % 10 === 0) console.log("[BB-Memory] Reindex: " + (done) + "/" + (total));
         });
-        showToast(`Reindex 完成：${memories.length} 条`, 'success');
+        showToast("Reindex 完成：" + (memories.length) + " 条", 'success');
     });
 }
 
@@ -932,7 +932,7 @@ function registerSlashCommands() {
                 ctx.registerSlashCommand(name, callback, [], helpText);
             }
         } catch (e) {
-            console.warn(`[BB-Memory] 注册命令 ${name} 失败:`, e.message);
+            console.warn("[BB-Memory] 注册命令 " + (name) + " 失败:", e.message);
         }
     };
 
@@ -941,9 +941,9 @@ function registerSlashCommands() {
         if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
         try {
             const results = await handleInitMemory(chatId);
-            showToast(`初始化：NPC${results.npc}/物品${results.items}/时间线${results.timeline}/记忆${results.memories}`, 'success');
+            showToast("初始化：NPC" + (results.npc) + "/物品" + (results.items) + "/时间线" + (results.timeline) + "/记忆" + (results.memories), 'success');
         } catch (e) {
-            showToast(`初始化失败: ${e.message}`, 'error');
+            showToast("初始化失败: " + (e.message), 'error');
         }
     }, '初始化 BB-Memory 记忆（从角色卡+世界书+对话）');
 
@@ -951,21 +951,21 @@ function registerSlashCommands() {
         const chatId = getChatId();
         if (!chatId) return;
         const result = await exportMemoriesToChatMetadata(chatId);
-        showToast(`备份完成：${result.count} 条 (${(result.size/1024).toFixed(1)}KB)`, 'success');
+        showToast("备份完成：" + (result.count) + " 条 (" + ((result.size/1024).toFixed(1)) + "KB)", 'success');
     }, '手动备份记忆到服务器');
 
     addCmd('bb-restore', async () => {
         const chatId = getChatId();
         if (!chatId) return;
         const result = await importMemoriesFromChatMetadata(chatId);
-        showToast(`恢复：${result.restored} 新增，${result.skipped} 跳过`, 'success');
+        showToast("恢复：" + (result.restored) + " 新增，" + (result.skipped) + " 跳过", 'success');
     }, '从服务器恢复记忆');
 
     addCmd('bb-stats', async () => {
         const chatId = getChatId();
         if (!chatId) return;
         const stats = await getMemoryStats(chatId);
-        const msg = `BB-Memory 统计：\nNPC: ${stats.npc.total} | 物品: ${stats.items.total} | 时间线: ${stats.timeline.total} | 记忆: ${stats.memories.total}`;
+        const msg = "BB-Memory 统计：\\nNPC: " + (stats.npc.total) + " | 物品: " + (stats.items.total) + " | 时间线: " + (stats.timeline.total) + " | 记忆: " + (stats.memories.total);
         showToast(msg, 'info');
     }, '查看记忆统计');
 
@@ -1036,7 +1036,7 @@ async function onChatChanged() {
         try {
             const result = await checkMaintenanceNeeded(chatId);
             if (result.needed) {
-                showToast(`记忆维护提醒：${result.issueCount} 条待处理。输入 /bb-maintenance 查看`, 'warning');
+                showToast("记忆维护提醒：" + (result.issueCount) + " 条待处理。输入 /bb-maintenance 查看", 'warning');
             }
         } catch { /* ignore */ }
     }, 3000);
@@ -1047,7 +1047,7 @@ async function onChatChanged() {
             try {
                 const result = await importMemoriesFromChatMetadata(chatId);
                 if (result.restored > 0 && settings.debugLogging) {
-                    console.log(`[BB-Memory] 自动恢复: ${result.restored} 条`);
+                    console.log("[BB-Memory] 自动恢复: " + (result.restored) + " 条");
                 }
             } catch { /* ignore */ }
         }, 5000);
@@ -1107,7 +1107,7 @@ async function init() {
     setAutoExtractProgressCallback((info) => {
         setHubExtractStatus(info.phase || '提取中...', info.progress || '');
         if (getSettings().debugLogging) {
-            console.log(`[BB-Memory] 提取进度: ${info.phase} ${info.current}/${info.total}`);
+            console.log("[BB-Memory] 提取进度: " + (info.phase) + " " + (info.current) + "/" + (info.total));
         }
     });
 

@@ -66,7 +66,7 @@ export async function checkMaintenanceNeeded(chatId) {
         if ((now - lastHit) / roundMs < 30) continue;
         issues.push({
             type: 'idle_transient_memory', collection: 'mem', item: m,
-            reason: `${m.title || '无标题'} — 长期未命中（${Math.floor((now - (m.lastHitAt || m.createdAt)) / roundMs)}轮）`,
+            reason: String(m.title || '无标题') + " — 长期未命中（" + (Math.floor((now - (m.lastHitAt || m.createdAt)) / roundMs)) + "轮）",
             severity: 'info',
         });
     }
@@ -76,7 +76,7 @@ export async function checkMaintenanceNeeded(chatId) {
         if (item.status === 'held' || item.keepPermanent) continue;
         issues.push({
             type: 'status_changed_item', collection: 'item', item,
-            reason: `${item.name} — 状态：${item.status}${item.keepPermanent ? '（永久保留）' : ''}`,
+            reason: String(item.name) + " — 状态：" + (item.status) + (item.keepPermanent ? '（永久保留）' : ''),
             severity: 'warning',
         });
     }
@@ -87,7 +87,7 @@ export async function checkMaintenanceNeeded(chatId) {
         if (t.memoryTier === 'eternal') continue;
         issues.push({
             type: 'compressible_timeline', collection: 'timeline', item: t,
-            reason: `${t.event} — 已结束，可压缩归档`,
+            reason: String(t.event) + " — 已结束，可压缩归档",
             severity: 'info',
         });
     }
@@ -98,7 +98,7 @@ export async function checkMaintenanceNeeded(chatId) {
         if (n.npcTier === 'background' || (n.npcTier === 'minor' && n.memoryTier === 'transient')) {
             issues.push({
                 type: 'low_tier_npc', collection: 'npc', item: n,
-                reason: `${n.name} — ${n.npcTier}级角色`,
+                reason: String(n.name) + " — " + (n.npcTier) + "级角色",
                 severity: 'info',
             });
         }
@@ -109,7 +109,7 @@ export async function checkMaintenanceNeeded(chatId) {
         if (t.status !== 'foreshadow') continue;
         issues.push({
             type: 'foreshadow', collection: 'timeline', item: t,
-            reason: `${t.event} — 待确认伏笔`,
+            reason: String(t.event) + " — 待确认伏笔",
             severity: 'info',
         });
     }
@@ -188,7 +188,7 @@ export async function performMaintenance(chatId, actions) {
             case 'compress_timeline':
                 await updateTimelineEntry(chatId, id, {
                     isActive: false, status: 'ended',
-                    summary: `[归档] ${(await getTimeline(chatId)).find(t => t.id === id)?.event || ''}: ${(await getTimeline(chatId)).find(t => t.id === id)?.summary || ''}`,
+                    summary: "[归档] " + ((await getTimeline(chatId)).find(t => t.id === id)?.event || '') + ": " + ((await getTimeline(chatId)).find(t => t.id === id)?.summary || ''),
                 });
                 results.compressed++;
                 break;
@@ -209,10 +209,7 @@ export async function performMaintenance(chatId, actions) {
 
 export function buildMaintenanceHTML(result) {
     if (!result || !result.issues?.length) {
-        return `<div class="bb-maintenance">
-            <div class="bb-maintenance-header">记忆维护</div>
-            <div class="bb-maintenance-empty">暂无需要维护的项目</div>
-        </div>`;
+        return "<div class=\"bb-maintenance\">\n            <div class=\"bb-maintenance-header\">记忆维护</div>\n            <div class=\"bb-maintenance-empty\">暂无需要维护的项目</div>\n        </div>";
     }
 
     const grouped = {};
@@ -237,42 +234,15 @@ export function buildMaintenanceHTML(result) {
         for (const issue of display) {
             const item = issue.item;
             const label = item.name || item.title || item.event || item.id;
-            items += `<div class="bb-maint-item" data-id="${escapeHtml(item.id)}" data-collection="${issue.collection}">
-                <span class="bb-maint-item-text">${escapeHtml(label)}</span>
-                <span class="bb-maint-item-reason">${escapeHtml(issue.reason)}</span>
-                <div class="bb-maint-item-actions">
-                    <button class="bb-maint-btn keep" data-op="keep">保留</button>
-                    ${issue.type === 'compressible_timeline' ? '<button class="bb-maint-btn compress" data-op="compress_timeline">压缩</button>' : ''}
-                    <button class="bb-maint-btn promote" data-op="promote">升级</button>
-                    <button class="bb-maint-btn demote" data-op="demote">降级</button>
-                    <button class="bb-maint-btn delete" data-op="delete">删除</button>
-                </div>
-            </div>`;
+            items += "<div class=\"bb-maint-item\" data-id=\"" + (escapeHtml(item.id)) + "\" data-collection=\"" + (issue.collection) + "\">\n                <span class=\"bb-maint-item-text\">" + (escapeHtml(label)) + "</span>\n                <span class=\"bb-maint-item-reason\">" + (escapeHtml(issue.reason)) + "</span>\n                <div class=\"bb-maint-item-actions\">\n                    <button class=\"bb-maint-btn keep\" data-op=\"keep\">保留</button>\n                    " + (issue.type === 'compressible_timeline' ? '<button class="bb-maint-btn compress" data-op="compress_timeline">压缩</button>' : '') + "\n                    <button class=\"bb-maint-btn promote\" data-op=\"promote\">升级</button>\n                    <button class=\"bb-maint-btn demote\" data-op=\"demote\">降级</button>\n                    <button class=\"bb-maint-btn delete\" data-op=\"delete\">删除</button>\n                </div>\n            </div>";
         }
         if (issues.length > 10) {
-            items += `<div class="bb-maint-more">...还有 ${issues.length - 10} 条</div>`;
+            items += "<div class=\"bb-maint-more\">...还有 " + (issues.length - 10) + " 条</div>";
         }
-        sections += `<div class="bb-maint-section">
-            <div class="bb-maint-section-header">${meta.icon} ${meta.label} <span class="bb-maint-count">${issues.length}条</span></div>
-            <div class="bb-maint-section-desc">${meta.desc}</div>
-            <div class="bb-maint-items">${items}</div>
-        </div>`;
+        sections += "<div class=\"bb-maint-section\">\n            <div class=\"bb-maint-section-header\">" + (meta.icon) + " " + (meta.label) + " <span class=\"bb-maint-count\">" + (issues.length) + "条</span></div>\n            <div class=\"bb-maint-section-desc\">" + (meta.desc) + "</div>\n            <div class=\"bb-maint-items\">" + (items) + "</div>\n        </div>";
     }
 
-    return `<div class="bb-maintenance">
-        <div class="bb-maintenance-header">
-            记忆维护
-            <span class="bb-maint-total">共 ${result.issueCount} 条待处理</span>
-        </div>
-        <div class="bb-maintenance-stats">
-            总条目: ${result.totalItems || 0} | NPC: ${result.stats?.npc || 0} | 物品: ${result.stats?.items || 0} | 时间线: ${result.stats?.timeline || 0} | 记忆: ${result.stats?.memories || 0}
-        </div>
-        ${sections}
-        <div class="bb-maintenance-actions">
-            <button class="bb-maint-btn-all keep-all">全部保留</button>
-            <button class="bb-maint-btn-all dismiss">稍后处理</button>
-        </div>
-    </div>`;
+    return "<div class=\"bb-maintenance\">\n        <div class=\"bb-maintenance-header\">\n            记忆维护\n            <span class=\"bb-maint-total\">共 " + (result.issueCount) + " 条待处理</span>\n        </div>\n        <div class=\"bb-maintenance-stats\">\n            总条目: " + (result.totalItems || 0) + " | NPC: " + (result.stats?.npc || 0) + " | 物品: " + (result.stats?.items || 0) + " | 时间线: " + (result.stats?.timeline || 0) + " | 记忆: " + (result.stats?.memories || 0) + "\n        </div>\n        " + (sections) + "\n        <div class=\"bb-maintenance-actions\">\n            <button class=\"bb-maint-btn-all keep-all\">全部保留</button>\n            <button class=\"bb-maint-btn-all dismiss\">稍后处理</button>\n        </div>\n    </div>";
 }
 
 function escapeHtml(text) {
@@ -292,7 +262,7 @@ export function dismissMaintenanceRemind() {
 export async function diagnoseMemories(memories) {
     return memories
         .filter(m => m.memoryTier === 'transient')
-        .map(m => ({ memory: m, reason: `${m.title || '无标题'}`, category: 'weak', severity: 'info' }));
+        .map(m => ({ memory: m, reason: String(m.title || '无标题'), category: 'weak', severity: 'info' }));
 }
 
 export async function autoMaintain(chatId, issues) {
@@ -358,13 +328,10 @@ export async function generateTimelineSummary(chatId, options = {}) {
 
 async function generateGroupSummary(chatId, group, _options = {}) {
     const lines = group.map((t, i) =>
-        `${i + 1}. [${t.storyTime || '?'}] ${t.event}: ${t.summary}`
+        String(i + 1) + ". [" + (t.storyTime || '?') + "] " + (t.event) + ": " + (t.summary)
     ).join('\n');
 
-    const prompt = `将以下时间线条目合并为一条总结（JSON）：
-${lines}
-返回格式：{"n":"标题","c":"内容(100字)","m":"摘要(20字)","i":0.7}
-只输出JSON。`;
+    const prompt = "将以下时间线条目合并为一条总结（JSON）：\n" + (lines) + "\n返回格式：{\"n\":\"标题\",\"c\":\"内容(100字)\",\"m\":\"摘要(20字)\",\"i\":0.7}\n只输出JSON。";
 
     let responseText;
     try {
@@ -378,12 +345,12 @@ ${lines}
 
     try {
         let text = responseText.trim();
-        text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+        text = text.replace(/^"""(?:json)?\\s*/i, '').replace(/\\s*"""$/i, '');
         const match = text.match(/\{[\s\S]*\}/);
         if (!match) return null;
         const parsed = JSON.parse(match[0]);
 
-        const existingKey = `tl_summary_${group[0].storyTimeSort || group[0].createdAt}`;
+        const existingKey = "tl_summary_" + (group[0].storyTimeSort || group[0].createdAt);
         const existing = (await getMemories(chatId)).find(m => m.timelineGroupKey === existingKey);
 
         if (existing) {

@@ -48,7 +48,7 @@ function saveChat() {
             ctx.saveChatDebounced();
         }
     } catch (e) {
-        console.warn(`${LOG_TAG} 保存聊天失败:`, e);
+        console.warn(String(LOG_TAG) + " 保存聊天失败:", e);
     }
 }
 
@@ -82,7 +82,7 @@ function cyrb53Hash(str) {
 export function computeExchangeHash(userText, aiText) {
     const u = (userText || '').trim();
     const a = (aiText || '').trim();
-    const combined = `U[${u.length}]${u.slice(0, 500)}|||A[${a.length}]${a.slice(0, 500)}`;
+    const combined = "U[" + (u.length) + "]" + (u.slice(0, 500)) + "|||A[" + (a.length) + "]" + (a.slice(0, 500));
     return cyrb53Hash(combined);
 }
 
@@ -93,14 +93,14 @@ export function computeExchangeHash(userText, aiText) {
 async function getProcessedSet(chatId) {
     if (!chatId) return new Set();
     const lf = getLocalForage();
-    const data = await lf.getItem(`${EXCHANGE_STORE_PREFIX}${chatId}`);
+    const data = await lf.getItem(String(EXCHANGE_STORE_PREFIX) + (chatId));
     return new Set(Array.isArray(data) ? data : []);
 }
 
 async function saveProcessedSet(chatId, hashSet) {
     if (!chatId) return;
     const lf = getLocalForage();
-    await lf.setItem(`${EXCHANGE_STORE_PREFIX}${chatId}`, [...hashSet]);
+    await lf.setItem(String(EXCHANGE_STORE_PREFIX) + (chatId), [...hashSet]);
 }
 
 /**
@@ -180,7 +180,7 @@ export async function syncMessageVisibility(windowOverride) {
     }
 
     if (hiddenCount > 0) {
-        console.log(`${LOG_TAG} 自动隐藏了 ${hiddenCount} 条消息（保留最近 ${windowExchanges} 个 exchange）`);
+        console.log(String(LOG_TAG) + " 自动隐藏了 " + (hiddenCount) + " 条消息（保留最近 " + (windowExchanges) + " 个 exchange）");
     }
 
     return { hiddenCount };

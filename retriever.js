@@ -279,7 +279,7 @@ function formatNpcLine(npc) {
     const parts = [npc.name, npc.role, npc.personality, npc.appearance, npc.status].filter(Boolean);
     const line = '◆ ' + parts.join(' | ');
     const relLines = (npc.relationships || []).map(r =>
-        `  关系：${r.name ? '与' + r.name : ''}${r.type || ''}${r.attitude ? '（' + r.attitude + '）' : ''}`
+        "  关系：" + (r.name ? '与' + r.name : '') + (r.type || '') + (r.attitude ? '（' + r.attitude + '）' : '')
     );
     return line + (relLines.length ? '\n' + relLines.join('\n') : '');
 }
@@ -300,22 +300,22 @@ function formatTimelineLine(t) {
     const timeStr = t.storyTime || '';
     const activeMark = t.status === 'ongoing' ? '（进行中）' :
                        t.status === 'foreshadow' ? '【伏笔】' : '（已结束）';
-    return `▸ ${timeStr} ${t.event} ${activeMark}\n  ${t.summary}${t.impact ? ' — ' + t.impact : ''}`;
+    return "▸ " + (timeStr) + " " + (t.event) + " " + (activeMark) + "\\n  " + (t.summary) + (t.impact ? ' — ' + t.impact : '');
 }
 
 function formatMemoryLine(m) {
     const parts = [];
-    if (m.title) parts.push(`[${m.title}]`);
+    if (m.title) parts.push("[" + (m.title) + "]");
     const typeLabel = MEMORY_TYPES[m.type]?.label || '';
-    if (typeLabel) parts.push(`(${typeLabel})`);
+    if (typeLabel) parts.push("(" + (typeLabel) + ")");
     if (m.truthStatus && m.truthStatus !== 'true') {
         const ts = TRUTH_STATUS[m.truthStatus];
-        if (ts) parts.push(`{${ts.label}}`);
+        if (ts) parts.push("{" + (ts.label) + "}");
     }
     parts.push(m.summary || m.content);
-    if (m.verbatim) parts.push(`「${m.verbatim}」`);
-    if (m.subject && m.target) parts.push(`(${m.subject} → ${m.target})`);
-    else if (m.subject) parts.push(`(${m.subject})`);
+    if (m.verbatim) parts.push("「" + (m.verbatim) + "」");
+    if (m.subject && m.target) parts.push("(" + (m.subject) + " → " + (m.target) + ")");
+    else if (m.subject) parts.push("(" + (m.subject) + ")");
     return parts.join(' ');
 }
 

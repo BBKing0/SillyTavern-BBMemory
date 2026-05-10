@@ -64,88 +64,20 @@ function mergeMemoryFields(existing, incoming) {
 
 // ═══ 四个提取提示词 ═══
 
-const NPC_EXTRACTION_PROMPT = `你是一个角色档案提取助手。从对话中提取 NPC 信息。
+const NPC_EXTRACTION_PROMPT = "你是一个角色档案提取助手。从对话中提取 NPC 信息。\n\n规则：\n1. 只提取有名字或明确身份的角色，不要从AI回复中推断用户信息\n2. 一次性出场的路人用 nt=background；有剧情潜力的用 nt=minor；重要配角用 nt=important；核心角色用 nt=core\n3. 如果没有值得记录的角色，返回空数组 []\n\n返回纯JSON数组（不要markdown代码块）：\nn=角色名 | r=身份/职业 | p=性格特征 | a=外貌描述 | s=当前状态 | l=当前位置\nrt=关系数组 [{\"n\":\"名称\",\"r\":\"关系类型(朋友/敌人/恋人/师徒/交易伙伴等)\",\"a\":\"态度(友好/敌对/中立/暧昧等)\"}]\nnt=分级(core/important/minor/background) | ic=一行索引卡 | g=标签数组\n\n示例：[{\"n\":\"雅赫摩斯\",\"r\":\"北境领主\",\"p\":\"冷酷果决，野心勃勃\",\"a\":\"高瘦黑发中年男子，眼神锐利\",\"s\":\"北境王座厅\",\"l\":\"北境\",\"rt\":[{\"n\":\"玩家\",\"r\":\"敌人\",\"a\":\"敌对\"}],\"nt\":\"core\",\"ic\":\"北境领主，已向玩家宣战\",\"g\":[\"北境\",\"领主\"]}]\n\n[当前对话]\n用户: {{userMessage}}\n角色: {{aiMessage}}";
 
-规则：
-1. 只提取有名字或明确身份的角色，不要从AI回复中推断用户信息
-2. 一次性出场的路人用 nt=background；有剧情潜力的用 nt=minor；重要配角用 nt=important；核心角色用 nt=core
-3. 如果没有值得记录的角色，返回空数组 []
+const ITEM_EXTRACTION_PROMPT = "你是一个物品追踪助手。从对话中提取值得记住的物品信息。\n\n规则：\n1. 只提取有意义的物品（剧情相关、有特殊价值、有纪念意义）\n2. 已使用的普通消耗品（药水、食物）kp=false；有情感/纪念价值的即使已使用也 kp=true\n3. 消耗品用 it=consumable；关键剧情物用 it=key；线索物用 it=clue；装备用 it=equipped；背景道具用 it=background\n4. 如果没有值得记录的物品，返回空数组 []\n\n返回纯JSON数组（不要markdown代码块）：\nn=物品名 | o=持有者 | s=状态(held=持有中/used=已使用/lost=已失去/destroyed=已销毁)\nsig=意义描述 | kp=true(永久保留)/false(可清理) | it=分级(key/equipped/clue/consumable/background)\ng=标签数组\n\n示例：[{\"n\":\"辉月之剑\",\"o\":\"玩家\",\"s\":\"held\",\"sig\":\"传说中的圣剑，曾属古代英雄阿尔托\",\"kp\":true,\"it\":\"key\",\"g\":[\"圣剑\",\"古代遗物\"]},{\"n\":\"治疗药水\",\"o\":\"玩家\",\"s\":\"used\",\"sig\":\"普通治疗药水\",\"kp\":false,\"it\":\"consumable\",\"g\":[\"药水\"]}]\n\n[当前对话]\n用户: {{userMessage}}\n角色: {{aiMessage}}";
 
-返回纯JSON数组（不要markdown代码块）：
-n=角色名 | r=身份/职业 | p=性格特征 | a=外貌描述 | s=当前状态 | l=当前位置
-rt=关系数组 [{"n":"名称","r":"关系类型(朋友/敌人/恋人/师徒/交易伙伴等)","a":"态度(友好/敌对/中立/暧昧等)"}]
-nt=分级(core/important/minor/background) | ic=一行索引卡 | g=标签数组
+const TIMELINE_EXTRACTION_PROMPT = "你是一个故事时间线助手。从对话中检测值得记录的故事节点。\n\n规则：\n1. 只在以下情况新增/更新时间线：地点变化、关系质变、重大决策、战斗、新角色入场、章节转换\n2. 日常寒暄、闲谈、重复行为不记录\n3. 如果当前内容是一条已有事件的延续，设置 active=true（AI会更新而非新建）\n4. 如果没有值得记录的故事节点，返回空数组 []\n5. 对于回忆/过去的事，active=false\n\n返回纯JSON数组（不要markdown代码块）：\nt=故事时间(如\"123年4月\"或\"第3天傍晚\"或\"\") | e=事件摘要(简短) | p=参与者数组 | l=地点\nactive=true(进行中可后续更新)/false(已结束) | imp=影响描述 | g=标签数组\n\n示例：[{\"t\":\"123年4月15日\",\"e\":\"北境会议宣战\",\"p\":[\"雅赫摩斯\",\"玩家\"],\"l\":\"北境王座厅\",\"active\":true,\"imp\":\"雅赫摩斯正式向北境诸邦宣战，玩家卷入战争\",\"g\":[\"北境战争\",\"宣战\"]}]\n\n[当前对话]\n用户: {{userMessage}}\n角色: {{aiMessage}}";
 
-示例：[{"n":"雅赫摩斯","r":"北境领主","p":"冷酷果决，野心勃勃","a":"高瘦黑发中年男子，眼神锐利","s":"北境王座厅","l":"北境","rt":[{"n":"玩家","r":"敌人","a":"敌对"}],"nt":"core","ic":"北境领主，已向玩家宣战","g":["北境","领主"]}]
-
-[当前对话]
-用户: {{userMessage}}
-角色: {{aiMessage}}`;
-
-const ITEM_EXTRACTION_PROMPT = `你是一个物品追踪助手。从对话中提取值得记住的物品信息。
-
-规则：
-1. 只提取有意义的物品（剧情相关、有特殊价值、有纪念意义）
-2. 已使用的普通消耗品（药水、食物）kp=false；有情感/纪念价值的即使已使用也 kp=true
-3. 消耗品用 it=consumable；关键剧情物用 it=key；线索物用 it=clue；装备用 it=equipped；背景道具用 it=background
-4. 如果没有值得记录的物品，返回空数组 []
-
-返回纯JSON数组（不要markdown代码块）：
-n=物品名 | o=持有者 | s=状态(held=持有中/used=已使用/lost=已失去/destroyed=已销毁)
-sig=意义描述 | kp=true(永久保留)/false(可清理) | it=分级(key/equipped/clue/consumable/background)
-g=标签数组
-
-示例：[{"n":"辉月之剑","o":"玩家","s":"held","sig":"传说中的圣剑，曾属古代英雄阿尔托","kp":true,"it":"key","g":["圣剑","古代遗物"]},{"n":"治疗药水","o":"玩家","s":"used","sig":"普通治疗药水","kp":false,"it":"consumable","g":["药水"]}]
-
-[当前对话]
-用户: {{userMessage}}
-角色: {{aiMessage}}`;
-
-const TIMELINE_EXTRACTION_PROMPT = `你是一个故事时间线助手。从对话中检测值得记录的故事节点。
-
-规则：
-1. 只在以下情况新增/更新时间线：地点变化、关系质变、重大决策、战斗、新角色入场、章节转换
-2. 日常寒暄、闲谈、重复行为不记录
-3. 如果当前内容是一条已有事件的延续，设置 active=true（AI会更新而非新建）
-4. 如果没有值得记录的故事节点，返回空数组 []
-5. 对于回忆/过去的事，active=false
-
-返回纯JSON数组（不要markdown代码块）：
-t=故事时间(如"123年4月"或"第3天傍晚"或"") | e=事件摘要(简短) | p=参与者数组 | l=地点
-active=true(进行中可后续更新)/false(已结束) | imp=影响描述 | g=标签数组
-
-示例：[{"t":"123年4月15日","e":"北境会议宣战","p":["雅赫摩斯","玩家"],"l":"北境王座厅","active":true,"imp":"雅赫摩斯正式向北境诸邦宣战，玩家卷入战争","g":["北境战争","宣战"]}]
-
-[当前对话]
-用户: {{userMessage}}
-角色: {{aiMessage}}`;
-
-const MEMORY_EXTRACTION_PROMPT = `你是一个记忆提取助手。从对话中提取值得长期记忆的关键信息。
-
-规则：
-1. 只提取重要的、值得记住的信息，不要记录日常寒暄
-2. 每条记忆应有简短标题和清晰内容
-3. 如果对话中有重要原话（承诺、告白、威胁等），保留在 v 字段
-4. 类型选择：event(事件), emotion(情感), habit(习惯), fact(事实)
-5. 如果没有值得记忆的内容，返回空数组 []
-
-返回纯JSON数组（不要markdown代码块）：
-n=标题(3-8字) | tp=类型(event/emotion/habit/fact) | m=一句话摘要(10-20字) | c=完整内容
-v=重要原话(无则"") | s=主体名 | a=目标名 | i=重要性(0-1) | e=情感强度(0-1)
-st=故事时间(无则"") | g=标签数组(前3个结构标签+后7个自由标签)
-
-示例：[{"n":"北境宣战","tp":"event","m":"雅赫摩斯向北境诸邦正式宣战","c":"在今日的北境会议上，雅赫摩斯宣布向北境诸邦宣战，玩家作为目击者在场","v":"从今日起，北境诸邦即为吾敌","s":"雅赫摩斯","a":"北境诸邦","i":0.8,"e":0.6,"st":"123年4月15日","g":["北境战争","雅赫摩斯","宣战"]}]
-
-[当前对话]
-用户: {{userMessage}}
-角色: {{aiMessage}}`;
+const MEMORY_EXTRACTION_PROMPT = "你是一个记忆提取助手。从对话中提取值得长期记忆的关键信息。\n\n规则：\n1. 只提取重要的、值得记住的信息，不要记录日常寒暄\n2. 每条记忆应有简短标题和清晰内容\n3. 如果对话中有重要原话（承诺、告白、威胁等），保留在 v 字段\n4. 类型选择：event(事件), emotion(情感), habit(习惯), fact(事实)\n5. 如果没有值得记忆的内容，返回空数组 []\n\n返回纯JSON数组（不要markdown代码块）：\nn=标题(3-8字) | tp=类型(event/emotion/habit/fact) | m=一句话摘要(10-20字) | c=完整内容\nv=重要原话(无则\"\") | s=主体名 | a=目标名 | i=重要性(0-1) | e=情感强度(0-1)\nst=故事时间(无则\"\") | g=标签数组(前3个结构标签+后7个自由标签)\n\n示例：[{\"n\":\"北境宣战\",\"tp\":\"event\",\"m\":\"雅赫摩斯向北境诸邦正式宣战\",\"c\":\"在今日的北境会议上，雅赫摩斯宣布向北境诸邦宣战，玩家作为目击者在场\",\"v\":\"从今日起，北境诸邦即为吾敌\",\"s\":\"雅赫摩斯\",\"a\":\"北境诸邦\",\"i\":0.8,\"e\":0.6,\"st\":\"123年4月15日\",\"g\":[\"北境战争\",\"雅赫摩斯\",\"宣战\"]}]\n\n[当前对话]\n用户: {{userMessage}}\n角色: {{aiMessage}}";
 
 // ═══ 四个解析器 ═══
 
 function cleanJsonText(text) {
     if (!text || !text.trim()) return '';
     let t = text.trim();
-    t = t.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+    t = t.replace(/^"""(?:json)?\\s*/i, '').replace(/\\s*"""$/i, '');
     const arrayMatch = t.match(/\[[\s\S]*\]/);
     return arrayMatch ? arrayMatch[0] : t;
 }
@@ -323,7 +255,7 @@ export async function callCustomApi(prompt) {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${autoGenApiKey}`,
+            'Authorization': "Bearer " + (autoGenApiKey),
         },
         body: JSON.stringify({
             model: autoGenModel || 'gpt-3.5-turbo',
@@ -336,7 +268,7 @@ export async function callCustomApi(prompt) {
         }),
     }, 30000);
 
-    if (!response.ok) throw new Error(`API 请求失败: ${response.status} ${response.statusText}`);
+    if (!response.ok) throw new Error("API 请求失败: " + (response.status) + " " + (response.statusText));
     const data = await response.json();
     if (data.choices && data.choices[0]) {
         return data.choices[0].message?.content || data.choices[0].text || '';
@@ -356,14 +288,14 @@ export async function callEmbeddingApi(text, timeoutMs = 10000) {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${embeddingApiKey}`,
+            'Authorization': "Bearer " + (embeddingApiKey),
         },
         body: JSON.stringify({ model: embeddingModel, input: text }),
     }, timeoutMs);
 
     if (!response.ok) {
         const errText = await response.text().catch(() => '');
-        throw new Error(`Embedding API 请求失败: ${response.status} ${errText ? '- ' + errText : ''}`);
+        throw new Error("Embedding API 请求失败: " + (response.status) + " " + (errText ? '- ' + errText : ''));
     }
     const data = await response.json();
     if (data.data && data.data[0] && Array.isArray(data.data[0].embedding)) {
@@ -431,7 +363,7 @@ async function extractNpcStage(chatId, userMessage, aiMessage) {
             count++;
         }
         if (count > 0 && getSettings().debugLogging) {
-            console.log(`[BB-Memory] NPC 提取: ${count} 个角色`);
+            console.log("[BB-Memory] NPC 提取: " + (count) + " 个角色");
         }
         return count;
     } catch (e) {
@@ -454,7 +386,7 @@ async function extractItemStage(chatId, userMessage, aiMessage) {
             count++;
         }
         if (count > 0 && getSettings().debugLogging) {
-            console.log(`[BB-Memory] 物品提取: ${count} 个`);
+            console.log("[BB-Memory] 物品提取: " + (count) + " 个");
         }
         return count;
     } catch (e) {
@@ -477,7 +409,7 @@ async function extractTimelineStage(chatId, userMessage, aiMessage) {
             count++;
         }
         if (count > 0 && getSettings().debugLogging) {
-            console.log(`[BB-Memory] 时间线提取: ${count} 条`);
+            console.log("[BB-Memory] 时间线提取: " + (count) + " 条");
         }
         return count;
     } catch (e) {
@@ -526,7 +458,7 @@ async function extractMemoryStage(chatId, userMessage, aiMessage) {
             count++;
         }
         if (count > 0 && getSettings().debugLogging) {
-            console.log(`[BB-Memory] 记忆提取: ${count} 条`);
+            console.log("[BB-Memory] 记忆提取: " + (count) + " 条");
         }
         return count;
     } catch (e) {
