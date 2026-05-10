@@ -258,7 +258,56 @@ function injectFloatingHub() {
     menu.id = 'bb_floating_menu';
     menu.className = 'bb-floating-menu';
     menu.style.display = 'none';
-    menu.innerHTML = '<div class="bb-floating-menu-header"><i class="fa-solid fa-brain"></i> BB-Memory v5.0</div><div class="bb-floating-menu-body"><div class="bb-floating-menu-item" id="bb_hub_slot_info"><i class="fa-solid fa-floppy-disk"></i><span>存档: <strong>default</strong> - <strong>0</strong> 条</span></div><div class="bb-floating-menu-item bb-floating-menu-action" id="bb_hub_hit_info" data-action="toggle_hit_list"><i class="fa-solid fa-bullseye"></i><span>命中: <strong id="bb_hub_hit_count">-</strong> 条</span><i class="fa-solid fa-chevron-down" style="margin-left:auto;font-size:0.7em;opacity:0.5;"></i></div><div id="bb_hub_hit_list" style="display:none;"></div><div class="bb-floating-menu-item" id="bb_hub_extract_progress"><i class="fa-solid fa-robot"></i><span id="bb_hub_extract_status">空闲</span><strong id="bb_hub_extract_pct"></strong></div><div style="border-top:1px solid var(--SmartThemeBorderColor,#444);margin:4px 0;"></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_manager"><i class="fa-solid fa-list"></i><span>记忆管家</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="init_memory"><i class="fa-solid fa-rocket"></i><span>初始化记忆</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="backup"><i class="fa-solid fa-cloud-upload"></i><span>备份</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="restore"><i class="fa-solid fa-cloud-download"></i><span>恢复</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="maintenance"><i class="fa-solid fa-broom"></i><span>维护</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="stats"><i class="fa-solid fa-chart-bar"></i><span>统计</span></div><div style="border-top:1px solid var(--SmartThemeBorderColor,#444);margin:4px 0;"></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="toggle_visibility"><i class="fa-solid fa-eye-slash"></i><span>切换楼层可见</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="meta_last"><i class="fa-solid fa-tag"></i><span>标记最后消息</span></div><div class="bb-floating-menu-item bb-floating-menu-action" data-action="manual_extract"><i class="fa-solid fa-wand-magic-sparkles"></i><span>手动提取</span></div></div>';
+    menu.innerHTML = `<div class="bb-floating-menu-header">
+            <i class="fa-solid fa-brain"></i> BB-Memory v5.0
+        </div>
+        <div class="bb-floating-menu-body">
+            <div class="bb-floating-menu-item" id="bb_hub_slot_info">
+                <i class="fa-solid fa-floppy-disk"></i>
+                <span>存档: <strong>default</strong> · <strong>0</strong> 条</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" id="bb_hub_hit_info" data-action="toggle_hit_list">
+                <i class="fa-solid fa-bullseye"></i>
+                <span>命中: <strong id="bb_hub_hit_count">-</strong> 条</span>
+                <i class="fa-solid fa-chevron-down" style="margin-left:auto;font-size:0.7em;opacity:0.5;"></i>
+            </div>
+            <div id="bb_hub_hit_list" style="display:none;"></div>
+            <div class="bb-floating-menu-item" id="bb_hub_extract_progress">
+                <i class="fa-solid fa-robot"></i>
+                <span id="bb_hub_extract_status">空闲</span><strong id="bb_hub_extract_pct"></strong>
+            </div>
+            <div style="border-top:1px solid var(--SmartThemeBorderColor,#444);margin:4px 0;"></div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_manager">
+                <i class="fa-solid fa-list"></i><span>记忆管家</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="init_memory">
+                <i class="fa-solid fa-rocket"></i><span>初始化记忆</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="backup">
+                <i class="fa-solid fa-cloud-upload"></i><span>备份</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="restore">
+                <i class="fa-solid fa-cloud-download"></i><span>恢复</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="maintenance">
+                <i class="fa-solid fa-broom"></i><span>维护</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="stats">
+                <i class="fa-solid fa-chart-bar"></i><span>统计</span>
+            </div>
+            <div style="border-top:1px solid var(--SmartThemeBorderColor,#444);margin:4px 0;"></div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="toggle_visibility">
+                <i class="fa-solid fa-eye-slash"></i><span>切换楼层可见</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="meta_last">
+                <i class="fa-solid fa-tag"></i><span>标记最后消息</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="manual_extract">
+                <i class="fa-solid fa-wand-magic-sparkles"></i><span>手动提取</span>
+            </div>
+        </div>`;
+
+console.log('[BB-Memory] ✅ TEST 5B-4 — template literal (backtick) restored');
     hub.appendChild(menu);
     document.body.appendChild(hub);
     let dragging = false, startX = 0, startY = 0, startLeft = 0, startTop = 0, hasMoved = false;
