@@ -187,3 +187,48 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
 
 console.log('[BB-Memory] ✅ interceptor defined');
 console.log('[BB-Memory] ✅ TEST 4 完成 — 全量 imports + 拦截器');
+
+// ═══ UI 辅助（测试追加） ═══
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = String(text || '');
+    return div.innerHTML;
+}
+
+function getExtensionFolder() {
+    try {
+        const url = String(import.meta.url);
+        let m = url.match(/\/scripts\/extensions\/(.+?)\/index\.mjs(?:\?|[#]|$)/i);
+        if (!m) m = url.match(/\/scripts\/extensions\/(.+?)\/index\.js(?:\?|[#]|$)/i);
+        if (!m) m = url.match(/\/scripts\/extensions\/(.+?)\/[^/]+\.(?:js|mjs)(?:\?|[#]|$)/i);
+        if (m?.[1]) return m[1];
+    } catch { /* ignore */ }
+    try {
+        const ctx = SillyTavern.getContext();
+        const ext = ctx.extensions?.find(e => e.name === 'BB-Memory' || e.display_name === 'BB-Memory');
+        if (ext) {
+            if (typeof ext.getFolder === 'function') return ext.getFolder();
+            return ext.baseFolder || ext.folder || '';
+        }
+    } catch { /* ignore */ }
+    return 'third-party/BB-Memory';
+}
+
+function initCollapsibleSettings() {
+    document.querySelectorAll('.bb-settings-section-header').forEach(header => {
+        header.addEventListener('click', () => {
+            const section = header.closest('.bb-settings-section');
+            const body = section?.querySelector('.bb-settings-section-body');
+            const chevron = header.querySelector('.bb-settings-chevron i');
+            if (body) {
+                const isHidden = body.style.display === 'none';
+                body.style.display = isHidden ? '' : 'none';
+                if (chevron) {
+                    chevron.className = isHidden ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-right';
+                }
+            }
+        });
+    });
+}
+
+console.log('[BB-Memory] ✅ TEST 5A — UI helpers added');
