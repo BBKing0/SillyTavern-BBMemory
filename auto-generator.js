@@ -28,7 +28,7 @@
  */
 
 import { getSettings, getMemories, addMemory, updateMemory } from './memory-store.js';
-import { getExtractableExchanges, markExchangeExtracted, isExchangeProcessed, computeExchangeHash, hideExchange } from './message-state.js';
+import { getExtractableExchanges, markExchangeExtracted, isExchangeProcessed, computeExchangeHash, hideExchange, refreshExtractionMarkers } from './message-state.js';
 import {
     normalizeNpcTier,
     normalizeItemTier,
@@ -915,6 +915,9 @@ function onMessageReceived(_messageIndex) {
                     if (confirmMode === 'active') {
                         hideExchange(oldest.userIndex, oldest.aiIndex);
                     }
+
+                    // v4.4.2: 提取完成后立即刷新 DOM 标记，确保隐藏样式生效
+                    setTimeout(() => refreshExtractionMarkers(), 200);
                 }
 
                 if (debug) console.log('[BB-Memory] 滑动窗口：已隐藏最旧 exchange');

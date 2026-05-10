@@ -425,6 +425,9 @@ function bindBrowseEvents(window, chatId) {
     window.querySelector('#bb_assistant_browse_sort')?.addEventListener('change', () => {
         renderFiltered();
     });
+
+    // v4.4.2: 初始渲染 — 不依赖用户点击类型，直接显示记忆列表
+    renderFiltered();
 }
 
 function bindBatchEvents(window, chatId) {

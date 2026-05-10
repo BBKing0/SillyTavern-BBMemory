@@ -40,12 +40,12 @@ function getLocalForage() {
 function saveChat() {
     try {
         const ctx = getContext();
-        if (typeof ctx.saveChatConditional === 'function') {
-            ctx.saveChatConditional();
+        // v4.4.2: 优先直接保存，避免 saveChatConditional 在有条件时跳过
+        // is_hidden 等变更必须持久化，否则刷新后丢失
+        if (typeof ctx.saveChat === 'function') {
+            ctx.saveChat();
         } else if (typeof ctx.saveChatDebounced === 'function') {
             ctx.saveChatDebounced();
-        } else if (typeof ctx.saveChat === 'function') {
-            ctx.saveChat();
         }
     } catch (e) {
         console.warn(`${LOG_TAG} 保存聊天失败:`, e);
