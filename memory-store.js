@@ -794,11 +794,17 @@ export async function exportMemoriesToChatMetadata(chatId) {
         const ctx = SillyTavern.getContext();
         if (ctx.chatMetadata) {
             ctx.chatMetadata[BACKUP_METADATA_KEY] = json;
+            // v4.4.3: 必须保存聊天才能将 chatMetadata 持久化到 ST 服务器
+            if (typeof ctx.saveChat === 'function') {
+                ctx.saveChat();
+            } else if (typeof ctx.saveChatDebounced === 'function') {
+                ctx.saveChatDebounced();
+            }
         }
 
         const settings = getSettings();
         settings.lastBackupTimestamp = Date.now();
-        SillyTavern.getContext().saveSettingsDebounced();
+        ctx.saveSettingsDebounced();
 
         if (settings.debugLogging) {
             console.log(`[BB-Memory] 备份到 chatMetadata: ${memories.length} 条, ${(size / 1024).toFixed(1)} KB`);

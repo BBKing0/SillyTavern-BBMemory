@@ -345,6 +345,23 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     // v4.1.0: 异步触发标签聚类检查（不阻塞注入）
     scheduleClusterCheck(chatId);
 
+    // v4.4.3: 可靠的上下文隐藏 — 将已提取/隐藏消息的 mes 临时清空
+    // ST 的 prompt builder 必然基于 mes 构建上下文，空内容 = 零影响
+    const hiddenBackups = [];
+    for (const msg of chat) {
+        if (msg._bbmem_extracted || msg._bbmem_hideSource === 'plugin') {
+            hiddenBackups.push({ msg, mes: msg.mes });
+            msg.mes = '';
+        }
+    }
+    if (hiddenBackups.length > 0) {
+        setTimeout(() => {
+            for (const { msg, mes } of hiddenBackups) {
+                msg.mes = mes;
+            }
+        }, 100);
+    }
+
     return chat;
 };
 

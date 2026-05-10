@@ -507,13 +507,26 @@ export function parseAiResponse(responseText) {
     }
 
     try {
-        const parsed = JSON.parse(text);
-        if (!Array.isArray(parsed)) return [];
+        let parsed = JSON.parse(text);
+        // v4.4.3: 如果返回的是单对象而非数组，尝试包装
+        if (!Array.isArray(parsed)) {
+            if (parsed && typeof parsed === 'object' && (parsed.content || parsed.c)) {
+                parsed = [parsed];
+            } else {
+                return [];
+            }
+        }
 
         const VALID_COG_TYPES = ['fact', 'episode', 'emotion', 'habit'];
 
         return parsed
-            .filter(item => item && (item.content || item.c) && typeof (item.content || item.c) === 'string')
+            .filter(item => {
+                const ok = item && (item.content || item.c) && typeof (item.content || item.c) === 'string';
+                if (!ok && getSettings().debugLogging) {
+                    console.warn('[BB-Memory] parseAiResponse 跳过无效条目:', item);
+                }
+                return ok;
+            })
             .map(item => {
                 // v4.1.0: 短码 → 全名映射
                 const m = expandShortCodes(item);

@@ -234,7 +234,7 @@ export async function importWorldBookWithAI(chatId, jsonString) {
         return `[条目${i + 1}${comment}]\n关键词: ${keys}\n内容: ${entry.content}`;
     }).join('\n\n');
 
-    // Build summarization prompt
+    // Build summarization prompt (v4.4.3: 使用短码格式与主提取流程一致)
     const prompt = `你是一个世界书记忆整理助手。以下是世界书的所有条目，请将它们整理为结构化的长期记忆条目。
 
 规则：
@@ -248,7 +248,10 @@ export async function importWorldBookWithAI(chatId, jsonString) {
 认知类型：fact | episode | emotion | habit
 分类路径：world.politics | world.lore | world.rules | npc.profile | npc.relationship | npc.emotion | npc.secret | npc.goal | npc.attitude | item.ownership | item.quest | item.key | item.clue | location.state | location.map | episode.event | episode.promise | episode.secret | episode.dialogue | episode.combat | emotion.bond | emotion.trauma | emotion.desire | habit.routine | habit.preference | habit.speech
 
-以纯JSON数组格式返回，每条包含字段：cognitiveType, categoryPath, title, content, summary, tags, subject, target, importance（0-1之间的小数）
+以纯JSON数组格式返回（不要markdown代码块，只输出JSON本身），使用短码字段名：
+t=cognitiveType | p=categoryPath | n=title | c=content | m=summary | g=tags | s=subject | a=target | i=importance
+
+示例：[{"t":"fact","p":"world.lore","n":"魔法体系","c":"这个世界使用元素魔法体系，分为火水土风四系","m":"四系元素魔法体系","g":["魔法","元素"],"s":"","a":"","i":0.8}]
 
 以下是世界书内容：
 
