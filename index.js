@@ -47,6 +47,7 @@ import {
 } from './memory-maintainer.js';
 
 import { openAssistant } from './memory-assistant.js';
+import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot } from './memory-slots.js';
 
 // ═══ 常量 ═══
 const INJECTION_KEY = 'bb_memory_injection';
@@ -162,6 +163,8 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         hits: merged.map(r => ({ id: r.memory.id, title: r.memory.title, type: r.memory.type, score: r.score, level: r.level })),
         stats,
     };
+    // 同步侧边栏命中列表
+    setTimeout(() => updateSidebarHitList(), 50);
 
     // 12. Active 模式：显示审核面板
     if (settings.extractionConfirmMode === 'active' && settings.activeConfirmStyle === 'popup') {
@@ -424,6 +427,117 @@ function bindSidebarEvents() {
             showToast(`初始化失败: ${e.message}`, 'error');
         }
     });
+
+    // v5.3: 添加记忆
+    document.querySelector('#bb_memory_add_btn')?.addEventListener('click', () => {
+        const chatId = getChatId();
+        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        openAssistant(chatId, 'memories');
+    });
+
+    // v5.3: 记忆管家（浏览查看）
+    document.querySelector('#bb_memory_manage_btn')?.addEventListener('click', () => {
+        const chatId = getChatId();
+        if (chatId) openAssistant(chatId, 'dashboard');
+    });
+
+    // v5.3: 记忆管理（编辑修改）
+    document.querySelector('#bb_memory_editor_btn')?.addEventListener('click', () => {
+        const chatId = getChatId();
+        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        openAssistant(chatId, 'memories');
+    });
+
+    // v5.3: 手动提取
+    document.querySelector('#bb_memory_extract_btn')?.addEventListener('click', async () => {
+        const chatId = getChatId();
+        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        showToast('正在收集上下文并提取记忆...', 'info');
+        try {
+            const results = await handleInitMemory(chatId);
+            showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 记忆 ${results.memories}`, 'success');
+        } catch (e) {
+            showToast(`提取失败: ${e.message}`, 'error');
+        }
+    });
+
+    // v5.3: 标记消息
+    document.querySelector('#bb_memory_meta_btn')?.addEventListener('click', () => {
+        const ctx = SillyTavern.getContext();
+        const chat = ctx.chat;
+        if (!chat || chat.length < 2) { showToast('聊天消息不足', 'warning'); return; }
+        let aiIdx = -1;
+        for (let i = chat.length - 1; i >= 0; i--) {
+            if (!chat[i].is_user && !chat[i].is_system) { aiIdx = i; break; }
+        }
+        if (aiIdx === -1) { showToast('未找到 AI 消息', 'warning'); return; }
+        chat[aiIdx]._bbmem_meta_marker = !chat[aiIdx]._bbmem_meta_marker;
+        try { ctx.saveChatDebounced(); } catch {}
+        setTimeout(() => refreshExtractionMarkers(), 100);
+        const label = chat[aiIdx]._bbmem_meta_marker ? '已标记为元指令（不提取）' : '已标记为可提取';
+        showToast(label, 'info');
+    });
+
+    // v5.3: 楼层可见
+    document.querySelector('#bb_memory_toggle_vis_btn')?.addEventListener('click', () => {
+        document.body.classList.toggle('bb-show-extracted');
+        const showing = document.body.classList.contains('bb-show-extracted');
+        showToast(showing ? '已显示被隐藏的楼层' : '已隐藏已提取的楼层', 'info');
+    });
+
+    // v5.3: 存档槽
+    document.querySelector('#bb_slot_save_btn')?.addEventListener('click', async () => {
+        const chatId = getChatId();
+        if (!chatId) return;
+        const charId = getCharacterId();
+        const slotName = document.querySelector('#bb_slot_selector')?.value || 'default';
+        await saveToSlot(charId, chatId, slotName);
+        showToast(`已保存到存档槽 "${slotName}"`, 'success');
+        refreshSlotUI();
+    });
+    document.querySelector('#bb_slot_load_btn')?.addEventListener('click', async () => {
+        const chatId = getChatId();
+        if (!chatId) return;
+        const charId = getCharacterId();
+        const slotName = document.querySelector('#bb_slot_selector')?.value || 'default';
+        const loaded = await loadFromSlot(charId, chatId, slotName);
+        showToast(`已加载存档槽 "${slotName}"`, 'success');
+        refreshSlotUI();
+        refreshSidebar();
+    });
+    document.querySelector('#bb_slot_create_btn')?.addEventListener('click', async () => {
+        const charId = getCharacterId();
+        const nameInput = document.querySelector('#bb_slot_new_name');
+        const slotName = nameInput?.value?.trim();
+        if (!slotName) { showToast('请输入存档名', 'warning'); return; }
+        await createEmptySlot(charId, slotName);
+        showToast(`已创建存档槽 "${slotName}"`, 'success');
+        if (nameInput) nameInput.value = '';
+        refreshSlotUI();
+    });
+    document.querySelector('#bb_slot_delete_btn')?.addEventListener('click', async () => {
+        const charId = getCharacterId();
+        const slotName = document.querySelector('#bb_slot_selector')?.value;
+        if (!slotName || slotName === 'default') { showToast('不能删除 default 槽', 'warning'); return; }
+        if (!confirm(`确定删除存档槽 "${slotName}"？此操作不可恢复。`)) return;
+        await deleteSlot(charId, slotName);
+        showToast(`已删除存档槽 "${slotName}"`, 'info');
+        refreshSlotUI();
+    });
+    document.querySelector('#bb_slot_selector')?.addEventListener('change', () => refreshSlotUI());
+
+    document.querySelector('#bb_memory_maintenance_btn')?.addEventListener('click', async () => {
+        const chatId = getChatId();
+        if (!chatId) return;
+        const result = await checkMaintenanceNeeded(chatId);
+        if (result.needed) {
+            const html = buildMaintenanceHTML(result);
+            showMaintenancePopup(chatId, html);
+        } else {
+            showToast('当前无需维护', 'info');
+        }
+    });
+    // 世界书导入
     document.querySelector('#bb_memory_import_wb_btn')?.addEventListener('click', () => {
         pickFile('.json', async (text) => {
             const chatId = getChatId();
@@ -444,21 +558,7 @@ function bindSidebarEvents() {
             }
         });
     });
-    document.querySelector('#bb_memory_manage_btn')?.addEventListener('click', () => {
-        const chatId = getChatId();
-        if (chatId) openAssistant(chatId, 'dashboard');
-    });
-    document.querySelector('#bb_memory_maintenance_btn')?.addEventListener('click', async () => {
-        const chatId = getChatId();
-        if (!chatId) return;
-        const result = await checkMaintenanceNeeded(chatId);
-        if (result.needed) {
-            const html = buildMaintenanceHTML(result);
-            showMaintenancePopup(chatId, html);
-        } else {
-            showToast('当前无需维护', 'info');
-        }
-    });
+
     document.querySelector('#bb_embedding_reindex_btn')?.addEventListener('click', async () => {
         const chatId = getChatId();
         if (!chatId) return;
@@ -467,6 +567,76 @@ function bindSidebarEvents() {
             if (done % 10 === 0) console.log(`[BB-Memory] Reindex: ${done}/${total}`);
         });
         showToast(`Reindex 完成：${memories.length} 条`, 'success');
+    });
+
+    // 初始刷新存档 UI
+    refreshSlotUI();
+}
+
+// ═══ 存档槽 UI 辅助 ═══
+
+async function refreshSlotUI() {
+    try {
+        const charId = getCharacterId();
+        const slots = await listSlots(charId);
+        const selector = document.querySelector('#bb_slot_selector');
+        const info = document.querySelector('#bb_slot_info');
+        if (selector) {
+            const currentVal = selector.value;
+            selector.innerHTML = slots.map(s =>
+                `<option value="${escapeHtml(s.name)}"${s.name === currentVal ? ' selected' : ''}>${escapeHtml(s.name)} (${s.count || 0}条)</option>`
+            ).join('');
+        }
+        if (info) {
+            const chatId = getChatId();
+            const mems = chatId ? await getMemories(chatId) : [];
+            info.textContent = `${mems.length} 条记忆`;
+        }
+    } catch { /* ignore */ }
+}
+
+// ═══ 折叠设置面板 ═══
+
+function initCollapsibleSettings() {
+    document.querySelectorAll('.bb-settings-section-header').forEach(header => {
+        header.addEventListener('click', () => {
+            const body = header.nextElementSibling;
+            const chevron = header.querySelector('.bb-settings-chevron i');
+            const isCollapsed = body.style.display === 'none';
+
+            body.style.display = isCollapsed ? '' : 'none';
+            if (chevron) {
+                if (isCollapsed) {
+                    chevron.classList.remove('fa-chevron-right');
+                    chevron.classList.add('fa-chevron-down');
+                } else {
+                    chevron.classList.remove('fa-chevron-down');
+                    chevron.classList.add('fa-chevron-right');
+                }
+            }
+
+            const sectionKey = header.dataset.section;
+            const s = getSettings();
+            if (!s._collapsedSections) s._collapsedSections = {};
+            s._collapsedSections[sectionKey] = !isCollapsed;
+            updateSettings({ _collapsedSections: s._collapsedSections });
+        });
+    });
+
+    // 恢复折叠状态
+    const s = getSettings();
+    const collapsed = s._collapsedSections || {};
+    document.querySelectorAll('.bb-settings-section-header').forEach(header => {
+        const key = header.dataset.section;
+        if (collapsed[key]) {
+            const body = header.nextElementSibling;
+            if (body) body.style.display = 'none';
+            const chevron = header.querySelector('.bb-settings-chevron i');
+            if (chevron) {
+                chevron.classList.remove('fa-chevron-down');
+                chevron.classList.add('fa-chevron-right');
+            }
+        }
     });
 }
 
@@ -1024,9 +1194,14 @@ async function handleFloatingMenuAction(action) {
             break;
         }
         case 'manual_extract': {
-            if (chatId) {
-                showToast('请使用斜杠命令 /bb-init 或记忆管家中的提取功能', 'info');
-                openAssistant(chatId, 'dashboard');
+            if (!chatId) return;
+            showToast('正在提取记忆...', 'info');
+            try {
+                const results = await handleInitMemory(chatId);
+                showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 记忆 ${results.memories}`, 'success');
+                refreshSidebar();
+            } catch (e) {
+                showToast(`提取失败: ${e.message}`, 'error');
             }
             break;
         }
@@ -1077,6 +1252,7 @@ async function init() {
             await mountExtensionSettingsHtml(html);
             restoreApiSettings(getSettings());
             bindSidebarEvents();
+            initCollapsibleSettings();
             settingsPanelMounted = true;
         }
     } catch (e) {
@@ -1093,12 +1269,13 @@ async function init() {
         if (getSettings().debugLogging) {
             console.log(`[BB-Memory] 提取进度: ${info.phase} ${info.current}/${info.total}`);
         }
+        const isDone = info.current >= info.total && info.total > 0;
+
         // 同步悬浮球进度
-        const progRow = document.getElementById('bb_hub_extract_progress');
-        if (progRow) {
-            const icon = progRow.querySelector('i');
-            const strong = progRow.querySelector('strong');
-            const isDone = info.current >= info.total && info.total > 0;
+        const hubRow = document.getElementById('bb_hub_extract_progress');
+        if (hubRow) {
+            const icon = hubRow.querySelector('i');
+            const strong = hubRow.querySelector('strong');
             if (isDone) {
                 if (icon) { icon.className = 'fa-solid fa-check-circle'; icon.style.color = '#4caf50'; }
                 if (strong) strong.textContent = '完成';
@@ -1109,6 +1286,24 @@ async function init() {
             } else {
                 if (icon) { icon.className = 'fa-solid fa-moon'; icon.style.color = ''; }
                 if (strong) strong.textContent = '';
+            }
+        }
+
+        // 同步侧边栏进度
+        const sidebarRow = document.getElementById('bb_sidebar_extract_progress');
+        if (sidebarRow) {
+            const icon = sidebarRow.querySelector('i');
+            const strong = sidebarRow.querySelector('strong');
+            if (isDone) {
+                if (icon) { icon.className = 'fa-solid fa-check-circle'; icon.style.color = '#4caf50'; }
+                if (strong) strong.textContent = '完成';
+            } else if (info.phase) {
+                if (icon) { icon.className = 'fa-solid fa-spinner fa-spin'; icon.style.color = ''; }
+                const pct = info.total > 0 ? Math.round((info.current / info.total) * 100) : 0;
+                if (strong) strong.textContent = pct + '%';
+            } else {
+                if (icon) { icon.className = 'fa-solid fa-moon'; icon.style.color = ''; }
+                if (strong) strong.textContent = '空闲';
             }
         }
     });
@@ -1156,6 +1351,41 @@ function refreshSidebar() {
     };
     updateCount();
     setInterval(updateCount, 30000); // 30秒刷新
+}
+
+function updateSidebarHitList() {
+    const result = lastRetrievalResult;
+    const listEl = document.getElementById('bb_sidebar_hit_list');
+    const tsEl = document.getElementById('bb_hit_timestamp');
+    if (!listEl) return;
+
+    if (!result || !result.hits || !result.hits.length) {
+        listEl.innerHTML = '<div style="opacity:0.4;text-align:center;font-size:0.8em;">暂无命中</div>';
+        return;
+    }
+
+    if (tsEl) {
+        const d = new Date(result.timestamp);
+        tsEl.textContent = d.toLocaleTimeString();
+    }
+
+    const typeIcons = { fact: 'fa-lightbulb', episode: 'fa-film', emotion: 'fa-heart', habit: 'fa-repeat' };
+    const levelColors = { L4: '#ce93d8', L3: '#4fc3f7', L2: '#ffb74d', L1: '#9e9e9e' };
+
+    listEl.innerHTML = result.hits.map(h => {
+        const icon = typeIcons[h.cognitiveType] || 'fa-circle';
+        const color = levelColors[h.level] || '#888';
+        const scorePct = Math.round(h.score * 100);
+        const shortTitle = (h.title || '').length > 18
+            ? escapeHtml(h.title.slice(0, 18)) + '...'
+            : escapeHtml(h.title);
+        return `<div class="bb-hub-hit-item" title="${escapeHtml(h.title)}" style="cursor:default;">
+            <i class="fa-solid ${icon}" style="color:${color};font-size:0.7em;"></i>
+            <span class="bb-hub-hit-title">${shortTitle}</span>
+            <span class="bb-hub-hit-level" style="color:${color}">${h.level}</span>
+            <span class="bb-hub-hit-score">${scorePct}%</span>
+        </div>`;
+    }).join('');
 }
 
 // ═══════════════════════════════════════════════════════════

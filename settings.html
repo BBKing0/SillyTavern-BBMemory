@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v5.0</b>
+            <b>BB-Memory v5.3</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -15,23 +15,90 @@
                 当前记忆数：<strong id="bb_memory_count">0</strong>
             </div>
 
-            <!-- 快捷按钮 -->
+            <!-- v5.3: 提取进度 -->
+            <div class="bb-mem-sidebar-info" id="bb_sidebar_extract_progress" style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+                <i class="fa-solid fa-moon" style="font-size:0.85em;opacity:0.6;"></i>
+                <span style="font-size:0.85em;">提取状态: <strong>空闲</strong></span>
+            </div>
+
+            <!-- 快捷按钮 行1：核心操作 -->
             <div class="bb-mem-sidebar-buttons">
                 <button id="bb_init_memory_btn" class="menu_button" title="从角色卡+世界书+对话初始化记忆">
                     <i class="fa-solid fa-rocket"></i> 初始化记忆
                 </button>
-                <button id="bb_memory_manage_btn" class="menu_button" title="打开记忆管家面板">
+                <button id="bb_memory_add_btn" class="menu_button" title="手动添加记忆条目">
+                    <i class="fa-solid fa-plus"></i> 添加记忆
+                </button>
+                <button id="bb_memory_manage_btn" class="menu_button" title="打开记忆管家面板（浏览/查看）">
                     <i class="fa-solid fa-list"></i> 记忆管家
+                </button>
+                <button id="bb_memory_editor_btn" class="menu_button" title="打开记忆管理面板（编辑/修改）">
+                    <i class="fa-solid fa-pen-to-square"></i> 记忆管理
+                </button>
+            </div>
+
+            <!-- 快捷按钮 行2：辅助操作 -->
+            <div class="bb-mem-sidebar-buttons">
+                <button id="bb_memory_extract_btn" class="menu_button" title="手动触发AI提取记忆">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> 手动提取
+                </button>
+                <button id="bb_memory_meta_btn" class="menu_button" title="标记/取消最后一条AI消息为元指令">
+                    <i class="fa-solid fa-tag"></i> 标记消息
+                </button>
+                <button id="bb_memory_toggle_vis_btn" class="menu_button" title="显示/隐藏已提取的聊天楼层">
+                    <i class="fa-solid fa-eye-slash"></i> 楼层可见
                 </button>
                 <button id="bb_memory_maintenance_btn" class="menu_button" title="打开记忆维护面板">
                     <i class="fa-solid fa-broom"></i> 记忆维护
                 </button>
-                <button id="bb_memory_backup_now" class="menu_button" title="立即备份">
-                    <i class="fa-solid fa-cloud-upload"></i> 备份
-                </button>
-                <button id="bb_memory_restore_now" class="menu_button" title="恢复备份">
-                    <i class="fa-solid fa-cloud-download"></i> 恢复
-                </button>
+            </div>
+
+            <!-- 存档槽 -->
+            <div class="bb-settings-section" style="margin-top:6px;">
+                <div class="bb-settings-section-header" data-section="slots">
+                    <span><i class="fa-solid fa-floppy-disk"></i> 存档槽</span>
+                    <small id="bb_slot_info" style="margin-left:auto;margin-right:8px;opacity:0.6;font-size:0.75em;"></small>
+                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                </div>
+                <div class="bb-settings-section-body">
+                    <div style="display:flex;gap:4px;align-items:center;margin-bottom:6px;">
+                        <select id="bb_slot_selector" class="text_pole" style="flex:1;">
+                            <option value="default">default</option>
+                        </select>
+                        <button id="bb_slot_save_btn" class="menu_button" title="保存当前记忆到所选槽" style="padding:4px 8px;">
+                            <i class="fa-solid fa-save"></i>
+                        </button>
+                        <button id="bb_slot_load_btn" class="menu_button" title="从所选槽加载记忆" style="padding:4px 8px;">
+                            <i class="fa-solid fa-folder-open"></i>
+                        </button>
+                    </div>
+                    <div style="display:flex;gap:4px;">
+                        <input id="bb_slot_new_name" type="text" class="text_pole" placeholder="新存档名..." style="flex:1;font-size:0.8em;" />
+                        <button id="bb_slot_create_btn" class="menu_button" title="创建新存档槽" style="padding:4px 8px;font-size:0.8em;">新建</button>
+                        <button id="bb_slot_delete_btn" class="menu_button" title="删除选中存档槽" style="padding:4px 8px;font-size:0.8em;color:#f44336;">删除</button>
+                    </div>
+                    <div style="display:flex;gap:4px;margin-top:4px;">
+                        <button id="bb_memory_backup_now" class="menu_button" title="立即备份到服务器" style="flex:1;font-size:0.8em;">
+                            <i class="fa-solid fa-cloud-upload"></i> 备份
+                        </button>
+                        <button id="bb_memory_restore_now" class="menu_button" title="从服务器恢复备份" style="flex:1;font-size:0.8em;">
+                            <i class="fa-solid fa-cloud-download"></i> 恢复
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 命中记忆 -->
+            <div class="bb-settings-section">
+                <div class="bb-settings-section-header" data-section="hits">
+                    <span><i class="fa-solid fa-bullseye"></i> 命中记忆 <small id="bb_hit_timestamp" style="font-size:0.7em;opacity:0.5;margin-left:6px;"></small></span>
+                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                </div>
+                <div class="bb-settings-section-body">
+                    <div id="bb_sidebar_hit_list" style="max-height:240px;overflow-y:auto;">
+                        <div style="opacity:0.4;text-align:center;font-size:0.8em;">等待检索...</div>
+                    </div>
+                </div>
             </div>
 
             <hr />
