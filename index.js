@@ -652,7 +652,7 @@ function showMaintenancePopup(chatId, result) {
         <div style="display:flex;flex-direction:column;flex:1;">
             <div style="display:flex;align-items:center;gap:8px;">
                 <strong>记忆维护</strong>
-                <span class="bb-maint-cat-count">${result.issueCount}条待处理</span>
+                <span class="bb-maint-cat-count" style="font-size:0.85em;">${result.issueCount}条待处理</span>
             </div>
             <p style="margin:4px 0 0;font-size:0.85em;opacity:0.7;">共 ${result.totalItems} 条条目</p>
         </div>
@@ -665,10 +665,10 @@ function showMaintenancePopup(chatId, result) {
     tabBar.style.cssText = 'display:flex;border-bottom:1px solid var(--SmartThemeBorderColor,#45475a);flex-shrink:0;';
     const pendingBtn = document.createElement('button');
     pendingBtn.textContent = `待维护 (${result.issueCount})`;
-    pendingBtn.style.cssText = 'flex:1;padding:10px;border:none;background:var(--SmartThemeBlurTintColor,#2a2a3e);color:inherit;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #fab387;';
+    pendingBtn.style.cssText = 'flex:1;padding:10px;border:none;background:var(--SmartThemeBlurTintColor,#2a2a3e);color:inherit;cursor:pointer;font-size:0.9em;font-weight:600;border-bottom:2px solid #fab387;';
     const resolvedBtn = document.createElement('button');
     resolvedBtn.textContent = '已维护';
-    resolvedBtn.style.cssText = 'flex:1;padding:10px;border:none;background:transparent;color:inherit;cursor:pointer;font-size:13px;opacity:0.6;border-bottom:2px solid transparent;';
+    resolvedBtn.style.cssText = 'flex:1;padding:10px;border:none;background:transparent;color:inherit;cursor:pointer;font-size:0.9em;opacity:0.6;border-bottom:2px solid transparent;';
     tabBar.appendChild(pendingBtn);
     tabBar.appendChild(resolvedBtn);
     panel.appendChild(tabBar);
@@ -696,11 +696,15 @@ function showMaintenancePopup(chatId, result) {
         foreshadow:            { icon: 'fa-solid fa-eye',      label: '待确认伏笔' },
     };
 
-    function refreshBadges(listEl) {
-        const total = listEl.querySelectorAll('.bb-maint-issue-item').length;
+    function refreshBadges() {
+        const total = body.querySelectorAll('.bb-maint-issue-item').length;
         const badgeEl = header.querySelector('.bb-maint-cat-count');
         if (badgeEl) badgeEl.textContent = total + '条待处理';
         pendingBtn.textContent = `待维护 (${total})`;
+        // 移除空的分类
+        body.querySelectorAll('.bb-maint-category').forEach(cat => {
+            if (!cat.querySelector('.bb-maint-issue-item')) cat.remove();
+        });
         if (total === 0) {
             body.innerHTML = '<div style="text-align:center;padding:40px;opacity:0.6;">所有待维护项已处理</div>';
         }
@@ -721,7 +725,7 @@ function showMaintenancePopup(chatId, result) {
         // Legend
         const legend = document.createElement('div');
         legend.className = 'bb-maint-legend';
-        legend.style.cssText = 'padding:0 0 12px;border:none;display:flex;gap:14px;flex-wrap:wrap;font-size:11px;opacity:0.7;';
+        legend.style.cssText = 'padding:0 0 12px;border:none;display:flex;gap:14px;flex-wrap:wrap;font-size:0.8em;opacity:0.7;';
         legend.innerHTML = [
             ['#4caf50','保留'],['#2196f3','升级'],['#ff9800','降级'],['#f44336','删除'],['#9c27b0','压缩']
         ].map(([c,l]) => `<span style="display:inline-flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:${c};display:inline-block;"></span>${l}</span>`).join('');
@@ -735,7 +739,7 @@ function showMaintenancePopup(chatId, result) {
             const catHeader = document.createElement('div');
             catHeader.className = 'bb-maint-cat-header';
             catHeader.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 0;cursor:pointer;';
-            catHeader.innerHTML = `<i class="${meta.icon}"></i><span style="flex:1;font-size:13px;font-weight:500;">${meta.label}</span><span class="bb-maint-cat-count">${typeIssues.length}条</span><i class="fa-solid fa-chevron-down" style="font-size:10px;opacity:0.5;"></i>`;
+            catHeader.innerHTML = `<i class="${meta.icon}"></i><span style="flex:1;font-size:0.9em;font-weight:500;">${meta.label}</span><span class="bb-maint-cat-count">${typeIssues.length}条</span><i class="fa-solid fa-chevron-down" style="font-size:0.75em;opacity:0.5;"></i>`;
 
             const itemList = document.createElement('div');
             itemList.className = 'bb-maint-cat-items';
@@ -751,14 +755,14 @@ function showMaintenancePopup(chatId, result) {
 
                 const infoDiv = document.createElement('div');
                 infoDiv.style.cssText = 'display:flex;flex-direction:column;flex:1;min-width:0;gap:2px;';
-                infoDiv.innerHTML = `<span class="bb-maint-issue-title" style="font-size:12px;">${escapeHtml(label)}</span><span class="bb-maint-issue-reason" style="font-size:10px;opacity:0.5;">${escapeHtml(iss.reason || '')}</span>`;
+                infoDiv.innerHTML = `<span class="bb-maint-issue-title" style="font-size:0.85em;">${escapeHtml(label)}</span><span class="bb-maint-issue-reason" style="font-size:0.75em;opacity:0.5;">${escapeHtml(iss.reason || '')}</span>`;
 
                 const actionDiv = document.createElement('div');
                 actionDiv.style.cssText = 'display:flex;gap:3px;flex-shrink:0;';
 
                 const addBtn = (op, color, text) => {
                     const btn = document.createElement('button');
-                    btn.style.cssText = `padding:2px 6px;border:1px solid ${color};background:transparent;color:${color};border-radius:4px;cursor:pointer;font-size:10px;`;
+                    btn.style.cssText = `padding:2px 6px;border:1px solid ${color};background:transparent;color:${color};border-radius:4px;cursor:pointer;font-size:0.75em;`;
                     btn.textContent = text;
                     btn.addEventListener('mouseenter', () => { btn.style.background = color + '22'; });
                     btn.addEventListener('mouseleave', () => { btn.style.background = 'transparent'; });
@@ -767,7 +771,10 @@ function showMaintenancePopup(chatId, result) {
                         withFeedback(btn, async () => {
                             await performMaintenance(chatId, [{ collection: iss.collection, id: item.id, op }]);
                             itemDiv.remove();
-                            refreshBadges(cat);
+                            // 同步移除 result.issues 中的对应项
+                            const idx = result.issues.findIndex(i => i.item.id === item.id && i.collection === iss.collection);
+                            if (idx >= 0) result.issues.splice(idx, 1);
+                            refreshBadges();
                         }, { successText: `${text}: ${label}` });
                     });
                     actionDiv.appendChild(btn);
@@ -809,7 +816,10 @@ function showMaintenancePopup(chatId, result) {
                 const actions = [...items].map(el => ({ collection: el.dataset.collection, id: el.dataset.id, op: 'keep' }));
                 const res = await performMaintenance(chatId, actions);
                 body.innerHTML = '<div style="text-align:center;padding:40px;opacity:0.6;">所有待维护项已保留</div>';
-                refreshBadges(body);
+                // 同步更新 result.issues
+                const actionIds = new Set(actions.map(a => a.id));
+                result.issues = result.issues.filter(i => !actionIds.has(i.item.id));
+                refreshBadges();
             }, { loadingText: '正在全部保留...', successText: '已全部保留' });
         });
         const laterBtn = document.createElement('button');
@@ -822,8 +832,8 @@ function showMaintenancePopup(chatId, result) {
     }
 
     function renderResolved() {
-        resolvedBtn.style.cssText = 'flex:1;padding:10px;border:none;background:var(--SmartThemeBlurTintColor,#2a2a3e);color:inherit;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #fab387;';
-        pendingBtn.style.cssText = 'flex:1;padding:10px;border:none;background:transparent;color:inherit;cursor:pointer;font-size:13px;opacity:0.6;border-bottom:2px solid transparent;';
+        resolvedBtn.style.cssText = 'flex:1;padding:10px;border:none;background:var(--SmartThemeBlurTintColor,#2a2a3e);color:inherit;cursor:pointer;font-size:0.9em;font-weight:600;border-bottom:2px solid #fab387;';
+        pendingBtn.style.cssText = 'flex:1;padding:10px;border:none;background:transparent;color:inherit;cursor:pointer;font-size:0.9em;opacity:0.6;border-bottom:2px solid transparent;';
         body.innerHTML = '';
 
         const resolved = getMaintenanceResolved(chatId);
@@ -835,9 +845,19 @@ function showMaintenancePopup(chatId, result) {
             const entry = resolved[i];
             const d = new Date(entry.resolvedAt);
             const timeStr = d.toLocaleString();
+            // 展示详细操作内容
+            const r = entry.results || {};
+            const parts = [];
+            if (r.kept) parts.push(`保留 ${r.kept} 条`);
+            if (r.deleted) parts.push(`删除 ${r.deleted} 条`);
+            if (r.promoted) parts.push(`升级 ${r.promoted} 条`);
+            if (r.demoted) parts.push(`降级 ${r.demoted} 条`);
+            if (r.compressed) parts.push(`压缩 ${r.compressed} 条`);
+            const detail = parts.length ? parts.join(' · ') : `${entry.actions || 0} 条已处理`;
+
             const row = document.createElement('div');
-            row.style.cssText = 'display:flex;align-items:center;padding:8px 12px;border-bottom:1px solid var(--SmartThemeBorderColor,#45475a);font-size:13px;gap:8px;';
-            row.innerHTML = `<span style="opacity:0.5;">#${resolved.length - i}</span><span style="flex:1;">${entry.actions || 0} 条已处理</span><span style="opacity:0.4;font-size:11px;">${escapeHtml(timeStr)}</span>`;
+            row.style.cssText = 'display:flex;align-items:center;padding:8px 12px;border-bottom:1px solid var(--SmartThemeBorderColor,#45475a);font-size:0.85em;gap:8px;';
+            row.innerHTML = `<span style="opacity:0.5;min-width:20px;">#${resolved.length - i}</span><span style="flex:1;">${escapeHtml(detail)}</span><span style="opacity:0.4;font-size:0.8em;white-space:nowrap;">${escapeHtml(timeStr)}</span>`;
             body.appendChild(row);
         }
         const clearBtn = document.createElement('button');

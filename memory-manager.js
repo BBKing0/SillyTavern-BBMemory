@@ -118,7 +118,7 @@ function buildManagerHTML(npc, items, timeline, memories, chatId) {
                 </button>
                 <span style="flex:1;"></span>
                 <span class="bb-batch-count" id="bb_batch_count_label" style="display:none;font-size:0.8em;opacity:0.7;">已选 <strong id="bb_batch_count">0</strong> 条</span>
-                <div id="bb_batch_menu" class="bb-batch-dropdown" style="position:relative;display:none;">
+                <div id="bb_batch_menu" class="bb-batch-dropdown" style="position:relative;display:inline-block;">
                     <button class="menu_button" id="bb_batch_toggle" disabled>
                         <i class="fa-solid fa-list-check"></i> 批量编辑 ▾
                     </button>
@@ -434,7 +434,6 @@ function bindBatchEvents(overlay, chatId) {
         const toggleBtn = overlay.querySelector('#bb_batch_toggle');
         if (countEl) countEl.textContent = String(count);
         if (labelEl) labelEl.style.display = batchMode && count > 0 ? '' : 'none';
-        if (menuEl) menuEl.style.display = batchMode ? 'inline-block' : 'none';
         const hasSelection = count > 0;
         if (toggleBtn) {
             toggleBtn.disabled = false; // always enabled in batch mode
@@ -820,60 +819,20 @@ function collectFormData(formEl, pillar) {
 // ═══ 快速编辑 ═══
 
 async function showQuickEditForm(overlay, chatId, id, pillar) {
-    const existing = overlay.querySelector('.bb-quick-add-form');
-    if (existing) existing.remove();
-
+    // 加载已有数据
     let entry;
-    if (pillar === 'npc') {
-        const list = await getNpcProfiles(chatId);
-        entry = list.find(e => e.id === id);
-    } else if (pillar === 'item') {
-        const list = await getItems(chatId);
-        entry = list.find(e => e.id === id);
-    } else if (pillar === 'timeline') {
-        const list = await getTimeline(chatId);
-        entry = list.find(e => e.id === id);
-    } else {
-        const list = await getMemories(chatId);
-        entry = list.find(e => e.id === id);
-    }
-    if (!entry) return;
+    const lists = await Promise.all([
+        getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+    ]);
+    if (pillar === 'npc') entry = lists[0].find(e => e.id === id);
+    else if (pillar === 'item') entry = lists[1].find(e => e.id === id);
+    else if (pillar === 'timeline') entry = lists[2].find(e => e.id === id);
+    else entry = lists[3].find(e => e.id === id);
 
-    const title = entry.title || entry.name || '';
-    const content = entry.content || entry.description || '';
+    if (!entry) { showToast('未找到该条目', 'error'); return; }
 
-    const form = document.createElement('div');
-    form.className = 'bb-quick-add-form';
-    form.style.cssText = 'padding:12px;margin:0 18px 12px;background:var(--SmartThemeBlurTintColor, rgba(255,255,255,0.05));border-radius:8px;border:1px solid var(--SmartThemeBorderColor,#444);';
-    form.innerHTML = `
-        <input id="bb_edit_title" class="text_pole" placeholder="标题" value="${escapeHtml(title)}" style="width:100%;margin-bottom:6px;" />
-        <textarea id="bb_edit_content" class="text_pole" placeholder="内容" rows="2" style="width:100%;margin-bottom:6px;">${escapeHtml(content)}</textarea>
-        <div style="display:flex;gap:4px;">
-            <button class="menu_button" id="bb_edit_cancel">取消</button>
-            <button class="menu_button" id="bb_edit_save" style="background:#4caf50;color:#fff;">保存</button>
-        </div>
-    `;
-
-    const listEl = overlay.querySelector('#bb_mgr_list');
-    listEl.parentNode.insertBefore(form, listEl);
-
-    form.querySelector('#bb_edit_cancel')?.addEventListener('click', () => form.remove());
-    form.querySelector('#bb_edit_save')?.addEventListener('click', async () => {
-        const newTitle = form.querySelector('#bb_edit_title')?.value?.trim();
-        const newContent = form.querySelector('#bb_edit_content')?.value?.trim();
-        if (!newTitle && !newContent) { showToast('标题或内容不能为空', 'warning'); return; }
-        try {
-            if (pillar === 'npc') await updateNpcProfile(chatId, id, { name: newTitle, description: newContent });
-            else if (pillar === 'item') await updateItem(chatId, id, { name: newTitle, description: newContent });
-            else if (pillar === 'timeline') await updateTimelineEntry(chatId, id, { title: newTitle, content: newContent });
-            else await updateMemory(chatId, id, { title: newTitle, content: newContent });
-            showToast('已保存', 'success');
-            form.remove();
-            await rerenderManagerList(overlay, chatId);
-        } catch (e) {
-            showToast(`保存失败: ${e.message}`, 'error');
-        }
-    });
+    // 复用添加表单的弹出层，预填数据
+    _showQuickFormPopup(overlay, chatId, { mode: 'edit', id, pillar, prefill: entry });
 }
 
 // ═══ 存档标签页 ═══

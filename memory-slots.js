@@ -15,28 +15,46 @@ function getLocalForage() {
 
 // ═══ 存储键 ═══
 
-const STORAGE_PREFIX = 'bb_memory_chat_';
 const SLOT_PREFIX = 'bb_memory_slot_';
 
-function chatStorageKey(chatId) {
-    return `${STORAGE_PREFIX}${chatId}`;
-}
+// v5 四柱存储键
+const PILLAR_KEYS = ['bb_npc_chat_', 'bb_item_chat_', 'bb_timeline_chat_', 'bb_mem_chat_'];
+const PILLAR_NAMES = ['npc', 'items', 'timeline', 'memories'];
 
 function slotKey(charId, slotName) {
     return `${SLOT_PREFIX}${charId}_${slotName}`;
 }
 
-// ═══ 直接读写 localforage ═══
+// ═══ v5 四柱数据读写 ═══
 
-async function readChatMemories(chatId) {
+async function readAllPillarData(chatId) {
     const lf = getLocalForage();
-    const data = await lf.getItem(chatStorageKey(chatId));
-    return Array.isArray(data) ? data : [];
+    const [npc, items, timeline, memories] = await Promise.all(
+        PILLAR_KEYS.map(k => lf.getItem(k + chatId))
+    );
+    return {
+        npc: Array.isArray(npc) ? npc : [],
+        items: Array.isArray(items) ? items : [],
+        timeline: Array.isArray(timeline) ? timeline : [],
+        memories: Array.isArray(memories) ? memories : [],
+    };
 }
 
-async function writeChatMemories(chatId, memories) {
+async function writeAllPillarData(chatId, data) {
     const lf = getLocalForage();
-    await lf.setItem(chatStorageKey(chatId), memories);
+    await Promise.all([
+        lf.setItem(PILLAR_KEYS[0] + chatId, data.npc || []),
+        lf.setItem(PILLAR_KEYS[1] + chatId, data.items || []),
+        lf.setItem(PILLAR_KEYS[2] + chatId, data.timeline || []),
+        lf.setItem(PILLAR_KEYS[3] + chatId, data.memories || []),
+    ]);
+}
+
+function totalCount(data) {
+    if (!data) return 0;
+    // Support old format (flat array) and new format (pillar object)
+    if (Array.isArray(data)) return data.length;
+    return (data.npc?.length || 0) + (data.items?.length || 0) + (data.timeline?.length || 0) + (data.memories?.length || 0);
 }
 
 // ═══ 角色ID获取 ═══
@@ -69,7 +87,7 @@ export async function listSlots(charId) {
         await lf.iterate((value, key) => {
             if (key.startsWith(prefix)) {
                 const slotName = key.slice(prefix.length);
-                const count = Array.isArray(value) ? value.length : 0;
+                const count = totalCount(value);
                 slots.push({ name: slotName, count, key });
             }
         });
@@ -79,7 +97,7 @@ export async function listSlots(charId) {
         if (Array.isArray(known)) {
             for (const name of known) {
                 const data = await lf.getItem(slotKey(charId, name));
-                slots.push({ name, count: Array.isArray(data) ? data.length : 0, key: slotKey(charId, name) });
+                slots.push({ name, count: totalCount(data), key: slotKey(charId, name) });
             }
         }
     }
@@ -110,34 +128,54 @@ async function updateSlotIndex(charId, slots) {
 export async function saveToSlot(charId, chatId, slotName) {
     if (!charId || !chatId) throw new Error('无法获取角色或聊天ID');
 
-    const memories = await readChatMemories(chatId);
+    // 读取四柱全部数据
+    const data = await readAllPillarData(chatId);
     const lf = getLocalForage();
-    await lf.setItem(slotKey(charId, slotName), memories);
+    await lf.setItem(slotKey(charId, slotName), data);
 
     const slots = await listSlots(charId);
     await updateSlotIndex(charId, slots);
 
-    return memories.length;
+    return totalCount(data);
 }
 
 /**
- * 从指定槽加载记忆到当前聊天（覆盖当前聊天记忆）
+ * 从指定槽加载数据到当前聊天（覆盖当前聊天数据）
  */
 export async function loadFromSlot(charId, chatId, slotName) {
     if (!charId || !chatId) throw new Error('无法获取角色或聊天ID');
 
     const lf = getLocalForage();
-    const data = await lf.getItem(slotKey(charId, slotName));
-    const memories = Array.isArray(data) ? data : [];
+    const raw = await lf.getItem(slotKey(charId, slotName));
 
-    // 重新生成ID避免冲突后写入
-    const migrated = memories.map((m, i) => ({
-        ...m,
-        id: `bb_${Date.now() + i}_${Math.random().toString(36).slice(2, 7)}`,
-    }));
-    await writeChatMemories(chatId, migrated);
+    // 兼容旧格式（扁平记忆数组）和新格式（四柱对象）
+    let data;
+    if (Array.isArray(raw)) {
+        // 旧格式：仅记忆条目
+        data = { npc: [], items: [], timeline: [], memories: raw };
+    } else if (raw && typeof raw === 'object') {
+        data = {
+            npc: Array.isArray(raw.npc) ? raw.npc : [],
+            items: Array.isArray(raw.items) ? raw.items : [],
+            timeline: Array.isArray(raw.timeline) ? raw.timeline : [],
+            memories: Array.isArray(raw.memories) ? raw.memories : [],
+        };
+    } else {
+        data = { npc: [], items: [], timeline: [], memories: [] };
+    }
 
-    return migrated.length;
+    // 重新生成ID避免冲突
+    const now = Date.now();
+    const newId = (i) => `bb_${now + i}_${Math.random().toString(36).slice(2, 7)}`;
+    data.npc = data.npc.map((e, i) => ({ ...e, id: newId(i) }));
+    data.items = data.items.map((e, i) => ({ ...e, id: newId(i + data.npc.length) }));
+    data.timeline = data.timeline.map((e, i) => ({ ...e, id: newId(i + data.npc.length + data.items.length) }));
+    data.memories = data.memories.map((e, i) => ({ ...e, id: newId(i + data.npc.length + data.items.length + data.timeline.length) }));
+
+    // 写入四柱
+    await writeAllPillarData(chatId, data);
+
+    return totalCount(data);
 }
 
 /**
@@ -182,5 +220,5 @@ export async function getSlotCount(charId, slotName) {
     if (!charId) return 0;
     const lf = getLocalForage();
     const data = await lf.getItem(slotKey(charId, slotName));
-    return Array.isArray(data) ? data.length : 0;
+    return totalCount(data);
 }

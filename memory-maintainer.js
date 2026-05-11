@@ -201,7 +201,7 @@ export async function performMaintenance(chatId, actions) {
     const actionIds = new Set(actions.map(a => a.id));
     cache.pending = cache.pending.filter(i => !actionIds.has(i.item.id));
     // Also persist to sessionStorage for the maintenance UI
-    addMaintenanceResolved(chatId, resultEntry.results);
+    addMaintenanceResolved(chatId, resultEntry.results, actions.length);
 
     return results;
 }
@@ -434,12 +434,13 @@ export function clearMaintenanceResolved(chatId) {
     try { sessionStorage.removeItem(key); } catch { /* ignore */ }
 }
 
-export function addMaintenanceResolved(chatId, results) {
+export function addMaintenanceResolved(chatId, results, actionsCount = 0) {
     const key = `bb_maint_resolved_${chatId}`;
     try {
         const existing = getMaintenanceResolved(chatId);
         existing.push({
             resolvedAt: Date.now(),
+            actions: actionsCount,
             results,
         });
         // Keep only last 50 entries
