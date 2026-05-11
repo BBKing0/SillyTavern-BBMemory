@@ -196,9 +196,12 @@ export async function performMaintenance(chatId, actions) {
     }
 
     const now = Date.now();
-    cache.resolved.push({ resolvedAt: now, actions: actions.length, results: { ...results } });
+    const resultEntry = { resolvedAt: now, actions: actions.length, results: { ...results } };
+    cache.resolved.push(resultEntry);
     const actionIds = new Set(actions.map(a => a.id));
     cache.pending = cache.pending.filter(i => !actionIds.has(i.item.id));
+    // Also persist to sessionStorage for the maintenance UI
+    addMaintenanceResolved(chatId, resultEntry.results);
 
     return results;
 }
@@ -406,4 +409,41 @@ ${lines}
         });
         return { merged: false };
     } catch { return null; }
+}
+
+// ═══ 已维护记录 ═══
+
+export function getMaintenanceResolved(chatId) {
+    const key = `bb_maint_resolved_${chatId}`;
+    try {
+        const raw = sessionStorage.getItem(key);
+        if (!raw) return [];
+        const data = JSON.parse(raw);
+        // Clean entries older than 7 days
+        const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+        const fresh = data.filter(e => e.resolvedAt > cutoff);
+        if (fresh.length !== data.length) {
+            sessionStorage.setItem(key, JSON.stringify(fresh));
+        }
+        return fresh;
+    } catch { return []; }
+}
+
+export function clearMaintenanceResolved(chatId) {
+    const key = `bb_maint_resolved_${chatId}`;
+    try { sessionStorage.removeItem(key); } catch { /* ignore */ }
+}
+
+export function addMaintenanceResolved(chatId, results) {
+    const key = `bb_maint_resolved_${chatId}`;
+    try {
+        const existing = getMaintenanceResolved(chatId);
+        existing.push({
+            resolvedAt: Date.now(),
+            results,
+        });
+        // Keep only last 50 entries
+        if (existing.length > 50) existing.splice(0, existing.length - 50);
+        sessionStorage.setItem(key, JSON.stringify(existing));
+    } catch { /* ignore */ }
 }

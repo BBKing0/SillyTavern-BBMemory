@@ -41,9 +41,10 @@ import {
 
 import {
     MEMORY_STATUS, checkMaintenanceNeeded, dismissMaintenanceRemind,
-    performMaintenance, buildMaintenanceHTML,
+    performMaintenance,
     fuzzyMemory, archiveMemory, restoreMemory, autoMaintain,
     generateTimelineSummary,
+    getMaintenanceResolved, clearMaintenanceResolved,
 } from './memory-maintainer.js';
 
 import { openAssistant } from './memory-assistant.js';
@@ -479,8 +480,7 @@ function bindSidebarEvents() {
         if (!chatId) return;
         const result = await checkMaintenanceNeeded(chatId);
         if (result.needed) {
-            const html = buildMaintenanceHTML(result);
-            showMaintenancePopup(chatId, html);
+            showMaintenancePopup(chatId, result);
         } else {
             showToast('当前无需维护', 'info');
         }
@@ -613,45 +613,247 @@ function getChatId() {
     } catch { return null; }
 }
 
-function showMaintenancePopup(chatId, html) {
-    const ctx = SillyTavern.getContext();
-    if (typeof ctx.callPopup !== 'function') return;
+// ═══ 反馈包装器 ═══
 
-    // 简化实现：将 HTML 嵌入确认弹窗
-    const popup = document.createElement('div');
-    popup.innerHTML = html;
-    popup.style.maxHeight = '70vh';
-    popup.style.overflowY = 'auto';
+function withFeedback(btn, fn, { loadingText, successText, errorText } = {}) {
+    if (btn.disabled) return Promise.resolve();
+    const origHTML = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${loadingText || '处理中...'}`;
+    const restore = () => { btn.disabled = false; btn.innerHTML = origHTML; };
+    return fn()
+        .then(r => { if (successText) showToast(successText, 'success'); restore(); return r; })
+        .catch(e => { if (errorText) showToast(`${errorText}: ${e.message}`, 'error'); else showToast(e.message, 'error'); restore(); throw e; });
+}
 
-    // 绑定维护按钮事件
-    popup.querySelectorAll('.bb-maint-btn').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            const item = btn.closest('.bb-maint-item');
-            const id = item?.dataset.id;
-            const collection = item?.dataset.collection;
-            const op = btn.dataset.op;
-            if (id && collection && op) {
-                await performMaintenance(chatId, [{ collection, id, op }]);
-                item.remove();
+// ═══ 记忆维护面板 ═══
+
+function showMaintenancePopup(chatId, result) {
+    if (!result || !result.issues || !result.issues.length) {
+        showToast('当前无需维护', 'info');
+        return;
+    }
+    const existing = document.querySelector('.bb-maint-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'bb-maint-overlay';
+
+    const panel = document.createElement('div');
+    panel.className = 'bb-maint-panel';
+    panel.style.cssText = 'display:flex;flex-direction:column;overflow:hidden;';
+
+    // Header
+    const header = document.createElement('div');
+    header.className = 'bb-maint-header';
+    header.style.cssText = 'display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--SmartThemeBorderColor,#45475a);flex-shrink:0;';
+    header.innerHTML = `
+        <i class="fa-solid fa-toolbox"></i>
+        <div style="display:flex;flex-direction:column;flex:1;">
+            <div style="display:flex;align-items:center;gap:8px;">
+                <strong>记忆维护</strong>
+                <span class="bb-maint-cat-count">${result.issueCount}条待处理</span>
+            </div>
+            <p style="margin:4px 0 0;font-size:0.85em;opacity:0.7;">共 ${result.totalItems} 条条目</p>
+        </div>
+        <button class="bb-maint-close-btn" style="background:none;border:none;color:inherit;font-size:24px;cursor:pointer;opacity:0.6;line-height:1;padding:0 4px;">&times;</button>
+    `;
+    panel.appendChild(header);
+
+    // Tab bar
+    const tabBar = document.createElement('div');
+    tabBar.style.cssText = 'display:flex;border-bottom:1px solid var(--SmartThemeBorderColor,#45475a);flex-shrink:0;';
+    const pendingBtn = document.createElement('button');
+    pendingBtn.textContent = `待维护 (${result.issueCount})`;
+    pendingBtn.style.cssText = 'flex:1;padding:10px;border:none;background:var(--SmartThemeBlurTintColor,#2a2a3e);color:inherit;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #fab387;';
+    const resolvedBtn = document.createElement('button');
+    resolvedBtn.textContent = '已维护';
+    resolvedBtn.style.cssText = 'flex:1;padding:10px;border:none;background:transparent;color:inherit;cursor:pointer;font-size:13px;opacity:0.6;border-bottom:2px solid transparent;';
+    tabBar.appendChild(pendingBtn);
+    tabBar.appendChild(resolvedBtn);
+    panel.appendChild(tabBar);
+
+    // Body
+    const body = document.createElement('div');
+    body.className = 'bb-maint-body';
+    body.style.cssText = 'flex:1;overflow-y:auto;padding:12px 20px;';
+    panel.appendChild(body);
+
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+
+    const close = () => { document.removeEventListener('keydown', onKeyDown); overlay.remove(); };
+    header.querySelector('.bb-maint-close-btn').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    const onKeyDown = (e) => { if (e.key === 'Escape') close(); };
+    document.addEventListener('keydown', onKeyDown);
+
+    const issueTypeDefs = {
+        idle_transient_memory: { icon: 'fa-regular fa-clock', label: '瞬时记忆（长期未命中）' },
+        status_changed_item:   { icon: 'fa-solid fa-box',     label: '状态变更的物品' },
+        compressible_timeline: { icon: 'fa-solid fa-compress', label: '可压缩的时间线' },
+        low_tier_npc:          { icon: 'fa-solid fa-user',     label: '低优先级NPC' },
+        foreshadow:            { icon: 'fa-solid fa-eye',      label: '待确认伏笔' },
+    };
+
+    function refreshBadges(listEl) {
+        const total = listEl.querySelectorAll('.bb-maint-issue-item').length;
+        const badgeEl = header.querySelector('.bb-maint-cat-count');
+        if (badgeEl) badgeEl.textContent = total + '条待处理';
+        pendingBtn.textContent = `待维护 (${total})`;
+        if (total === 0) {
+            body.innerHTML = '<div style="text-align:center;padding:40px;opacity:0.6;">所有待维护项已处理</div>';
+        }
+    }
+
+    function renderPending() {
+        pendingBtn.style.cssText = 'flex:1;padding:10px;border:none;background:var(--SmartThemeBlurTintColor,#2a2a3e);color:inherit;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #fab387;';
+        resolvedBtn.style.cssText = 'flex:1;padding:10px;border:none;background:transparent;color:inherit;cursor:pointer;font-size:13px;opacity:0.6;border-bottom:2px solid transparent;';
+        body.innerHTML = '';
+
+        const issues = result.issues || [];
+        const grouped = {};
+        for (const iss of issues) {
+            if (!grouped[iss.type]) grouped[iss.type] = [];
+            grouped[iss.type].push(iss);
+        }
+
+        // Legend
+        const legend = document.createElement('div');
+        legend.className = 'bb-maint-legend';
+        legend.style.cssText = 'padding:0 0 12px;border:none;display:flex;gap:14px;flex-wrap:wrap;font-size:11px;opacity:0.7;';
+        legend.innerHTML = [
+            ['#4caf50','保留'],['#2196f3','升级'],['#ff9800','降级'],['#f44336','删除'],['#9c27b0','压缩']
+        ].map(([c,l]) => `<span style="display:inline-flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:${c};display:inline-block;"></span>${l}</span>`).join('');
+        body.appendChild(legend);
+
+        for (const [type, typeIssues] of Object.entries(grouped)) {
+            const meta = issueTypeDefs[type] || { icon: 'fa-solid fa-circle', label: type };
+            const cat = document.createElement('div');
+            cat.className = 'bb-maint-category';
+
+            const catHeader = document.createElement('div');
+            catHeader.className = 'bb-maint-cat-header';
+            catHeader.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 0;cursor:pointer;';
+            catHeader.innerHTML = `<i class="${meta.icon}"></i><span style="flex:1;font-size:13px;font-weight:500;">${meta.label}</span><span class="bb-maint-cat-count">${typeIssues.length}条</span><i class="fa-solid fa-chevron-down" style="font-size:10px;opacity:0.5;"></i>`;
+
+            const itemList = document.createElement('div');
+            itemList.className = 'bb-maint-cat-items';
+
+            for (const iss of typeIssues) {
+                const item = iss.item;
+                const label = item.name || item.title || item.event || item.id;
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'bb-maint-issue-item';
+                itemDiv.dataset.collection = iss.collection;
+                itemDiv.dataset.id = item.id;
+                itemDiv.style.cssText = 'display:flex;align-items:center;padding:6px 0;gap:8px;border-bottom:1px solid var(--SmartThemeBorderColor,rgba(255,255,255,0.05));';
+
+                const infoDiv = document.createElement('div');
+                infoDiv.style.cssText = 'display:flex;flex-direction:column;flex:1;min-width:0;gap:2px;';
+                infoDiv.innerHTML = `<span class="bb-maint-issue-title" style="font-size:12px;">${escapeHtml(label)}</span><span class="bb-maint-issue-reason" style="font-size:10px;opacity:0.5;">${escapeHtml(iss.reason || '')}</span>`;
+
+                const actionDiv = document.createElement('div');
+                actionDiv.style.cssText = 'display:flex;gap:3px;flex-shrink:0;';
+
+                const addBtn = (op, color, text) => {
+                    const btn = document.createElement('button');
+                    btn.style.cssText = `padding:2px 6px;border:1px solid ${color};background:transparent;color:${color};border-radius:4px;cursor:pointer;font-size:10px;`;
+                    btn.textContent = text;
+                    btn.addEventListener('mouseenter', () => { btn.style.background = color + '22'; });
+                    btn.addEventListener('mouseleave', () => { btn.style.background = 'transparent'; });
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        withFeedback(btn, async () => {
+                            await performMaintenance(chatId, [{ collection: iss.collection, id: item.id, op }]);
+                            itemDiv.remove();
+                            refreshBadges(cat);
+                        }, { successText: `${text}: ${label}` });
+                    });
+                    actionDiv.appendChild(btn);
+                };
+                addBtn('keep', '#4caf50', '保留');
+                addBtn('promote', '#2196f3', '升级');
+                addBtn('demote', '#ff9800', '降级');
+                addBtn('delete', '#f44336', '删除');
+                if (type === 'compressible_timeline') {
+                    addBtn('compress_timeline', '#9c27b0', '压缩');
+                }
+
+                itemDiv.appendChild(infoDiv);
+                itemDiv.appendChild(actionDiv);
+                itemList.appendChild(itemDiv);
             }
-        });
-    });
-    popup.querySelector('.keep-all')?.addEventListener('click', async () => {
-        const actions = [...popup.querySelectorAll('.bb-maint-item')].map(item => ({
-            collection: item.dataset.collection,
-            id: item.dataset.id,
-            op: 'keep',
-        }));
-        await performMaintenance(chatId, actions);
-        popup.querySelector('.bb-maint-items')?.remove();
-        showToast('已全部保留', 'success');
-    });
-    popup.querySelector('.dismiss')?.addEventListener('click', () => {
-        dismissMaintenanceRemind();
-        showToast('已稍后提醒', 'info');
-    });
 
-    ctx.callPopup(popup.innerHTML, 'text');
+            catHeader.addEventListener('click', () => {
+                const hidden = itemList.style.display === 'none';
+                itemList.style.display = hidden ? '' : 'none';
+                const chevron = catHeader.querySelector('.fa-chevron-down');
+                if (chevron) chevron.style.transform = hidden ? '' : 'rotate(-90deg)';
+            });
+
+            cat.appendChild(catHeader);
+            cat.appendChild(itemList);
+            body.appendChild(cat);
+        }
+
+        // Bottom actions
+        const bottomBar = document.createElement('div');
+        bottomBar.style.cssText = 'display:flex;gap:8px;padding:12px 0 0;flex-wrap:wrap;border-top:1px solid var(--SmartThemeBorderColor,#45475a);margin-top:8px;';
+        const keepAllBtn = document.createElement('button');
+        keepAllBtn.className = 'bb-maint-btn-auto menu_button';
+        keepAllBtn.textContent = '全部保留';
+        keepAllBtn.addEventListener('click', () => {
+            withFeedback(keepAllBtn, async () => {
+                const items = body.querySelectorAll('.bb-maint-issue-item');
+                const actions = [...items].map(el => ({ collection: el.dataset.collection, id: el.dataset.id, op: 'keep' }));
+                const res = await performMaintenance(chatId, actions);
+                body.innerHTML = '<div style="text-align:center;padding:40px;opacity:0.6;">所有待维护项已保留</div>';
+                refreshBadges(body);
+            }, { loadingText: '正在全部保留...', successText: '已全部保留' });
+        });
+        const laterBtn = document.createElement('button');
+        laterBtn.className = 'bb-maint-btn-later menu_button';
+        laterBtn.textContent = '稍后提醒(24h)';
+        laterBtn.addEventListener('click', () => { dismissMaintenanceRemind(); close(); showToast('24小时内不再提醒', 'info'); });
+        bottomBar.appendChild(keepAllBtn);
+        bottomBar.appendChild(laterBtn);
+        body.appendChild(bottomBar);
+    }
+
+    function renderResolved() {
+        resolvedBtn.style.cssText = 'flex:1;padding:10px;border:none;background:var(--SmartThemeBlurTintColor,#2a2a3e);color:inherit;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #fab387;';
+        pendingBtn.style.cssText = 'flex:1;padding:10px;border:none;background:transparent;color:inherit;cursor:pointer;font-size:13px;opacity:0.6;border-bottom:2px solid transparent;';
+        body.innerHTML = '';
+
+        const resolved = getMaintenanceResolved(chatId);
+        if (!resolved.length) {
+            body.innerHTML = '<div style="text-align:center;padding:40px;opacity:0.6;">暂无已维护记录</div>';
+            return;
+        }
+        for (let i = resolved.length - 1; i >= 0; i--) {
+            const entry = resolved[i];
+            const d = new Date(entry.resolvedAt);
+            const timeStr = d.toLocaleString();
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;padding:8px 12px;border-bottom:1px solid var(--SmartThemeBorderColor,#45475a);font-size:13px;gap:8px;';
+            row.innerHTML = `<span style="opacity:0.5;">#${resolved.length - i}</span><span style="flex:1;">${entry.actions || 0} 条已处理</span><span style="opacity:0.4;font-size:11px;">${escapeHtml(timeStr)}</span>`;
+            body.appendChild(row);
+        }
+        const clearBtn = document.createElement('button');
+        clearBtn.className = 'menu_button'; clearBtn.textContent = '清空已维护'; clearBtn.style.cssText = 'margin-top:12px;';
+        clearBtn.addEventListener('click', () => {
+            withFeedback(clearBtn, async () => {
+                clearMaintenanceResolved(chatId);
+                body.innerHTML = '<div style="text-align:center;padding:40px;opacity:0.6;">已清空</div>';
+            }, { successText: '已清空' });
+        });
+        body.appendChild(clearBtn);
+    }
+
+    pendingBtn.addEventListener('click', renderPending);
+    resolvedBtn.addEventListener('click', renderResolved);
+    renderPending();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -721,7 +923,7 @@ function registerSlashCommands() {
         if (!chatId) return;
         const result = await checkMaintenanceNeeded(chatId);
         if (result.needed) {
-            showMaintenancePopup(chatId, buildMaintenanceHTML(result));
+            showMaintenancePopup(chatId, result);
         } else {
             showToast('当前无需维护', 'info');
         }
@@ -1228,6 +1430,23 @@ async function init() {
             } else {
                 if (icon) { icon.className = 'fa-solid fa-moon'; icon.style.color = ''; }
                 if (strong) strong.textContent = '空闲';
+            }
+        }
+
+        // 同步维护面板进度（如有打开）
+        const maintOverlay = document.querySelector('.bb-maint-overlay');
+        if (maintOverlay) {
+            const progressEl = maintOverlay.querySelector('.bb-maint-progress');
+            if (progressEl) {
+                if (isDone) {
+                    progressEl.style.display = 'none';
+                } else if (info.phase) {
+                    progressEl.style.display = 'block';
+                    const pct = info.total > 0 ? Math.round((info.current / info.total) * 100) : 0;
+                    progressEl.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> 提取进度: ${info.phase} ${info.current}/${info.total} (${pct}%)`;
+                } else {
+                    progressEl.style.display = 'none';
+                }
             }
         }
     });
