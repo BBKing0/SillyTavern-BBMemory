@@ -479,7 +479,7 @@ function bindSidebarEvents() {
         const chatId = getChatId();
         if (!chatId) return;
         const result = await checkMaintenanceNeeded(chatId);
-        if (result.needed) {
+        if (result.issues && result.issues.length > 0) {
             showMaintenancePopup(chatId, result);
         } else {
             showToast('当前无需维护', 'info');
@@ -922,7 +922,7 @@ function registerSlashCommands() {
         const chatId = getChatId();
         if (!chatId) return;
         const result = await checkMaintenanceNeeded(chatId);
-        if (result.needed) {
+        if (result.issues && result.issues.length > 0) {
             showMaintenancePopup(chatId, result);
         } else {
             showToast('当前无需维护', 'info');

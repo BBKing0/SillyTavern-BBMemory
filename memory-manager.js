@@ -179,6 +179,9 @@ function buildManagerHTML(npc, items, timeline, memories, chatId) {
 
 // ═══ 条目渲染 ═══
 
+// ═══ 批量编辑模式 ═══
+let batchMode = false;
+
 function buildEntryItemHTML(e) {
     const pillar = e._pillar;
     const pillarConfig = {
@@ -188,46 +191,78 @@ function buildEntryItemHTML(e) {
         mem:      { icon: 'fa-brain',        label: '记忆',  color: '#81c784' },
     }[pillar] || { icon: 'fa-circle', label: pillar, color: '#888' };
 
-    const title = e.title || e.name || (e.content || '').slice(0, 30) || '(无标题)';
-    const content = e.content || e.description || '';
-    const subtitle = [];
+    const title = e.title || e.name || (e.content || e.description || '').slice(0, 40) || '(无标题)';
+    const desc = (e.content || e.description || e.event || '').trim();
 
+    // 状态标签
+    let statusBadges = '';
     if (pillar === 'npc') {
         const tier = NPC_TIERS[e.npcTier];
-        if (tier) subtitle.push(`NPC: ${tier.label}`);
-        if (e.role) subtitle.push(e.role);
+        if (tier) statusBadges += `<span class="bb-item-badge" style="background:${pillarConfig.color}22;color:${pillarConfig.color};border:1px solid ${pillarConfig.color}44;">${tier.label}</span>`;
+        if (e.role) statusBadges += `<span style="font-size:0.75em;opacity:0.5;">${escapeHtml(e.role)}</span>`;
     } else if (pillar === 'item') {
-        if (e.status) subtitle.push(`状态: ${e.status}`);
         const tier = ITEM_TIERS[e.itemTier];
-        if (tier) subtitle.push(`物品: ${tier.label}`);
-        if (e.owner) subtitle.push(`持有: ${e.owner}`);
+        if (tier) statusBadges += `<span class="bb-item-badge" style="background:${pillarConfig.color}22;color:${pillarConfig.color};border:1px solid ${pillarConfig.color}44;">${tier.label}</span>`;
+        if (e.status) statusBadges += `<span class="bb-item-badge" style="font-size:0.7em;">${escapeHtml(e.status)}</span>`;
+        if (e.owner) statusBadges += `<span style="font-size:0.75em;opacity:0.5;">持有: ${escapeHtml(e.owner)}</span>`;
     } else if (pillar === 'timeline') {
-        subtitle.push(e.isActive ? '进行中' : '已结束');
-        if (e.storyTime) subtitle.push(e.storyTime);
+        statusBadges += `<span class="bb-item-badge" style="background:${e.isActive ? '#4caf5022' : '#ff980022'};color:${e.isActive ? '#4caf50' : '#ff9800'};border:1px solid ${e.isActive ? '#4caf5044' : '#ff980044'};">${e.isActive ? '进行中' : '已结束'}</span>`;
+        if (e.storyTime) statusBadges += `<span style="font-size:0.75em;opacity:0.5;">${escapeHtml(e.storyTime)}</span>`;
     } else if (pillar === 'mem') {
+        if (e.memoryTier && e.memoryTier !== 'transient') {
+            const tierColors = { stable: '#4caf50', core: '#ba68c8', eternal: '#ff9800', archived: '#888' };
+            const tierLabels = { stable: '稳固', core: '核心', eternal: '永恒', archived: '归档' };
+            const c = tierColors[e.memoryTier] || '#888';
+            statusBadges += `<span class="bb-item-badge" style="background:${c}22;color:${c};border:1px solid ${c}44;">${tierLabels[e.memoryTier] || e.memoryTier}</span>`;
+        }
         const typeDef = MEMORY_TYPES[e.type];
-        if (typeDef) subtitle.push(typeDef.label);
-        if (e.memoryTier) subtitle.push(`层级: ${e.memoryTier}`);
+        if (typeDef) statusBadges += `<span class="bb-item-badge" style="font-size:0.7em;">${typeDef.label}</span>`;
     }
 
+    // 时间行
     const createdDate = e.createdAt ? new Date(e.createdAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    const updatedDate = (e.updatedAt && e.updatedAt !== e.createdAt) ? new Date(e.updatedAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+
+    // 标签（仅记忆条目）
+    let tagRow = '';
+    if (pillar === 'mem' && Array.isArray(e.tags) && e.tags.length) {
+        tagRow = `<div style="margin-top:4px;display:flex;gap:3px;flex-wrap:wrap;">${e.tags.map(t => `<span class="bb-item-badge" style="font-size:0.7em;background:rgba(129,199,132,0.12);border:1px solid rgba(129,199,132,0.25);">${escapeHtml(typeof t === 'string' ? t : t.name || t)}</span>`).join('')}</div>`;
+    }
+
+    // 复选框（批量模式才显示）
+    const cbStyle = batchMode ? '' : 'display:none;';
+    const cbHTML = `<input type="checkbox" class="bb-mem-batch-cb" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" style="margin-right:8px;width:15px;height:15px;cursor:pointer;flex-shrink:0;${cbStyle}" />`;
+
+    // 描述内容
+    const descContent = pillar === 'npc'
+        ? (e.personality ? `性格: ${escapeHtml(e.personality).slice(0, 60)}<br>` : '') + (e.appearance ? `外貌: ${escapeHtml(e.appearance).slice(0, 60)}` : '') + (e.location ? `<br>位置: ${escapeHtml(e.location)}` : '')
+        : pillar === 'timeline'
+        ? (e.participants?.length ? `参与者: ${escapeHtml(e.participants.join(', '))}<br>` : '') + (e.location ? `地点: ${escapeHtml(e.location)}<br>` : '') + (e.impact ? `影响: ${escapeHtml(e.impact)}` : '')
+        : escapeHtml(desc.slice(0, 200));
 
     return `
     <div class="bb-mem-item" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}">
-        <div class="bb-mem-item-header">
-            <input type="checkbox" class="bb-mem-batch-cb" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" style="margin-right:8px;width:15px;height:15px;cursor:pointer;flex-shrink:0;" />
-            <span class="bb-mem-item-type" style="color:${pillarConfig.color}">
+        <div style="display:flex;align-items:center;margin-bottom:6px;">
+            ${cbHTML}
+            <strong style="flex:1;font-size:0.95em;">${escapeHtml(title)}</strong>
+            <span style="display:flex;align-items:center;gap:4px;flex-shrink:0;">${statusBadges}</span>
+            <span class="bb-mem-item-type" style="color:${pillarConfig.color};margin-left:6px;font-size:0.75em;">
                 <i class="fa-solid ${pillarConfig.icon}"></i> ${pillarConfig.label}
             </span>
-            ${subtitle.length ? `<span style="font-size:0.75em;opacity:0.6;">${subtitle.join(' · ')}</span>` : ''}
         </div>
-        <div class="bb-mem-item-content"><strong>${escapeHtml(title)}</strong>${content ? ' — ' + escapeHtml(content.slice(0, 100)) : ''}</div>
-        ${createdDate ? `<div class="bb-mem-item-meta"><span class="bb-mem-item-date">${createdDate}</span></div>` : ''}
-        <div class="bb-mem-item-actions">
-            <button class="menu_button bb-mem-btn-sm bb-mem-edit" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" title="编辑">
+        ${descContent ? `
+        <div style="margin:4px 0;padding:8px;background:var(--SmartThemeBlurTintColor, rgba(0,0,0,0.08));border:1px solid var(--SmartThemeBorderColor, #444);border-radius:6px;font-size:0.85em;line-height:1.5;">
+            ${descContent}
+            ${tagRow}
+        </div>` : ''}
+        <div style="display:flex;align-items:center;font-size:0.75em;opacity:0.5;gap:12px;">
+            ${createdDate ? `<span><i class="fa-regular fa-calendar-plus"></i> ${escapeHtml(createdDate)}</span>` : ''}
+            ${updatedDate ? `<span><i class="fa-solid fa-pen"></i> ${escapeHtml(updatedDate)}</span>` : ''}
+            <span style="flex:1;"></span>
+            <button class="menu_button bb-mem-btn-sm bb-mem-edit" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" title="编辑" style="font-size:0.85em;">
                 <i class="fa-solid fa-pen"></i>
             </button>
-            <button class="menu_button bb-mem-btn-sm bb-mem-delete menu_button_danger" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" title="删除">
+            <button class="menu_button bb-mem-btn-sm bb-mem-delete menu_button_danger" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" title="删除" style="font-size:0.85em;">
                 <i class="fa-solid fa-trash"></i>
             </button>
         </div>
@@ -398,34 +433,33 @@ function bindBatchEvents(overlay, chatId) {
         const menuEl = overlay.querySelector('#bb_batch_menu');
         const toggleBtn = overlay.querySelector('#bb_batch_toggle');
         if (countEl) countEl.textContent = String(count);
-        if (labelEl) labelEl.style.display = count > 0 ? '' : 'none';
-        if (menuEl) menuEl.style.display = 'inline-block';
+        if (labelEl) labelEl.style.display = batchMode && count > 0 ? '' : 'none';
+        if (menuEl) menuEl.style.display = batchMode ? 'inline-block' : 'none';
         const hasSelection = count > 0;
-        if (toggleBtn) toggleBtn.disabled = !hasSelection;
+        if (toggleBtn) {
+            toggleBtn.disabled = false; // always enabled in batch mode
+            toggleBtn.textContent = batchMode ? '退出批量编辑' : '批量编辑';
+        }
         ['bb_batch_delete', 'bb_batch_archive', 'bb_batch_fuzzy'].forEach(id => {
             const btn = overlay.querySelector('#' + id);
             if (btn) btn.disabled = !hasSelection;
         });
     };
 
+    // 批量编辑开关
+    overlay.querySelector('#bb_batch_toggle')?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        batchMode = !batchMode;
+        // 退出时取消所有勾选
+        if (!batchMode) {
+            overlay.querySelectorAll('.bb-mem-batch-cb').forEach(cb => { cb.checked = false; });
+        }
+        await rerenderManagerList(overlay, chatId);
+        updateUI();
+    });
+
     overlay.addEventListener('change', (e) => {
         if (e.target.classList.contains('bb-mem-batch-cb')) updateUI();
-    });
-
-    // 批量编辑下拉菜单
-    overlay.querySelector('#bb_batch_toggle')?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const dropdown = overlay.querySelector('.bb-batch-dropdown-content');
-        if (dropdown) dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
-    });
-
-    // 点击其他地方关闭下拉
-    document.addEventListener('click', (e) => {
-        const menu = overlay.querySelector('#bb_batch_menu');
-        if (menu && !menu.contains(e.target)) {
-            const dropdown = overlay.querySelector('.bb-batch-dropdown-content');
-            if (dropdown) dropdown.style.display = 'none';
-        }
     });
 
     overlay.querySelector('#bb_batch_select_all')?.addEventListener('click', (e) => {
@@ -455,6 +489,7 @@ function bindBatchEvents(overlay, chatId) {
             else await removeMemory(chatId, id);
         }
         showToast(`已删除 ${checked.length} 条`, 'success');
+        batchMode = false;
         await rerenderManagerList(overlay, chatId);
     });
 
@@ -467,6 +502,7 @@ function bindBatchEvents(overlay, chatId) {
             }
         }
         showToast(`已归档 ${checked.length} 条`, 'success');
+        batchMode = false;
         await rerenderManagerList(overlay, chatId);
     });
 
@@ -479,6 +515,7 @@ function bindBatchEvents(overlay, chatId) {
             }
         }
         showToast(`已模糊化 ${checked.length} 条`, 'success');
+        batchMode = false;
         await rerenderManagerList(overlay, chatId);
     });
 }
@@ -866,9 +903,21 @@ async function renderSlotsPanel(overlay, chatId) {
                 case 'name_desc': return b.name.localeCompare(a.name);
                 case 'count_desc': return (b.count || 0) - (a.count || 0);
                 case 'count_asc': return (a.count || 0) - (b.count || 0);
+                case 'created_desc': return (b.createdAt || 0) - (a.createdAt || 0);
+                case 'created_asc': return (a.createdAt || 0) - (b.createdAt || 0);
+                case 'updated_desc': return (b.updatedAt || 0) - (a.updatedAt || 0);
+                case 'updated_asc': return (a.updatedAt || 0) - (b.updatedAt || 0);
                 default: return 0;
             }
         });
+        // 当前使用的槽置顶
+        const settings = getSettings();
+        const currentSlot = settings.currentSlotName || 'default';
+        const currentIdx = slots.findIndex(s => s.name === currentSlot);
+        if (currentIdx > 0) {
+            const [current] = slots.splice(currentIdx, 1);
+            slots.unshift(current);
+        }
 
         slotsEl.innerHTML = `
             <div class="bb-slots-info">
@@ -890,6 +939,10 @@ async function renderSlotsPanel(overlay, chatId) {
                     <option value="name_desc" ${sortMode === 'name_desc' ? 'selected' : ''}>名称 Z-A</option>
                     <option value="count_desc" ${sortMode === 'count_desc' ? 'selected' : ''}>条数 ↓</option>
                     <option value="count_asc" ${sortMode === 'count_asc' ? 'selected' : ''}>条数 ↑</option>
+                    <option value="created_desc" ${sortMode === 'created_desc' ? 'selected' : ''}>创建时间 ↓</option>
+                    <option value="created_asc" ${sortMode === 'created_asc' ? 'selected' : ''}>创建时间 ↑</option>
+                    <option value="updated_desc" ${sortMode === 'updated_desc' ? 'selected' : ''}>更新时间 ↓</option>
+                    <option value="updated_asc" ${sortMode === 'updated_asc' ? 'selected' : ''}>更新时间 ↑</option>
                 </select>
             </div>
 
@@ -899,7 +952,7 @@ async function renderSlotsPanel(overlay, chatId) {
                         <div class="bb-slot-info">
                             <span class="bb-slot-name">
                                 <i class="fa-solid fa-floppy-disk"></i> ${escapeHtml(s.name)}
-                                ${s.name === 'default' ? '<span class="bb-slot-default-badge">默认</span>' : ''}
+                                ${s.name === 'default' ? '<span class="bb-slot-default-badge">当前</span>' : ''}
                             </span>
                             <span class="bb-slot-count">${s.count} 条记忆</span>
                         </div>
