@@ -47,6 +47,7 @@ import {
 } from './memory-maintainer.js';
 
 import { openAssistant } from './memory-assistant.js';
+import { openMemoryManager } from './memory-manager.js';
 import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot } from './memory-slots.js';
 
 // ═══ 常量 ═══
@@ -428,27 +429,14 @@ function bindSidebarEvents() {
         }
     });
 
-    // v5.3: 添加记忆
-    document.querySelector('#bb_memory_add_btn')?.addEventListener('click', () => {
-        const chatId = getChatId();
-        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
-        openAssistant(chatId, 'memories');
-    });
-
-    // v5.3: 记忆管家（浏览查看）
+    // v5.5: 记忆管家 → 完整管理器
     document.querySelector('#bb_memory_manage_btn')?.addEventListener('click', () => {
         const chatId = getChatId();
-        if (chatId) openAssistant(chatId, 'dashboard');
-    });
-
-    // v5.3: 记忆管理（编辑修改）
-    document.querySelector('#bb_memory_editor_btn')?.addEventListener('click', () => {
-        const chatId = getChatId();
         if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
-        openAssistant(chatId, 'memories');
+        openMemoryManager(chatId);
     });
 
-    // v5.3: 手动提取
+    // v5.5: 记忆维护
     document.querySelector('#bb_memory_extract_btn')?.addEventListener('click', async () => {
         const chatId = getChatId();
         if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
@@ -485,47 +473,7 @@ function bindSidebarEvents() {
         showToast(showing ? '已显示被隐藏的楼层' : '已隐藏已提取的楼层', 'info');
     });
 
-    // v5.3: 存档槽
-    document.querySelector('#bb_slot_save_btn')?.addEventListener('click', async () => {
-        const chatId = getChatId();
-        if (!chatId) return;
-        const charId = getCharacterId();
-        const slotName = document.querySelector('#bb_slot_selector')?.value || 'default';
-        await saveToSlot(charId, chatId, slotName);
-        showToast(`已保存到存档槽 "${slotName}"`, 'success');
-        refreshSlotUI();
-    });
-    document.querySelector('#bb_slot_load_btn')?.addEventListener('click', async () => {
-        const chatId = getChatId();
-        if (!chatId) return;
-        const charId = getCharacterId();
-        const slotName = document.querySelector('#bb_slot_selector')?.value || 'default';
-        const loaded = await loadFromSlot(charId, chatId, slotName);
-        showToast(`已加载存档槽 "${slotName}"`, 'success');
-        refreshSlotUI();
-        refreshSidebar();
-    });
-    document.querySelector('#bb_slot_create_btn')?.addEventListener('click', async () => {
-        const charId = getCharacterId();
-        const nameInput = document.querySelector('#bb_slot_new_name');
-        const slotName = nameInput?.value?.trim();
-        if (!slotName) { showToast('请输入存档名', 'warning'); return; }
-        await createEmptySlot(charId, slotName);
-        showToast(`已创建存档槽 "${slotName}"`, 'success');
-        if (nameInput) nameInput.value = '';
-        refreshSlotUI();
-    });
-    document.querySelector('#bb_slot_delete_btn')?.addEventListener('click', async () => {
-        const charId = getCharacterId();
-        const slotName = document.querySelector('#bb_slot_selector')?.value;
-        if (!slotName || slotName === 'default') { showToast('不能删除 default 槽', 'warning'); return; }
-        if (!confirm(`确定删除存档槽 "${slotName}"？此操作不可恢复。`)) return;
-        await deleteSlot(charId, slotName);
-        showToast(`已删除存档槽 "${slotName}"`, 'info');
-        refreshSlotUI();
-    });
-    document.querySelector('#bb_slot_selector')?.addEventListener('change', () => refreshSlotUI());
-
+    // v5.5: 记忆维护按钮
     document.querySelector('#bb_memory_maintenance_btn')?.addEventListener('click', async () => {
         const chatId = getChatId();
         if (!chatId) return;
@@ -569,30 +517,6 @@ function bindSidebarEvents() {
         showToast(`Reindex 完成：${memories.length} 条`, 'success');
     });
 
-    // 初始刷新存档 UI
-    refreshSlotUI();
-}
-
-// ═══ 存档槽 UI 辅助 ═══
-
-async function refreshSlotUI() {
-    try {
-        const charId = getCharacterId();
-        const slots = await listSlots(charId);
-        const selector = document.querySelector('#bb_slot_selector');
-        const info = document.querySelector('#bb_slot_info');
-        if (selector) {
-            const currentVal = selector.value;
-            selector.innerHTML = slots.map(s =>
-                `<option value="${escapeHtml(s.name)}"${s.name === currentVal ? ' selected' : ''}>${escapeHtml(s.name)} (${s.count || 0}条)</option>`
-            ).join('');
-        }
-        if (info) {
-            const chatId = getChatId();
-            const mems = chatId ? await getMemories(chatId) : [];
-            info.textContent = `${mems.length} 条记忆`;
-        }
-    } catch { /* ignore */ }
 }
 
 // ═══ 折叠设置面板 ═══
@@ -1206,7 +1130,7 @@ async function handleFloatingMenuAction(action) {
             break;
         }
         case 'open_manager': {
-            if (chatId) openAssistant(chatId, 'dashboard');
+            if (chatId) openMemoryManager(chatId);
             break;
         }
         case 'toggle_hit_list': {
