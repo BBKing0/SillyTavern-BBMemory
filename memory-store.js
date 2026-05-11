@@ -8,7 +8,7 @@
 import { normalizeNpcTier, normalizeItemTier } from './entity-tiers.js';
 
 // ═══ 模块名与存储键 ═══
-export const MODULE_NAME = 'bb_memory_v5';
+export const MODULE_NAME = 'bb_memory';
 
 const STORAGE_KEYS = {
     npc:      'bb_npc_chat_',
@@ -489,7 +489,7 @@ export async function recordHit(chatId, collection, id) {
                     entry.memoryTier = nextTier;
                     entry.lastPromotedAt = Date.now();
                     if (getSettings().debugLogging) {
-                        console.log("[BB-Memory] 升格: " + (entry.name || entry.title || entry.id) + " → " + (nextTier));
+                        console.log(`[BB-Memory] 升格: ${entry.name || entry.title || entry.id} → ${nextTier}`);
                     }
                 }
             }
@@ -546,7 +546,7 @@ async function checkDiversityLimit(chatId, collection, entry, targetTier) {
         }).length;
         if (count >= limit) {
             if (getSettings().debugLogging) {
-                console.log("[BB-Memory] 多样性限制: 标签\"" + (tag) + "\"已有 " + (count) + " 条 core，阻止升格");
+                console.log(`[BB-Memory] 多样性限制: 标签"${tag}"已有 ${count} 条 core，阻止升格`);
             }
             return false;
         }
@@ -588,7 +588,7 @@ export async function checkDemotions(chatId) {
                 changed = true;
                 results.demoted.push({ collection: name, id: item.id, from: 'core', to: 'stable' });
                 if (settings.debugLogging) {
-                    console.log("[BB-Memory] 降格: " + (item.name || item.title || item.id) + " core→stable (" + (roundsSinceHit) + "轮未命中)");
+                    console.log(`[BB-Memory] 降格: ${item.name || item.title || item.id} core→stable (${roundsSinceHit}轮未命中)`);
                 }
             } else if (item.memoryTier === 'stable' && roundsSinceHit >= DEMOTE_MISS_ROUNDS.stable) {
                 item.memoryTier = 'transient';
@@ -937,7 +937,7 @@ export async function migrateV4ToV5(chatId) {
     settings.migratedFromV4 = true;
     updateSettings({ migratedFromV4: true });
 
-    console.log("[BB-Memory] v4→v5 迁移完成: " + (npcList.length) + " NPC, " + (itemList.length) + " 物品, " + (timelineEntries.length) + " 时间线, " + (memoryEntries.length) + " 记忆");
+    console.log(`[BB-Memory] v4→v5 迁移完成: ${npcList.length} NPC, ${itemList.length} 物品, ${timelineEntries.length} 时间线, ${memoryEntries.length} 记忆`);
     return {
         migrated: true,
         npc: npcList.length,
@@ -1042,7 +1042,7 @@ export async function updateFactContent(chatId, id, newContent, options = {}) {
     entry.hiddenNotes.push({
         id: generateId(),
         type: 'note',
-        content: "[旧版本] " + (entry.content),
+        content: `[旧版本] ${entry.content}`,
         allowInjection: false,
         createdAt: Date.now(),
     });

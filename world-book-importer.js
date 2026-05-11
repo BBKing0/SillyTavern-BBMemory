@@ -90,11 +90,24 @@ export async function importWorldBookWithAI(chatId, jsonString) {
     // 拼接所有条目为上下文
     const contextText = entries.map((entry, i) => {
         const keys = (entry.key || []).join(', ');
-        const comment = entry.comment ? " (" + (entry.comment) + ")" : '';
-        return "[条目" + (i + 1) + (comment) + "]\\n关键词: " + (keys) + "\\n内容: " + (entry.content);
+        const comment = entry.comment ? ` (${entry.comment})` : '';
+        return `[条目${i + 1}${comment}]\n关键词: ${keys}\n内容: ${entry.content}`;
     }).join('\n\n');
 
-    const prompt = "你是一个世界书记忆整理助手。请将以下世界书内容整理为结构化记忆，分四类输出：\n\n规则：\n1. NPC角色 → {\"n\":\"角色名\",\"r\":\"身份\",\"p\":\"性格\",\"a\":\"外貌\",\"s\":\"状态\",\"l\":\"位置\",\"rt\":[],\"nt\":\"分级\",\"ic\":\"\",\"g\":[]}\n2. 物品 → {\"n\":\"物品名\",\"o\":\"持有者\",\"s\":\"held\",\"sig\":\"意义\",\"kp\":false,\"it\":\"分级\",\"g\":[]}\n3. 时间线 → {\"t\":\"时间\",\"e\":\"事件\",\"p\":[],\"l\":\"地点\",\"active\":false,\"imp\":\"影响\",\"g\":[]}\n4. 记忆 → {\"n\":\"标题\",\"tp\":\"fact\",\"m\":\"摘要\",\"c\":\"内容\",\"v\":\"\",\"s\":\"\",\"a\":\"\",\"i\":0.7,\"e\":0,\"st\":\"\",\"g\":[]}\n\n分级速查：NPC: core/important/minor/background | 物品: key/equipped/clue/consumable/background\n\n返回JSON对象（不要markdown代码块）：{\"npc\":[...],\"items\":[...],\"timeline\":[...],\"memories\":[...]}\n\n世界书内容：\n" + (contextText);
+    const prompt = `你是一个世界书记忆整理助手。请将以下世界书内容整理为结构化记忆，分四类输出：
+
+规则：
+1. NPC角色 → {"n":"角色名","r":"身份","p":"性格","a":"外貌","s":"状态","l":"位置","rt":[],"nt":"分级","ic":"","g":[]}
+2. 物品 → {"n":"物品名","o":"持有者","s":"held","sig":"意义","kp":false,"it":"分级","g":[]}
+3. 时间线 → {"t":"时间","e":"事件","p":[],"l":"地点","active":false,"imp":"影响","g":[]}
+4. 记忆 → {"n":"标题","tp":"fact","m":"摘要","c":"内容","v":"","s":"","a":"","i":0.7,"e":0,"st":"","g":[]}
+
+分级速查：NPC: core/important/minor/background | 物品: key/equipped/clue/consumable/background
+
+返回JSON对象（不要markdown代码块）：{"npc":[...],"items":[...],"timeline":[...],"memories":[...]}
+
+世界书内容：
+${contextText}`;
 
     let responseText;
     if (settings.autoGenMode === 'custom' && settings.autoGenEndpoint) {
@@ -105,7 +118,7 @@ export async function importWorldBookWithAI(chatId, jsonString) {
 
     // 解析
     let text = responseText.trim();
-    text = text.replace(/^"""(?:json)?\\s*/i, '').replace(/\\s*"""$/i, '');
+    text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
     const match = text.match(/\{[\s\S]*\}/);
     if (!match) throw new Error('AI 未返回有效的 JSON');
     const parsed = JSON.parse(match[0]);

@@ -51,7 +51,37 @@ export function closeAssistant() {
 // ═══════════════════════════════════════════════════════════
 
 function buildAssistantHTML(npc, items, timeline, memories) {
-    return "<div class=\"bb-assistant-header\" id=\"bb_assistant_drag_handle\">\n        <span>记忆管家</span>\n        <div class=\"bb-assistant-header-btns\">\n            <button id=\"bb_assistant_refresh\" title=\"刷新\">↻</button>\n            <button id=\"bb_assistant_close\" title=\"关闭\">×</button>\n        </div>\n    </div>\n    <div class=\"bb-assistant-tabs\">\n        <button class=\"bb-assistant-tab active\" data-tab=\"dashboard\">仪表盘</button>\n        <button class=\"bb-assistant-tab\" data-tab=\"npc\">NPC档案 <span class=\"bb-tab-count\">" + (npc.length) + "</span></button>\n        <button class=\"bb-assistant-tab\" data-tab=\"items\">物品栏 <span class=\"bb-tab-count\">" + (items.length) + "</span></button>\n        <button class=\"bb-assistant-tab\" data-tab=\"timeline\">时间线 <span class=\"bb-tab-count\">" + (timeline.length) + "</span></button>\n        <button class=\"bb-assistant-tab\" data-tab=\"memories\">记忆条目 <span class=\"bb-tab-count\">" + (memories.length) + "</span></button>\n    </div>\n    <div class=\"bb-assistant-panels\">\n        <div class=\"bb-assistant-panel\" data-panel=\"dashboard\" style=\"display:block\">\n            " + (buildDashboardHTML(npc, items, timeline, memories)) + "\n        </div>\n        <div class=\"bb-assistant-panel\" data-panel=\"npc\" style=\"display:none\">\n            " + (buildNpcBrowseHTML(npc)) + "\n        </div>\n        <div class=\"bb-assistant-panel\" data-panel=\"items\" style=\"display:none\">\n            " + (buildItemsBrowseHTML(items)) + "\n        </div>\n        <div class=\"bb-assistant-panel\" data-panel=\"timeline\" style=\"display:none\">\n            " + (buildTimelineBrowseHTML(timeline)) + "\n        </div>\n        <div class=\"bb-assistant-panel\" data-panel=\"memories\" style=\"display:none\">\n            " + (buildMemoriesBrowseHTML(memories)) + "\n        </div>\n    </div>";
+    return `<div class="bb-assistant-header" id="bb_assistant_drag_handle">
+        <span>记忆管家</span>
+        <div class="bb-assistant-header-btns">
+            <button id="bb_assistant_refresh" title="刷新">↻</button>
+            <button id="bb_assistant_close" title="关闭">×</button>
+        </div>
+    </div>
+    <div class="bb-assistant-tabs">
+        <button class="bb-assistant-tab active" data-tab="dashboard">仪表盘</button>
+        <button class="bb-assistant-tab" data-tab="npc">NPC档案 <span class="bb-tab-count">${npc.length}</span></button>
+        <button class="bb-assistant-tab" data-tab="items">物品栏 <span class="bb-tab-count">${items.length}</span></button>
+        <button class="bb-assistant-tab" data-tab="timeline">时间线 <span class="bb-tab-count">${timeline.length}</span></button>
+        <button class="bb-assistant-tab" data-tab="memories">记忆条目 <span class="bb-tab-count">${memories.length}</span></button>
+    </div>
+    <div class="bb-assistant-panels">
+        <div class="bb-assistant-panel" data-panel="dashboard" style="display:block">
+            ${buildDashboardHTML(npc, items, timeline, memories)}
+        </div>
+        <div class="bb-assistant-panel" data-panel="npc" style="display:none">
+            ${buildNpcBrowseHTML(npc)}
+        </div>
+        <div class="bb-assistant-panel" data-panel="items" style="display:none">
+            ${buildItemsBrowseHTML(items)}
+        </div>
+        <div class="bb-assistant-panel" data-panel="timeline" style="display:none">
+            ${buildTimelineBrowseHTML(timeline)}
+        </div>
+        <div class="bb-assistant-panel" data-panel="memories" style="display:none">
+            ${buildMemoriesBrowseHTML(memories)}
+        </div>
+    </div>`;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -69,11 +99,34 @@ function buildDashboardHTML(npc, items, timeline, memories) {
     const tlTiers = byTier(timeline);
     const memTiers = byTier(memories);
 
-    return "<div class=\"bb-dashboard\">\n        <div class=\"bb-dash-cards\">\n            <div class=\"bb-dash-card npc\">\n                <div class=\"bb-dash-num\">" + (npc.length) + "</div><div>NPC档案</div>\n                <div class=\"bb-dash-detail\">核心:" + (npcTiers.core) + " 稳定:" + (npcTiers.stable) + " 瞬时:" + (npcTiers.transient) + "</div>\n            </div>\n            <div class=\"bb-dash-card items\">\n                <div class=\"bb-dash-num\">" + (items.length) + "</div><div>物品</div>\n                <div class=\"bb-dash-detail\">核心:" + (itemTiers.core) + " 稳定:" + (itemTiers.stable) + " 瞬时:" + (itemTiers.transient) + "</div>\n            </div>\n            <div class=\"bb-dash-card timeline\">\n                <div class=\"bb-dash-num\">" + (timeline.length) + "</div><div>时间线</div>\n                <div class=\"bb-dash-detail\">进行中:" + (timeline.filter(t=>t.isActive).length) + " 已结束:" + (timeline.filter(t=>!t.isActive).length) + "</div>\n            </div>\n            <div class=\"bb-dash-card memories\">\n                <div class=\"bb-dash-num\">" + (memories.length) + "</div><div>记忆条目</div>\n                <div class=\"bb-dash-detail\">核心:" + (memTiers.core) + " 稳定:" + (memTiers.stable) + " 瞬时:" + (memTiers.transient) + "</div>\n            </div>\n        </div>\n        <div class=\"bb-dash-recent\">\n            <h4>最近记忆</h4>\n            " + (memories.slice(-5).reverse().map(m =>)<div class="bb-dash-mem-item">
+    return `<div class="bb-dashboard">
+        <div class="bb-dash-cards">
+            <div class="bb-dash-card npc">
+                <div class="bb-dash-num">${npc.length}</div><div>NPC档案</div>
+                <div class="bb-dash-detail">核心:${npcTiers.core} 稳定:${npcTiers.stable} 瞬时:${npcTiers.transient}</div>
+            </div>
+            <div class="bb-dash-card items">
+                <div class="bb-dash-num">${items.length}</div><div>物品</div>
+                <div class="bb-dash-detail">核心:${itemTiers.core} 稳定:${itemTiers.stable} 瞬时:${itemTiers.transient}</div>
+            </div>
+            <div class="bb-dash-card timeline">
+                <div class="bb-dash-num">${timeline.length}</div><div>时间线</div>
+                <div class="bb-dash-detail">进行中:${timeline.filter(t=>t.isActive).length} 已结束:${timeline.filter(t=>!t.isActive).length}</div>
+            </div>
+            <div class="bb-dash-card memories">
+                <div class="bb-dash-num">${memories.length}</div><div>记忆条目</div>
+                <div class="bb-dash-detail">核心:${memTiers.core} 稳定:${memTiers.stable} 瞬时:${memTiers.transient}</div>
+            </div>
+        </div>
+        <div class="bb-dash-recent">
+            <h4>最近记忆</h4>
+            ${memories.slice(-5).reverse().map(m => `<div class="bb-dash-mem-item">
                 <span class="bb-dash-mem-type" style="color:${MEMORY_TYPES[m.type]?.color||'#999'}">${MEMORY_TYPES[m.type]?.label||m.type}</span>
                 <span>${escapeHtml((m.title || m.content || '').slice(0, 60))}</span>
                 <span class="bb-dash-mem-tier">${m.memoryTier}</span>
-            </div>").join('')}\n        </div>\n    </div>";
+            </div>`).join('')}
+        </div>
+    </div>`;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -82,11 +135,37 @@ function buildDashboardHTML(npc, items, timeline, memories) {
 
 function buildNpcBrowseHTML(npc) {
     const tierFilter = ['core', 'important', 'minor', 'background'];
-    return "<div class=\"bb-browse-controls\">\n        <div class=\"bb-browse-filters\">\n            " + (tierFilter.map(t =>)<button class="bb-browse-filter-btn" data-filter="${t}">${NPC_TIERS[t]?.label || t}</button>").join('')}\n            <button class=\"bb-browse-filter-btn active\" data-filter=\"all\">全部</button>\n        </div>\n        <input type=\"text\" class=\"bb-browse-search\" placeholder=\"搜索NPC...\" id=\"bb_npc_search\">\n    </div>\n    <div class=\"bb-browse-list\" id=\"bb_npc_list\">\n        " + (npc.map(n => buildNpcItemHTML(n)).join('')) + "\n    </div>";
+    return `<div class="bb-browse-controls">
+        <div class="bb-browse-filters">
+            ${tierFilter.map(t => `<button class="bb-browse-filter-btn" data-filter="${t}">${NPC_TIERS[t]?.label || t}</button>`).join('')}
+            <button class="bb-browse-filter-btn active" data-filter="all">全部</button>
+        </div>
+        <input type="text" class="bb-browse-search" placeholder="搜索NPC..." id="bb_npc_search">
+    </div>
+    <div class="bb-browse-list" id="bb_npc_list">
+        ${npc.map(n => buildNpcItemHTML(n)).join('')}
+    </div>`;
 }
 
 function buildNpcItemHTML(n) {
-    return "<div class=\"bb-browse-item npc-item\" data-id=\"" + (n.id) + "\" data-tier=\"" + (n.npcTier) + "\">\n        <div class=\"bb-browse-item-header\">\n            <span class=\"bb-tier-badge\" style=\"background:" + (NPC_TIERS[n.npcTier]?.color||'#999') + "\">" + (NPC_TIERS[n.npcTier]?.label||n.npcTier) + "</span>\n            <strong>" + (escapeHtml(n.name)) + "</strong>\n            <span class=\"bb-mtier-badge\">" + (n.memoryTier) + "</span>\n        </div>\n        <div class=\"bb-browse-item-body\">\n            <div>身份：" + (escapeHtml(n.role || '?')) + " | 状态：" + (escapeHtml(n.status || '?')) + " | 位置：" + (escapeHtml(n.location || '?')) + "</div>\n            <div>性格：" + (escapeHtml(n.personality || '?')) + "</div>\n            <div>外貌：" + (escapeHtml(n.appearance || '?')) + "</div>\n            " + (n.relationships?.length ?)<div>关系：${n.relationships.map(r => String(r.name) + "(" + (r.type) + ")").join(', ')}</div>" : ''}\n            " + (n.indexCard ?)<div class="bb-index-card">索引卡：${escapeHtml(n.indexCard)}</div>" : ''}\n        </div>\n        <div class=\"bb-browse-item-actions\">\n            <button class=\"bb-item-btn edit\" data-action=\"edit\">编辑</button>\n            <button class=\"bb-item-btn delete\" data-action=\"delete\">删除</button>\n        </div>\n    </div>";
+    return `<div class="bb-browse-item npc-item" data-id="${n.id}" data-tier="${n.npcTier}">
+        <div class="bb-browse-item-header">
+            <span class="bb-tier-badge" style="background:${NPC_TIERS[n.npcTier]?.color||'#999'}">${NPC_TIERS[n.npcTier]?.label||n.npcTier}</span>
+            <strong>${escapeHtml(n.name)}</strong>
+            <span class="bb-mtier-badge">${n.memoryTier}</span>
+        </div>
+        <div class="bb-browse-item-body">
+            <div>身份：${escapeHtml(n.role || '?')} | 状态：${escapeHtml(n.status || '?')} | 位置：${escapeHtml(n.location || '?')}</div>
+            <div>性格：${escapeHtml(n.personality || '?')}</div>
+            <div>外貌：${escapeHtml(n.appearance || '?')}</div>
+            ${n.relationships?.length ? `<div>关系：${n.relationships.map(r => `${r.name}(${r.type})`).join(', ')}</div>` : ''}
+            ${n.indexCard ? `<div class="bb-index-card">索引卡：${escapeHtml(n.indexCard)}</div>` : ''}
+        </div>
+        <div class="bb-browse-item-actions">
+            <button class="bb-item-btn edit" data-action="edit">编辑</button>
+            <button class="bb-item-btn delete" data-action="delete">删除</button>
+        </div>
+    </div>`;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -95,12 +174,36 @@ function buildNpcItemHTML(n) {
 
 function buildItemsBrowseHTML(items) {
     const tierFilter = ['key', 'equipped', 'clue', 'consumable', 'background'];
-    return "<div class=\"bb-browse-controls\">\n        <div class=\"bb-browse-filters\">\n            " + (tierFilter.map(t =>)<button class="bb-browse-filter-btn" data-filter="${t}">${ITEM_TIERS[t]?.label || t}</button>").join('')}\n            <button class=\"bb-browse-filter-btn active\" data-filter=\"all\">全部</button>\n        </div>\n        <input type=\"text\" class=\"bb-browse-search\" placeholder=\"搜索物品...\" id=\"bb_item_search\">\n    </div>\n    <div class=\"bb-browse-list\" id=\"bb_item_list\">\n        " + (items.map(i => buildItemHTML(i)).join('')) + "\n    </div>";
+    return `<div class="bb-browse-controls">
+        <div class="bb-browse-filters">
+            ${tierFilter.map(t => `<button class="bb-browse-filter-btn" data-filter="${t}">${ITEM_TIERS[t]?.label || t}</button>`).join('')}
+            <button class="bb-browse-filter-btn active" data-filter="all">全部</button>
+        </div>
+        <input type="text" class="bb-browse-search" placeholder="搜索物品..." id="bb_item_search">
+    </div>
+    <div class="bb-browse-list" id="bb_item_list">
+        ${items.map(i => buildItemHTML(i)).join('')}
+    </div>`;
 }
 
 function buildItemHTML(i) {
     const statusLabel = { held: '持有中', used: '已使用', lost: '已失去', destroyed: '已销毁' }[i.status] || i.status;
-    return "<div class=\"bb-browse-item item-item\" data-id=\"" + (i.id) + "\" data-tier=\"" + (i.itemTier) + "\">\n        <div class=\"bb-browse-item-header\">\n            <span class=\"bb-tier-badge\" style=\"background:" + (ITEM_TIERS[i.itemTier]?.color||'#999') + "\">" + (ITEM_TIERS[i.itemTier]?.label||i.itemTier) + "</span>\n            <strong>" + (escapeHtml(i.name)) + "</strong>\n            <span class=\"bb-status-badge\">" + (statusLabel) + "</span>\n            " + (i.keepPermanent ? '<span class="bb-kp-badge">永久</span>' : '') + "\n            <span class=\"bb-mtier-badge\">" + (i.memoryTier) + "</span>\n        </div>\n        <div class=\"bb-browse-item-body\">\n            <div>持有者：" + (escapeHtml(i.owner || '?')) + " | 意义：" + (escapeHtml((i.significance || '').slice(0, 60))) + "</div>\n        </div>\n        <div class=\"bb-browse-item-actions\">\n            <button class=\"bb-item-btn edit\" data-action=\"edit\">编辑</button>\n            <button class=\"bb-item-btn delete\" data-action=\"delete\">删除</button>\n        </div>\n    </div>";
+    return `<div class="bb-browse-item item-item" data-id="${i.id}" data-tier="${i.itemTier}">
+        <div class="bb-browse-item-header">
+            <span class="bb-tier-badge" style="background:${ITEM_TIERS[i.itemTier]?.color||'#999'}">${ITEM_TIERS[i.itemTier]?.label||i.itemTier}</span>
+            <strong>${escapeHtml(i.name)}</strong>
+            <span class="bb-status-badge">${statusLabel}</span>
+            ${i.keepPermanent ? '<span class="bb-kp-badge">永久</span>' : ''}
+            <span class="bb-mtier-badge">${i.memoryTier}</span>
+        </div>
+        <div class="bb-browse-item-body">
+            <div>持有者：${escapeHtml(i.owner || '?')} | 意义：${escapeHtml((i.significance || '').slice(0, 60))}</div>
+        </div>
+        <div class="bb-browse-item-actions">
+            <button class="bb-item-btn edit" data-action="edit">编辑</button>
+            <button class="bb-item-btn delete" data-action="delete">删除</button>
+        </div>
+    </div>`;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -110,12 +213,43 @@ function buildItemHTML(i) {
 function buildTimelineBrowseHTML(timeline) {
     const statuses = ['ongoing', 'ended', 'foreshadow'];
     const statusLabels = { ongoing: '进行中', ended: '已结束', foreshadow: '伏笔' };
-    return "<div class=\"bb-browse-controls\">\n        <div class=\"bb-browse-filters\">\n            " + (statuses.map(s =>)<button class="bb-browse-filter-btn" data-filter="${s}">${statusLabels[s]}</button>").join('')}\n            <button class=\"bb-browse-filter-btn active\" data-filter=\"all\">全部</button>\n        </div>\n        <select class=\"bb-browse-sort\" id=\"bb_timeline_sort\">\n            <option value=\"story_asc\">按故事时间升序</option>\n            <option value=\"story_desc\">按故事时间降序</option>\n            <option value=\"created_desc\">按创建时间降序</option>\n        </select>\n    </div>\n    <div class=\"bb-browse-list\" id=\"bb_timeline_list\">\n        " + (timeline.map(t => buildTimelineItemHTML(t)).join('')) + "\n    </div>";
+    return `<div class="bb-browse-controls">
+        <div class="bb-browse-filters">
+            ${statuses.map(s => `<button class="bb-browse-filter-btn" data-filter="${s}">${statusLabels[s]}</button>`).join('')}
+            <button class="bb-browse-filter-btn active" data-filter="all">全部</button>
+        </div>
+        <select class="bb-browse-sort" id="bb_timeline_sort">
+            <option value="story_asc">按故事时间升序</option>
+            <option value="story_desc">按故事时间降序</option>
+            <option value="created_desc">按创建时间降序</option>
+        </select>
+    </div>
+    <div class="bb-browse-list" id="bb_timeline_list">
+        ${timeline.map(t => buildTimelineItemHTML(t)).join('')}
+    </div>`;
 }
 
 function buildTimelineItemHTML(t) {
     const statusLabel = { ongoing: '进行中', ended: '已结束', foreshadow: '伏笔' }[t.status] || t.status;
-    return "<div class=\"bb-browse-item tl-item\" data-id=\"" + (t.id) + "\" data-status=\"" + (t.status) + "\">\n        <div class=\"bb-browse-item-header\">\n            <span class=\"bb-status-badge " + (t.status) + "\">" + (statusLabel) + "</span>\n            <strong>" + (escapeHtml(t.event)) + "</strong>\n            " + (t.storyTime ?)<span class="bb-time-badge">${escapeHtml(t.storyTime)}</span>" : ''}\n            <span class=\"bb-mtier-badge\">" + (t.memoryTier) + "</span>\n        </div>\n        <div class=\"bb-browse-item-body\">\n            <div>" + (escapeHtml(t.summary)) + "</div>\n            " + (t.participants?.length ?)<div>参与者：${t.participants.join(', ')}</div>" : ''}\n            " + (t.location ?)<div>地点：${escapeHtml(t.location)}</div>" : ''}\n            " + (t.impact ?)<div>影响：${escapeHtml(t.impact)}</div>" : ''}\n        </div>\n        <div class=\"bb-browse-item-actions\">\n            <button class=\"bb-item-btn edit\" data-action=\"edit\">编辑</button>\n            <button class=\"bb-item-btn toggle-active\" data-action=\"toggle\">" + (t.isActive ? '结束' : '恢复') + "</button>\n            <button class=\"bb-item-btn delete\" data-action=\"delete\">删除</button>\n        </div>\n    </div>";
+    return `<div class="bb-browse-item tl-item" data-id="${t.id}" data-status="${t.status}">
+        <div class="bb-browse-item-header">
+            <span class="bb-status-badge ${t.status}">${statusLabel}</span>
+            <strong>${escapeHtml(t.event)}</strong>
+            ${t.storyTime ? `<span class="bb-time-badge">${escapeHtml(t.storyTime)}</span>` : ''}
+            <span class="bb-mtier-badge">${t.memoryTier}</span>
+        </div>
+        <div class="bb-browse-item-body">
+            <div>${escapeHtml(t.summary)}</div>
+            ${t.participants?.length ? `<div>参与者：${t.participants.join(', ')}</div>` : ''}
+            ${t.location ? `<div>地点：${escapeHtml(t.location)}</div>` : ''}
+            ${t.impact ? `<div>影响：${escapeHtml(t.impact)}</div>` : ''}
+        </div>
+        <div class="bb-browse-item-actions">
+            <button class="bb-item-btn edit" data-action="edit">编辑</button>
+            <button class="bb-item-btn toggle-active" data-action="toggle">${t.isActive ? '结束' : '恢复'}</button>
+            <button class="bb-item-btn delete" data-action="delete">删除</button>
+        </div>
+    </div>`;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -124,12 +258,46 @@ function buildTimelineItemHTML(t) {
 
 function buildMemoriesBrowseHTML(memories) {
     const types = Object.values(MEMORY_TYPES);
-    return "<div class=\"bb-browse-controls\">\n        <div class=\"bb-browse-filters\">\n            " + (types.map(t =>)<button class="bb-browse-filter-btn" data-filter="${t.id}">${t.label}</button>").join('')}\n            <button class=\"bb-browse-filter-btn active\" data-filter=\"all\">全部</button>\n        </div>\n        <input type=\"text\" class=\"bb-browse-search\" placeholder=\"搜索记忆...\" id=\"bb_mem_search\">\n        <select class=\"bb-browse-sort\" id=\"bb_mem_sort\">\n            <option value=\"created_desc\">创建时间↓</option>\n            <option value=\"created_asc\">创建时间↑</option>\n            <option value=\"story_desc\">故事时间↓</option>\n            <option value=\"story_asc\">故事时间↑</option>\n            <option value=\"importance_desc\">重要性↓</option>\n        </select>\n    </div>\n    <div class=\"bb-browse-list\" id=\"bb_mem_list\">\n        " + (memories.map(m => buildMemoryItemHTML(m)).join('')) + "\n    </div>";
+    return `<div class="bb-browse-controls">
+        <div class="bb-browse-filters">
+            ${types.map(t => `<button class="bb-browse-filter-btn" data-filter="${t.id}">${t.label}</button>`).join('')}
+            <button class="bb-browse-filter-btn active" data-filter="all">全部</button>
+        </div>
+        <input type="text" class="bb-browse-search" placeholder="搜索记忆..." id="bb_mem_search">
+        <select class="bb-browse-sort" id="bb_mem_sort">
+            <option value="created_desc">创建时间↓</option>
+            <option value="created_asc">创建时间↑</option>
+            <option value="story_desc">故事时间↓</option>
+            <option value="story_asc">故事时间↑</option>
+            <option value="importance_desc">重要性↓</option>
+        </select>
+    </div>
+    <div class="bb-browse-list" id="bb_mem_list">
+        ${memories.map(m => buildMemoryItemHTML(m)).join('')}
+    </div>`;
 }
 
 function buildMemoryItemHTML(m) {
     const typeDef = MEMORY_TYPES[m.type];
-    return "<div class=\"bb-browse-item mem-item\" data-id=\"" + (m.id) + "\" data-type=\"" + (m.type) + "\">\n        <div class=\"bb-browse-item-header\">\n            <span class=\"bb-type-badge\" style=\"color:" + (typeDef?.color||'#999') + "\">" + (typeDef?.label||m.type) + "</span>\n            <strong>" + (escapeHtml(m.title || m.summary?.slice(0, 30) || '(无标题)')) + "</strong>\n            <span class=\"bb-mtier-badge\">" + (m.memoryTier) + "</span>\n            <span class=\"bb-imp-badge\">重要度:" + ((m.importance*100).toFixed(0)) + "%</span>\n        </div>\n        <div class=\"bb-browse-item-body\">\n            <div>" + (escapeHtml(m.summary || m.content?.slice(0, 100) || '')) + "</div>\n            " + (m.verbatim ?)<div class="bb-verbatim">原话：「${escapeHtml(m.verbatim)}」</div>" : ''}\n            " + (m.subject ?)<span class="bb-subject">主体:${escapeHtml(m.subject)}</span>" : ''}\n            " + (m.target ?)<span class="bb-target">→ ${escapeHtml(m.target)}</span>" : ''}\n            " + (m.storyTime ?)<span class="bb-time-badge">${escapeHtml(m.storyTime)}</span>" : ''}\n        </div>\n        <div class=\"bb-browse-item-actions\">\n            <button class=\"bb-item-btn edit\" data-action=\"edit\">编辑</button>\n            <button class=\"bb-item-btn delete\" data-action=\"delete\">删除</button>\n        </div>\n    </div>";
+    return `<div class="bb-browse-item mem-item" data-id="${m.id}" data-type="${m.type}">
+        <div class="bb-browse-item-header">
+            <span class="bb-type-badge" style="color:${typeDef?.color||'#999'}">${typeDef?.label||m.type}</span>
+            <strong>${escapeHtml(m.title || m.summary?.slice(0, 30) || '(无标题)')}</strong>
+            <span class="bb-mtier-badge">${m.memoryTier}</span>
+            <span class="bb-imp-badge">重要度:${(m.importance*100).toFixed(0)}%</span>
+        </div>
+        <div class="bb-browse-item-body">
+            <div>${escapeHtml(m.summary || m.content?.slice(0, 100) || '')}</div>
+            ${m.verbatim ? `<div class="bb-verbatim">原话：「${escapeHtml(m.verbatim)}」</div>` : ''}
+            ${m.subject ? `<span class="bb-subject">主体:${escapeHtml(m.subject)}</span>` : ''}
+            ${m.target ? `<span class="bb-target">→ ${escapeHtml(m.target)}</span>` : ''}
+            ${m.storyTime ? `<span class="bb-time-badge">${escapeHtml(m.storyTime)}</span>` : ''}
+        </div>
+        <div class="bb-browse-item-actions">
+            <button class="bb-item-btn edit" data-action="edit">编辑</button>
+            <button class="bb-item-btn delete" data-action="delete">删除</button>
+        </div>
+    </div>`;
 }
 
 // ═══════════════════════════════════════════════════════════

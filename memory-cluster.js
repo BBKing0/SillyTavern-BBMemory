@@ -32,7 +32,7 @@ function buildClusterPrompt(childMemories, tagName) {
         const m = childMemories[i];
         const title = m.title || '(无标题)';
         const summary = m.summary || m.content?.slice(0, 80) || '';
-        lines.push(String(i + 1) + ". [" + (title) + "] " + (summary));
+        lines.push(`${i + 1}. [${title}] ${summary}`);
     }
     lines.push('');
     lines.push('短码对照：t=cognitiveType p=categoryPath n=title c=content m=summary v=verbatim g=tags s=subject a=target i=importance e=emotionalWeight');
@@ -60,7 +60,7 @@ async function createClusterSummary(chatId, tagName, childMemories) {
     // 解析 AI 返回的单条记忆
     const parsed = parseAiResponse(responseText);
     if (!parsed.length) {
-        console.warn("[BB-Memory] 聚类「" + (tagName) + "」失败：AI 未返回有效记忆");
+        console.warn(`[BB-Memory] 聚类「${tagName}」失败：AI 未返回有效记忆`);
         return null;
     }
 
@@ -74,8 +74,8 @@ async function createClusterSummary(chatId, tagName, childMemories) {
 
     const entry = await addMemory(chatId, mem.content || '', mem.cognitiveType || 'episode', 'auto', {
         categoryPath: mem.categoryPath || 'episode.event',
-        title: mem.title || "「" + (tagName) + "」合集",
-        summary: mem.summary || "关于「" + (tagName) + "」的 " + (childMemories.length) + " 条记忆合集",
+        title: mem.title || `「${tagName}」合集`,
+        summary: mem.summary || `关于「${tagName}」的 ${childMemories.length} 条记忆合集`,
         verbatim: mem.verbatim || '',
         tags: [{ name: tagName, weight: 1.0 }],
         importance: Math.max(0.6, avgImportance),
@@ -97,7 +97,7 @@ async function createClusterSummary(chatId, tagName, childMemories) {
         });
     }
 
-    console.log("[BB-Memory] 标签聚类完成: 「" + (tagName) + "」" + (childIds.length) + " 条 → 合集 #" + (entry.id));
+    console.log(`[BB-Memory] 标签聚类完成: 「${tagName}」${childIds.length} 条 → 合集 #${entry.id}`);
     return entry;
 }
 
@@ -136,7 +136,7 @@ async function updateClusterSummary(chatId, clusterMem, newChildren) {
         });
     }
 
-    console.log("[BB-Memory] 更新聚类合集「" + (tagName) + "」: +" + (newChildren.length) + " 条子记忆");
+    console.log(`[BB-Memory] 更新聚类合集「${tagName}」: +${newChildren.length} 条子记忆`);
 }
 
 /**
@@ -182,7 +182,7 @@ export async function checkAndClusterByTags(chatId, onProgress) {
     }
 
     if (!triggers.length) {
-        return { clustered: 0, updated: 0, summary: "没有标签达到阈值 (≥" + (threshold) + ")" };
+        return { clustered: 0, updated: 0, summary: `没有标签达到阈值 (≥${threshold})` };
     }
 
     let clustered = 0;
@@ -210,8 +210,8 @@ export async function checkAndClusterByTags(chatId, onProgress) {
     }
 
     const parts = [];
-    if (clustered > 0) parts.push("新建 " + (clustered) + " 个合集");
-    if (updated > 0) parts.push("更新 " + (updated) + " 个合集");
+    if (clustered > 0) parts.push(`新建 ${clustered} 个合集`);
+    if (updated > 0) parts.push(`更新 ${updated} 个合集`);
     const summary = parts.join('，') || '无变化';
     return { clustered, updated, summary };
 }
@@ -225,7 +225,7 @@ export function scheduleClusterCheck(chatId) {
         try {
             const result = await checkAndClusterByTags(chatId);
             if (result.clustered > 0 || result.updated > 0) {
-                console.log("[BB-Memory] 自动聚类: " + (result.summary));
+                console.log(`[BB-Memory] 自动聚类: ${result.summary}`);
             }
         } catch (e) {
             console.warn('[BB-Memory] 自动聚类检查失败:', e.message);
