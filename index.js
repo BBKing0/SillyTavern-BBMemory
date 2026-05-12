@@ -652,7 +652,7 @@ function showMaintenancePopup(chatId, result) {
 
     const panel = document.createElement('div');
     panel.className = 'bb-maint-panel';
-    panel.style.cssText = 'display:flex;flex-direction:column;overflow:hidden;';
+    panel.style.cssText = 'display:flex;flex-direction:column;max-height:80vh;';
 
     // Header
     const header = document.createElement('div');
@@ -687,7 +687,7 @@ function showMaintenancePopup(chatId, result) {
     // Body
     const body = document.createElement('div');
     body.className = 'bb-maint-body';
-    body.style.cssText = 'flex:1;overflow-y:auto;padding:12px 20px;';
+    body.style.cssText = 'flex:1;overflow-y:auto;padding:12px 20px;min-height:0;';
     panel.appendChild(body);
 
     overlay.appendChild(panel);
