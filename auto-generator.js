@@ -609,6 +609,107 @@ export async function onMessageReceived(_messageIndex) {
     }, delay);
 }
 
+// ═══ 合并提取（测试功能）═══
+
+const MERGED_EXTRACTION_PROMPT = `你是一个记忆提取助手。从对话中提取结构化信息，分四类输出。
+
+## 1. NPC角色提取
+只提取有名字或明确身份的角色。路人 nt=background；有剧情的 nt=minor；重要配角 nt=important；核心 nt=core。
+字段：n(姓名), r(身份), p(性格), a(外貌), s(状态), l(位置), rt(关系数组[{"n":"名","r":"关系类型","a":"态度"}]), nt(分级), ic(索引卡), g(标签数组)
+若无新角色，返回空数组。
+
+## 2. 物品提取
+提取有意义的物品。消耗品 it=consumable；关键剧情物 it=key；线索 it=clue；装备 it=equipped；背景 it=background。
+字段：n(物品名), o(持有者), s(状态:held/used/lost/destroyed), sig(意义), kp(永久保留true/false), it(分级), g(标签数组)
+若无新物品，返回空数组。
+
+## 3. 时间线提取
+检测故事节点：地点变化、关系质变、重大决策、战斗、新角色、章节转换。active=true 进行中可更新。
+字段：t(故事时间), e(事件摘要), p(参与者数组), l(地点), active(true/false), imp(影响), g(标签数组)
+若无事件，返回空数组。
+
+## 4. 记忆提取
+提取重要的长期记忆。类型：event(事件)/emotion(情感)/habit(习惯)/fact(事实)。只提取值得记住的。
+字段：n(标题3-8字), tp(类型), m(摘要10-20字), c(完整内容), v(重要原话), s(主体), a(目标), i(重要性0-1), e(情感强度0-1), st(故事时间), g(标签数组)
+若无值得记忆的，返回空数组。
+
+## 输出格式
+返回纯JSON对象（不要markdown代码块）：
+{"npc":[], "items":[], "timeline":[], "memories":[]}
+
+[当前对话]
+用户: {{userMessage}}
+角色: {{aiMessage}}`;
+
+function parseMergedResponse(responseText) {
+    if (!responseText || !responseText.trim()) {
+        return { npc: [], items: [], timeline: [], memories: [] };
+    }
+    let text = responseText.trim();
+    text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return { npc: [], items: [], timeline: [], memories: [] };
+    try {
+        const parsed = JSON.parse(match[0]);
+        return {
+            npc: parseNpcResponse(JSON.stringify(parsed.npc || [])),
+            items: parseItemResponse(JSON.stringify(parsed.items || [])),
+            timeline: parseTimelineResponse(JSON.stringify(parsed.timeline || [])),
+            memories: parseMemoryResponse(JSON.stringify(parsed.memories || [])),
+        };
+    } catch (e) {
+        if (getSettings().debugLogging) console.warn('[BB-Memory] 合并响应解析失败:', e.message);
+        return { npc: [], items: [], timeline: [], memories: [] };
+    }
+}
+
+async function extractMergedStage(chatId, userMessage, aiMessage) {
+    const prompt = MERGED_EXTRACTION_PROMPT
+        .replace('{{userMessage}}', userMessage || '(无)')
+        .replace('{{aiMessage}}', cleanAiMessage(aiMessage) || '(无)');
+    try {
+        const responseText = await callApi(prompt);
+        const results = parseMergedResponse(responseText);
+        let total = 0;
+        for (const npc of results.npc) { await upsertNpcProfile(chatId, npc); total++; }
+        for (const item of results.items) { await upsertItem(chatId, item); total++; }
+        for (const tl of results.timeline) { await upsertTimelineEntry(chatId, tl); total++; }
+        const settings = getSettings();
+        const maxPerExchange = settings.maxMemoriesPerExchange ?? 3;
+        const limited = results.memories.slice(0, maxPerExchange);
+        const existingMemories = await getMemories(chatId);
+        const activeMemories = existingMemories.filter(m => m.embedding);
+        for (const mem of limited) {
+            const embedding = settings.embeddingEnabled && settings.embeddingEndpoint
+                ? await embedMemoryEntry(mem)
+                : null;
+            if (settings.dedupEnabled && embedding) {
+                const similar = findMostSimilarMemory(embedding, activeMemories);
+                if (similar) {
+                    if (similar.similarity >= getDedupConfig().mergeThreshold) {
+                        await updateMemory(chatId, similar.memory.id, mergeMemoryFields(similar.memory, mem));
+                        continue;
+                    } else if (similar.similarity >= getDedupConfig().reduceThreshold) {
+                        mem.importance = Math.max(0.3, (mem.importance || 0.5) - 0.15);
+                    }
+                }
+            }
+            await addMemory(chatId, { ...mem, embedding });
+            if (embedding) activeMemories.push({ embedding });
+            total++;
+        }
+        if (total > 0 && getSettings().debugLogging) {
+            console.log(`[BB-Memory] 合并提取: ${total} 条 (NPC${results.npc.length}/物品${results.items.length}/时间线${results.timeline.length}/记忆${limited.length})`);
+        }
+        return total;
+    } catch (e) {
+        console.warn('[BB-Memory] 合并提取失败:', e.message);
+        return 0;
+    }
+}
+
+// ═══ 分阶段提取 ═══
+
 async function processLatestExchange(chatId) {
     // 先同步可见性，将超出窗口的旧消息标记为插件隐藏
     await syncMessageVisibility();
@@ -624,10 +725,6 @@ async function processLatestExchange(chatId) {
     // 检查已处理
     if (await isExchangeProcessed(chatId, oldest.hash)) return;
 
-    if (confirmMode !== 'active') {
-        hideExchange(oldest.userIndex, oldest.aiIndex);
-    }
-
     try {
         if (confirmMode === 'active') {
             // Active 模式：解析但不保存
@@ -637,6 +734,11 @@ async function processLatestExchange(chatId) {
             if (candidates.length > 0) {
                 pendingAutoCandidates.push(...candidates.map(c => ({ ...c, _chatId: chatId })));
             }
+        } else if (settings.extractionMode === 'merged') {
+            // 合并模式：1次API调用提取全部四类
+            reportProgress('merged', 0, 1);
+            await extractMergedStage(chatId, oldest.userMessage, oldest.aiMessage);
+            reportProgress('merged', 1, 1);
         } else {
             // Semi/Auto 模式：四阶段提取
             reportProgress('npc', 0, 4);
@@ -661,9 +763,8 @@ async function processLatestExchange(chatId) {
 
     await markExchangeExtracted(oldest.aiIndex, oldest.hash);
 
-    if (confirmMode === 'active') {
-        hideExchange(oldest.userIndex, oldest.aiIndex);
-    }
+    // 提取完成后隐藏消息（统一放在提取之后）
+    hideExchange(oldest.userIndex, oldest.aiIndex);
 
     setTimeout(() => refreshExtractionMarkers(), 200);
 }

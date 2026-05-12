@@ -38,7 +38,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     maxMemoriesPerExchange: 3,
     extractionConfirmMode: 'semi', // 'active' | 'semi' | 'auto'
     activeConfirmStyle: 'popup',   // 'popup' | 'toast'
-    contextWindowExchanges: 5,
+    contextWindowExchanges: 3,
+    extractionMode: 'staged',        // 'staged' | 'merged'
     // Embedding
     embeddingEnabled: false,
     embeddingEndpoint: '',

@@ -164,12 +164,11 @@ export async function syncMessageVisibility(windowOverride) {
         const msg = chat[i];
         if (msg.is_system) continue;
 
-        if (!msg.is_hidden) {
-            msg.is_hidden = true;
-            msg._bbmem_hideSource = 'plugin';
+        if (!msg.is_hidden && !msg._bbmem_extracted) {
+            msg._bbmem_pendingExtraction = true;
             hiddenCount++;
             changed = true;
-        } else if (!msg._bbmem_hideSource) {
+        } else if (msg.is_hidden && !msg._bbmem_hideSource) {
             msg._bbmem_hideSource = 'user';
             changed = true;
         }
@@ -224,8 +223,8 @@ export async function getExtractableExchanges() {
 
         // 只关注 AI 消息
         if (msg.is_user) continue;
-        // 只处理插件自动隐藏的
-        if (msg._bbmem_hideSource !== 'plugin') continue;
+        // 只处理标记为待提取的
+        if (!msg._bbmem_pendingExtraction) continue;
         // 已经提取过的跳过
         if (msg._bbmem_extracted) continue;
         // v2.9.8: 元标记消息跳过
@@ -277,6 +276,11 @@ export async function markExchangeExtracted(aiIndex, hash) {
 
     if (chat && chat[aiIndex]) {
         chat[aiIndex]._bbmem_extracted = true;
+        chat[aiIndex]._bbmem_pendingExtraction = false;
+        if (!chat[aiIndex].is_hidden) {
+            chat[aiIndex].is_hidden = true;
+            chat[aiIndex]._bbmem_hideSource = 'plugin';
+        }
         saveChat();
     }
 

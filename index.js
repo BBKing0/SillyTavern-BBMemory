@@ -84,9 +84,9 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     }
     if (!userMessage) { clearInjection(); return chat; }
 
-    // 2. 上下文隐藏安全网
+    // 2. 上下文隐藏安全网 —— 只隐藏已提取的消息
     for (const msg of chat) {
-        if ((msg._bbmem_extracted || msg._bbmem_hideSource === 'plugin') && !msg.is_hidden) {
+        if (msg._bbmem_extracted && !msg.is_hidden) {
             msg.is_hidden = true;
             msg._bbmem_hideSource = 'plugin';
         }
@@ -180,7 +180,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     // 13. v4.4.3: 上下文隐藏 —— 清空已提取消息的 mes
     const hiddenBackups = [];
     for (const msg of chat) {
-        if (msg._bbmem_extracted || msg._bbmem_hideSource === 'plugin') {
+        if (msg._bbmem_extracted) {
             hiddenBackups.push({ msg, mes: msg.mes });
             msg.mes = '';
         }
@@ -397,6 +397,8 @@ function bindSidebarEvents() {
     bindSelect('#bb_auto_gen_mode', 'autoGenMode');
     bindSelect('#bb_extraction_confirm_mode', 'extractionConfirmMode');
     bindSelect('#bb_active_confirm_style', 'activeConfirmStyle');
+
+    bindSelect('#bb_extraction_mode', 'extractionMode');
 
     // 数字/文本输入
     bindInput('#bb_token_budget', 'tokenBudget', 'number');

@@ -288,6 +288,25 @@
                 </div>
             </div>
 
+            <!-- 测试功能 -->
+            <hr />
+            <div class="bb-settings-section">
+                <div class="bb-settings-section-header" data-section="experimental">
+                    <span><i class="fa-solid fa-flask"></i> 测试功能</span>
+                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                </div>
+                <div class="bb-settings-section-body">
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_extraction_mode">提取模式</label>
+                        <select id="bb_extraction_mode" class="text_pole">
+                            <option value="staged">分阶段提取（默认）</option>
+                            <option value="merged">合并提取（省Token，测试中）</option>
+                        </select>
+                    </div>
+                    <div class="bb-mem-hint">合并模式将4次API调用合并为1次，降低Token消耗。</div>
+                </div>
+            </div>
+
         </div>
     </div>
 </div>
