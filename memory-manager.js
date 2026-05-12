@@ -848,6 +848,158 @@ async function showQuickEditForm(overlay, chatId, id, pillar) {
     _showQuickFormPopup(overlay, chatId, { mode: 'edit', id, pillar, prefill: entry });
 }
 
+// ═══ 通用弹出表单（添加/编辑共用） ═══
+
+function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill }) {
+    const existing = document.querySelector('.bb-form-overlay');
+    if (existing) existing.remove();
+
+    const isEdit = mode === 'edit';
+    const titleText = isEdit ? '编辑条目' : '添加条目';
+    const titleIcon = isEdit ? 'fa-pen-to-square' : 'fa-plus';
+
+    const formOverlay = document.createElement('div');
+    formOverlay.className = 'bb-form-overlay';
+    formOverlay.style.cssText = 'position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
+    document.body.appendChild(formOverlay);
+
+    const render = () => {
+        formOverlay.innerHTML = `
+        <div class="bb-mem-form-popup" style="background:var(--SmartThemeChatTintColor,#1e1e2e);border:1px solid var(--SmartThemeBorderColor,#444);border-radius:12px;width:100%;max-width:600px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.5);">
+            <div style="display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid var(--SmartThemeBorderColor,#444);">
+                <h3 style="margin:0;"><i class="fa-solid ${titleIcon}"></i> ${titleText}</h3>
+                <span style="flex:1;"></span>
+                ${!isEdit ? '' : `<span style="font-size:0.8em;opacity:0.5;margin-right:8px;">${escapeHtml(pillar)}</span>`}
+                <button class="bb-form-close" style="background:none;border:none;color:inherit;font-size:22px;cursor:pointer;opacity:0.6;">&times;</button>
+            </div>
+            <div style="flex:1;overflow-y:auto;padding:14px 18px;">
+                ${buildPillarFormFields_inner(pillar)}
+            </div>
+            <div style="display:flex;gap:8px;padding:12px 18px;border-top:1px solid var(--SmartThemeBorderColor,#444);">
+                <button class="menu_button bb-form-cancel" style="flex:1;">取消</button>
+                <button class="menu_button bb-form-save" style="flex:1;background:#4caf50;color:#fff;">${isEdit ? '更新' : '保存'}</button>
+            </div>
+        </div>`;
+
+        // 预填数据
+        if (prefill) {
+            const setVal = (cls, val) => { const el = formOverlay.querySelector('.' + cls); if (el) el.value = val || ''; };
+            const setCheck = (cls, val) => { const el = formOverlay.querySelector('.' + cls); if (el) el.checked = !!val; };
+            const tagsStr = Array.isArray(prefill.tags)
+                ? prefill.tags.map(t => typeof t === 'string' ? t : t.name || t).filter(Boolean).join(', ')
+                : '';
+
+            switch (pillar) {
+                case 'npc':
+                    setVal('bb-f-name', prefill.name);
+                    setVal('bb-f-role', prefill.role);
+                    setVal('bb-f-personality', prefill.personality);
+                    setVal('bb-f-appearance', prefill.appearance);
+                    setVal('bb-f-location', prefill.location);
+                    setVal('bb-f-relationships', Array.isArray(prefill.relationships) ? prefill.relationships.map(r => typeof r === 'string' ? r : r.name || '').filter(Boolean).join(', ') : '');
+                    if (prefill.npcTier) { const el = formOverlay.querySelector('.bb-f-npcTier'); if (el) el.value = prefill.npcTier; }
+                    setVal('bb-f-tags', tagsStr);
+                    break;
+                case 'item':
+                    setVal('bb-f-name', prefill.name);
+                    setVal('bb-f-owner', prefill.owner);
+                    if (prefill.status) { const el = formOverlay.querySelector('.bb-f-status'); if (el) el.value = prefill.status; }
+                    setVal('bb-f-significance', prefill.significance);
+                    if (prefill.itemTier) { const el = formOverlay.querySelector('.bb-f-itemTier'); if (el) el.value = prefill.itemTier; }
+                    setCheck('bb-f-keepPermanent', prefill.keepPermanent);
+                    setVal('bb-f-tags', tagsStr);
+                    break;
+                case 'timeline':
+                    setVal('bb-f-title', prefill.title || prefill.event);
+                    setVal('bb-f-storyTime', prefill.storyTime);
+                    if (prefill.status) { const el = formOverlay.querySelector('.bb-f-status'); if (el) el.value = prefill.status; }
+                    else if (prefill.isActive) { const el = formOverlay.querySelector('.bb-f-status'); if (el) el.value = 'ongoing'; }
+                    setVal('bb-f-event', prefill.event || prefill.summary || '');
+                    setVal('bb-f-participants', Array.isArray(prefill.participants) ? prefill.participants.join(', ') : '');
+                    setVal('bb-f-location', prefill.location);
+                    setVal('bb-f-impact', prefill.impact);
+                    setVal('bb-f-tags', tagsStr);
+                    break;
+                case 'mem':
+                    setVal('bb-f-title', prefill.title);
+                    if (prefill.type) { const el = formOverlay.querySelector('.bb-f-type'); if (el) el.value = prefill.type; }
+                    if (prefill.truthStatus) { const el = formOverlay.querySelector('.bb-f-truthStatus'); if (el) el.value = prefill.truthStatus; }
+                    setVal('bb-f-content', prefill.content);
+                    setVal('bb-f-subject', prefill.subject);
+                    setVal('bb-f-target', prefill.target);
+                    setVal('bb-f-summary', prefill.summary);
+                    setVal('bb-f-verbatim', prefill.verbatim);
+                    { const el = formOverlay.querySelector('.bb-f-importance'); if (el) { el.value = Math.round((prefill.importance || 0.5) * 100); el.dispatchEvent(new Event('input')); } }
+                    { const el = formOverlay.querySelector('.bb-f-emotional'); if (el) { el.value = Math.round((prefill.emotionalWeight || 0) * 100); el.dispatchEvent(new Event('input')); } }
+                    setVal('bb-f-tags', tagsStr);
+                    break;
+            }
+        }
+
+        bindFormEvents_inner(formOverlay, chatId, pillar, isEdit ? { id } : null);
+    };
+
+    render();
+
+    const close = () => { document.removeEventListener('keydown', onEsc); formOverlay.remove(); };
+    const onEsc = (e) => { if (e.key === 'Escape') close(); };
+    document.addEventListener('keydown', onEsc);
+    formOverlay.addEventListener('click', (e) => { if (e.target === formOverlay) close(); });
+}
+
+// ═══ 编辑模式事件绑定 ═══
+
+function bindFormEvents_inner(formOverlay, chatId, pillar, editInfo) {
+    const isEdit = !!editInfo;
+
+    formOverlay.querySelector('.bb-form-close')?.addEventListener('click', () => formOverlay.remove());
+    formOverlay.querySelector('.bb-form-cancel')?.addEventListener('click', () => formOverlay.remove());
+
+    // Slider sync
+    formOverlay.querySelector('.bb-f-importance')?.addEventListener('input', function () {
+        const val = formOverlay.querySelector('.bb-f-importance-val');
+        if (val) val.textContent = this.value;
+    });
+    formOverlay.querySelector('.bb-f-emotional')?.addEventListener('input', function () {
+        const val = formOverlay.querySelector('.bb-f-emotional-val');
+        if (val) val.textContent = this.value;
+    });
+
+    formOverlay.querySelector('.bb-form-save')?.addEventListener('click', async () => {
+        const btn = formOverlay.querySelector('.bb-form-save');
+        const origHTML = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 保存中...';
+        try {
+            const data = collectFormData(formOverlay, pillar);
+            if (!data.name && !data.title) { showToast('请至少填写标题/名称', 'warning'); btn.disabled = false; btn.innerHTML = origHTML; return; }
+
+            if (isEdit) {
+                // 更新时间线的 isActive 字段
+                if (pillar === 'timeline') {
+                    data.isActive = data.status === 'ongoing';
+                }
+                switch (pillar) {
+                    case 'npc': await updateNpcProfile(chatId, editInfo.id, data); break;
+                    case 'item': await updateItem(chatId, editInfo.id, data); break;
+                    case 'timeline': await updateTimelineEntry(chatId, editInfo.id, data); break;
+                    default: await updateMemory(chatId, editInfo.id, data); break;
+                }
+            } else {
+                switch (pillar) {
+                    case 'npc': await addNpcProfile(chatId, data); break;
+                    case 'item': await addItem(chatId, data); break;
+                    case 'timeline': await addTimelineEntry(chatId, data); break;
+                    default: await addMemory(chatId, data); break;
+                }
+            }
+
+            showToast(isEdit ? '已更新' : '已添加', 'success');
+            formOverlay.remove();
+            const managerOverlay = document.querySelector('.bb-mem-overlay');
+            if (managerOverlay) { await rerenderManagerList(managerOverlay, chatId); updateCurrentSlotBar(managerOverlay, chatId); }
+        } catch (e) { showToast(`保存失败: ${e.message}`, 'error'); btn.disabled = false; btn.innerHTML = origHTML; }
+    });
+}
+
 // ═══ 存档标签页 ═══
 
 async function renderSlotsPanel(overlay, chatId) {
