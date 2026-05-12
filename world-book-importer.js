@@ -80,7 +80,10 @@ export async function importWorldBook(chatId, jsonString) {
 //  AI 摘要导入
 // ═══════════════════════════════════════════════════════════
 
-export async function importWorldBookWithAI(chatId, jsonString) {
+export async function importWorldBookWithAI(chatId, jsonString, onProgress) {
+    const report = (msg) => { if (typeof onProgress === 'function') onProgress(msg); };
+
+    report('正在解析世界书...');
     const data = JSON.parse(jsonString);
     const entries = extractEntries(data);
     if (!entries.length) throw new Error('未找到有效的世界书条目。');
@@ -109,6 +112,7 @@ export async function importWorldBookWithAI(chatId, jsonString) {
 世界书内容：
 ${contextText}`;
 
+    report(`正在调用 AI 分析 ${entries.length} 条世界书条目...`);
     let responseText;
     if (settings.autoGenMode === 'custom' && settings.autoGenEndpoint) {
         responseText = await callCustomApi(prompt);
@@ -116,6 +120,7 @@ ${contextText}`;
         responseText = await callMainApi(prompt);
     }
 
+    report('正在解析 AI 返回结果...');
     // 解析
     let text = responseText.trim();
     text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
@@ -123,6 +128,7 @@ ${contextText}`;
     if (!match) throw new Error('AI 未返回有效的 JSON');
     const parsed = JSON.parse(match[0]);
 
+    report('正在写入记忆数据...');
     let count = 0;
     if (Array.isArray(parsed.npc)) {
         for (const n of parsed.npc) {

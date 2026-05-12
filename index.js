@@ -500,10 +500,19 @@ function bindSidebarEvents() {
         pickFile('.json', async (text) => {
             const chatId = getChatId();
             if (!chatId) return;
+            const progressEl = createProgressToast('世界书AI导入: 正在解析...');
             try {
-                const count = await handleWorldBookImportWithAI(chatId, text);
+                // 包装导入函数，注入进度回调
+                const count = await handleWorldBookImportWithAI(chatId, text, (msg) => {
+                    if (progressEl) progressEl.textContent = `世界书AI导入: ${msg}`;
+                });
+                if (progressEl) {
+                    progressEl.textContent = `世界书AI导入完成！共 ${count} 条`;
+                    setTimeout(() => progressEl.remove(), 3000);
+                }
                 showToast(`AI 导入：${count} 条`, 'success');
             } catch (e) {
+                if (progressEl) progressEl.remove();
                 showToast(`AI 导入失败: ${e.message}`, 'error');
             }
         });
@@ -643,7 +652,7 @@ function showMaintenancePopup(chatId, result) {
 
     const panel = document.createElement('div');
     panel.className = 'bb-maint-panel';
-    panel.style.cssText = 'display:flex;flex-direction:column;overflow:auto;';
+    panel.style.cssText = 'display:flex;flex-direction:column;overflow:hidden;';
 
     // Header
     const header = document.createElement('div');

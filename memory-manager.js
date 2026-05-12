@@ -223,14 +223,16 @@ function buildEntryItemHTML(e) {
     const createdDate = e.createdAt ? new Date(e.createdAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
     const updatedDate = (e.updatedAt && e.updatedAt !== e.createdAt) ? new Date(e.updatedAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
 
-    // 故事时间行
+    // 故事时间行（使用故事内时间，非系统时间戳）
     let storyTimeHTML = '';
-    if (pillar === 'mem' && e.storyTime) {
-        storyTimeHTML = `<span><i class="fa-solid fa-clock"></i> ${escapeHtml(e.storyTime)}</span>`;
-    } else if (pillar === 'npc' && e.createdAt) {
-        storyTimeHTML = `<span><i class="fa-solid fa-handshake"></i> 初见: ${escapeHtml(createdDate)}</span>`;
-    } else if (pillar === 'item' && e.createdAt) {
-        storyTimeHTML = `<span><i class="fa-solid fa-gift"></i> 获得: ${escapeHtml(createdDate)}</span>`;
+    if (e.storyTime) {
+        if (pillar === 'mem') {
+            storyTimeHTML = `<span><i class="fa-solid fa-clock"></i> ${escapeHtml(e.storyTime)}</span>`;
+        } else if (pillar === 'npc') {
+            storyTimeHTML = `<span><i class="fa-solid fa-handshake"></i> 初见: ${escapeHtml(e.storyTime)}</span>`;
+        } else if (pillar === 'item') {
+            storyTimeHTML = `<span><i class="fa-solid fa-gift"></i> 获得: ${escapeHtml(e.storyTime)}</span>`;
+        }
     }
 
     // 标签（仅记忆条目）
