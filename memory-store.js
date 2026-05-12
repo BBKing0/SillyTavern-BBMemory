@@ -40,6 +40,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     activeConfirmStyle: 'popup',   // 'popup' | 'toast'
     contextWindowExchanges: 3,
     extractionMode: 'staged',        // 'staged' | 'merged'
+    extractedMsgDisplay: 'transparent', // 'hidden' | 'transparent' | 'visible'
     // Embedding
     embeddingEnabled: false,
     embeddingEndpoint: '',

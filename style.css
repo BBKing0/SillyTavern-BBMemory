@@ -2134,6 +2134,12 @@
     filter: grayscale(0.6);
 }
 
+.bb-show-extracted-clear .mes.bb-extracted-hidden {
+    display: block !important;
+    opacity: 1;
+    filter: none;
+}
+
 .bb-show-hidden-btn {
     position: fixed;
     bottom: 40px;

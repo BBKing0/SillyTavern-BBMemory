@@ -401,6 +401,7 @@ function bindSidebarEvents() {
     bindSelect('#bb_extraction_mode', 'extractionMode');
 
     // 数字/文本输入
+    bindInput('#bb_context_window', 'contextWindowExchanges', 'number');
     bindInput('#bb_token_budget', 'tokenBudget', 'number');
     bindInput('#bb_max_results', 'maxResults', 'number');
     bindInput('#bb_maintenance_mem_threshold', 'maintenanceMemThreshold', 'number');
@@ -471,11 +472,9 @@ function bindSidebarEvents() {
         showToast(label, 'info');
     });
 
-    // v5.3: 楼层可见
+    // v5.9.5: 楼层可见（三态切换：隐藏 → 半透明 → 完全可见）
     document.querySelector('#bb_memory_toggle_vis_btn')?.addEventListener('click', () => {
-        document.body.classList.toggle('bb-show-extracted');
-        const showing = document.body.classList.contains('bb-show-extracted');
-        showToast(showing ? '已显示被隐藏的楼层' : '已隐藏已提取的楼层', 'info');
+        cycleExtractedVisibility();
     });
 
     // v5.5: 记忆维护按钮
@@ -1224,7 +1223,7 @@ function injectFloatingHub() {
         if (!actionItem) return;
         const action = actionItem.dataset.action;
         await handleFloatingMenuAction(action);
-        if (action !== 'toggle_hit_list') {
+        if (action !== 'toggle_hit_list' && action !== 'toggle_visibility') {
             menu.style.display = 'none';
         }
     });
@@ -1309,11 +1308,13 @@ async function refreshFloatingHubData() {
         } catch { /* ignore */ }
     }
 
-    // 更新可见性按钮图标
+    // 更新可见性按钮图标（三态）
     const toggleItem = document.querySelector('.bb-floating-menu-action[data-action="toggle_visibility"] i');
     if (toggleItem) {
-        const showing = document.body.classList.contains('bb-show-extracted');
-        toggleItem.className = showing ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash';
+        const mode = getSettings().extractedMsgDisplay || 'hidden';
+        if (mode === 'visible') toggleItem.className = 'fa-solid fa-eye';
+        else if (mode === 'transparent') toggleItem.className = 'fa-solid fa-eye';
+        else toggleItem.className = 'fa-solid fa-eye-slash';
     }
 
     // 命中列表展开时同步刷新
@@ -1324,14 +1325,35 @@ async function refreshFloatingHubData() {
     }
 }
 
+function cycleExtractedVisibility() {
+    const settings = getSettings();
+    const current = settings.extractedMsgDisplay || 'hidden';
+    const next = current === 'hidden' ? 'transparent' : current === 'transparent' ? 'visible' : 'hidden';
+
+    // 更新设置
+    updateSettings({ extractedMsgDisplay: next });
+
+    // 更新 body class
+    document.body.classList.remove('bb-show-extracted', 'bb-show-extracted-clear');
+    if (next === 'transparent') document.body.classList.add('bb-show-extracted');
+    else if (next === 'visible') document.body.classList.add('bb-show-extracted-clear');
+
+    // 更新悬浮球图标
+    const toggleItem = document.querySelector('.bb-floating-menu-action[data-action="toggle_visibility"] i');
+    if (toggleItem) {
+        toggleItem.className = next === 'hidden' ? 'fa-solid fa-eye-slash' : 'fa-solid fa-eye';
+    }
+
+    const labels = { hidden: '楼层已隐藏', transparent: '楼层半透明显示（可区分）', visible: '楼层完全可见' };
+    showToast(labels[next], 'info');
+}
+
 async function handleFloatingMenuAction(action) {
     const chatId = getChatId();
     switch (action) {
         case 'toggle_visibility': {
-            document.body.classList.toggle('bb-show-extracted');
-            const showing = document.body.classList.contains('bb-show-extracted');
-            showToast(showing ? '已显示被隐藏的楼层' : '已隐藏已提取的楼层', 'info');
-            break;
+            cycleExtractedVisibility();
+            return;  // 不关闭菜单
         }
         case 'meta_last': {
             const ctx = SillyTavern.getContext();

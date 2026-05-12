@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v5.7</b>
+            <b>BB-Memory v5.9.5</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -190,6 +190,12 @@
                             <option value="toast">通知提示</option>
                         </select>
                     </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_context_window">上下文保留窗口（Exchange数）</label>
+                        <input id="bb_context_window" type="number" class="text_pole" min="1" max="20" value="3" />
+                    </div>
+                    <div class="bb-mem-hint">保留最近N个AI回复在上下文中，超出窗口的将被提取并隐藏。</div>
 
                     <div id="bb_memory_custom_api_section">
                         <div class="bb-mem-sidebar-section">
