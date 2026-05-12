@@ -223,6 +223,16 @@ function buildEntryItemHTML(e) {
     const createdDate = e.createdAt ? new Date(e.createdAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
     const updatedDate = (e.updatedAt && e.updatedAt !== e.createdAt) ? new Date(e.updatedAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
 
+    // 故事时间行
+    let storyTimeHTML = '';
+    if (pillar === 'mem' && e.storyTime) {
+        storyTimeHTML = `<span><i class="fa-solid fa-clock"></i> ${escapeHtml(e.storyTime)}</span>`;
+    } else if (pillar === 'npc' && e.createdAt) {
+        storyTimeHTML = `<span><i class="fa-solid fa-handshake"></i> 初见: ${escapeHtml(createdDate)}</span>`;
+    } else if (pillar === 'item' && e.createdAt) {
+        storyTimeHTML = `<span><i class="fa-solid fa-gift"></i> 获得: ${escapeHtml(createdDate)}</span>`;
+    }
+
     // 标签（仅记忆条目）
     let tagRow = '';
     if (pillar === 'mem' && Array.isArray(e.tags) && e.tags.length) {
@@ -256,6 +266,7 @@ function buildEntryItemHTML(e) {
             ${tagRow}
         </div>` : ''}
         <div style="display:flex;align-items:center;font-size:0.75em;opacity:0.5;gap:12px;">
+            ${storyTimeHTML}
             ${createdDate ? `<span><i class="fa-regular fa-calendar-plus"></i> ${escapeHtml(createdDate)}</span>` : ''}
             ${updatedDate ? `<span><i class="fa-solid fa-pen"></i> ${escapeHtml(updatedDate)}</span>` : ''}
             <span style="flex:1;"></span>

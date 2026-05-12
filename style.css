@@ -1467,11 +1467,16 @@
     }
 
     /* 维护弹窗 */
+    .bb-maint-overlay {
+        align-items: flex-start;
+        padding: 0;
+    }
     .bb-maint-panel {
         width: 100%;
         max-width: 100%;
         border-radius: 0;
-        max-height: 90vh;
+        max-height: 100vh;
+        overflow-y: auto;
     }
     .bb-maint-header {
         padding: 12px 14px;

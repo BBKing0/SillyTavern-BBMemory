@@ -13,6 +13,7 @@ import {
 import {
     getExtractableExchanges, markExchangeExtracted, isExchangeProcessed,
     computeExchangeHash, hideExchange, refreshExtractionMarkers,
+    syncMessageVisibility,
 } from './message-state.js';
 import { normalizeNpcTier, normalizeItemTier } from './entity-tiers.js';
 
@@ -609,6 +610,9 @@ export async function onMessageReceived(_messageIndex) {
 }
 
 async function processLatestExchange(chatId) {
+    // 先同步可见性，将超出窗口的旧消息标记为插件隐藏
+    await syncMessageVisibility();
+
     const settings = getSettings();
     const confirmMode = settings.extractionConfirmMode || 'semi';
 

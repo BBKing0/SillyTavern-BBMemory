@@ -302,18 +302,20 @@ async function handleInitMemory(chatId) {
     }
 
     // 使用分阶段提取
-    const settings = getSettings();
-    const progressEl = createProgressToast('初始化记忆');
+    const progressEl = createProgressToast('初始化记忆: 准备中...');
+
     const updateProgress = (info) => {
         if (progressEl) progressEl.textContent = `初始化记忆: ${info.progress || ''}`;
     };
 
     const results = await extractFromContext(chatId, contextText, { onProgress: updateProgress });
 
-    if (progressEl) progressEl.remove();
+    if (progressEl) {
+        progressEl.textContent = `初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 记忆 ${results.memories}`;
+        setTimeout(() => progressEl.remove(), 3000);
+    }
 
-    const msg = `初始化完成：\nNPC: ${results.npc} 个\n物品: ${results.items} 个\n时间线: ${results.timeline} 条\n记忆: ${results.memories} 条`;
-    showToast(msg, 'success');
+    showToast(`初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 记忆 ${results.memories}`, 'success');
     return results;
 }
 
@@ -641,7 +643,7 @@ function showMaintenancePopup(chatId, result) {
 
     const panel = document.createElement('div');
     panel.className = 'bb-maint-panel';
-    panel.style.cssText = 'display:flex;flex-direction:column;overflow:hidden;';
+    panel.style.cssText = 'display:flex;flex-direction:column;overflow:auto;';
 
     // Header
     const header = document.createElement('div');
