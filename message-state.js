@@ -160,11 +160,11 @@ export async function syncMessageVisibility(windowOverride) {
     let hiddenCount = 0;
     let changed = false;
 
-    for (let i = 1; i < cutoff; i++) {
+    for (let i = 0; i < cutoff; i++) {
         const msg = chat[i];
-        if (msg.is_system) continue;
+        if (msg.is_system || msg.is_user) continue;
 
-        if (!msg.is_hidden && !msg._bbmem_extracted) {
+        if (!msg.is_hidden && !msg._bbmem_extracted && !msg._bbmem_pendingExtraction) {
             msg._bbmem_pendingExtraction = true;
             hiddenCount++;
             changed = true;
@@ -218,11 +218,11 @@ export async function getExtractableExchanges() {
     const processedSet = await getProcessedSet(chatId);
     const exchanges = [];
 
-    for (let i = 1; i < chat.length; i++) {
+    for (let i = 0; i < chat.length; i++) {
         const msg = chat[i];
 
         // 只关注 AI 消息
-        if (msg.is_user) continue;
+        if (msg.is_user || msg.is_system) continue;
         // 只处理标记为待提取的
         if (!msg._bbmem_pendingExtraction) continue;
         // 已经提取过的跳过
@@ -365,7 +365,14 @@ export function refreshExtractionMarkers() {
         }
 
         // ── 提取标记 ──
-        if (msg._bbmem_extracted) {
+        if (msg._bbmem_pendingExtraction && !msg._bbmem_extracted) {
+            const marker = document.createElement('span');
+            marker.className = 'bb-extract-marker bb-extract-pending';
+            marker.title = 'BB-Memory 正在提取此消息...';
+            marker.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+            const contentEl = block.querySelector('.mes_text') || block.querySelector('.mes_block') || block;
+            contentEl.appendChild(marker);
+        } else if (msg._bbmem_extracted) {
             const marker = document.createElement('span');
             marker.className = 'bb-extract-marker';
             marker.title = '此消息已被 BB-Memory 提取';
@@ -374,7 +381,7 @@ export function refreshExtractionMarkers() {
             contentEl.appendChild(marker);
         }
 
-        // ── 隐藏已提取/元标记的消息 ──
+        // ── 隐藏已提取/元标记的消息（待提取的不隐藏）──
         if (msg._bbmem_extracted || msg._bbmem_meta_marker) {
             if (!block.classList.contains('bb-extracted-hidden')) {
                 block.classList.add('bb-extracted-hidden');
