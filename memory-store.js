@@ -176,6 +176,9 @@ export async function addNpcProfile(chatId, data) {
         updatedAt: now,
         lastHitAt: null,
         source: data.source || 'manual',
+        sourceExchange: data.sourceExchange || '',
+        sourceFloor: typeof data.sourceFloor === 'number' ? data.sourceFloor : -1,
+        sourceChatId: data.sourceChatId || '',
     };
     profiles.push(entry);
     await saveCollection('npc', chatId, profiles);
@@ -245,6 +248,9 @@ export async function addItem(chatId, data) {
         updatedAt: now,
         lastHitAt: null,
         source: data.source || 'manual',
+        sourceExchange: data.sourceExchange || '',
+        sourceFloor: typeof data.sourceFloor === 'number' ? data.sourceFloor : -1,
+        sourceChatId: data.sourceChatId || '',
     };
     items.push(entry);
     await saveCollection('item', chatId, items);
@@ -318,6 +324,9 @@ export async function addTimelineEntry(chatId, data) {
         updatedAt: now,
         lastHitAt: null,
         source: data.source || 'manual',
+        sourceExchange: data.sourceExchange || '',
+        sourceFloor: typeof data.sourceFloor === 'number' ? data.sourceFloor : -1,
+        sourceChatId: data.sourceChatId || '',
     };
     timeline.push(entry);
     // 按 storyTimeSort 排序
@@ -413,6 +422,9 @@ export async function addMemory(chatId, data) {
         lastPromotedAt: null,                 // 上次升格时间戳（冷却用）
         source: data.source || 'manual',
         sourceMessageIds: Array.isArray(data.sourceMessageIds) ? data.sourceMessageIds : [],
+        sourceExchange: data.sourceExchange || '',
+        sourceFloor: typeof data.sourceFloor === 'number' ? data.sourceFloor : -1,
+        sourceChatId: data.sourceChatId || '',
     };
     memories.push(entry);
     await saveCollection('mem', chatId, memories);

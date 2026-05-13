@@ -223,6 +223,13 @@ function buildEntryItemHTML(e) {
     const createdDate = e.createdAt ? new Date(e.createdAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
     const updatedDate = (e.updatedAt && e.updatedAt !== e.createdAt) ? new Date(e.updatedAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
 
+    // 来源楼层
+    let sourceFloorHTML = '';
+    if (typeof e.sourceFloor === 'number') {
+        if (e.sourceFloor >= 0) sourceFloorHTML = `<span style="opacity:0.6;"><i class="fa-solid fa-layer-group"></i> 第 ${e.sourceFloor} 层</span>`;
+        else sourceFloorHTML = `<span style="opacity:0.4;font-size:0.75em;"><i class="fa-solid fa-clock-rotate-left"></i> 旧聊天记忆</span>`;
+    }
+
     // 故事时间行（使用故事内时间，非系统时间戳）
     let storyTimeHTML = '';
     if (e.storyTime) {
@@ -269,6 +276,7 @@ function buildEntryItemHTML(e) {
         </div>` : ''}
         <div style="display:flex;align-items:center;font-size:0.75em;opacity:0.5;gap:12px;">
             ${storyTimeHTML}
+            ${sourceFloorHTML}
             ${createdDate ? `<span><i class="fa-regular fa-calendar-plus"></i> ${escapeHtml(createdDate)}</span>` : ''}
             ${updatedDate ? `<span><i class="fa-solid fa-pen"></i> ${escapeHtml(updatedDate)}</span>` : ''}
             <span style="flex:1;"></span>

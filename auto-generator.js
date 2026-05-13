@@ -421,14 +421,14 @@ function buildStagePrompt(template, userMessage, aiMessage) {
 /**
  * 阶段 1：NPC 提取
  */
-async function extractNpcStage(chatId, userMessage, aiMessage) {
+async function extractNpcStage(chatId, userMessage, aiMessage, sourceInfo) {
     const prompt = buildStagePrompt(NPC_EXTRACTION_PROMPT, userMessage, aiMessage);
     try {
         const responseText = await callApi(prompt);
         const npcs = parseNpcResponse(responseText);
         let count = 0;
         for (const npc of npcs) {
-            await upsertNpcProfile(chatId, npc);
+            await upsertNpcProfile(chatId, { ...npc, ...(sourceInfo || {}) });
             count++;
         }
         if (count > 0 && getSettings().debugLogging) {
@@ -444,14 +444,14 @@ async function extractNpcStage(chatId, userMessage, aiMessage) {
 /**
  * 阶段 2：物品提取
  */
-async function extractItemStage(chatId, userMessage, aiMessage) {
+async function extractItemStage(chatId, userMessage, aiMessage, sourceInfo) {
     const prompt = buildStagePrompt(ITEM_EXTRACTION_PROMPT, userMessage, aiMessage);
     try {
         const responseText = await callApi(prompt);
         const items = parseItemResponse(responseText);
         let count = 0;
         for (const item of items) {
-            await upsertItem(chatId, item);
+            await upsertItem(chatId, { ...item, ...(sourceInfo || {}) });
             count++;
         }
         if (count > 0 && getSettings().debugLogging) {
@@ -467,14 +467,14 @@ async function extractItemStage(chatId, userMessage, aiMessage) {
 /**
  * 阶段 3：时间线提取
  */
-async function extractTimelineStage(chatId, userMessage, aiMessage) {
+async function extractTimelineStage(chatId, userMessage, aiMessage, sourceInfo) {
     const prompt = buildStagePrompt(TIMELINE_EXTRACTION_PROMPT, userMessage, aiMessage);
     try {
         const responseText = await callApi(prompt);
         const entries = parseTimelineResponse(responseText);
         let count = 0;
         for (const entry of entries) {
-            await upsertTimelineEntry(chatId, entry);
+            await upsertTimelineEntry(chatId, { ...entry, ...(sourceInfo || {}) });
             count++;
         }
         if (count > 0 && getSettings().debugLogging) {
@@ -490,7 +490,7 @@ async function extractTimelineStage(chatId, userMessage, aiMessage) {
 /**
  * 阶段 4：记忆提取
  */
-async function extractMemoryStage(chatId, userMessage, aiMessage) {
+async function extractMemoryStage(chatId, userMessage, aiMessage, sourceInfo) {
     const prompt = buildStagePrompt(MEMORY_EXTRACTION_PROMPT, userMessage, aiMessage);
     try {
         const responseText = await callApi(prompt);
@@ -522,7 +522,7 @@ async function extractMemoryStage(chatId, userMessage, aiMessage) {
                 }
             }
 
-            await addMemory(chatId, { ...mem, embedding });
+            await addMemory(chatId, { ...mem, embedding, ...(sourceInfo || {}) });
             if (embedding) activeMemories.push({ embedding });
             count++;
         }
@@ -667,7 +667,7 @@ function parseMergedResponse(responseText) {
     }
 }
 
-async function extractMergedStage(chatId, userMessage, aiMessage) {
+async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
     const prompt = MERGED_EXTRACTION_PROMPT
         .replace('{{userMessage}}', userMessage || '(无)')
         .replace('{{aiMessage}}', cleanAiMessage(aiMessage) || '(无)');
@@ -675,9 +675,9 @@ async function extractMergedStage(chatId, userMessage, aiMessage) {
         const responseText = await callApi(prompt);
         const results = parseMergedResponse(responseText);
         let total = 0;
-        for (const npc of results.npc) { await upsertNpcProfile(chatId, npc); total++; }
-        for (const item of results.items) { await upsertItem(chatId, item); total++; }
-        for (const tl of results.timeline) { await upsertTimelineEntry(chatId, tl); total++; }
+        for (const npc of results.npc) { await upsertNpcProfile(chatId, { ...npc, ...(sourceInfo || {}) }); total++; }
+        for (const item of results.items) { await upsertItem(chatId, { ...item, ...(sourceInfo || {}) }); total++; }
+        for (const tl of results.timeline) { await upsertTimelineEntry(chatId, { ...tl, ...(sourceInfo || {}) }); total++; }
         const settings = getSettings();
         const maxPerExchange = settings.maxMemoriesPerExchange ?? 3;
         const limited = results.memories.slice(0, maxPerExchange);
@@ -698,7 +698,7 @@ async function extractMergedStage(chatId, userMessage, aiMessage) {
                     }
                 }
             }
-            await addMemory(chatId, { ...mem, embedding });
+            await addMemory(chatId, { ...mem, embedding, ...(sourceInfo || {}) });
             if (embedding) activeMemories.push({ embedding });
             total++;
         }
@@ -729,6 +729,8 @@ async function processLatestExchange(chatId) {
     // 检查已处理
     if (await isExchangeProcessed(chatId, oldest.hash)) return;
 
+    const sourceInfo = { sourceExchange: oldest.hash, sourceFloor: oldest.aiIndex, sourceChatId: chatId };
+
     try {
         if (confirmMode === 'active') {
             // Active 模式：解析但不保存
@@ -741,24 +743,24 @@ async function processLatestExchange(chatId) {
         } else if (settings.extractionMode === 'merged') {
             // 合并模式：1次API调用提取全部四类
             reportProgress('merged', 0, 1);
-            await extractMergedStage(chatId, oldest.userMessage, oldest.aiMessage);
+            await extractMergedStage(chatId, oldest.userMessage, oldest.aiMessage, sourceInfo);
             reportProgress('merged', 1, 1);
         } else {
             // Semi/Auto 模式：四阶段提取
             reportProgress('npc', 0, 4);
-            await extractNpcStage(chatId, oldest.userMessage, oldest.aiMessage);
+            await extractNpcStage(chatId, oldest.userMessage, oldest.aiMessage, sourceInfo);
             reportProgress('npc', 1, 4);
 
             reportProgress('item', 1, 4);
-            await extractItemStage(chatId, oldest.userMessage, oldest.aiMessage);
+            await extractItemStage(chatId, oldest.userMessage, oldest.aiMessage, sourceInfo);
             reportProgress('item', 2, 4);
 
             reportProgress('timeline', 2, 4);
-            await extractTimelineStage(chatId, oldest.userMessage, oldest.aiMessage);
+            await extractTimelineStage(chatId, oldest.userMessage, oldest.aiMessage, sourceInfo);
             reportProgress('timeline', 3, 4);
 
             reportProgress('mem', 3, 4);
-            await extractMemoryStage(chatId, oldest.userMessage, oldest.aiMessage);
+            await extractMemoryStage(chatId, oldest.userMessage, oldest.aiMessage, sourceInfo);
             reportProgress('mem', 4, 4);
         }
     } catch (e) {

@@ -147,7 +147,7 @@ export async function syncMessageVisibility(windowOverride) {
     // 从末尾反向计数 exchange（AI 消息），找到窗口截止位置
     let visibleExchangeCount = 0;
     let cutoff = chat.length;
-    for (let i = chat.length - 1; i >= 1; i--) {
+    for (let i = chat.length - 1; i >= 0; i--) {
         const msg = chat[i];
         if (msg.is_system || msg.is_user || msg.is_hidden) continue;
         visibleExchangeCount++;
