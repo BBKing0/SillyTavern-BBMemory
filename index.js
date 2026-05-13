@@ -12,7 +12,7 @@ import {
     getItems, addItem, updateItem, removeItem, upsertItem,
     getTimeline, addTimelineEntry, updateTimelineEntry, removeTimelineEntry, upsertTimelineEntry,
     getMemories, addMemory, updateMemory, removeMemory,
-    clearAllData, getMemoryStats,
+    clearAllData, deleteByExchange, getMemoryStats,
     exportMemoriesToChatMetadata, importMemoriesFromChatMetadata,
     migrateV4ToV5, recordHits, checkDemotions,
     exportMemories, importMemories, updateFactContent, addHiddenNote, removeHiddenNote,
@@ -976,6 +976,57 @@ function registerSlashCommands() {
             showToast('所有记忆已清空', 'warning');
         }
     }, '清空当前聊天的所有记忆');
+
+    addCmd('bb-delete-floor', async (args) => {
+        const chatId = getChatId();
+        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        const floor = parseInt(args, 10);
+        if (isNaN(floor)) { showToast('用法: /bb-delete-floor <楼层号>', 'warning'); return; }
+        // 查找该楼层 AI 消息的 exchange hash
+        const ctx2 = SillyTavern.getContext();
+        const chat = ctx2.chat || [];
+        if (floor < 0 || floor >= chat.length) { showToast(`楼层 ${floor} 不存在`, 'warning'); return; }
+        const msg = chat[floor];
+        if (!msg || msg.is_user) { showToast(`第 ${floor} 层不是AI消息`, 'warning'); return; }
+        // 查找前一条用户消息，计算 exchange hash
+        let userMsg = '';
+        for (let j = floor - 1; j >= 0; j--) {
+            if (chat[j].is_user && chat[j].mes) { userMsg = chat[j].mes; break; }
+        }
+        const { computeExchangeHash } = await import('./message-state.js');
+        const exchangeHash = computeExchangeHash(userMsg, msg.mes || '');
+        const result = await deleteByExchange(chatId, exchangeHash);
+        showToast(`已删除: NPC${result.npc}/物品${result.items}/时间线${result.timeline}/记忆${result.memories}`, 'success');
+    }, '删除指定楼层的所有关联记忆');
+
+    addCmd('bb-re-extract', async (args) => {
+        const chatId = getChatId();
+        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        const floor = parseInt(args, 10);
+        if (isNaN(floor)) { showToast('用法: /bb-re-extract <楼层号>', 'warning'); return; }
+        const ctx2 = SillyTavern.getContext();
+        const chat = ctx2.chat || [];
+        if (floor < 0 || floor >= chat.length) { showToast(`楼层 ${floor} 不存在`, 'warning'); return; }
+        const aiMsg = chat[floor];
+        if (!aiMsg || aiMsg.is_user) { showToast(`第 ${floor} 层不是AI消息`, 'warning'); return; }
+        // 向前查找用户消息配对
+        let userMsg = '';
+        for (let j = floor - 1; j >= 0; j--) {
+            if (chat[j].is_user && chat[j].mes) { userMsg = chat[j].mes; break; }
+        }
+        // 先删除旧记忆，再重新提取
+        const { computeExchangeHash } = await import('./message-state.js');
+        const exchangeHash = computeExchangeHash(userMsg, aiMsg.mes || '');
+        await deleteByExchange(chatId, exchangeHash);
+        // 清除提取标记以便重新提取
+        aiMsg._bbmem_extracted = false;
+        aiMsg._bbmem_pendingExtraction = true;
+        try { ctx2.saveChatDebounced(); } catch {}
+        // 触发提取
+        showToast('正在重新提取...', 'info');
+        const { onMessageReceived } = await import('./auto-generator.js');
+        onMessageReceived(floor);
+    }, '删除并重新提取指定楼层的记忆');
 
     if (getSettings().debugLogging) {
         console.log('[BB-Memory] 斜杠命令已注册');

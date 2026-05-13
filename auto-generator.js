@@ -65,7 +65,16 @@ function mergeMemoryFields(existing, incoming) {
 
 // ═══ 四个提取提示词 ═══
 
-const NPC_EXTRACTION_PROMPT = `你是一个角色档案提取助手。从对话中提取 NPC 信息。
+const PROMPT_META_GUARD = `你是一个角色扮演(RP)剧情记忆提取助手。**只提取角色扮演的剧情内容。**
+**绝对不要提取以下内容**：
+- 用户与AI助手的对话（如"请帮我写...""你能给我建议吗"）
+- 用户的元指令/OOC（如"(OOC: ...)"、系统设置请求）
+- AI助手的自我介绍、工具说明、能力声明
+如果对话中只有元指令没有RP内容，返回空数据。
+
+`;
+
+const NPC_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个角色档案提取助手。从对话中提取 NPC 信息。
 
 规则：
 1. 只提取有名字或明确身份的角色，不要从AI回复中推断用户信息
@@ -83,7 +92,7 @@ nt=分级(core/important/minor/background) | ic=一行索引卡 | g=标签数组
 用户: {{userMessage}}
 角色: {{aiMessage}}`;
 
-const ITEM_EXTRACTION_PROMPT = `你是一个物品追踪助手。从对话中提取值得记住的物品信息。
+const ITEM_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个物品追踪助手。从对话中提取值得记住的物品信息。
 
 规则：
 1. 只提取有意义的物品（剧情相关、有特殊价值、有纪念意义）
@@ -102,7 +111,7 @@ g=标签数组
 用户: {{userMessage}}
 角色: {{aiMessage}}`;
 
-const TIMELINE_EXTRACTION_PROMPT = `你是一个故事时间线助手。从对话中检测值得记录的故事节点。
+const TIMELINE_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个故事时间线助手。从对话中检测值得记录的故事节点。
 
 规则：
 1. 只在以下情况新增/更新时间线：地点变化、关系质变、重大决策、战斗、新角色入场、章节转换
@@ -121,7 +130,7 @@ active=true(进行中可后续更新)/false(已结束) | imp=影响描述 | g=�
 用户: {{userMessage}}
 角色: {{aiMessage}}`;
 
-const MEMORY_EXTRACTION_PROMPT = `你是一个记忆提取助手。从对话中提取值得长期记忆的关键信息。
+const MEMORY_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个记忆提取助手。从对话中提取值得长期记忆的关键信息。
 
 规则：
 1. 只提取重要的、值得记住的信息，不要记录日常寒暄
@@ -611,7 +620,7 @@ export async function onMessageReceived(_messageIndex) {
 
 // ═══ 合并提取（测试功能）═══
 
-const MERGED_EXTRACTION_PROMPT = `你是一个记忆提取助手。从对话中提取结构化信息，分四类输出。
+const MERGED_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个记忆提取助手。从对话中提取结构化信息，分四类输出。
 
 ## 1. NPC角色提取
 只提取有名字或明确身份的角色。路人 nt=background；有剧情的 nt=minor；重要配角 nt=important；核心 nt=core。

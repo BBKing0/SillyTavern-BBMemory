@@ -149,7 +149,7 @@ export async function syncMessageVisibility(windowOverride) {
     let cutoff = chat.length;
     for (let i = chat.length - 1; i >= 0; i--) {
         const msg = chat[i];
-        if (msg.is_system || msg.is_user || msg.is_hidden) continue;
+        if (msg.is_user || msg.is_hidden) continue;
         visibleExchangeCount++;
         if (visibleExchangeCount >= windowExchanges) {
             cutoff = i;

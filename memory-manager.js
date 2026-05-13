@@ -280,6 +280,10 @@ function buildEntryItemHTML(e) {
             ${createdDate ? `<span><i class="fa-regular fa-calendar-plus"></i> ${escapeHtml(createdDate)}</span>` : ''}
             ${updatedDate ? `<span><i class="fa-solid fa-pen"></i> ${escapeHtml(updatedDate)}</span>` : ''}
             <span style="flex:1;"></span>
+            ${typeof e.sourceFloor === 'number' && e.sourceFloor >= 0 ? `
+            <button class="menu_button bb-mem-btn-sm bb-mem-re-extract" data-floor="${e.sourceFloor}" title="重新提取该楼层记忆" style="font-size:0.75em;opacity:0.6;">
+                <i class="fa-solid fa-rotate"></i>
+            </button>` : ''}
             <button class="menu_button bb-mem-btn-sm bb-mem-edit" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" title="编辑" style="font-size:0.85em;">
                 <i class="fa-solid fa-pen"></i>
             </button>
@@ -561,6 +565,34 @@ function rebindItemActions(overlay, chatId) {
     });
 
     // 编辑
+    overlay.querySelectorAll('.bb-mem-re-extract').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const floor = parseInt(btn.dataset.floor, 10);
+            if (isNaN(floor)) return;
+            withFeedback(btn, async () => {
+                // 查找楼层消息，计算 exchange hash
+                const ctx = SillyTavern.getContext();
+                const chat = ctx.chat || [];
+                if (floor < 0 || floor >= chat.length) throw new Error('楼层不存在');
+                const aiMsg = chat[floor];
+                if (!aiMsg || aiMsg.is_user) throw new Error('不是AI消息');
+                let userMsg = '';
+                for (let j = floor - 1; j >= 0; j--) {
+                    if (chat[j].is_user && chat[j].mes) { userMsg = chat[j].mes; break; }
+                }
+                const { computeExchangeHash } = await import('./message-state.js');
+                const exchangeHash = computeExchangeHash(userMsg, aiMsg.mes || '');
+                const { default: store } = await import('./memory-store.js');
+                await store.deleteByExchange(chatId, exchangeHash);
+                aiMsg._bbmem_extracted = false;
+                aiMsg._bbmem_pendingExtraction = true;
+                try { ctx.saveChatDebounced(); } catch {}
+                showToast('已清理，将自动重新提取', 'success');
+            }, { loadingText: '重提中...', successText: '已清理，等待重新提取' });
+        });
+    });
+
     overlay.querySelectorAll('.bb-mem-edit').forEach(btn => {
         btn.addEventListener('click', async (e) => {
             e.stopPropagation();

@@ -635,6 +635,30 @@ export async function clearAllData(chatId) {
 }
 
 /**
+ * 按 exchange hash 删除关联的记忆条目（支持 ROLL 后清理）
+ */
+export async function deleteByExchange(chatId, exchangeHash) {
+    if (!exchangeHash) return { npc: 0, items: 0, timeline: 0, memories: 0 };
+    const [npc, items, timeline, memories] = await Promise.all([
+        getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+    ]);
+    const filterOut = (arr) => arr.filter(e => e.sourceExchange === exchangeHash);
+    const removed = {
+        npc: filterOut(npc).length,
+        items: filterOut(items).length,
+        timeline: filterOut(timeline).length,
+        memories: filterOut(memories).length,
+    };
+    await Promise.all([
+        saveCollection('npc', chatId, npc.filter(e => e.sourceExchange !== exchangeHash)),
+        saveCollection('item', chatId, items.filter(e => e.sourceExchange !== exchangeHash)),
+        saveCollection('timeline', chatId, timeline.filter(e => e.sourceExchange !== exchangeHash)),
+        saveCollection('mem', chatId, memories.filter(e => e.sourceExchange !== exchangeHash)),
+    ]);
+    return removed;
+}
+
+/**
  * v5 兼容旧接口名称
  */
 export async function clearMemories(chatId) {
