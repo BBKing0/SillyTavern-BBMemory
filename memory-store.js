@@ -39,7 +39,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     extractionConfirmMode: 'semi', // 'active' | 'semi' | 'auto'
     activeConfirmStyle: 'popup',   // 'popup' | 'toast'
     contextWindowExchanges: 3,
-    extractionMode: 'staged',        // 'staged' | 'merged'
+    extractionMode: 'merged',        // 'merged' | 'staged' — v6.2默认合并提取
     extractedMsgDisplay: 'transparent', // 'hidden' | 'transparent' | 'visible'
     // Embedding
     embeddingEnabled: false,

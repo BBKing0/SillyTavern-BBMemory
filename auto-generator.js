@@ -74,12 +74,13 @@ const PROMPT_META_GUARD = `你是一个角色扮演(RP)剧情记忆提取助手�
 
 `;
 
-const NPC_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个角色档案提取助手。从对话中提取 NPC 信息。
+const NPC_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个角色档案提取助手。从对话中提取**本轮首次登场**或**属性发生明显变化**的 NPC。
 
 规则：
 1. 只提取有名字或明确身份的角色，不要从AI回复中推断用户信息
 2. 一次性出场的路人用 nt=background；有剧情潜力的用 nt=minor；重要配角用 nt=important；核心角色用 nt=core
-3. 如果没有值得记录的角色，返回空数组 []
+3. **职责边界：只记录角色本身的属性（身份、性格、外貌、关系），不记录事件过程**
+4. 如果角色已存在且本轮没有新信息，不需要重复提取
 
 返回纯JSON数组（不要markdown代码块）：
 n=角色名 | r=身份/职业 | p=性格特征 | a=外貌描述 | s=当前状态 | l=当前位置
@@ -92,13 +93,14 @@ nt=分级(core/important/minor/background) | ic=一行索引卡 | g=标签数组
 用户: {{userMessage}}
 角色: {{aiMessage}}`;
 
-const ITEM_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个物品追踪助手。从对话中提取值得记住的物品信息。
+const ITEM_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个物品追踪助手。从对话中提取**本轮首次出现**或**状态发生改变**的有意义物品。
 
 规则：
 1. 只提取有意义的物品（剧情相关、有特殊价值、有纪念意义）
 2. 已使用的普通消耗品（药水、食物）kp=false；有情感/纪念价值的即使已使用也 kp=true
 3. 消耗品用 it=consumable；关键剧情物用 it=key；线索物用 it=clue；装备用 it=equipped；背景道具用 it=background
-4. 如果没有值得记录的物品，返回空数组 []
+4. **职责边界：只记录物品本身的信息（持有者、状态、意义），不记录使用场景或事件**
+5. 如果物品已存在且状态未变，不需要重复提取
 
 返回纯JSON数组（不要markdown代码块）：
 n=物品名 | o=持有者 | s=状态(held=持有中/used=已使用/lost=已失去/destroyed=已销毁)
@@ -111,40 +113,60 @@ g=标签数组
 用户: {{userMessage}}
 角色: {{aiMessage}}`;
 
-const TIMELINE_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个故事时间线助手。从对话中检测值得记录的故事节点。
+const TIMELINE_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个故事时间线记录员。只记录真正重要的**故事里程碑**，而非日记流水账。
 
-规则：
-1. 只在以下情况新增/更新时间线：地点变化、关系质变、重大决策、战斗、新角色入场、章节转换
-2. 日常寒暄、闲谈、重复行为不记录
-3. 如果当前内容是一条已有事件的延续，设置 active=true（AI会更新而非新建）
-4. 如果没有值得记录的故事节点，返回空数组 []
-5. 对于回忆/过去的事，active=false
+**什么是里程碑（满足任一即记录）**：
+- 时间跨越一天以上（如"三天后..."）
+- 故事阶段转换（章节结束、新篇章开始）
+- 重大战斗/冲突的起始或结束
+- 核心角色关系的质变（敌人→朋友、朋友→恋人等）
+- 核心剧情转折
+
+**什么不是里程碑（不要记录）**：
+- 同一场景内的日常对话和微小进展
+- 重复行为、短暂冲突
+- 没有明确时间信息的事件
+
+**格式要求**：
+- 时间粒度至少以"日"为单位
+- 同一日内发生的事件合并为一条
+- 描述极其简短（一句话）
+- 如果没有达到里程碑级别，返回空数组 []
 
 返回纯JSON数组（不要markdown代码块）：
-t=故事时间(如"123年4月"或"第3天傍晚"或"") | e=事件摘要(简短) | p=参与者数组 | l=地点
-active=true(进行中可后续更新)/false(已结束) | imp=影响描述 | g=标签数组
+t=故事时间(如"123年4月5日~5月6日"或"同日") | e=事件摘要(一句话) | p=参与者数组 | l=地点
+active=true/false | imp=影响描述 | g=标签数组
 
-示例：[{"t":"123年4月15日","e":"北境会议宣战","p":["雅赫摩斯","玩家"],"l":"北境王座厅","active":true,"imp":"雅赫摩斯正式向北境诸邦宣战，玩家卷入战争","g":["北境战争","宣战"]}]
+示例：
+[{"t":"123年4月5日~5月6日","e":"北境战争爆发。雅赫摩斯宣战，玩家应征入伍","p":["雅赫摩斯","玩家"],"l":"北境","active":false,"imp":"北境格局根本改变","g":["北境战争","宣战"]},
+{"t":"123年7月8日","e":"玩家与艾琳在王都重逢，相拥和解","p":["玩家","艾琳"],"l":"王都","active":false,"imp":"核心关系修复","g":["重逢","和解"]}]
 
 [当前对话]
 用户: {{userMessage}}
 角色: {{aiMessage}}`;
 
-const MEMORY_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个记忆提取助手。从对话中提取值得长期记忆的关键信息。
+const MEMORY_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个记忆提取助手。从对话中提取**所有值得长期记忆的关键信息**。
 
-规则：
-1. 只提取重要的、值得记住的信息，不要记录日常寒暄
-2. 每条记忆应有简短标题和清晰内容
-3. 如果对话中有重要原话（承诺、告白、威胁等），保留在 v 字段
-4. 类型选择：event(事件), emotion(情感), habit(习惯), fact(事实)
-5. 如果没有值得记忆的内容，返回空数组 []
+**提取标准（降低门槛，宁可多提取）**：
+- 发生任何事件、行动、决策 → 提取
+- 出现情感波动、态度变化、关系进展 → 提取
+- 透露新信息（角色背景、世界观、计划、秘密） → 提取
+- 做出承诺、威胁、告白、约定 → 提取
+- 角色展现出习惯、偏好、性格特征 → 提取
+- 场景或情境发生变化 → 提取
 
-返回纯JSON数组（不要markdown代码块）：
-n=标题(3-8字) | tp=类型(event/emotion/habit/fact) | m=一句话摘要(10-20字) | c=完整内容
-v=重要原话(无则"") | s=主体名 | a=目标名 | i=重要性(0-1) | e=情感强度(0-1)
-st=故事时间(无则"") | g=标签数组(前3个结构标签+后7个自由标签)
+**记忆字段**：
+n=标题(3-8字，精准概括) | tp=类型(event/emotion/habit/fact)
+m=一句话摘要(10-20字) | c=完整内容(2-5句话，保留上下文)
+v=重要原话(无则"") | s=主体名 | a=目标名
+i=重要性(0-1，对剧情的影响程度) | e=情感强度(0-1，情感冲击力)
+st=故事时间(无则"") | g=标签数组(前3个结构标签+自由标签)
 
-示例：[{"n":"北境宣战","tp":"event","m":"雅赫摩斯向北境诸邦正式宣战","c":"在今日的北境会议上，雅赫摩斯宣布向北境诸邦宣战，玩家作为目击者在场","v":"从今日起，北境诸邦即为吾敌","s":"雅赫摩斯","a":"北境诸邦","i":0.8,"e":0.6,"st":"123年4月15日","g":["北境战争","雅赫摩斯","宣战"]}]
+示例：
+[{"n":"北境宣战","tp":"event","m":"雅赫摩斯向北境诸邦正式宣战","c":"在会议上，雅赫摩斯宣布向北境诸邦宣战，玩家作为目击者在场。这将改变整个北境格局。","v":"从今日起，北境诸邦即为吾敌","s":"雅赫摩斯","a":"北境诸邦","i":0.85,"e":0.6,"st":"123年4月15日","g":["北境战争","宣战","雅赫摩斯","政治","冲突"]},
+{"n":"疑惧之心","tp":"emotion","m":"玩家对即将到来的战争感到恐惧","c":"尽管表面镇定，玩家内心对战争前景充满不安，担心无法保护身边的人。","v":"","s":"玩家","a":"","i":0.5,"e":0.7,"st":"","g":["情感","恐惧","内心","战争前夕"]}]
+
+如果没有值得记忆的内容（极罕见），返回空数组 []。
 
 [当前对话]
 用户: {{userMessage}}
@@ -620,35 +642,106 @@ export async function onMessageReceived(_messageIndex) {
 
 // ═══ 合并提取（测试功能）═══
 
-const MERGED_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个记忆提取助手。从对话中提取结构化信息，分四类输出。
+const MERGED_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个记忆提取助手。从对话中提取需要长期记住的信息。
 
-## 1. NPC角色提取
-只提取有名字或明确身份的角色。路人 nt=background；有剧情的 nt=minor；重要配角 nt=important；核心 nt=core。
-字段：n(姓名), r(身份), p(性格), a(外貌), s(状态), l(位置), rt(关系数组[{"n":"名","r":"关系类型","a":"态度"}]), nt(分级), ic(索引卡), g(标签数组)
-示例：[{"n":"雅赫摩斯","r":"北境领主","p":"冷酷果决","a":"高瘦黑发中年","s":"北境王座厅","l":"北境","rt":[{"n":"玩家","r":"敌人","a":"敌对"}],"nt":"core","ic":"北境领主，已向玩家宣战","g":["北境","领主"]}]
-若无新角色，返回空数组。
+**工作顺序：先提取记忆，再从记忆中反推需要更新的NPC/物品/时间线。**
 
-## 2. 物品提取
-提取有意义的物品。消耗品 it=consumable；关键剧情物 it=key；线索 it=clue；装备 it=equipped；背景 it=background。
-字段：n(物品名), o(持有者), s(状态:held/used/lost/destroyed), sig(意义), kp(永久保留true/false), it(分级), g(标签数组)
-示例：[{"n":"辉月之剑","o":"玩家","s":"held","sig":"传说中的圣剑","kp":true,"it":"key","g":["圣剑","古代遗物"]}]
-若无新物品，返回空数组。
+═══════════════════════════════════════════════════════
+## 核心：记忆提取（最重要，必须认真完成）
+═══════════════════════════════════════════════════════
 
-## 3. 时间线提取
-检测故事节点：地点变化、关系质变、重大决策、战斗、新角色、章节转换。active=true 进行中可更新。
-字段：t(故事时间), e(事件摘要), p(参与者数组), l(地点), active(true/false), imp(影响), g(标签数组)
-示例：[{"t":"123年4月","e":"北境会议宣战","p":["雅赫摩斯","玩家"],"l":"北境王座厅","active":true,"imp":"正式向北境诸邦宣战","g":["北境战争","宣战"]}]
-若无事件，返回空数组。
+从对话中提取**所有值得长期记忆的关键信息**。宁可多提取，不可遗漏。
 
-## 4. 记忆提取
-提取重要的长期记忆。类型：event(事件)/emotion(情感)/habit(习惯)/fact(事实)。只提取值得记住的。
-字段：n(标题3-8字), tp(类型), m(摘要10-20字), c(完整内容), v(重要原话), s(主体), a(目标), i(重要性0-1), e(情感强度0-1), st(故事时间), g(标签数组)
-示例：[{"n":"北境宣战","tp":"event","m":"雅赫摩斯向北境宣战","c":"雅赫摩斯在会议上宣布向北境诸邦宣战","v":"从今日起，北境诸邦即为吾敌","s":"雅赫摩斯","a":"北境诸邦","i":0.8,"e":0.6,"st":"123年4月","g":["北境战争","宣战"]}]
-若无值得记忆的，返回空数组。
+提取标准（**降低门槛**，满足任一条即提取）：
+- 发生任何事件、行动、决策
+- 出现情感波动、态度变化、关系进展（哪怕细微）
+- 透露新信息（角色背景、世界观、计划、秘密）
+- 做出承诺、威胁、告白、约定
+- 角色展现出习惯、偏好、性格特征
+- 场景或情境发生变化
+- 任何可能对未来剧情有影响的内容
 
+每条记忆字段（n和tp和m和c必填）：
+- n=标题(3-8字，精准概括)
+- tp=类型(event/emotion/habit/fact)
+- m=一句话摘要(10-20字)
+- c=完整内容(2-5句话，保留上下文)
+- v=重要原话(无则"")
+- s=主体名 | a=目标名
+- i=重要性0-1(对剧情的影响程度)
+- e=情感强度0-1(情感冲击力)
+- st=故事时间(无则"")
+- g=标签数组(前3个结构标签+自由标签)
+
+示例：
+[{"n":"北境宣战","tp":"event","m":"雅赫摩斯向北境诸邦正式宣战","c":"在会议上，雅赫摩斯宣布向北境诸邦宣战，玩家作为目击者在场。这一决定将改变整个北境格局。","v":"从今日起，北境诸邦即为吾敌","s":"雅赫摩斯","a":"北境诸邦","i":0.85,"e":0.6,"st":"123年4月15日","g":["北境战争","宣战","雅赫摩斯","政治","冲突"]},
+{"n":"疑惧之心","tp":"emotion","m":"玩家对即将到来的战争感到恐惧","c":"尽管表面镇定，玩家内心对战争前景充满不安，担心无法保护身边的人。","v":"","s":"玩家","a":"","i":0.5,"e":0.7,"st":"","g":["情感","恐惧","内心","战争前夕"]}]
+
+若无任何值得记忆的内容（极罕见），返回空数组。
+
+═══════════════════════════════════════════════════════
+## 辅助：NPC角色更新（仅更新本轮新出现或变化的角色）
+═══════════════════════════════════════════════════════
+
+只提取**本轮对话中首次登场**或**属性/关系发生明显变化**的角色。已存在的角色如果没有新信息则不需要重复提取。
+
+字段：n(姓名), r(身份/职业), p(性格特征), a(外貌描述), s(当前状态), l(当前位置)
+rt=关系数组 [{"n":"关联角色名","r":"关系类型(朋友/敌人/恋人/师徒等)","a":"态度(友好/敌对/中立/暧昧等)"}]
+nt=分级(core=核心/important=重要配角/minor=有剧情的配角/background=路人)
+ic=一行索引卡(角色核心信息摘要) | g=标签数组
+
+若无新角色或变化，返回空数组。
+
+═══════════════════════════════════════════════════════
+## 辅助：物品更新（仅更新本轮新出现或状态变化的物品）
+═══════════════════════════════════════════════════════
+
+只提取**本轮首次出现**或**状态发生改变**的有意义物品。
+
+字段：n(物品名), o(持有者), s(状态:held/used/lost/destroyed)
+sig=意义描述, kp=true永久保留/false可清理
+it=分级(key/equipped/clue/consumable/background) | g=标签数组
+
+若无新物品或变化，返回空数组。
+
+═══════════════════════════════════════════════════════
+## 辅助：时间线里程碑（仅记录真正重要的故事节点）
+═══════════════════════════════════════════════════════
+
+时间线是**故事里程碑**，不是日记流水账。只记录级别达到以下标准的事件：
+
+**什么是里程碑（满足任一）**：
+- 时间跨越一天以上（如"三天后..."）
+- 故事阶段转换（章节结束、新篇章开始）
+- 重大战斗/冲突的起始或结束
+- 核心角色关系的质变（敌人→朋友、朋友→恋人等）
+- 核心剧情转折
+
+**什么不是里程碑（不要记录）**：
+- 同一场景内的日常对话和微小进展 → 放在记忆条目中
+- 重复行为、短暂冲突
+- 没有明确时间信息的事件
+
+**格式要求**：
+- 时间粒度至少以"日"为单位。没有具体日期可用"同年初夏""三天后"等
+- 同一日内发生的事件合并为一条
+- 描述极其简短（一句话）
+
+字段：t(故事时间，如"123年4月5日~5月6日"或"同日"), e(事件摘要，一句话),
+p(参与者数组), l(地点), active=true/false, imp(影响), g(标签数组)
+
+示例：
+[{"t":"123年4月5日~5月6日","e":"北境战争爆发。雅赫摩斯宣战，玩家应征入伍","p":["雅赫摩斯","玩家"],"l":"北境","active":false,"imp":"北境格局根本改变","g":["北境战争","宣战"]},
+{"t":"123年7月8日","e":"玩家与艾琳在王都重逢，相拥和解","p":["玩家","艾琳"],"l":"王都","active":false,"imp":"核心关系修复","g":["重逢","和解"]}]
+
+若本轮对话未达到里程碑级别，返回空数组。
+
+═══════════════════════════════════════════════════════
 ## 输出格式
-返回纯JSON对象（不要markdown代码块）：
-{"npc":[], "items":[], "timeline":[], "memories":[]}
+═══════════════════════════════════════════════════════
+
+返回纯JSON对象（不要markdown代码块，不要```json```）：
+{"memories":[...记忆数组，核心输出...], "npc":[...NPC数组...], "items":[...物品数组...], "timeline":[...时间线数组...]}
 
 [当前对话]
 用户: {{userMessage}}
@@ -656,22 +749,35 @@ const MERGED_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个记忆提取�
 
 function parseMergedResponse(responseText) {
     if (!responseText || !responseText.trim()) {
+        console.warn('[BB-Memory] 合并提取响应为空');
         return { npc: [], items: [], timeline: [], memories: [] };
     }
     let text = responseText.trim();
     text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
     const match = text.match(/\{[\s\S]*\}/);
-    if (!match) return { npc: [], items: [], timeline: [], memories: [] };
+    if (!match) {
+        console.warn('[BB-Memory] 合并提取响应未找到JSON对象，前200字符:', text.slice(0, 200));
+        return { npc: [], items: [], timeline: [], memories: [] };
+    }
     try {
         const parsed = JSON.parse(match[0]);
-        return {
-            npc: parseNpcResponse(JSON.stringify(parsed.npc || [])),
-            items: parseItemResponse(JSON.stringify(parsed.items || [])),
-            timeline: parseTimelineResponse(JSON.stringify(parsed.timeline || [])),
-            memories: parseMemoryResponse(JSON.stringify(parsed.memories || [])),
+        // v6.2.0: 兼容不同字段名
+        const memArr = parsed.memories || parsed.memory || parsed.mem || [];
+        const npcArr = parsed.npc || [];
+        const itemsArr = parsed.items || [];
+        const tlArr = parsed.timeline || [];
+        const result = {
+            npc: parseNpcResponse(JSON.stringify(npcArr)),
+            items: parseItemResponse(JSON.stringify(itemsArr)),
+            timeline: parseTimelineResponse(JSON.stringify(tlArr)),
+            memories: parseMemoryResponse(JSON.stringify(memArr)),
         };
+        if (memArr.length === 0 && npcArr.length === 0 && itemsArr.length === 0 && tlArr.length === 0) {
+            console.log('[BB-Memory] 合并提取: 本轮无需提取');
+        }
+        return result;
     } catch (e) {
-        if (getSettings().debugLogging) console.warn('[BB-Memory] 合并响应解析失败:', e.message);
+        console.warn('[BB-Memory] 合并响应JSON解析失败:', e.message, '前200字符:', text.slice(0, 200));
         return { npc: [], items: [], timeline: [], memories: [] };
     }
 }
@@ -711,9 +817,7 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
             if (embedding) activeMemories.push({ embedding });
             total++;
         }
-        if (total > 0 && getSettings().debugLogging) {
-            console.log(`[BB-Memory] 合并提取: ${total} 条 (NPC${results.npc.length}/物品${results.items.length}/时间线${results.timeline.length}/记忆${limited.length})`);
-        }
+        console.log(`[BB-Memory] 合并提取: NPC${results.npc.length}/物品${results.items.length}/时间线${results.timeline.length}/记忆${limited.length} (保存${total}条)`);
         return total;
     } catch (e) {
         console.warn('[BB-Memory] 合并提取失败:', e.message);
