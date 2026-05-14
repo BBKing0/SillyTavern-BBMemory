@@ -160,7 +160,9 @@ export async function syncMessageVisibility(windowOverride) {
     let hiddenCount = 0;
     let changed = false;
 
-    for (let i = 0; i < cutoff; i++) {
+    // v6.1.5: 只标记最靠近窗口的一个 exchange（从 cutoff 向左扫描，找到即停）
+    // 避免初始加载时一次性标记所有历史消息
+    for (let i = cutoff - 1; i >= 0; i--) {
         const msg = chat[i];
         if (msg.is_system || msg.is_user) continue;
 
@@ -168,7 +170,15 @@ export async function syncMessageVisibility(windowOverride) {
             msg._bbmem_pendingExtraction = true;
             hiddenCount++;
             changed = true;
-        } else if (msg.is_hidden && !msg._bbmem_hideSource) {
+            break;  // 只标记一个
+        }
+    }
+
+    // 修复隐藏消息的来源标记（独立遍历）
+    for (let i = 0; i < cutoff; i++) {
+        const msg = chat[i];
+        if (msg.is_system || msg.is_user) continue;
+        if (msg.is_hidden && !msg._bbmem_hideSource) {
             msg._bbmem_hideSource = 'user';
             changed = true;
         }
