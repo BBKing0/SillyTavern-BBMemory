@@ -10,7 +10,7 @@ import {
     getItems, addItem, updateItem, removeItem,
     getTimeline, addTimelineEntry, updateTimelineEntry, removeTimelineEntry,
     getMemories, addMemory, updateMemory, removeMemory,
-    clearAllData, getMemoryStats, getSettings, updateSettings,
+    clearAllData, deleteByExchange, getMemoryStats, getSettings, updateSettings,
     exportMemories, importMemories, updateFactContent, addHiddenNote, removeHiddenNote,
 } from './memory-store.js';
 import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot } from './memory-slots.js';
@@ -18,7 +18,7 @@ import { simpleSearch } from './retriever.js';
 import { MEMORY_TYPES, TRUTH_STATUS, HIDDEN_NOTE_TYPES, TIMELINE_STATUS, ITEM_STATUS } from './memory-types.js';
 import { NPC_TIERS, ITEM_TIERS, normalizeNpcTier, normalizeItemTier } from './entity-tiers.js';
 import { extractFromContext, saveExtractedMemories } from './auto-generator.js';
-import { markExchangeExtracted, hideExchange } from './message-state.js';
+import { markExchangeExtracted, hideExchange, unmarkExchangeProcessed } from './message-state.js';
 import { fuzzyMemory, archiveMemory, restoreMemory } from './memory-maintainer.js';
 
 // ═══ 全局状态 ═══
@@ -570,10 +570,12 @@ function rebindItemActions(overlay, chatId) {
             e.stopPropagation();
             const floor = parseInt(btn.dataset.floor, 10);
             if (isNaN(floor)) return;
-            withFeedback(btn, async () => {
-                // 查找楼层消息，计算 exchange hash
-                const ctx = SillyTavern.getContext();
-                const chat = ctx.chat || [];
+            btn.disabled = true;
+            const origHTML = btn.innerHTML;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+            try {
+                const ctx2 = SillyTavern.getContext();
+                const chat = ctx2.chat || [];
                 if (floor < 0 || floor >= chat.length) throw new Error('楼层不存在');
                 const aiMsg = chat[floor];
                 if (!aiMsg || aiMsg.is_user) throw new Error('不是AI消息');
@@ -583,13 +585,18 @@ function rebindItemActions(overlay, chatId) {
                 }
                 const { computeExchangeHash } = await import('./message-state.js');
                 const exchangeHash = computeExchangeHash(userMsg, aiMsg.mes || '');
-                const { default: store } = await import('./memory-store.js');
-                await store.deleteByExchange(chatId, exchangeHash);
+                await deleteByExchange(chatId, exchangeHash);
+                await unmarkExchangeProcessed(chatId, exchangeHash); // v6.1.6
                 aiMsg._bbmem_extracted = false;
                 aiMsg._bbmem_pendingExtraction = true;
-                try { ctx.saveChatDebounced(); } catch {}
+                try { ctx2.saveChatDebounced(); } catch {}
                 showToast('已清理，将自动重新提取', 'success');
-            }, { loadingText: '重提中...', successText: '已清理，等待重新提取' });
+            } catch (err) {
+                showToast('重提失败: ' + err.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = origHTML;
+            }
         });
     });
 

@@ -4,9 +4,9 @@
     "js": "index.js",
     "css": "style.css",
     "author": "BB-Memory Dev",
-    "version": "6.1.5",
+    "version": "6.1.6",
     "homePage": "https://github.com/BBKing0/SillyTavern-BBMemory",
     "auto_update": true,
     "generate_interceptor": "bbMemoryInterceptor",
-    "description": "智能长期记忆扩展 v6.1.5 - 四柱架构：NPC档案/物品栏/时间线/记忆条目，升降格系统，楼层操作，换楼刷新"
+    "description": "智能长期记忆扩展 v6.1.6 - 四柱架构：NPC档案/物品栏/时间线/记忆条目，升降格系统，楼层操作，换楼刷新"
 }

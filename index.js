@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v6.1.5 主入口
+ * index.js —— BB-Memory v6.1.6 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 时间线 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -36,7 +36,7 @@ import {
 
 import {
     syncMessageVisibility, refreshExtractionMarkers,
-    markExchangeExtracted, hideExchange,
+    markExchangeExtracted, hideExchange, unmarkExchangeProcessed,
 } from './message-state.js';
 
 import {
@@ -1029,6 +1029,7 @@ function registerSlashCommands() {
         const { computeExchangeHash } = await import('./message-state.js');
         const exchangeHash = computeExchangeHash(userMsg, aiMsg.mes || '');
         await deleteByExchange(chatId, exchangeHash);
+        await unmarkExchangeProcessed(chatId, exchangeHash); // v6.1.6
         // 清除提取标记以便重新提取
         aiMsg._bbmem_extracted = false;
         aiMsg._bbmem_pendingExtraction = true;
@@ -1523,7 +1524,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v6.1.5 初始化开始...');
+    console.log('[BB-Memory] v6.1.6 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -1639,7 +1640,7 @@ async function init() {
     // v6.1: 监听消息删除，自动清理关联记忆
     initMessageDeletionWatch();
 
-    console.log('[BB-Memory] v6.1.5 初始化完成');
+    console.log('[BB-Memory] v6.1.6 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆

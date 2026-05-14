@@ -112,6 +112,18 @@ export async function isExchangeProcessed(chatId, hash) {
 }
 
 /**
+ * v6.1.6: 从已处理集合中移除 hash，用于重新提取
+ */
+export async function unmarkExchangeProcessed(chatId, hash) {
+    if (!chatId || !hash) return;
+    const set = await getProcessedSet(chatId);
+    if (set.has(hash)) {
+        set.delete(hash);
+        await saveProcessedSet(chatId, set);
+    }
+}
+
+/**
  * 将 exchange hash 标记为已处理
  */
 export async function markExchangeProcessed(chatId, hash) {
@@ -427,6 +439,7 @@ export function refreshExtractionMarkers() {
                     const hash = computeExchangeHash(userText, msg.mes || '');
                     const store = await import('./memory-store.js');
                     await store.deleteByExchange(chatId, hash);
+                    await unmarkExchangeProcessed(chatId, hash); // v6.1.6: 清除已处理标记
                     msg._bbmem_extracted = false;
                     msg._bbmem_pendingExtraction = true;
                     saveChat();
@@ -445,11 +458,10 @@ export function refreshExtractionMarkers() {
             // 删除楼层关联记忆按钮
             const delBtn = document.createElement('button');
             delBtn.className = 'bb-floor-btn bb-floor-del';
-            delBtn.title = '删除该楼层关联的所有记忆';
+            delBtn.title = '查看并删除该楼层关联的记忆';
             delBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
             delBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
-                if (!confirm('确定删除该楼层关联的所有记忆吗？（NPC/物品/时间线/记忆条目）')) return;
                 delBtn.disabled = true;
                 delBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
                 try {
@@ -459,18 +471,32 @@ export function refreshExtractionMarkers() {
                     }
                     const hash = computeExchangeHash(userText, msg.mes || '');
                     const store = await import('./memory-store.js');
-                    const removed = await store.deleteByExchange(chatId, hash);
-                    const total = removed.npc + removed.items + removed.timeline + removed.memories;
-                    msg._bbmem_extracted = false;
-                    msg._bbmem_pendingExtraction = false;
-                    saveChat();
-                    showInlineToast(block, `已删除 ${total} 条记忆（NPC:${removed.npc} 物品:${removed.items} 时间线:${removed.timeline} 记忆:${removed.memories}）`, 'success');
-                    refreshExtractionMarkers();
+                    // v6.1.6: 先加载关联记忆展示给用户
+                    const [npc, items, timeline, memories] = await Promise.all([
+                        store.getNpcProfiles(chatId), store.getItems(chatId),
+                        store.getTimeline(chatId), store.getMemories(chatId),
+                    ]);
+                    const matched = {
+                        npc: npc.filter(e => e.sourceExchange === hash),
+                        items: items.filter(e => e.sourceExchange === hash),
+                        timeline: timeline.filter(e => e.sourceExchange === hash),
+                        memories: memories.filter(e => e.sourceExchange === hash),
+                    };
+                    await showDeleteFloorDialog(chatId, hash, matched, async () => {
+                        const removed = await store.deleteByExchange(chatId, hash);
+                        const total = removed.npc + removed.items + removed.timeline + removed.memories;
+                        msg._bbmem_extracted = false;
+                        msg._bbmem_pendingExtraction = false;
+                        saveChat();
+                        showInlineToast(block, `已删除 ${total} 条记忆（NPC:${removed.npc} 物品:${removed.items} 时间线:${removed.timeline} 记忆:${removed.memories}）`, 'success');
+                        refreshExtractionMarkers();
+                    });
                 } catch (err) {
                     console.warn('[BB-Memory] 删除楼层记忆失败:', err.message);
+                    showInlineToast(block, '删除失败: ' + err.message, 'error');
+                } finally {
                     delBtn.disabled = false;
                     delBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
-                    showInlineToast(block, '删除失败: ' + err.message, 'error');
                 }
             });
             floorActions.appendChild(delBtn);
@@ -503,6 +529,84 @@ export function refreshExtractionMarkers() {
     });
 
     if (changed) saveChat();
+}
+
+// v6.1.6: 删除楼层关联记忆的确认弹窗
+async function showDeleteFloorDialog(chatId, hash, matched, onConfirm) {
+    const totalAll = matched.npc.length + matched.items.length + matched.timeline.length + matched.memories.length;
+    if (totalAll === 0) {
+        showInlineToast(null, '该楼层没有关联的记忆条目', 'info');
+        return;
+    }
+
+    // 移除旧弹窗
+    const existing = document.querySelector('.bb-delete-dialog-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'bb-delete-dialog-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;';
+
+    const panel = document.createElement('div');
+    panel.style.cssText = 'background:var(--SmartThemeBlurTintColor,#1e1e2e);border:1px solid var(--SmartThemeBorderColor,#45475a);border-radius:12px;padding:20px;max-width:560px;width:90vw;max-height:70vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.5);';
+
+    // 头部
+    panel.innerHTML = `
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-shrink:0;">
+            <i class="fa-solid fa-trash" style="color:#ef5350;"></i>
+            <div style="flex:1;"><strong>删除楼层关联记忆</strong></div>
+            <span style="font-size:0.85em;opacity:0.7;">${totalAll} 条</span>
+        </div>
+        <div style="flex:1;overflow-y:auto;min-height:0;font-size:0.85em;"></div>
+        <div style="display:flex;gap:8px;margin-top:16px;flex-shrink:0;">
+            <button class="bb-dialog-btn-cancel" style="flex:1;padding:8px;border:1px solid var(--SmartThemeBorderColor,#45475a);border-radius:6px;background:transparent;color:inherit;cursor:pointer;">取消</button>
+            <button class="bb-dialog-btn-del" style="flex:1;padding:8px;border:none;border-radius:6px;background:#ef5350;color:#fff;cursor:pointer;font-weight:600;">全部删除</button>
+        </div>
+    `;
+
+    const body = panel.querySelector('div:nth-child(2)');
+    const pillars = [
+        { key: 'npc', icon: 'fa-user', label: 'NPC角色', color: '#64b5f6', entries: matched.npc, fields: ['name','tier','role'] },
+        { key: 'items', icon: 'fa-box', label: '物品', color: '#ffb74d', entries: matched.items, fields: ['name','status','tier'] },
+        { key: 'timeline', icon: 'fa-clock', label: '时间线', color: '#81c784', entries: matched.timeline, fields: ['event','storyTime'] },
+        { key: 'memories', icon: 'fa-brain', label: '记忆条目', color: '#ce93d8', entries: matched.memories, fields: ['title','type','tier'] },
+    ];
+
+    for (const p of pillars) {
+        if (!p.entries.length) continue;
+        const section = document.createElement('details');
+        section.open = true;
+        section.style.cssText = 'margin-bottom:8px;';
+        section.innerHTML = `<summary style="cursor:pointer;padding:4px 0;color:${p.color};">
+            <i class="fa-solid ${p.icon}"></i> ${p.label} <strong>(${p.entries.length})</strong>
+        </summary>`;
+        const list = document.createElement('ul');
+        list.style.cssText = 'margin:4px 0 0 16px;padding:0;list-style:none;';
+        for (const e of p.entries) {
+            const parts = p.fields.map(f => e[f] || '-').join(' · ');
+            const li = document.createElement('li');
+            li.style.cssText = 'padding:2px 0;opacity:0.85;';
+            li.textContent = parts;
+            list.appendChild(li);
+        }
+        section.appendChild(list);
+        body.appendChild(section);
+    }
+
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+
+    return new Promise((resolve) => {
+        const cleanup = () => { overlay.remove(); resolve(); };
+        panel.querySelector('.bb-dialog-btn-cancel').addEventListener('click', cleanup);
+        panel.querySelector('.bb-dialog-btn-del').addEventListener('click', async () => {
+            panel.querySelector('.bb-dialog-btn-del').disabled = true;
+            panel.querySelector('.bb-dialog-btn-del').textContent = '删除中...';
+            await onConfirm();
+            cleanup();
+        });
+        overlay.addEventListener('click', (ev) => { if (ev.target === overlay) cleanup(); });
+    });
 }
 
 function showInlineToast(nearBlock, message, type) {
