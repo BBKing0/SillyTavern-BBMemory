@@ -659,6 +659,28 @@ export async function deleteByExchange(chatId, exchangeHash) {
 }
 
 /**
+ * v6.1.0: 换楼刷新 — 将当前聊天所有记忆的 sourceFloor 统一设为 -1（旧聊天记忆）
+ * 用于玩家"换楼"（开新聊天）后，将旧楼层的记忆标记为无特定楼层来源
+ */
+export async function refreshAllSourceFloors(chatId) {
+    const [npc, items, timeline, memories] = await Promise.all([
+        getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+    ]);
+    const stats = { npc: 0, items: 0, timeline: 0, memories: 0 };
+    for (const e of npc) { if (typeof e.sourceFloor === 'number' && e.sourceFloor >= 0) { e.sourceFloor = -1; stats.npc++; } }
+    for (const e of items) { if (typeof e.sourceFloor === 'number' && e.sourceFloor >= 0) { e.sourceFloor = -1; stats.items++; } }
+    for (const e of timeline) { if (typeof e.sourceFloor === 'number' && e.sourceFloor >= 0) { e.sourceFloor = -1; stats.timeline++; } }
+    for (const e of memories) { if (typeof e.sourceFloor === 'number' && e.sourceFloor >= 0) { e.sourceFloor = -1; stats.memories++; } }
+    await Promise.all([
+        saveCollection('npc', chatId, npc),
+        saveCollection('item', chatId, items),
+        saveCollection('timeline', chatId, timeline),
+        saveCollection('mem', chatId, memories),
+    ]);
+    return stats;
+}
+
+/**
  * v5 兼容旧接口名称
  */
 export async function clearMemories(chatId) {

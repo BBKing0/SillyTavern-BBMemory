@@ -277,6 +277,7 @@ export async function markExchangeExtracted(aiIndex, hash) {
     if (chat && chat[aiIndex]) {
         chat[aiIndex]._bbmem_extracted = true;
         chat[aiIndex]._bbmem_pendingExtraction = false;
+        chat[aiIndex]._bbmem_exchangeHash = hash; // v6.1: 用于消息删除时自动清理
         if (!chat[aiIndex].is_hidden) {
             chat[aiIndex].is_hidden = true;
             chat[aiIndex]._bbmem_hideSource = 'plugin';
@@ -324,6 +325,8 @@ export function refreshExtractionMarkers() {
     const chat = ctx.chat;
     if (!chat) return;
 
+    const chatId = getChatId();
+
     let changed = false;
     const msgBlocks = document.querySelectorAll('.mes');
     msgBlocks.forEach(block => {
@@ -332,6 +335,8 @@ export function refreshExtractionMarkers() {
         if (existingMarker) existingMarker.remove();
         const existingMetaBtn = block.querySelector('.bb-meta-toggle-btn');
         if (existingMetaBtn) existingMetaBtn.remove();
+        const existingFloorActions = block.querySelector('.bb-floor-actions');
+        if (existingFloorActions) existingFloorActions.remove();
 
         const mesId = block.getAttribute('mesid');
         if (mesId == null) return;
@@ -341,7 +346,6 @@ export function refreshExtractionMarkers() {
         const msg = chat[idx];
 
         // ── 元标记按钮（所有消息都添加）──
-        // v2.9.9: 清晰的双图标区分 — 🗃️ 可提取 / 🤖 元指令
         const metaBtn = document.createElement('button');
         metaBtn.className = 'bb-meta-toggle-btn';
         if (msg._bbmem_meta_marker) {
@@ -355,7 +359,6 @@ export function refreshExtractionMarkers() {
             metaBtn.style.opacity = '0.5';
             metaBtn.style.color = 'var(--SmartThemeQuoteColor, #4caf50)';
         }
-        // 插入到 mes_buttons 行或 mes_block 中
         const btnRow = block.querySelector('.mes_buttons');
         if (btnRow) {
             btnRow.appendChild(metaBtn);
@@ -364,21 +367,107 @@ export function refreshExtractionMarkers() {
             contentEl.appendChild(metaBtn);
         }
 
+        // ── 楼层操作按钮容器 ──
+        const floorActions = document.createElement('span');
+        floorActions.className = 'bb-floor-actions';
+        const markerTarget = block.querySelector('.mes_text') || block.querySelector('.mes_block') || block;
+
         // ── 提取标记 ──
         if (msg._bbmem_pendingExtraction && !msg._bbmem_extracted) {
             const marker = document.createElement('span');
             marker.className = 'bb-extract-marker bb-extract-pending';
             marker.title = 'BB-Memory 正在提取此消息...';
             marker.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
-            const contentEl = block.querySelector('.mes_text') || block.querySelector('.mes_block') || block;
-            contentEl.appendChild(marker);
+            markerTarget.appendChild(marker);
+
+            // 跳过按钮
+            const skipBtn = document.createElement('button');
+            skipBtn.className = 'bb-floor-btn bb-floor-skip';
+            skipBtn.title = '跳过提取该楼层';
+            skipBtn.innerHTML = '<i class="fa-solid fa-forward"></i>';
+            skipBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                msg._bbmem_pendingExtraction = false;
+                saveChat();
+                refreshExtractionMarkers();
+            });
+            floorActions.appendChild(skipBtn);
+
         } else if (msg._bbmem_extracted) {
             const marker = document.createElement('span');
             marker.className = 'bb-extract-marker';
-            marker.title = '此消息已被 BB-Memory 提取';
+            marker.title = '此消息已被 BB-Memory 提取 (v6.1)';
             marker.innerHTML = '<i class="fa-solid fa-circle-check"></i>';
-            const contentEl = block.querySelector('.mes_text') || block.querySelector('.mes_block') || block;
-            contentEl.appendChild(marker);
+            markerTarget.appendChild(marker);
+
+            // 重新提取按钮
+            const reExtractBtn = document.createElement('button');
+            reExtractBtn.className = 'bb-floor-btn bb-floor-re-extract';
+            reExtractBtn.title = '重新提取该楼层记忆';
+            reExtractBtn.innerHTML = '<i class="fa-solid fa-rotate"></i>';
+            reExtractBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                reExtractBtn.disabled = true;
+                reExtractBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+                try {
+                    let userText = '';
+                    for (let j = idx - 1; j >= 0; j--) {
+                        if (chat[j].is_user && chat[j].mes) { userText = chat[j].mes; break; }
+                    }
+                    const hash = computeExchangeHash(userText, msg.mes || '');
+                    const store = await import('./memory-store.js');
+                    await store.deleteByExchange(chatId, hash);
+                    msg._bbmem_extracted = false;
+                    msg._bbmem_pendingExtraction = true;
+                    saveChat();
+                    const ag = await import('./auto-generator.js');
+                    ag.onMessageReceived(idx);
+                    refreshExtractionMarkers();
+                } catch (err) {
+                    console.warn('[BB-Memory] 重新提取失败:', err.message);
+                    reExtractBtn.disabled = false;
+                    reExtractBtn.innerHTML = '<i class="fa-solid fa-rotate"></i>';
+                    showInlineToast(block, '重新提取失败: ' + err.message, 'error');
+                }
+            });
+            floorActions.appendChild(reExtractBtn);
+
+            // 删除楼层关联记忆按钮
+            const delBtn = document.createElement('button');
+            delBtn.className = 'bb-floor-btn bb-floor-del';
+            delBtn.title = '删除该楼层关联的所有记忆';
+            delBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
+            delBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                if (!confirm('确定删除该楼层关联的所有记忆吗？（NPC/物品/时间线/记忆条目）')) return;
+                delBtn.disabled = true;
+                delBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+                try {
+                    let userText = '';
+                    for (let j = idx - 1; j >= 0; j--) {
+                        if (chat[j].is_user && chat[j].mes) { userText = chat[j].mes; break; }
+                    }
+                    const hash = computeExchangeHash(userText, msg.mes || '');
+                    const store = await import('./memory-store.js');
+                    const removed = await store.deleteByExchange(chatId, hash);
+                    const total = removed.npc + removed.items + removed.timeline + removed.memories;
+                    msg._bbmem_extracted = false;
+                    msg._bbmem_pendingExtraction = false;
+                    saveChat();
+                    showInlineToast(block, `已删除 ${total} 条记忆（NPC:${removed.npc} 物品:${removed.items} 时间线:${removed.timeline} 记忆:${removed.memories}）`, 'success');
+                    refreshExtractionMarkers();
+                } catch (err) {
+                    console.warn('[BB-Memory] 删除楼层记忆失败:', err.message);
+                    delBtn.disabled = false;
+                    delBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
+                    showInlineToast(block, '删除失败: ' + err.message, 'error');
+                }
+            });
+            floorActions.appendChild(delBtn);
+        }
+
+        if (floorActions.children.length > 0) {
+            markerTarget.appendChild(floorActions);
         }
 
         // ── 隐藏已提取/元标记的消息（待提取的不隐藏）──
@@ -386,7 +475,6 @@ export function refreshExtractionMarkers() {
             if (!block.classList.contains('bb-extracted-hidden')) {
                 block.classList.add('bb-extracted-hidden');
             }
-            // v4.2.0: 数据级隐藏 — 确保 AI 上下文也不可见
             if (!msg.is_hidden) {
                 msg.is_hidden = true;
                 msg._bbmem_hideSource = 'plugin';
@@ -395,7 +483,30 @@ export function refreshExtractionMarkers() {
         } else {
             block.classList.remove('bb-extracted-hidden');
         }
+
+        // v6.1: 存储 exchange hash 到 DOM 用于删除检测
+        if (msg._bbmem_exchangeHash) {
+            block.setAttribute('data-bb-exchange-hash', msg._bbmem_exchangeHash);
+        } else {
+            block.removeAttribute('data-bb-exchange-hash');
+        }
     });
 
     if (changed) saveChat();
+}
+
+function showInlineToast(nearBlock, message, type) {
+    const existing = document.querySelector('.bb-inline-toast');
+    if (existing) existing.remove();
+    const toast = document.createElement('div');
+    toast.className = 'bb-inline-toast';
+    toast.textContent = message;
+    toast.style.cssText = `
+        position:fixed;bottom:100px;left:50%;transform:translateX(-50%);z-index:99999;
+        padding:8px 16px;border-radius:6px;font-size:0.85em;pointer-events:none;
+        background:${type === 'error' ? '#f44336' : '#4caf50'};color:#fff;
+        box-shadow:0 2px 8px rgba(0,0,0,0.3);
+    `;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
 }

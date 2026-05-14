@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v5.0 主入口
+ * index.js —— BB-Memory v6.1 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 时间线 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -12,7 +12,7 @@ import {
     getItems, addItem, updateItem, removeItem, upsertItem,
     getTimeline, addTimelineEntry, updateTimelineEntry, removeTimelineEntry, upsertTimelineEntry,
     getMemories, addMemory, updateMemory, removeMemory,
-    clearAllData, deleteByExchange, getMemoryStats,
+    clearAllData, deleteByExchange, getMemoryStats, refreshAllSourceFloors,
     exportMemoriesToChatMetadata, importMemoriesFromChatMetadata,
     migrateV4ToV5, recordHits, checkDemotions,
     exportMemories, importMemories, updateFactContent, addHiddenNote, removeHiddenNote,
@@ -481,11 +481,14 @@ function bindSidebarEvents() {
     document.querySelector('#bb_memory_maintenance_btn')?.addEventListener('click', async () => {
         const chatId = getChatId();
         if (!chatId) return;
-        const result = await checkMaintenanceNeeded(chatId);
-        if (result.issues && result.issues.length > 0) {
+        try {
+            const result = await checkMaintenanceNeeded(chatId);
             showMaintenancePopup(chatId, result);
-        } else {
-            showToast('当前无需维护', 'info');
+        } catch (e) {
+            console.warn('[BB-Memory] 维护检查异常:', e.message);
+            showToast('维护检查出错: ' + e.message, 'error');
+            // 仍然打开面板（空数据模式）
+            showMaintenancePopup(chatId, { issues: [], issueCount: 0, totalItems: 0, needed: false });
         }
     });
     // 世界书导入
@@ -641,13 +644,12 @@ function withFeedback(btn, fn, { loadingText, successText, errorText } = {}) {
 // ═══ 记忆维护面板 ═══
 
 function showMaintenancePopup(chatId, result) {
-    if (!result || !result.issues || !result.issues.length) {
-        showToast('当前无需维护', 'info');
-        return;
-    }
     const existing = document.querySelector('.bb-maint-overlay');
     if (existing) existing.remove();
 
+    const issues = result?.issues || [];
+    const issueCount = result?.issueCount ?? issues.length;
+    const totalItems = result?.totalItems ?? 0;
     const overlay = document.createElement('div');
     overlay.className = 'bb-maint-overlay';
 
@@ -664,9 +666,9 @@ function showMaintenancePopup(chatId, result) {
         <div style="display:flex;flex-direction:column;flex:1;">
             <div style="display:flex;align-items:center;gap:8px;">
                 <strong>记忆维护</strong>
-                <span class="bb-maint-cat-count" style="font-size:0.85em;">${result.issueCount}条待处理</span>
+                <span class="bb-maint-cat-count" style="font-size:0.85em;">${issueCount}条待处理</span>
             </div>
-            <p style="margin:4px 0 0;font-size:0.85em;opacity:0.7;">共 ${result.totalItems} 条条目</p>
+            <p style="margin:4px 0 0;font-size:0.85em;opacity:0.7;">共 ${totalItems} 条条目</p>
         </div>
         <button class="bb-maint-close-btn" style="background:none;border:none;color:inherit;font-size:24px;cursor:pointer;opacity:0.6;line-height:1;padding:0 4px;">&times;</button>
     `;
@@ -676,7 +678,7 @@ function showMaintenancePopup(chatId, result) {
     const tabBar = document.createElement('div');
     tabBar.style.cssText = 'display:flex;border-bottom:1px solid var(--SmartThemeBorderColor,#45475a);flex-shrink:0;';
     const pendingBtn = document.createElement('button');
-    pendingBtn.textContent = `待维护 (${result.issueCount})`;
+    pendingBtn.textContent = `待维护 (${issueCount})`;
     pendingBtn.style.cssText = 'flex:1;padding:10px;border:none;background:var(--SmartThemeBlurTintColor,#2a2a3e);color:inherit;cursor:pointer;font-size:0.9em;font-weight:600;border-bottom:2px solid #fab387;';
     const resolvedBtn = document.createElement('button');
     resolvedBtn.textContent = '已维护';
@@ -727,11 +729,18 @@ function showMaintenancePopup(chatId, result) {
         resolvedBtn.style.cssText = 'flex:1;padding:10px;border:none;background:transparent;color:inherit;cursor:pointer;font-size:13px;opacity:0.6;border-bottom:2px solid transparent;';
         body.innerHTML = '';
 
-        const issues = result.issues || [];
         const grouped = {};
         for (const iss of issues) {
             if (!grouped[iss.type]) grouped[iss.type] = [];
             grouped[iss.type].push(iss);
+        }
+
+        if (issues.length === 0) {
+            body.innerHTML = `<div style="text-align:center;padding:40px;opacity:0.6;">
+                <i class="fa-solid fa-circle-check" style="font-size:2em;color:#4caf50;display:block;margin-bottom:12px;"></i>
+                记忆状态良好，没有待维护项
+            </div>`;
+            return;
         }
 
         // Legend
@@ -953,11 +962,13 @@ function registerSlashCommands() {
     addCmd('bb-maintenance', async () => {
         const chatId = getChatId();
         if (!chatId) return;
-        const result = await checkMaintenanceNeeded(chatId);
-        if (result.issues && result.issues.length > 0) {
+        try {
+            const result = await checkMaintenanceNeeded(chatId);
             showMaintenancePopup(chatId, result);
-        } else {
-            showToast('当前无需维护', 'info');
+        } catch (e) {
+            console.warn('[BB-Memory] 维护检查异常:', e.message);
+            showToast('维护检查出错: ' + e.message, 'error');
+            showMaintenancePopup(chatId, { issues: [], issueCount: 0, totalItems: 0, needed: false });
         }
     }, '打开记忆维护面板');
 
@@ -1027,6 +1038,18 @@ function registerSlashCommands() {
         const { onMessageReceived } = await import('./auto-generator.js');
         onMessageReceived(floor);
     }, '删除并重新提取指定楼层的记忆');
+
+    addCmd('bb-floor-refresh', async () => {
+        const chatId = getChatId();
+        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        const stats = await refreshAllSourceFloors(chatId);
+        const total = stats.npc + stats.items + stats.timeline + stats.memories;
+        if (total === 0) {
+            showToast('当前没有需要刷新的楼层记忆（所有记忆已标记为旧聊天来源）', 'info');
+        } else {
+            showToast(`楼层刷新完成！已标记 ${total} 条记忆为旧聊天来源（NPC:${stats.npc} 物品:${stats.items} 时间线:${stats.timeline} 记忆:${stats.memories}）`, 'success');
+        }
+    }, '换楼刷新 — 将所有记忆的楼层标记为旧聊天来源（开新聊天后使用）');
 
     if (getSettings().debugLogging) {
         console.log('[BB-Memory] 斜杠命令已注册');
@@ -1186,6 +1209,14 @@ function injectFloatingHub() {
             <div class="bb-floating-menu-item bb-floating-menu-action" data-action="manual_extract">
                 <i class="fa-solid fa-wand-magic-sparkles"></i>
                 <span>手动提取</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="floor_refresh">
+                <i class="fa-solid fa-arrows-rotate"></i>
+                <span>换楼刷新</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_maintenance">
+                <i class="fa-solid fa-toolbox"></i>
+                <span>记忆维护</span>
             </div>
             <div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_manager">
                 <i class="fa-solid fa-gear"></i>
@@ -1441,6 +1472,28 @@ async function handleFloatingMenuAction(action) {
             if (chatId) openMemoryManager(chatId);
             break;
         }
+        case 'floor_refresh': {
+            if (!chatId) return;
+            const stats = await refreshAllSourceFloors(chatId);
+            const total = stats.npc + stats.items + stats.timeline + stats.memories;
+            if (total === 0) {
+                showToast('当前没有需要刷新的楼层记忆', 'info');
+            } else {
+                showToast(`已标记 ${total} 条记忆为旧聊天来源`, 'success');
+            }
+            break;
+        }
+        case 'open_maintenance': {
+            if (!chatId) return;
+            try {
+                const result = await checkMaintenanceNeeded(chatId);
+                showMaintenancePopup(chatId, result);
+            } catch (e) {
+                console.warn('[BB-Memory] 维护检查异常:', e.message);
+                showMaintenancePopup(chatId, { issues: [], issueCount: 0, totalItems: 0, needed: false });
+            }
+            break;
+        }
         case 'toggle_hit_list': {
             const hitList = document.getElementById('bb_hub_hit_list');
             const hitRow = document.getElementById('bb_hub_hit_info');
@@ -1470,7 +1523,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v5.0 初始化开始...');
+    console.log('[BB-Memory] v6.1 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -1583,7 +1636,56 @@ async function init() {
     // 注入可拖拽悬浮球
     injectFloatingHub();
 
-    console.log('[BB-Memory] v5.0 初始化完成');
+    // v6.1: 监听消息删除，自动清理关联记忆
+    initMessageDeletionWatch();
+
+    console.log('[BB-Memory] v6.1 初始化完成');
+}
+
+// v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
+function initMessageDeletionWatch() {
+    const setup = () => {
+        const chatArea = document.querySelector('#chat');
+        if (!chatArea) {
+            setTimeout(setup, 2000);
+            return;
+        }
+        const observer = new MutationObserver((mutations) => {
+            for (const m of mutations) {
+                for (const node of m.removedNodes) {
+                    if (node.nodeType !== 1) continue;
+                    // 检查被移除的元素或其子元素中是否有带 exchange hash 的 .mes
+                    const mesEls = node.classList?.contains('mes') ? [node] : [];
+                    if (mesEls.length === 0 && node.querySelectorAll) {
+                        node.querySelectorAll('.mes[data-bb-exchange-hash]').forEach(el => mesEls.push(el));
+                    }
+                    for (const mesEl of mesEls) {
+                        const hash = mesEl.getAttribute('data-bb-exchange-hash');
+                        if (hash) {
+                            handleMessageDeletedByExchange(hash);
+                        }
+                    }
+                }
+            }
+        });
+        observer.observe(chatArea, { childList: true, subtree: true });
+    };
+    setup();
+}
+
+async function handleMessageDeletedByExchange(exchangeHash) {
+    const chatId = getChatId();
+    if (!chatId || !exchangeHash) return;
+    try {
+        const removed = await deleteByExchange(chatId, exchangeHash);
+        const total = removed.npc + removed.items + removed.timeline + removed.memories;
+        if (total > 0) {
+            console.log(`[BB-Memory] 自动清理已删除楼层的关联记忆: NPC${removed.npc}/物品${removed.items}/时间线${removed.timeline}/记忆${removed.memories}`);
+            showToast(`已自动清理 ${total} 条关联记忆`, 'info');
+        }
+    } catch (e) {
+        console.warn('[BB-Memory] 自动清理失败:', e.message);
+    }
 }
 
 function refreshSidebar() {

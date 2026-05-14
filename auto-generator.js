@@ -733,6 +733,11 @@ async function processLatestExchange(chatId) {
     const exchanges = await getExtractableExchanges();
     if (!exchanges.length) return;
 
+    // v6.1: 等攒够 contextWindowExchanges 个待提取 exchange 后才开始提取
+    // 防止每个消息都触发提取（窗口保留）
+    const minPending = settings.contextWindowExchanges ?? 3;
+    if (exchanges.length < minPending) return;
+
     const oldest = exchanges[0];
 
     // 检查已处理
