@@ -4,9 +4,9 @@
     "js": "index.js",
     "css": "style.css",
     "author": "BB-Memory Dev",
-    "version": "6.2.1",
+    "version": "6.3.0",
     "homePage": "https://github.com/BBKing0/SillyTavern-BBMemory",
     "auto_update": true,
     "generate_interceptor": "bbMemoryInterceptor",
-    "description": "智能长期记忆扩展 v6.2.0 - 四柱架构：记忆优先提示词，里程碑时间线，合并提取默认，楼层操作"
+    "description": "智能长期记忆扩展 v6.3.0 - 四柱架构：融合提示词（情感弧线+伏笔追踪），窗口修复，用户消息同步隐藏"
 }

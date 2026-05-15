@@ -172,9 +172,9 @@ export async function syncMessageVisibility(windowOverride) {
     let hiddenCount = 0;
     let changed = false;
 
-    // v6.1.5: 只标记最靠近窗口的一个 exchange（从 cutoff 向左扫描，找到即停）
-    // 避免初始加载时一次性标记所有历史消息
-    for (let i = cutoff - 1; i >= 0; i--) {
+    // v6.3.0: 恢复批量标记 — 将窗口外的所有未处理消息标记为待提取
+    // 配合 processLatestExchange 的阈值检查，等攒够窗口数量后才开始提取
+    for (let i = 0; i < cutoff; i++) {
         const msg = chat[i];
         if (msg.is_system || msg.is_user) continue;
 
@@ -182,15 +182,7 @@ export async function syncMessageVisibility(windowOverride) {
             msg._bbmem_pendingExtraction = true;
             hiddenCount++;
             changed = true;
-            break;  // 只标记一个
-        }
-    }
-
-    // 修复隐藏消息的来源标记（独立遍历）
-    for (let i = 0; i < cutoff; i++) {
-        const msg = chat[i];
-        if (msg.is_system || msg.is_user) continue;
-        if (msg.is_hidden && !msg._bbmem_hideSource) {
+        } else if (msg.is_hidden && !msg._bbmem_hideSource) {
             msg._bbmem_hideSource = 'user';
             changed = true;
         }
@@ -289,20 +281,28 @@ export async function getExtractableExchanges() {
  *   - 在 AI 消息对象上设置 _bbmem_extracted = true
  *   - 将 hash 加入已处理集合
  */
-export async function markExchangeExtracted(aiIndex, hash) {
+export async function markExchangeExtracted(userIndex, aiIndex, hash) {
     const chatId = getChatId();
     if (!chatId) return;
 
     const ctx = getContext();
     const chat = ctx.chat;
 
-    if (chat && chat[aiIndex]) {
-        chat[aiIndex]._bbmem_extracted = true;
-        chat[aiIndex]._bbmem_pendingExtraction = false;
-        chat[aiIndex]._bbmem_exchangeHash = hash; // v6.1: 用于消息删除时自动清理
-        if (!chat[aiIndex].is_hidden) {
-            chat[aiIndex].is_hidden = true;
-            chat[aiIndex]._bbmem_hideSource = 'plugin';
+    if (chat) {
+        // v6.3.0: 同时标记 AI 消息和用户消息
+        if (chat[aiIndex]) {
+            chat[aiIndex]._bbmem_extracted = true;
+            chat[aiIndex]._bbmem_pendingExtraction = false;
+            chat[aiIndex]._bbmem_exchangeHash = hash;
+            if (!chat[aiIndex].is_hidden) {
+                chat[aiIndex].is_hidden = true;
+                chat[aiIndex]._bbmem_hideSource = 'plugin';
+            }
+        }
+        // 用户消息也标记为隐藏，防止"跨楼层"问题
+        if (chat[userIndex] && !chat[userIndex].is_hidden) {
+            chat[userIndex].is_hidden = true;
+            chat[userIndex]._bbmem_hideSource = 'plugin';
         }
         saveChat();
     }
