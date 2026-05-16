@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v6.2.1</b>
+            <b>BB-Memory v6.4.0</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -210,6 +210,23 @@
                             <label for="bb_auto_gen_model">模型</label>
                             <input id="bb_auto_gen_model" type="text" class="text_pole" placeholder="gpt-4o-mini" />
                         </div>
+                    </div>
+
+                    <hr style="margin: 12px 0; border-color: var(--SmartThemeBorderColor);" />
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_extraction_style">提取风格 <small>根据角色扮演类型调整提取侧重</small></label>
+                        <select id="bb_extraction_style" class="text_pole">
+                            <option value="auto" selected>自动识别</option>
+                            <option value="daily">日常陪伴 — 关注情感细节、习惯、偏好</option>
+                            <option value="drama">正剧叙事 — 关注伏笔、剧情节点、角色弧线</option>
+                            <option value="custom">自定义偏置</option>
+                        </select>
+                    </div>
+
+                    <div class="bb-mem-sidebar-section" id="bb_custom_bias_section" style="display:none;">
+                        <label for="bb_custom_extraction_bias">自定义风格偏置 <small>描述你希望优先提取什么类型的记忆</small></label>
+                        <textarea id="bb_custom_extraction_bias" class="text_pole" rows="4" placeholder="例如：优先提取角色之间的情感互动、微妙的表情变化、未说出口的潜台词..."></textarea>
                     </div>
 
                 </div>

@@ -41,6 +41,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     contextWindowExchanges: 3,
     extractionMode: 'merged',        // 'merged' | 'staged' — v6.2默认合并提取
     extractedMsgDisplay: 'transparent', // 'hidden' | 'transparent' | 'visible'
+    extractionStyle: 'auto',             // 'auto' | 'daily' | 'drama' | 'custom'
+    customExtractionBias: '',            // 自定义风格偏置（extractionStyle=custom 时生效）
     // Embedding
     embeddingEnabled: false,
     embeddingEndpoint: '',

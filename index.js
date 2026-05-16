@@ -404,6 +404,31 @@ function bindSidebarEvents() {
 
     bindSelect('#bb_extraction_mode', 'extractionMode');
 
+    // 提取风格
+    bindSelect('#bb_extraction_style', 'extractionStyle');
+    const styleSelect = document.querySelector('#bb_extraction_style');
+    const customBiasSection = document.querySelector('#bb_custom_bias_section');
+    const customBiasTextarea = document.querySelector('#bb_custom_extraction_bias');
+
+    // 自定义偏置区域显示/隐藏
+    const toggleCustomBias = () => {
+        if (styleSelect && customBiasSection) {
+            customBiasSection.style.display = styleSelect.value === 'custom' ? '' : 'none';
+        }
+    };
+    if (styleSelect) {
+        styleSelect.addEventListener('change', toggleCustomBias);
+        toggleCustomBias(); // 初始状态
+    }
+
+    // 自定义偏置文本绑定（手动处理）
+    if (customBiasTextarea) {
+        customBiasTextarea.value = getSettings().customExtractionBias || '';
+        customBiasTextarea.addEventListener('change', () => {
+            updateSettings({ customExtractionBias: customBiasTextarea.value });
+        });
+    }
+
     // 数字/文本输入
     bindInput('#bb_context_window', 'contextWindowExchanges', 'number');
     bindInput('#bb_token_budget', 'tokenBudget', 'number');
