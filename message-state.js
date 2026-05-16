@@ -484,9 +484,10 @@ export function refreshExtractionMarkers() {
                     };
                     await showDeleteFloorDialog(chatId, hash, matched, async () => {
                         const removed = await store.deleteByExchange(chatId, hash);
+                        await unmarkExchangeProcessed(chatId, hash);
                         const total = removed.npc + removed.items + removed.timeline + removed.memories;
                         msg._bbmem_extracted = false;
-                        msg._bbmem_pendingExtraction = false;
+                        msg._bbmem_pendingExtraction = true;
                         saveChat();
                         showInlineToast(block, `已删除 ${total} 条记忆（NPC:${removed.npc} 物品:${removed.items} 时间线:${removed.timeline} 记忆:${removed.memories}）`, 'success');
                         refreshExtractionMarkers();

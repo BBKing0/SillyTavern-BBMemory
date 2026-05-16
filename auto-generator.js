@@ -402,22 +402,26 @@ function normalizeEmbeddingEndpoint(url) {
     return cleaned + '/v1/embeddings';
 }
 
-export async function callMainApi(prompt) {
+export async function callMainApi(prompt, options = {}) {
     const { generateRaw } = SillyTavern.getContext();
+    const formatHint = options.isMerged ? '纯JSON对象' : '纯JSON';
     const result = await generateRaw({
-        systemPrompt: '你是一个JSON格式的记忆提取助手。只输出纯JSON数组，不要包含其他文字。',
+        systemPrompt: `你是一个JSON格式的记忆提取助手。只输出${formatHint}，不要包含其他文字。`,
         prompt,
     });
     return result;
 }
 
-export async function callCustomApi(prompt) {
+export async function callCustomApi(prompt, options = {}) {
     const settings = getSettings();
     const { autoGenEndpoint, autoGenApiKey, autoGenModel } = settings;
     if (!autoGenEndpoint) throw new Error('未配置自定义API端点');
 
     const endpoint = normalizeEndpoint(autoGenEndpoint);
     if (settings.debugLogging) console.log('[BB-Memory] 副API请求端点:', endpoint);
+
+    const formatHint = options.isMerged ? '纯JSON对象' : '纯JSON';
+    const maxTokens = options.isMerged ? 3000 : 1000;
 
     const response = await fetchWithTimeout(endpoint, {
         method: 'POST',
@@ -428,13 +432,13 @@ export async function callCustomApi(prompt) {
         body: JSON.stringify({
             model: autoGenModel || 'gpt-3.5-turbo',
             messages: [
-                { role: 'system', content: '你是一个JSON格式的记忆提取助手。只输出纯JSON数组，不要包含其他文字。' },
+                { role: 'system', content: `你是一个JSON格式的记忆提取助手。只输出${formatHint}，不要包含其他文字。` },
                 { role: 'user', content: prompt },
             ],
             temperature: 0.3,
-            max_tokens: 1000,
+            max_tokens: maxTokens,
         }),
-    }, 30000);
+    }, 60000);
 
     if (!response.ok) throw new Error(`API 请求失败: ${response.status} ${response.statusText}`);
     const data = await response.json();
@@ -487,12 +491,12 @@ async function embedMemoryEntry(mem) {
 
 // ═══ 调用分发 ═══
 
-async function callApi(prompt) {
+async function callApi(prompt, options = {}) {
     const settings = getSettings();
     if (settings.autoGenMode === 'custom' && settings.autoGenEndpoint) {
-        return callCustomApi(prompt);
+        return callCustomApi(prompt, options);
     }
-    return callMainApi(prompt);
+    return callMainApi(prompt, options);
 }
 
 // ═══ AI消息清洗 ═══
@@ -843,13 +847,38 @@ function parseMergedResponse(responseText) {
     }
     let text = responseText.trim();
     text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) {
-        console.warn('[BB-Memory] 合并提取响应未找到JSON对象，前200字符:', text.slice(0, 200));
-        return { npc: [], items: [], timeline: [], memories: [] };
+    // 先尝试匹配 JSON 对象；若失败则尝试数组
+    let match = text.match(/\{[\s\S]*\}/);
+    let parsed;
+    if (match) {
+        try {
+            parsed = JSON.parse(match[0]);
+        } catch (e) { /* 对象解析失败，尝试数组 */ }
+    }
+    // 如果对象解析失败，或者匹配到的是数组（LLM 可能忽略 system prompt）
+    if (!parsed || Array.isArray(parsed)) {
+        if (!parsed) {
+            match = text.match(/\[[\s\S]*\]/);
+            if (!match) {
+                console.warn('[BB-Memory] 合并提取响应未找到JSON，前200字符:', text.slice(0, 200));
+                return { npc: [], items: [], timeline: [], memories: [] };
+            }
+            try { parsed = JSON.parse(match[0]); } catch (e2) {
+                console.warn('[BB-Memory] 合并响应JSON解析失败:', e2.message, '前200字符:', text.slice(0, 200));
+                return { npc: [], items: [], timeline: [], memories: [] };
+            }
+        }
+        // 如果解析结果是数组，尝试取第一个对象元素
+        if (Array.isArray(parsed)) {
+            if (parsed.length > 0 && typeof parsed[0] === 'object' && !Array.isArray(parsed[0])) {
+                parsed = parsed[0];
+            } else {
+                console.warn('[BB-Memory] 合并提取响应为数组但无可用的对象元素');
+                return { npc: [], items: [], timeline: [], memories: [] };
+            }
+        }
     }
     try {
-        const parsed = JSON.parse(match[0]);
         // v6.2.0: 兼容不同字段名
         const memArr = parsed.memories || parsed.memory || parsed.mem || [];
         const npcArr = parsed.npc || [];
@@ -876,7 +905,7 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
         .replace('{{userMessage}}', userMessage || '(无)')
         .replace('{{aiMessage}}', cleanAiMessage(aiMessage) || '(无)');
     try {
-        const responseText = await callApi(prompt);
+        const responseText = await callApi(prompt, { isMerged: true });
         const results = parseMergedResponse(responseText);
         let total = 0;
         for (const npc of results.npc) { await upsertNpcProfile(chatId, { ...npc, ...(sourceInfo || {}) }); total++; }

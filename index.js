@@ -1004,9 +1004,14 @@ function registerSlashCommands() {
         for (let j = floor - 1; j >= 0; j--) {
             if (chat[j].is_user && chat[j].mes) { userMsg = chat[j].mes; break; }
         }
-        const { computeExchangeHash } = await import('./message-state.js');
+        const { computeExchangeHash, unmarkExchangeProcessed, refreshExtractionMarkers } = await import('./message-state.js');
         const exchangeHash = computeExchangeHash(userMsg, msg.mes || '');
         const result = await deleteByExchange(chatId, exchangeHash);
+        await unmarkExchangeProcessed(chatId, exchangeHash);
+        msg._bbmem_extracted = false;
+        msg._bbmem_pendingExtraction = true;
+        try { ctx2.saveChatDebounced(); } catch {}
+        refreshExtractionMarkers();
         showToast(`已删除: NPC${result.npc}/物品${result.items}/时间线${result.timeline}/记忆${result.memories}`, 'success');
     }, '删除指定楼层的所有关联记忆');
 
