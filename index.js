@@ -142,7 +142,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     recordHits(chatId, hitRecords).catch(() => {});
 
     // 9. 构建注入文本
-    const { text, tokenEstimate, stats } = buildMemoryInjectionPrompt({
+    const { text, tokenEstimate, stats, truncated, tokenBudget } = buildMemoryInjectionPrompt({
         npcProfiles: npcForInjection,
         items: itemsForInjection,
         timeline: tlForInjection,
@@ -154,6 +154,10 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     const injectionText = (settings.injectionTemplate || '[BB-Memory 长期记忆]\n{{memories}}')
         .replace('{{memories}}', text);
     ctx.setExtensionPrompt(INJECTION_KEY, injectionText, POSITION_IN_CHAT, 4, ROLE_SYSTEM);
+
+    if (truncated.length > 0) {
+        console.warn(`[BB-Memory] 注入token预算(${tokenBudget})不足，以下区块被截断: ${truncated.join(', ')} | 已用~${tokenEstimate} tokens`);
+    }
 
     if (settings.debugLogging) {
         console.log(`[BB-Memory] 注入: NPC${stats.npcCount} 物品${stats.itemCount} 时间线${stats.timelineCount} 记忆${stats.memoryCount} | ~${tokenEstimate} tokens`);
@@ -1009,6 +1013,7 @@ function registerSlashCommands() {
         const result = await deleteByExchange(chatId, exchangeHash);
         await unmarkExchangeProcessed(chatId, exchangeHash);
         msg._bbmem_extracted = false;
+        msg._bbmem_skipped = false;
         msg._bbmem_pendingExtraction = true;
         try { ctx2.saveChatDebounced(); } catch {}
         refreshExtractionMarkers();

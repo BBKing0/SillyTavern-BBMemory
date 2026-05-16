@@ -421,7 +421,6 @@ export async function callCustomApi(prompt, options = {}) {
     if (settings.debugLogging) console.log('[BB-Memory] 副API请求端点:', endpoint);
 
     const formatHint = options.isMerged ? '纯JSON对象' : '纯JSON';
-    const maxTokens = options.isMerged ? 3000 : 1000;
 
     const response = await fetchWithTimeout(endpoint, {
         method: 'POST',
@@ -436,7 +435,6 @@ export async function callCustomApi(prompt, options = {}) {
                 { role: 'user', content: prompt },
             ],
             temperature: 0.3,
-            max_tokens: maxTokens,
         }),
     }, 60000);
 

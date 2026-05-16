@@ -337,6 +337,7 @@ export function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, relev
     const tokenBudget = settings.tokenBudget || 800;
     let tokenUsed = 0;
     const stats = { npcCount: 0, itemCount: 0, timelineCount: 0, memoryCount: 0 };
+    const truncated = [];
 
     const sections = [];
 
@@ -351,6 +352,9 @@ export function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, relev
             stats.npcCount++;
         }
         if (lines.length > 1) sections.push(lines.join('\n'));
+        if (stats.npcCount < npcProfiles.length) {
+            truncated.push(`角色(${stats.npcCount}/${npcProfiles.length})`);
+        }
     }
 
     // ── 区块 2：重要物品 ──
@@ -364,6 +368,9 @@ export function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, relev
             stats.itemCount++;
         }
         if (lines.length > 1) sections.push(lines.join('\n'));
+        if (stats.itemCount < items.length) {
+            truncated.push(`物品(${stats.itemCount}/${items.length})`);
+        }
     }
 
     // ── 区块 3：故事时间线 ──
@@ -380,6 +387,9 @@ export function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, relev
                 stats.timelineCount++;
             }
             if (lines.length > 1) sections.push(lines.join('\n'));
+            if (stats.timelineCount < all.length) {
+                truncated.push(`时间线(${stats.timelineCount}/${all.length})`);
+            }
         }
     }
 
@@ -398,12 +408,15 @@ export function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, relev
             stats.memoryCount++;
         }
         if (lines.length > 1) sections.push(lines.join('\n'));
+        if (stats.memoryCount < relevantResults.length) {
+            truncated.push(`记忆(${stats.memoryCount}/${relevantResults.length})`);
+        }
     }
 
     const text = sections.join('\n\n');
     const tokenEstimate = tokenUsed;
 
-    return { text, tokenEstimate, stats };
+    return { text, tokenEstimate, stats, truncated, tokenBudget };
 }
 
 // ═══════════════════════════════════════════════════════════

@@ -178,7 +178,7 @@ export async function syncMessageVisibility(windowOverride) {
         const msg = chat[i];
         if (msg.is_system || msg.is_user) continue;
 
-        if (!msg.is_hidden && !msg._bbmem_extracted && !msg._bbmem_pendingExtraction) {
+        if (!msg.is_hidden && !msg._bbmem_extracted && !msg._bbmem_pendingExtraction && !msg._bbmem_skipped) {
             msg._bbmem_pendingExtraction = true;
             hiddenCount++;
             changed = true;
@@ -410,10 +410,32 @@ export function refreshExtractionMarkers() {
             skipBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 msg._bbmem_pendingExtraction = false;
+                msg._bbmem_skipped = true;
                 saveChat();
                 refreshExtractionMarkers();
             });
             floorActions.appendChild(skipBtn);
+
+        } else if (msg._bbmem_skipped && !msg._bbmem_extracted) {
+            // 已跳过状态：显示跳过标记 + 重入队列按钮
+            const marker = document.createElement('span');
+            marker.className = 'bb-extract-marker bb-extract-skipped';
+            marker.title = '该楼层已被跳过提取';
+            marker.innerHTML = '<i class="fa-solid fa-forward-step"></i>';
+            markerTarget.appendChild(marker);
+
+            const requeueBtn = document.createElement('button');
+            requeueBtn.className = 'bb-floor-btn bb-floor-requeue';
+            requeueBtn.title = '重新加入提取队列';
+            requeueBtn.innerHTML = '<i class="fa-solid fa-rotate-left"></i>';
+            requeueBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                msg._bbmem_pendingExtraction = true;
+                msg._bbmem_skipped = false;
+                saveChat();
+                refreshExtractionMarkers();
+            });
+            floorActions.appendChild(requeueBtn);
 
         } else if (msg._bbmem_extracted) {
             const marker = document.createElement('span');
