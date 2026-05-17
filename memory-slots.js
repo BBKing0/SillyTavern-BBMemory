@@ -21,6 +21,9 @@ const SLOT_PREFIX = 'bb_memory_slot_';
 const PILLAR_KEYS = ['bb_npc_chat_', 'bb_item_chat_', 'bb_timeline_chat_', 'bb_mem_chat_'];
 const PILLAR_NAMES = ['npc', 'items', 'timeline', 'memories'];
 
+// v7.5.0 时间线线程存储键（独立于四柱）
+const THREAD_KEY = 'bb_timeline_threads_';
+
 function slotKey(charId, slotName) {
     return `${SLOT_PREFIX}${charId}_${slotName}`;
 }
@@ -29,14 +32,16 @@ function slotKey(charId, slotName) {
 
 async function readAllPillarData(chatId) {
     const lf = getLocalForage();
-    const [npc, items, timeline, memories] = await Promise.all(
-        PILLAR_KEYS.map(k => lf.getItem(k + chatId))
-    );
+    const [npc, items, timeline, memories, threads] = await Promise.all([
+        ...PILLAR_KEYS.map(k => lf.getItem(k + chatId)),
+        lf.getItem(THREAD_KEY + chatId),
+    ]);
     return {
         npc: Array.isArray(npc) ? npc : [],
         items: Array.isArray(items) ? items : [],
         timeline: Array.isArray(timeline) ? timeline : [],
         memories: Array.isArray(memories) ? memories : [],
+        threads: Array.isArray(threads) ? threads : [],
     };
 }
 
@@ -47,6 +52,7 @@ async function writeAllPillarData(chatId, data) {
         lf.setItem(PILLAR_KEYS[1] + chatId, data.items || []),
         lf.setItem(PILLAR_KEYS[2] + chatId, data.timeline || []),
         lf.setItem(PILLAR_KEYS[3] + chatId, data.memories || []),
+        lf.setItem(THREAD_KEY + chatId, data.threads || []),
     ]);
 }
 
@@ -54,7 +60,7 @@ function totalCount(data) {
     if (!data) return 0;
     // Support old format (flat array) and new format (pillar object)
     if (Array.isArray(data)) return data.length;
-    return (data.npc?.length || 0) + (data.items?.length || 0) + (data.timeline?.length || 0) + (data.memories?.length || 0);
+    return (data.npc?.length || 0) + (data.items?.length || 0) + (data.timeline?.length || 0) + (data.memories?.length || 0) + (data.threads?.length || 0);
 }
 
 // ═══ 角色ID获取 ═══
@@ -148,20 +154,21 @@ export async function loadFromSlot(charId, chatId, slotName) {
     const lf = getLocalForage();
     const raw = await lf.getItem(slotKey(charId, slotName));
 
-    // 兼容旧格式（扁平记忆数组）和新格式（四柱对象）
+    // 兼容旧格式（扁平记忆数组）和新格式（五柱对象，v7.5.0 含 threads）
     let data;
     if (Array.isArray(raw)) {
         // 旧格式：仅记忆条目
-        data = { npc: [], items: [], timeline: [], memories: raw };
+        data = { npc: [], items: [], timeline: [], memories: raw, threads: [] };
     } else if (raw && typeof raw === 'object') {
         data = {
             npc: Array.isArray(raw.npc) ? raw.npc : [],
             items: Array.isArray(raw.items) ? raw.items : [],
             timeline: Array.isArray(raw.timeline) ? raw.timeline : [],
             memories: Array.isArray(raw.memories) ? raw.memories : [],
+            threads: Array.isArray(raw.threads) ? raw.threads : [],
         };
     } else {
-        data = { npc: [], items: [], timeline: [], memories: [] };
+        data = { npc: [], items: [], timeline: [], memories: [], threads: [] };
     }
 
     // 重新生成ID避免冲突
@@ -171,8 +178,9 @@ export async function loadFromSlot(charId, chatId, slotName) {
     data.items = data.items.map((e, i) => ({ ...e, id: newId(i + data.npc.length) }));
     data.timeline = data.timeline.map((e, i) => ({ ...e, id: newId(i + data.npc.length + data.items.length) }));
     data.memories = data.memories.map((e, i) => ({ ...e, id: newId(i + data.npc.length + data.items.length + data.timeline.length) }));
+    data.threads = data.threads.map((e, i) => ({ ...e, id: newId(i + data.npc.length + data.items.length + data.timeline.length + data.memories.length) }));
 
-    // 写入四柱
+    // 写入五柱（含线程）
     await writeAllPillarData(chatId, data);
 
     return totalCount(data);

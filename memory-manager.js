@@ -73,11 +73,14 @@ function buildManagerHTML(npc, items, timeline, memories, chatId) {
             <button class="bb-mgr-tab" data-tab="slots">
                 <i class="fa-solid fa-floppy-disk"></i> 存档
             </button>
+            <button class="bb-mgr-tab" data-tab="threads">
+                <i class="fa-solid fa-timeline"></i> 时间线
+            </button>
             <button class="bb-mgr-tab" data-tab="dashboard">
                 <i class="fa-solid fa-gauge-high"></i> 仪表盘
             </button>
-            <button class="bb-mgr-tab" data-tab="threads">
-                <i class="fa-solid fa-timeline"></i> 时间线
+            <button class="bb-mgr-tab" data-tab="warehouse">
+                <i class="fa-solid fa-box-archive"></i> 归档仓库
             </button>
         </div>
 
@@ -174,16 +177,22 @@ function buildManagerHTML(npc, items, timeline, memories, chatId) {
             </div>
         </div>
 
+        <!-- 时间线标签页 -->
+        <div class="bb-mgr-panel" data-panel="threads" style="display:none;">
+            <div id="bb_thread_panel_content">
+                <div class="bb-mem-empty"><i class="fa-solid fa-spinner fa-spin"></i> 加载中...</div>
+            </div>
+        </div>
+
         <!-- 仪表盘标签页 -->
         <div class="bb-mgr-panel" data-panel="dashboard" style="display:none;">
             <div id="bb_dashboard_content">
                 <div class="bb-mem-empty"><i class="fa-solid fa-spinner fa-spin"></i> 加载中...</div>
             </div>
         </div>
-
-        <!-- v6.8.0 时间线线程标签页 -->
-        <div class="bb-mgr-panel" data-panel="threads" style="display:none;">
-            <div id="bb_thread_panel_content">
+        <!-- v7.5.0 归档仓库标签页 -->
+        <div class="bb-mgr-panel" data-panel="warehouse" style="display:none;">
+            <div id="bb_warehouse_content">
                 <div class="bb-mem-empty"><i class="fa-solid fa-spinner fa-spin"></i> 加载中...</div>
             </div>
         </div>
@@ -372,6 +381,8 @@ function bindManagerEvents(overlay, chatId) {
                 await renderDashboardPanel(overlay, chatId);
             } else if (panelName === 'threads') {
                 await renderThreadPanel(overlay, chatId);
+            } else if (panelName === 'warehouse') {
+                await renderArchiveWarehouse(overlay, chatId);
             }
         });
     });
@@ -1287,6 +1298,11 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
                 await renderSlotsPanel(overlay, chatId);
                 updateCurrentSlotBar(overlay, chatId);
                 await rerenderManagerList(overlay, chatId);
+                // v7.5.0 清除面板缓存，强制下次切换时重新加载
+                const dashContent = overlay.querySelector('#bb_dashboard_content');
+                if (dashContent) dashContent.innerHTML = '<div class="bb-mem-empty"><i class="fa-solid fa-spinner fa-spin"></i> 加载中...</div>';
+                const threadContent = overlay.querySelector('#bb_thread_panel_content');
+                if (threadContent) threadContent.innerHTML = '<div class="bb-mem-empty"><i class="fa-solid fa-spinner fa-spin"></i> 加载中...</div>';
             } catch (err) { showToast(`加载失败: ${err.message}`, 'error'); }
         });
     });
@@ -1494,8 +1510,24 @@ async function renderThreadPanel(overlay, chatId) {
             <div class="bb-thread-empty">
                 <i class="fa-solid fa-timeline" style="font-size:2em;opacity:0.3;"></i>
                 <p>暂无时间线线程</p>
-                <p style="font-size:0.8em;opacity:0.5;">提取记忆后，点击侧边栏「刷新时间线总结」生成</p>
+                <button class="menu_button" id="bb_thread_refresh_empty" style="margin-top:8px;">
+                    <i class="fa-solid fa-rotate"></i> 刷新时间线总结
+                </button>
             </div>`;
+        // v7.5.0 空状态内联刷新按钮
+        panel.querySelector('#bb_thread_refresh_empty')?.addEventListener('click', async () => {
+            const btn = panel.querySelector('#bb_thread_refresh_empty');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 生成中...';
+            try {
+                const { regenerateThreadSummary } = await import('./memory-maintainer.js');
+                await regenerateThreadSummary(chatId);
+                await renderThreadPanel(overlay, chatId);
+            } catch (e) {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fa-solid fa-rotate"></i> 刷新时间线总结';
+            }
+        });
         return;
     }
 
@@ -1573,17 +1605,18 @@ async function renderThreadPanel(overlay, chatId) {
         html += '</div></div>';
     }
 
-    // 详细时间线条目（折叠区）
+    // v7.5.0 详细时间线条目（折叠区，仅显示进行中条目）
     const tlId = 'bb_thread_detail_timeline';
-    if (timeline.length) {
+    const activeTimelineEntries = timeline.filter(t => t.isActive);
+    if (activeTimelineEntries.length) {
         html += `
         <div class="bb-thread-detail-section">
             <button class="bb-thread-detail-toggle" id="${tlId}_toggle" data-collapsed="true">
                 <i class="fa-solid fa-chevron-right"></i>
-                详细时间线条目 (${timeline.length}条) — 点击展开
+                详细时间线条目 (${activeTimelineEntries.length}条) — 点击展开
             </button>
             <div class="bb-thread-detail-list" id="${tlId}_list" style="display:none;">
-                ${timeline.sort((a, b) => (a.storyTimeSort ?? 0) - (b.storyTimeSort ?? 0)).map(t => {
+                ${activeTimelineEntries.sort((a, b) => (a.storyTimeSort ?? 0) - (b.storyTimeSort ?? 0)).map(t => {
                     const tStatus = t.status === 'ongoing' ? '进行中' : t.status === 'ended' ? '已结束' : t.status === 'foreshadow' ? '伏笔' : t.status || '';
                     return `
                     <div class="bb-thread-detail-item">
@@ -1639,7 +1672,7 @@ async function renderThreadPanel(overlay, chatId) {
             const id = btn.dataset.id;
             const entry = timeline.find(t => t.id === id);
             if (entry) {
-                showQuickEditForm(overlay, chatId, { ...entry, _pillar: 'timeline' });
+                showQuickEditForm(overlay, chatId, entry.id, 'timeline');
             }
         });
     });
@@ -1947,6 +1980,78 @@ async function rerenderManagerList(overlay, chatId) {
     }
 
     rebindItemActions(overlay, chatId);
+}
+
+// ═══ v7.5.0 归档仓库 ═══
+
+async function renderArchiveWarehouse(overlay, chatId) {
+    const panel = overlay.querySelector('#bb_warehouse_content');
+    if (!panel) return;
+
+    try {
+        const memories = await getMemories(chatId);
+        const archived = memories.filter(m => m.status === 'archived');
+
+        const tierLabels = { transient: '瞬时', stable: '稳固', core: '核心', eternal: '永恒' };
+
+        panel.innerHTML = `
+            <div style="padding:12px 18px;">
+                <div style="display:flex;align-items:center;margin-bottom:12px;">
+                    <h3 style="margin:0;"><i class="fa-solid fa-box-archive"></i> 归档仓库</h3>
+                    <span style="flex:1;"></span>
+                    <span style="font-size:0.85em;opacity:0.6;">${archived.length} 条归档</span>
+                </div>
+                <div id="bb_warehouse_list" style="max-height:calc(100vh - 200px);overflow-y:auto;">
+                    ${archived.length ? archived.map(m => {
+                        const preview = (m.content || m.summary || '').slice(0, 80);
+                        const tier = m.memoryTier || 'transient';
+                        return `
+                        <div class="bb-mem-item" style="opacity:0.85;border-left:3px solid #9e9e9e;margin-bottom:6px;">
+                            <div style="display:flex;align-items:center;padding:8px;">
+                                <div style="flex:1;min-width:0;">
+                                    <strong style="font-size:0.9em;">${escapeHtml(m.title || '(无标题)')}</strong>
+                                    <span style="display:inline-block;margin-left:6px;padding:1px 6px;font-size:0.7em;background:rgba(158,158,158,0.15);color:#9e9e9e;border:1px solid rgba(158,158,158,0.25);border-radius:3px;">${tierLabels[tier] || tier}</span>
+                                    ${preview ? `<div style="font-size:0.8em;opacity:0.55;margin-top:3px;">${escapeHtml(preview)}</div>` : ''}
+                                </div>
+                                <div style="display:flex;gap:4px;flex-shrink:0;">
+                                    <button class="menu_button bb-warehouse-restore" data-id="${escapeHtml(m.id)}" style="font-size:0.75em;padding:2px 8px;">
+                                        <i class="fa-solid fa-undo"></i> 恢复
+                                    </button>
+                                    <button class="menu_button menu_button_danger bb-warehouse-delete" data-id="${escapeHtml(m.id)}" style="font-size:0.75em;padding:2px 8px;">
+                                        <i class="fa-solid fa-trash"></i> 删除
+                                    </button>
+                                </div>
+                            </div>
+                        </div>`;
+                    }).join('') : '<div style="text-align:center;padding:24px;opacity:0.4;font-size:0.9em;"><i class="fa-solid fa-box-open" style="font-size:2em;display:block;margin-bottom:8px;"></i>暂无归档记忆</div>'}
+                </div>
+            </div>`;
+
+        // 恢复按钮
+        panel.querySelectorAll('.bb-warehouse-restore').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const id = btn.dataset.id;
+                await restoreMemory(chatId, id);
+                showToast('已恢复记忆', 'success');
+                await renderArchiveWarehouse(overlay, chatId);
+                await rerenderManagerList(overlay, chatId);
+            });
+        });
+
+        // 删除按钮
+        panel.querySelectorAll('.bb-warehouse-delete').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const id = btn.dataset.id;
+                if (!confirm('确定永久删除此归档记忆吗？')) return;
+                await removeMemory(chatId, id);
+                showToast('已删除归档记忆', 'info');
+                await renderArchiveWarehouse(overlay, chatId);
+                await rerenderManagerList(overlay, chatId);
+            });
+        });
+    } catch (err) {
+        panel.innerHTML = `<div class="bb-mem-empty">加载失败：${escapeHtml(err.message)}</div>`;
+    }
 }
 
 function showToast(msg, type = 'info') {
