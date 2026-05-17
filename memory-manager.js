@@ -15,7 +15,7 @@ import {
     exportMemories, importMemories, updateFactContent, addHiddenNote, removeHiddenNote,
     isArchived, archiveEntry, restoreEntry,
 } from './memory-store.js';
-import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot } from './memory-slots.js';
+import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot, exportSlot } from './memory-slots.js';
 import { simpleSearch } from './retriever.js';
 import { MEMORY_TYPES, TRUTH_STATUS, HIDDEN_NOTE_TYPES, TIMELINE_STATUS, ITEM_STATUS } from './memory-types.js';
 import { NPC_TIERS, ITEM_TIERS, normalizeNpcTier, normalizeItemTier } from './entity-tiers.js';
@@ -161,9 +161,6 @@ function buildManagerHTML(npc, items, timeline, memories, chatId) {
                 </button>
                 <button class="menu_button" id="bb_mgr_import" title="从JSON文件导入">
                     <i class="fa-solid fa-upload"></i> 导入
-                </button>
-                <button class="menu_button" id="bb_mgr_import_wb" title="从世界书导入">
-                    <i class="fa-solid fa-book-atlas"></i> 世界书
                 </button>
                 <button class="menu_button menu_button_danger" id="bb_mgr_clear" title="清空全部数据">
                     <i class="fa-solid fa-trash"></i> 清空
@@ -475,27 +472,6 @@ function bindManagerEvents(overlay, chatId) {
         input.click();
     });
 
-    // 世界书导入
-    overlay.querySelector('#bb_mgr_import_wb')?.addEventListener('click', async () => {
-        const input = document.createElement('input');
-        input.type = 'file'; input.accept = '.json';
-        input.addEventListener('change', async (e) => {
-            const file = e.target.files?.[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = async (ev) => {
-                try {
-                    const { importWorldBook } = await import('./world-book-importer.js');
-                    const count = await importWorldBook(chatId, ev.target.result);
-                    showToast(`世界书导入 ${count} 条`, 'success');
-                    await rerenderManagerList(overlay, chatId);
-                } catch (err) { showToast(`导入失败: ${err.message}`, 'error'); }
-            };
-            reader.readAsText(file);
-        });
-        input.click();
-    });
-
     // 清空
     overlay.querySelector('#bb_mgr_clear')?.addEventListener('click', async () => {
         const ctx = SillyTavern.getContext();
@@ -521,13 +497,14 @@ function bindBatchEvents(overlay, chatId) {
         const count = checked.length;
         const countEl = overlay.querySelector('#bb_batch_count');
         const labelEl = overlay.querySelector('#bb_batch_count_label');
-        const menuEl = overlay.querySelector('#bb_batch_menu');
+        const dropdown = overlay.querySelector('.bb-batch-dropdown-content');
         const toggleBtn = overlay.querySelector('#bb_batch_toggle');
         if (countEl) countEl.textContent = String(count);
         if (labelEl) labelEl.style.display = batchMode && count > 0 ? '' : 'none';
+        if (dropdown) dropdown.style.display = batchMode ? '' : 'none';
         const hasSelection = count > 0;
         if (toggleBtn) {
-            toggleBtn.disabled = false; // always enabled in batch mode
+            toggleBtn.disabled = false;
             toggleBtn.textContent = batchMode ? '退出批量编辑' : '批量编辑';
         }
         ['bb_batch_delete', 'bb_batch_archive', 'bb_batch_fuzzy'].forEach(id => {
@@ -540,6 +517,9 @@ function bindBatchEvents(overlay, chatId) {
     overlay.querySelector('#bb_batch_toggle')?.addEventListener('click', async (e) => {
         e.stopPropagation();
         batchMode = !batchMode;
+        // 切换下拉菜单
+        const dropdown = overlay.querySelector('.bb-batch-dropdown-content');
+        if (dropdown) dropdown.style.display = batchMode ? '' : 'none';
         // 退出时取消所有勾选
         if (!batchMode) {
             overlay.querySelectorAll('.bb-mem-batch-cb').forEach(cb => { cb.checked = false; });
@@ -581,6 +561,7 @@ function bindBatchEvents(overlay, chatId) {
         showToast(`已删除 ${checked.length} 条`, 'success');
         batchMode = false;
         await rerenderManagerList(overlay, chatId);
+        updateUI();
     });
 
     overlay.querySelector('#bb_batch_archive')?.addEventListener('click', async () => {
@@ -592,6 +573,7 @@ function bindBatchEvents(overlay, chatId) {
         showToast(`已归档 ${checked.length} 条`, 'success');
         batchMode = false;
         await rerenderManagerList(overlay, chatId);
+        updateUI();
     });
 
     overlay.querySelector('#bb_batch_fuzzy')?.addEventListener('click', async () => {
@@ -605,6 +587,7 @@ function bindBatchEvents(overlay, chatId) {
         showToast(`已模糊化 ${checked.length} 条`, 'success');
         batchMode = false;
         await rerenderManagerList(overlay, chatId);
+        updateUI();
     });
 }
 
@@ -1261,7 +1244,7 @@ async function renderSlotsPanel(overlay, chatId) {
                         <div class="bb-slot-info">
                             <span class="bb-slot-name">
                                 <i class="fa-solid fa-floppy-disk"></i> ${escapeHtml(s.name)}
-                                ${s.name === 'default' ? '<span class="bb-slot-default-badge">当前</span>' : ''}
+                                ${s.name === currentSlot ? '<span class="bb-slot-default-badge">当前</span>' : ''}
                             </span>
                             <span class="bb-slot-count">${s.count} 条记忆</span>
                         </div>
@@ -1271,6 +1254,9 @@ async function renderSlotsPanel(overlay, chatId) {
                             </button>
                             <button class="menu_button bb-slot-btn-load" data-slot="${escapeHtml(s.name)}" title="从此槽加载数据（覆盖当前）">
                                 <i class="fa-solid fa-arrow-down"></i> 加载
+                            </button>
+                            <button class="menu_button bb-slot-btn-export" data-slot="${escapeHtml(s.name)}" title="导出此存档为JSON文件">
+                                <i class="fa-solid fa-download"></i>
                             </button>
                             ${s.name !== 'default' ? `
                             <button class="menu_button menu_button_danger bb-slot-btn-delete" data-slot="${escapeHtml(s.name)}" title="删除此存档槽">
@@ -1339,6 +1325,16 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
                 showToast(`已删除存档「${slotName}」`, 'info');
                 await renderSlotsPanel(overlay, chatId);
             } catch (err) { showToast(`删除失败: ${err.message}`, 'error'); }
+        });
+    });
+
+    slotsEl.querySelectorAll('.bb-slot-btn-export').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const slotName = btn.dataset.slot;
+            try {
+                const count = await exportSlot(charId, slotName);
+                showToast(`已导出存档「${slotName}」(${count} 条)`, 'success');
+            } catch (err) { showToast(`导出失败: ${err.message}`, 'error'); }
         });
     });
 

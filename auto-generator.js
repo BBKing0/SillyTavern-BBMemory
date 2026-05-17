@@ -1324,20 +1324,6 @@ export async function saveExtractedMemories(chatId, candidateMemories, onProgres
 export { parseMemoryResponse, parseNpcResponse, parseItemResponse, parseTimelineResponse };
 
 /**
- * 兼容旧的 parseAiResponse 调用（world-book-importer 等）
- */
-export function parseAiResponse(responseText) {
-    return parseMemoryResponse(responseText);
-}
-
-/**
- * 兼容旧的 getDefaultPrompt
- */
-export function getDefaultPrompt() {
-    return MEMORY_EXTRACTION_PROMPT;
-}
-
-/**
  * 嵌入现有记忆（批量补 embedding）
  */
 export async function embedExistingMemories(memories, onProgress) {

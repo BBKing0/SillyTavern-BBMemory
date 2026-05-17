@@ -230,3 +230,40 @@ export async function getSlotCount(charId, slotName) {
     const data = await lf.getItem(slotKey(charId, slotName));
     return totalCount(data);
 }
+
+/**
+ * 导出指定槽的数据为 JSON 文件下载
+ */
+export async function exportSlot(charId, slotName) {
+    if (!charId) throw new Error('无法获取角色ID');
+
+    const lf = getLocalForage();
+    const raw = await lf.getItem(slotKey(charId, slotName));
+
+    let data;
+    if (Array.isArray(raw)) {
+        data = { npc: [], items: [], timeline: [], memories: raw, threads: [] };
+    } else if (raw && typeof raw === 'object') {
+        data = {
+            npc: Array.isArray(raw.npc) ? raw.npc : [],
+            items: Array.isArray(raw.items) ? raw.items : [],
+            timeline: Array.isArray(raw.timeline) ? raw.timeline : [],
+            memories: Array.isArray(raw.memories) ? raw.memories : [],
+            threads: Array.isArray(raw.threads) ? raw.threads : [],
+        };
+    } else {
+        data = { npc: [], items: [], timeline: [], memories: [], threads: [] };
+    }
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `BB-Memory-${slotName}-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    return totalCount(data);
+}

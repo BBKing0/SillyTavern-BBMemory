@@ -255,20 +255,6 @@ function getExtensionFolder() {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  世界书导入（v5 适配）
-// ═══════════════════════════════════════════════════════════
-
-async function handleWorldBookImport(chatId, jsonString) {
-    const { importWorldBook } = await import('./world-book-importer.js');
-    return importWorldBook(chatId, jsonString);
-}
-
-async function handleWorldBookImportWithAI(chatId, jsonString) {
-    const { importWorldBookWithAI } = await import('./world-book-importer.js');
-    return importWorldBookWithAI(chatId, jsonString);
-}
-
-// ═══════════════════════════════════════════════════════════
 //  初始化记忆（新功能）
 // ═══════════════════════════════════════════════════════════
 
@@ -630,37 +616,6 @@ function bindSidebarEvents() {
             showToast('线程总结失败: ' + e.message, 'error');
         }
     });
-    // 世界书导入
-    document.querySelector('#bb_memory_import_wb_btn')?.addEventListener('click', () => {
-        pickFile('.json', async (text) => {
-            const chatId = getChatId();
-            if (!chatId) return;
-            const count = await handleWorldBookImport(chatId, text);
-            showToast(`直接导入：${count} 条`, 'success');
-        });
-    });
-    document.querySelector('#bb_memory_import_wb_ai_btn')?.addEventListener('click', () => {
-        pickFile('.json', async (text) => {
-            const chatId = getChatId();
-            if (!chatId) return;
-            const progressEl = createProgressToast('世界书AI导入: 正在解析...');
-            try {
-                // 包装导入函数，注入进度回调
-                const count = await handleWorldBookImportWithAI(chatId, text, (msg) => {
-                    if (progressEl) progressEl.textContent = `世界书AI导入: ${msg}`;
-                });
-                if (progressEl) {
-                    progressEl.textContent = `世界书AI导入完成！共 ${count} 条`;
-                    setTimeout(() => progressEl.remove(), 3000);
-                }
-                showToast(`AI 导入：${count} 条`, 'success');
-            } catch (e) {
-                if (progressEl) progressEl.remove();
-                showToast(`AI 导入失败: ${e.message}`, 'error');
-            }
-        });
-    });
-
     document.querySelector('#bb_embedding_reindex_btn')?.addEventListener('click', async () => {
         const chatId = getChatId();
         if (!chatId) return;
