@@ -5,6 +5,8 @@
  * 保留：分级定义、标准化、检索乘数、索引卡、实体展开。
  */
 
+import { isArchived } from './memory-store.js';
+
 // ═══════════════════════════════════════════════════════════
 //  分级定义
 // ═══════════════════════════════════════════════════════════
@@ -184,7 +186,7 @@ export function expandEntityMemories(memories, queryText, excludeIds, limit = 8)
 
     function tryPush(m) {
         if (!m || seen.has(m.id)) return false;
-        if (m.status === 'archived' || m.status === 'deleted') return false;
+        if (isArchived(m) || m.status === 'deleted') return false;
         out.push(m);
         seen.add(m.id);
         return true;

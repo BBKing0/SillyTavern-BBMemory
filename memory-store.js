@@ -182,6 +182,7 @@ export async function addNpcProfile(chatId, data) {
         tags: Array.isArray(data.tags) ? data.tags : [],
         hitCount: data.hitCount || 0,
         memoryTier: data.memoryTier || 'transient',
+        archived: data.archived || false,
         createdAt: now,
         updatedAt: now,
         lastHitAt: null,
@@ -256,6 +257,7 @@ export async function addItem(chatId, data) {
         tags: Array.isArray(data.tags) ? data.tags : [],
         hitCount: data.hitCount || 0,
         memoryTier: data.memoryTier || 'transient',
+        archived: data.archived || false,
         createdAt: now,
         updatedAt: now,
         lastHitAt: null,
@@ -333,6 +335,7 @@ export async function addTimelineEntry(chatId, data) {
         tags: Array.isArray(data.tags) ? data.tags : [],
         hitCount: data.hitCount || 0,
         memoryTier: data.memoryTier || 'transient',
+        archived: data.archived || false,
         relatedEventIds: Array.isArray(data.relatedEventIds) ? data.relatedEventIds : [],
         createdAt: now,
         updatedAt: now,
@@ -499,6 +502,7 @@ export async function addMemory(chatId, data) {
         truthStatus: data.truthStatus || 'true',
         hitCount: data.hitCount || 0,
         memoryTier: data.memoryTier || 'transient',
+        archived: data.archived || false,
         relatedMemoryIds: Array.isArray(data.relatedMemoryIds) ? data.relatedMemoryIds : [],
         isTimelineSummary: data.isTimelineSummary || false,
         timelineGroupKey: data.timelineGroupKey || '',
@@ -544,6 +548,51 @@ export async function removeMemory(chatId, id) {
         return true;
     }
     return false;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  v7.6.0 统一归档系统
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 判断条目是否已归档
+ * 向后兼容：记忆条目的 status === 'archived' 也视为归档
+ */
+export function isArchived(entry) {
+    if (!entry) return false;
+    if (entry.archived === true) return true;
+    if (entry.status === 'archived') return true;
+    return false;
+}
+
+/**
+ * 归档指定条目（支持四柱）
+ * @param {string} chatId
+ * @param {string} type - 'npc' | 'item' | 'timeline' | 'mem'
+ * @param {string} id
+ */
+export async function archiveEntry(chatId, type, id) {
+    switch (type) {
+        case 'npc': return updateNpcProfile(chatId, id, { archived: true });
+        case 'item': return updateItem(chatId, id, { archived: true });
+        case 'timeline': return updateTimelineEntry(chatId, id, { archived: true, isActive: false });
+        default: return updateMemory(chatId, id, { archived: true, status: 'archived' });
+    }
+}
+
+/**
+ * 从归档恢复条目（保持原等级不变）
+ * @param {string} chatId
+ * @param {string} type - 'npc' | 'item' | 'timeline' | 'mem'
+ * @param {string} id
+ */
+export async function restoreEntry(chatId, type, id) {
+    switch (type) {
+        case 'npc': return updateNpcProfile(chatId, id, { archived: false });
+        case 'item': return updateItem(chatId, id, { archived: false });
+        case 'timeline': return updateTimelineEntry(chatId, id, { archived: false, isActive: true, status: 'ongoing' });
+        default: return updateMemory(chatId, id, { archived: false, status: 'active' });
+    }
 }
 
 // ═══════════════════════════════════════════════════════════

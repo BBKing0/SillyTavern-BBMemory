@@ -13,6 +13,7 @@ import {
     getMemories, addMemory, updateMemory, removeMemory,
     clearAllData, deleteByExchange, getMemoryStats, getSettings, updateSettings,
     exportMemories, importMemories, updateFactContent, addHiddenNote, removeHiddenNote,
+    isArchived, archiveEntry, restoreEntry,
 } from './memory-store.js';
 import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot } from './memory-slots.js';
 import { simpleSearch } from './retriever.js';
@@ -345,6 +346,9 @@ function buildEntryItemHTML(e) {
             <button class="menu_button bb-mem-btn-sm bb-mem-edit" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" title="编辑" style="font-size:0.85em;">
                 <i class="fa-solid fa-pen"></i>
             </button>
+            <button class="menu_button bb-mem-btn-sm bb-mem-archive" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" title="归档" style="font-size:0.85em;">
+                <i class="fa-solid fa-box-archive"></i>
+            </button>
             <button class="menu_button bb-mem-btn-sm bb-mem-delete menu_button_danger" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" title="删除" style="font-size:0.85em;">
                 <i class="fa-solid fa-trash"></i>
             </button>
@@ -583,9 +587,7 @@ function bindBatchEvents(overlay, chatId) {
         const checked = overlay.querySelectorAll('.bb-mem-batch-cb:checked');
         if (!checked.length) return;
         for (const cb of checked) {
-            if (cb.dataset.pillar === 'mem') {
-                await archiveMemory(chatId, cb.dataset.id);
-            }
+            await archiveEntry(chatId, cb.dataset.pillar, cb.dataset.id);
         }
         showToast(`已归档 ${checked.length} 条`, 'success');
         batchMode = false;
@@ -622,6 +624,18 @@ function rebindItemActions(overlay, chatId) {
             else if (pillar === 'timeline') await removeTimelineEntry(chatId, id);
             else await removeMemory(chatId, id);
             showToast('已删除', 'info');
+            await rerenderManagerList(overlay, chatId);
+        });
+    });
+
+    // v7.6.0 归档
+    overlay.querySelectorAll('.bb-mem-archive').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            const pillar = btn.dataset.pillar;
+            await archiveEntry(chatId, pillar, id);
+            showToast('已归档', 'success');
             await rerenderManagerList(overlay, chatId);
         });
     });
@@ -814,7 +828,13 @@ function showQuickAddForm(overlay, chatId) {
                 <input class="text_pole bb-f-title" placeholder="记忆标题（3-8字）" style="width:100%;margin-bottom:8px;" />
                 <div style="display:flex;gap:8px;">
                     <div style="flex:1;"><label style="font-size:0.85em;">类型</label><select class="text_pole bb-f-type" style="width:100%;margin-bottom:8px;">${Object.values(MEMORY_TYPES).map(t => `<option value="${t.id}" ${t.id === 'event' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div>
-                    <div style="flex:1;"><label style="font-size:0.85em;">等级</label><select class="text_pole bb-f-memoryTier" style="width:100%;margin-bottom:8px;"><option value="transient">模糊</option><option value="stable" selected>稳固</option><option value="core">核心</option><option value="eternal">永恒</option><option value="archived">归档</option></select></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">等级</label><select class="text_pole bb-f-memoryTier" style="width:100%;margin-bottom:8px;"><option value="transient">模糊</option><option value="stable" selected>稳固</option><option value="core">核心</option><option value="eternal">永恒</option></select></div>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                    <label style="font-size:0.85em;display:flex;align-items:center;gap:4px;cursor:pointer;">
+                        <input type="checkbox" class="bb-f-archived" style="width:auto;margin:0;" />
+                        <i class="fa-solid fa-box-archive" style="opacity:0.5;"></i> 已归档
+                    </label>
                 </div>
                 <div style="display:flex;gap:8px;">
                     <div style="flex:1;"><label style="font-size:0.85em;">真值状态</label><select class="text_pole bb-f-truthStatus" style="width:100%;margin-bottom:8px;">${Object.entries(TRUTH_STATUS).map(([k,v]) => `<option value="${k}" ${k === 'true' ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
@@ -986,6 +1006,7 @@ function collectFormData(formEl, pillar) {
             truthStatus: formEl.querySelector('.bb-f-truthStatus')?.value || 'true',
             importance: parseInt(formEl.querySelector('.bb-f-importance')?.value || '50', 10) / 100,
             emotionalWeight: parseInt(formEl.querySelector('.bb-f-emotional')?.value || '0', 10) / 100,
+            archived: formEl.querySelector('.bb-f-archived')?.checked || false,
             tags, source: 'manual',
         };
     }
@@ -1094,6 +1115,7 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
                     setVal('bb-f-verbatim', prefill.verbatim);
                     { const el = formOverlay.querySelector('.bb-f-importance'); if (el) { el.value = Math.round((prefill.importance || 0.5) * 100); el.dispatchEvent(new Event('input')); } }
                     { const el = formOverlay.querySelector('.bb-f-emotional'); if (el) { el.value = Math.round((prefill.emotionalWeight || 0) * 100); el.dispatchEvent(new Event('input')); } }
+                    setCheck('bb-f-archived', prefill.archived || prefill.status === 'archived');
                     setVal('bb-f-tags', tagsStr);
                     break;
             }
@@ -1946,6 +1968,9 @@ async function rerenderManagerList(overlay, chatId) {
         ...memories.map(e => ({ ...e, _pillar: 'mem' })),
     ];
 
+    // v7.6.0 过滤已归档条目
+    allEntries = allEntries.filter(e => !isArchived(e));
+
     // 应用筛选
     if (activeFilter && activeFilter !== 'all') {
         allEntries = allEntries.filter(e => e._pillar === activeFilter);
@@ -1989,9 +2014,23 @@ async function renderArchiveWarehouse(overlay, chatId) {
     if (!panel) return;
 
     try {
-        const memories = await getMemories(chatId);
-        const archived = memories.filter(m => m.status === 'archived');
+        const [npc, items, timeline, memories] = await Promise.all([
+            getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+        ]);
 
+        const allArchived = [
+            ...npc.filter(e => isArchived(e)).map(e => ({ ...e, _pillar: 'npc' })),
+            ...items.filter(e => isArchived(e)).map(e => ({ ...e, _pillar: 'item' })),
+            ...timeline.filter(e => isArchived(e)).map(e => ({ ...e, _pillar: 'timeline' })),
+            ...memories.filter(e => isArchived(e)).map(e => ({ ...e, _pillar: 'mem' })),
+        ];
+
+        const pillarConfig = {
+            npc: { icon: 'fa-user', label: 'NPC', color: '#ba68c8' },
+            item: { icon: 'fa-box', label: '物品', color: '#4fc3f7' },
+            timeline: { icon: 'fa-clock', label: '时间线', color: '#ffb74d' },
+            mem: { icon: 'fa-brain', label: '记忆', color: '#81c784' },
+        };
         const tierLabels = { transient: '瞬时', stable: '稳固', core: '核心', eternal: '永恒' };
 
         panel.innerHTML = `
@@ -1999,31 +2038,34 @@ async function renderArchiveWarehouse(overlay, chatId) {
                 <div style="display:flex;align-items:center;margin-bottom:12px;">
                     <h3 style="margin:0;"><i class="fa-solid fa-box-archive"></i> 归档仓库</h3>
                     <span style="flex:1;"></span>
-                    <span style="font-size:0.85em;opacity:0.6;">${archived.length} 条归档</span>
+                    <span style="font-size:0.85em;opacity:0.6;">${allArchived.length} 条归档</span>
                 </div>
                 <div id="bb_warehouse_list" style="max-height:calc(100vh - 200px);overflow-y:auto;">
-                    ${archived.length ? archived.map(m => {
-                        const preview = (m.content || m.summary || '').slice(0, 80);
-                        const tier = m.memoryTier || 'transient';
+                    ${allArchived.length ? allArchived.map(e => {
+                        const pc = pillarConfig[e._pillar] || pillarConfig.mem;
+                        const name = e.title || e.name || e.event || '(无标题)';
+                        const preview = (e.content || e.summary || e.significance || e.role || '').slice(0, 80);
+                        const tier = e.memoryTier || 'transient';
                         return `
-                        <div class="bb-mem-item" style="opacity:0.85;border-left:3px solid #9e9e9e;margin-bottom:6px;">
+                        <div class="bb-mem-item" style="opacity:0.85;border-left:3px solid ${pc.color};margin-bottom:6px;">
                             <div style="display:flex;align-items:center;padding:8px;">
                                 <div style="flex:1;min-width:0;">
-                                    <strong style="font-size:0.9em;">${escapeHtml(m.title || '(无标题)')}</strong>
+                                    <span style="color:${pc.color};font-size:0.7em;margin-right:4px;"><i class="fa-solid ${pc.icon}"></i> ${pc.label}</span>
+                                    <strong style="font-size:0.9em;">${escapeHtml(name)}</strong>
                                     <span style="display:inline-block;margin-left:6px;padding:1px 6px;font-size:0.7em;background:rgba(158,158,158,0.15);color:#9e9e9e;border:1px solid rgba(158,158,158,0.25);border-radius:3px;">${tierLabels[tier] || tier}</span>
                                     ${preview ? `<div style="font-size:0.8em;opacity:0.55;margin-top:3px;">${escapeHtml(preview)}</div>` : ''}
                                 </div>
                                 <div style="display:flex;gap:4px;flex-shrink:0;">
-                                    <button class="menu_button bb-warehouse-restore" data-id="${escapeHtml(m.id)}" style="font-size:0.75em;padding:2px 8px;">
+                                    <button class="menu_button bb-warehouse-restore" data-pillar="${e._pillar}" data-id="${escapeHtml(e.id)}" style="font-size:0.75em;padding:2px 8px;">
                                         <i class="fa-solid fa-undo"></i> 恢复
                                     </button>
-                                    <button class="menu_button menu_button_danger bb-warehouse-delete" data-id="${escapeHtml(m.id)}" style="font-size:0.75em;padding:2px 8px;">
+                                    <button class="menu_button menu_button_danger bb-warehouse-delete" data-pillar="${e._pillar}" data-id="${escapeHtml(e.id)}" style="font-size:0.75em;padding:2px 8px;">
                                         <i class="fa-solid fa-trash"></i> 删除
                                     </button>
                                 </div>
                             </div>
                         </div>`;
-                    }).join('') : '<div style="text-align:center;padding:24px;opacity:0.4;font-size:0.9em;"><i class="fa-solid fa-box-open" style="font-size:2em;display:block;margin-bottom:8px;"></i>暂无归档记忆</div>'}
+                    }).join('') : '<div style="text-align:center;padding:24px;opacity:0.4;font-size:0.9em;"><i class="fa-solid fa-box-open" style="font-size:2em;display:block;margin-bottom:8px;"></i>暂无归档条目</div>'}
                 </div>
             </div>`;
 
@@ -2031,8 +2073,9 @@ async function renderArchiveWarehouse(overlay, chatId) {
         panel.querySelectorAll('.bb-warehouse-restore').forEach(btn => {
             btn.addEventListener('click', async () => {
                 const id = btn.dataset.id;
-                await restoreMemory(chatId, id);
-                showToast('已恢复记忆', 'success');
+                const pillar = btn.dataset.pillar;
+                await restoreEntry(chatId, pillar, id);
+                showToast('已恢复', 'success');
                 await renderArchiveWarehouse(overlay, chatId);
                 await rerenderManagerList(overlay, chatId);
             });
@@ -2042,9 +2085,13 @@ async function renderArchiveWarehouse(overlay, chatId) {
         panel.querySelectorAll('.bb-warehouse-delete').forEach(btn => {
             btn.addEventListener('click', async () => {
                 const id = btn.dataset.id;
-                if (!confirm('确定永久删除此归档记忆吗？')) return;
-                await removeMemory(chatId, id);
-                showToast('已删除归档记忆', 'info');
+                const pillar = btn.dataset.pillar;
+                if (!confirm('确定永久删除此归档条目吗？')) return;
+                if (pillar === 'npc') await removeNpcProfile(chatId, id);
+                else if (pillar === 'item') await removeItem(chatId, id);
+                else if (pillar === 'timeline') await removeTimelineEntry(chatId, id);
+                else await removeMemory(chatId, id);
+                showToast('已删除归档条目', 'info');
                 await renderArchiveWarehouse(overlay, chatId);
                 await rerenderManagerList(overlay, chatId);
             });

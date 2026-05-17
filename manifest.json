@@ -4,9 +4,9 @@
     "js": "index.js",
     "css": "style.css",
     "author": "BB-Memory Dev",
-    "version": "7.5.0",
+    "version": "7.6.0",
     "homePage": "https://github.com/BBKing0/SillyTavern-BBMemory",
     "auto_update": true,
     "generate_interceptor": "bbMemoryInterceptor",
-    "description": "智能长期记忆扩展 v7.5.0 - 存档槽时间线同步 + 标签页重排 + 编辑修复 + 归档仓库"
+    "description": "智能长期记忆扩展 v7.6.0 - 统一归档系统：四柱支持 + 单条归档 + 检索过滤 + 仓库完善"
 }

@@ -322,11 +322,11 @@ export async function fuzzyMemory(chatId, memoryId) {
 }
 
 export async function archiveMemory(chatId, memoryId) {
-    return updateMemory(chatId, memoryId, { status: 'archived' });
+    return updateMemory(chatId, memoryId, { archived: true, status: 'archived' });
 }
 
 export async function restoreMemory(chatId, memoryId) {
-    return updateMemory(chatId, memoryId, { status: 'active', memoryTier: 'transient' });
+    return updateMemory(chatId, memoryId, { archived: false, status: 'active' });
 }
 
 // ═══════════════════════════════════════════════════════════
