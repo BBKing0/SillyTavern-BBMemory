@@ -63,6 +63,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
     maintenanceMemThreshold: 20,   // 记忆维护阈值
     maintenanceNpcThreshold: 5,    // NPC 维护阈值
     maintenanceItemThreshold: 20,  // 物品维护阈值
+    // 记忆体检
+    healthCheckDuplicateThreshold: 0.95,   // 近似重复检测阈值
+    healthCheckIsolationThreshold: 0.30,   // 语义孤立检测阈值
+    healthCheckStaleDays: 7,               // 长期休眠判定天数
+    healthCheckStaleHitThreshold: 3,       // 休眠命中次数阈值
     // 时间线总结
     timelineSummaryEnabled: true,
     // 自动备份
@@ -180,6 +185,7 @@ export async function addNpcProfile(chatId, data) {
         source: data.source || 'manual',
         sourceExchange: data.sourceExchange || '',
         sourceFloor: typeof data.sourceFloor === 'number' ? data.sourceFloor : -1,
+        sourceMessageHash: data.sourceMessageHash || '',
         sourceChatId: data.sourceChatId || '',
     };
     profiles.push(entry);
@@ -252,6 +258,7 @@ export async function addItem(chatId, data) {
         source: data.source || 'manual',
         sourceExchange: data.sourceExchange || '',
         sourceFloor: typeof data.sourceFloor === 'number' ? data.sourceFloor : -1,
+        sourceMessageHash: data.sourceMessageHash || '',
         sourceChatId: data.sourceChatId || '',
     };
     items.push(entry);
@@ -328,6 +335,7 @@ export async function addTimelineEntry(chatId, data) {
         source: data.source || 'manual',
         sourceExchange: data.sourceExchange || '',
         sourceFloor: typeof data.sourceFloor === 'number' ? data.sourceFloor : -1,
+        sourceMessageHash: data.sourceMessageHash || '',
         sourceChatId: data.sourceChatId || '',
     };
     timeline.push(entry);
@@ -426,6 +434,7 @@ export async function addMemory(chatId, data) {
         sourceMessageIds: Array.isArray(data.sourceMessageIds) ? data.sourceMessageIds : [],
         sourceExchange: data.sourceExchange || '',
         sourceFloor: typeof data.sourceFloor === 'number' ? data.sourceFloor : -1,
+        sourceMessageHash: data.sourceMessageHash || '',
         sourceChatId: data.sourceChatId || '',
     };
     memories.push(entry);

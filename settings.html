@@ -148,6 +148,43 @@
 
             <hr />
 
+            <!-- 记忆体检设置 -->
+            <div class="bb-settings-section">
+                <div class="bb-settings-section-header" data-section="healthcheck">
+                    <span><i class="fa-solid fa-stethoscope"></i> 记忆体检</span>
+                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                </div>
+                <div class="bb-settings-section-body">
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_health_check_duplicate_threshold">近似重复阈值</label>
+                        <small class="bb-mem-hint">余弦相似度超过此值视为近似重复（默认0.95）</small>
+                        <input id="bb_health_check_duplicate_threshold" type="number" class="text_pole" min="0.80" max="1.00" step="0.01" value="0.95" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_health_check_isolation_threshold">语义孤立阈值</label>
+                        <small class="bb-mem-hint">孤立度超过此值标记为孤立条目（默认0.30）</small>
+                        <input id="bb_health_check_isolation_threshold" type="number" class="text_pole" min="0.10" max="0.90" step="0.05" value="0.30" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_health_check_stale_days">休眠判定（天）</label>
+                        <small class="bb-mem-hint">超过此天数未命中且命中次数少视为休眠（默认7）</small>
+                        <input id="bb_health_check_stale_days" type="number" class="text_pole" min="1" max="90" value="7" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_health_check_stale_hit_threshold">休眠命中次数阈值</label>
+                        <small class="bb-mem-hint">命中次数低于此值且长期未命中视为休眠（默认3）</small>
+                        <input id="bb_health_check_stale_hit_threshold" type="number" class="text_pole" min="0" max="20" value="3" />
+                    </div>
+
+                </div>
+            </div>
+
+            <hr />
+
             <!-- AI 自动生成设置 -->
             <div class="bb-settings-section">
                 <div class="bb-settings-section-header" data-section="autogen">

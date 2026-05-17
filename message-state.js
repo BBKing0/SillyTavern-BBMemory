@@ -59,7 +59,7 @@ function saveChat() {
 /**
  * cyrb53 变体哈希 —— 快速、低碰撞的字符串指纹算法
  */
-function cyrb53Hash(str) {
+export function cyrb53Hash(str) {
     let h1 = 0xdeadbeef;
     let h2 = 0x41c6ce57;
     for (let i = 0; i < str.length; i++) {

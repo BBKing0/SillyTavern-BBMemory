@@ -47,6 +47,8 @@ import {
     getMaintenanceResolved, clearMaintenanceResolved,
 } from './memory-maintainer.js';
 
+import { runHealthCheck, buildHealthCheckPanel } from './memory-health-check.js';
+
 import { openAssistant } from './memory-assistant.js';
 import { openMemoryManager } from './memory-manager.js';
 import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot } from './memory-slots.js';
@@ -437,6 +439,10 @@ function bindSidebarEvents() {
     bindInput('#bb_maintenance_npc_threshold', 'maintenanceNpcThreshold', 'number');
     bindInput('#bb_maintenance_item_threshold', 'maintenanceItemThreshold', 'number');
     bindInput('#bb_diversity_limit', 'diversityLimitPerTag', 'number');
+    bindInput('#bb_health_check_duplicate_threshold', 'healthCheckDuplicateThreshold', 'number');
+    bindInput('#bb_health_check_isolation_threshold', 'healthCheckIsolationThreshold', 'number');
+    bindInput('#bb_health_check_stale_days', 'healthCheckStaleDays', 'number');
+    bindInput('#bb_health_check_stale_hit_threshold', 'healthCheckStaleHitThreshold', 'number');
     bindInput('#bb_injection_template', 'injectionTemplate', 'string');
     bindInput('#bb_calendar_description', 'calendarDescription', 'string');
 
@@ -714,6 +720,11 @@ function showMaintenancePopup(chatId, result) {
     resolvedBtn.style.cssText = 'flex:1;padding:10px;border:none;background:transparent;color:inherit;cursor:pointer;font-size:0.9em;opacity:0.6;border-bottom:2px solid transparent;';
     tabBar.appendChild(pendingBtn);
     tabBar.appendChild(resolvedBtn);
+    const healthBtn = document.createElement('button');
+    healthBtn.textContent = '体检';
+    healthBtn.title = '记忆健康检查 — 数据完整性、孤立条目、近似重复等';
+    healthBtn.style.cssText = 'flex:1;padding:10px;border:none;background:transparent;color:inherit;cursor:pointer;font-size:0.9em;opacity:0.6;border-bottom:2px solid transparent;';
+    tabBar.appendChild(healthBtn);
     panel.appendChild(tabBar);
 
     // Body
@@ -756,6 +767,7 @@ function showMaintenancePopup(chatId, result) {
     function renderPending() {
         pendingBtn.style.cssText = 'flex:1;padding:10px;border:none;background:var(--SmartThemeBlurTintColor,#2a2a3e);color:inherit;cursor:pointer;font-size:13px;font-weight:600;border-bottom:2px solid #fab387;';
         resolvedBtn.style.cssText = 'flex:1;padding:10px;border:none;background:transparent;color:inherit;cursor:pointer;font-size:13px;opacity:0.6;border-bottom:2px solid transparent;';
+        healthBtn.style.cssText = 'flex:1;padding:10px;border:none;background:transparent;color:inherit;cursor:pointer;font-size:0.9em;opacity:0.6;border-bottom:2px solid transparent;';
         body.innerHTML = '';
 
         const grouped = {};
@@ -884,6 +896,7 @@ function showMaintenancePopup(chatId, result) {
     function renderResolved() {
         resolvedBtn.style.cssText = 'flex:1;padding:10px;border:none;background:var(--SmartThemeBlurTintColor,#2a2a3e);color:inherit;cursor:pointer;font-size:0.9em;font-weight:600;border-bottom:2px solid #fab387;';
         pendingBtn.style.cssText = 'flex:1;padding:10px;border:none;background:transparent;color:inherit;cursor:pointer;font-size:0.9em;opacity:0.6;border-bottom:2px solid transparent;';
+        healthBtn.style.cssText = 'flex:1;padding:10px;border:none;background:transparent;color:inherit;cursor:pointer;font-size:0.9em;opacity:0.6;border-bottom:2px solid transparent;';
         body.innerHTML = '';
 
         const resolved = getMaintenanceResolved(chatId);
@@ -921,8 +934,31 @@ function showMaintenancePopup(chatId, result) {
         body.appendChild(clearBtn);
     }
 
+    async function renderHealthCheck() {
+        pendingBtn.style.cssText = 'flex:1;padding:10px;border:none;background:transparent;color:inherit;cursor:pointer;font-size:0.9em;opacity:0.6;border-bottom:2px solid transparent;';
+        resolvedBtn.style.cssText = 'flex:1;padding:10px;border:none;background:transparent;color:inherit;cursor:pointer;font-size:0.9em;opacity:0.6;border-bottom:2px solid transparent;';
+        healthBtn.style.cssText = 'flex:1;padding:10px;border:none;background:var(--SmartThemeBlurTintColor,#2a2a3e);color:inherit;cursor:pointer;font-size:0.9em;font-weight:600;border-bottom:2px solid #a6e3a1;';
+
+        body.innerHTML = '<div style="text-align:center;padding:40px;"><i class="fa-solid fa-spinner fa-spin" style="font-size:2em;"></i><p style="margin-top:12px;opacity:0.6;">正在体检...</p></div>';
+
+        try {
+            const healthResult = await runHealthCheck(chatId);
+            body.innerHTML = '';
+            body.appendChild(buildHealthCheckPanel(chatId, healthResult, {
+                onRefresh: renderHealthCheck,
+                onAction: () => { /* 操作后无需刷新面板，单项操作后条目已移除 */ },
+            }));
+        } catch (e) {
+            body.innerHTML = `<div style="text-align:center;padding:40px;opacity:0.6;color:#f44338;">
+                <i class="fa-solid fa-circle-exclamation" style="font-size:2em;"></i>
+                <p style="margin-top:12px;">体检异常: ${escapeHtml(e.message)}</p>
+            </div>`;
+        }
+    }
+
     pendingBtn.addEventListener('click', renderPending);
     resolvedBtn.addEventListener('click', renderResolved);
+    healthBtn.addEventListener('click', renderHealthCheck);
     renderPending();
 }
 

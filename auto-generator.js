@@ -12,7 +12,7 @@ import {
 } from './memory-store.js';
 import {
     getExtractableExchanges, markExchangeExtracted, isExchangeProcessed,
-    computeExchangeHash, hideExchange, refreshExtractionMarkers,
+    computeExchangeHash, cyrb53Hash, hideExchange, refreshExtractionMarkers,
     syncMessageVisibility,
 } from './message-state.js';
 import { normalizeNpcTier, normalizeItemTier } from './entity-tiers.js';
@@ -1090,7 +1090,7 @@ async function processLatestExchange(chatId) {
     // 检查已处理
     if (await isExchangeProcessed(chatId, oldest.hash)) return;
 
-    const sourceInfo = { sourceExchange: oldest.hash, sourceFloor: oldest.aiIndex, sourceChatId: chatId };
+    const sourceInfo = { sourceExchange: oldest.hash, sourceFloor: oldest.aiIndex, sourceChatId: chatId, sourceMessageHash: cyrb53Hash(oldest.aiMessage?.mes || '') };
 
     // META_DIALOGUE 检测辅助
     const checkMetaDialogue = (text) => text && text.trim().toUpperCase().startsWith('META_DIALOGUE');

@@ -1047,6 +1047,38 @@
 }
 
 /* ═══════════════════════════════════════
+   记忆体检面板
+   ═══════════════════════════════════════ */
+
+.bb-health-body {
+    padding: 0;
+    font-size: 0.92em;
+}
+
+.bb-health-section {
+    margin-bottom: 10px;
+}
+
+.bb-health-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.05));
+}
+
+.bb-health-items {
+    padding-left: 2px;
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+    .bb-health-item {
+        flex-wrap: wrap;
+    }
+}
+
+/* ═══════════════════════════════════════
    v2.5: Fuzzy / Archive action buttons
    ═══════════════════════════════════════ */
 
