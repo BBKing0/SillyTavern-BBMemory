@@ -722,9 +722,9 @@ export function setAutoExtractProgressCallback(cb) {
     onAutoExtractProgress = cb;
 }
 
-function reportProgress(phase, current, total) {
+function reportProgress(phase, current, total, text) {
     if (typeof onAutoExtractProgress === 'function') {
-        onAutoExtractProgress({ phase, current, total });
+        onAutoExtractProgress({ phase, current, total, text: text || '' });
     }
 }
 
@@ -1025,14 +1025,18 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
         .replace('{{userMessage}}', userMessage || '(无)')
         .replace('{{aiMessage}}', cleanAiMessage(aiMessage) || '(无)');
     try {
+        reportProgress('merged', 0, 5, '正在调用 AI 提取记忆...');
         const responseText = await callApi(prompt, { isMerged: true });
         // META_DIALOGUE 检测
         if (responseText && responseText.trim().toUpperCase().startsWith('META_DIALOGUE')) {
             console.log('[BB-Memory] 检测到纯元对话，跳过提取');
+            reportProgress('merged', 5, 5, '提取完成（纯元对话已跳过）');
             return { isMetaDialogue: true, total: 0 };
         }
+        reportProgress('merged', 1, 5, '正在解析提取结果...');
         const results = parseMergedResponse(responseText);
         let total = 0;
+        reportProgress('merged', 2, 5, '正在保存 NPC/物品/时间线...');
         for (const npc of results.npc) { await upsertNpcProfile(chatId, { ...npc, ...(sourceInfo || {}) }); total++; }
         for (const item of results.items) { await upsertItem(chatId, { ...item, ...(sourceInfo || {}) }); total++; }
         for (const tl of results.timeline) { await upsertTimelineEntry(chatId, { ...tl, ...(sourceInfo || {}) }); total++; }
@@ -1041,8 +1045,10 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
         const limited = results.memories.slice(0, maxPerExchange);
         const existingMemories = await getMemories(chatId);
         const activeMemories = existingMemories.filter(m => m.embedding);
+        const hasEmbedding = settings.embeddingEnabled && settings.embeddingEndpoint;
+        reportProgress('merged', 3, 5, hasEmbedding ? '正在向量化记忆...' : '正在保存记忆条目...');
         for (const mem of limited) {
-            const embedding = settings.embeddingEnabled && settings.embeddingEndpoint
+            const embedding = hasEmbedding
                 ? await embedMemoryEntry(mem)
                 : null;
             if (settings.dedupEnabled && embedding) {
@@ -1060,10 +1066,13 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
             if (embedding) activeMemories.push({ embedding });
             total++;
         }
+        reportProgress('merged', 4, 5, '正在汇总结果...');
         console.log(`[BB-Memory] 合并提取: NPC${results.npc.length}/物品${results.items.length}/时间线${results.timeline.length}/记忆${limited.length} (保存${total}条)`);
+        reportProgress('merged', 5, 5, '提取完成');
         return total;
     } catch (e) {
         console.warn('[BB-Memory] 合并提取失败:', e.message);
+        reportProgress('merged', 5, 5, '提取失败');
         return 0;
     }
 }
@@ -1109,10 +1118,8 @@ async function processLatestExchange(chatId) {
                 pendingAutoCandidates.push(...candidates.map(c => ({ ...c, _chatId: chatId })));
             }
         } else if (settings.extractionMode === 'merged') {
-            // 合并模式：1次API调用提取全部四类
-            reportProgress('merged', 0, 1);
+            // 合并模式：1次API调用提取全部四类（进度在 extractMergedStage 内部报告）
             const mergedResult = await extractMergedStage(chatId, oldest.userMessage, oldest.aiMessage, sourceInfo);
-            reportProgress('merged', 1, 1);
             // 如果检测到纯元对话，不标记为已提取（留给用户判断）
             if (mergedResult && mergedResult.isMetaDialogue) {
                 console.log('[BB-Memory] 跳过元对话 exchange，不标记已提取');

@@ -205,7 +205,11 @@ function buildEntryItemHTML(e) {
     }[pillar] || { icon: 'fa-circle', label: pillar, color: '#888' };
 
     const title = e.title || e.name || (e.content || e.description || '').slice(0, 40) || '(无标题)';
-    const desc = (e.content || e.description || e.event || '').trim();
+    // 模糊记忆默认显示 summary，其他显示 content
+    const isFuzzy = pillar === 'mem' && e.memoryTier === 'transient';
+    const desc = isFuzzy
+        ? (e.summary || (e.content || e.description || e.event || '').slice(0, 50)).trim()
+        : (e.content || e.description || e.event || '').trim();
 
     // 状态标签
     let statusBadges = '';
@@ -222,13 +226,25 @@ function buildEntryItemHTML(e) {
         statusBadges += `<span class="bb-item-badge" style="background:${e.isActive ? '#4caf5022' : '#ff980022'};color:${e.isActive ? '#4caf50' : '#ff9800'};border:1px solid ${e.isActive ? '#4caf5044' : '#ff980044'};">${e.isActive ? '进行中' : '已结束'}</span>`;
         if (e.storyTime) statusBadges += `<span style="font-size:0.75em;opacity:0.5;">${escapeHtml(e.storyTime)}</span>`;
     } else if (pillar === 'mem') {
-        if (e.memoryTier && e.memoryTier !== 'transient') {
+        const tierOrder = ['transient', 'stable', 'core', 'eternal'];
+        const currentTierIdx = tierOrder.indexOf(e.memoryTier || 'transient');
+        if (!e.memoryTier || e.memoryTier === 'transient') {
+            statusBadges += '<span class="bb-mem-fuzzy-tag">模糊</span>';
+            // 升格按钮（从模糊恢复到稳定）
+            statusBadges += `<button class="bb-mem-tier-btn bb-mem-tier-up" data-id="${escapeHtml(e.id)}" title="升格为稳固" style="font-size:0.65em;padding:0 4px;line-height:1.4;cursor:pointer;opacity:0.5;"><i class="fa-solid fa-arrow-up"></i></button>`;
+        } else {
             const tierColors = { stable: '#4caf50', core: '#ba68c8', eternal: '#ff9800', archived: '#888' };
             const tierLabels = { stable: '稳固', core: '核心', eternal: '永恒', archived: '归档' };
             const c = tierColors[e.memoryTier] || '#888';
             statusBadges += `<span class="bb-item-badge" style="background:${c}22;color:${c};border:1px solid ${c}44;">${tierLabels[e.memoryTier] || e.memoryTier}</span>`;
-        } else if (e.memoryTier === 'transient') {
-            statusBadges += '<span class="bb-mem-fuzzy-tag">模糊</span>';
+            // 非永恒可升格
+            if (e.memoryTier !== 'eternal' && currentTierIdx < tierOrder.length - 1) {
+                statusBadges += `<button class="bb-mem-tier-btn bb-mem-tier-up" data-id="${escapeHtml(e.id)}" title="升格" style="font-size:0.65em;padding:0 4px;line-height:1.4;cursor:pointer;opacity:0.5;"><i class="fa-solid fa-chevron-up"></i></button>`;
+            }
+            // 非transient可降格
+            if (currentTierIdx > 1) {
+                statusBadges += `<button class="bb-mem-tier-btn bb-mem-tier-down" data-id="${escapeHtml(e.id)}" title="降格" style="font-size:0.65em;padding:0 4px;line-height:1.4;cursor:pointer;opacity:0.5;"><i class="fa-solid fa-chevron-down"></i></button>`;
+            }
         }
         const typeDef = MEMORY_TYPES[e.type];
         if (typeDef) statusBadges += `<span class="bb-item-badge" style="font-size:0.7em;">${typeDef.label}</span>`;
@@ -268,11 +284,27 @@ function buildEntryItemHTML(e) {
     const cbHTML = `<input type="checkbox" class="bb-mem-batch-cb" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" style="margin-right:8px;width:15px;height:15px;cursor:pointer;flex-shrink:0;${cbStyle}" />`;
 
     // 描述内容
-    const descContent = pillar === 'npc'
-        ? (e.personality ? `性格: ${escapeHtml(e.personality).slice(0, 60)}<br>` : '') + (e.appearance ? `外貌: ${escapeHtml(e.appearance).slice(0, 60)}` : '') + (e.location ? `<br>位置: ${escapeHtml(e.location)}` : '')
-        : pillar === 'timeline'
-        ? (e.participants?.length ? `参与者: ${escapeHtml(e.participants.join(', '))}<br>` : '') + (e.location ? `地点: ${escapeHtml(e.location)}<br>` : '') + (e.impact ? `影响: ${escapeHtml(e.impact)}` : '')
-        : escapeHtml(desc.slice(0, 200));
+    let descContent;
+    if (pillar === 'npc') {
+        descContent = (e.personality ? `性格: ${escapeHtml(e.personality).slice(0, 60)}<br>` : '') + (e.appearance ? `外貌: ${escapeHtml(e.appearance).slice(0, 60)}` : '') + (e.location ? `<br>位置: ${escapeHtml(e.location)}` : '');
+    } else if (pillar === 'timeline') {
+        descContent = (e.participants?.length ? `参与者: ${escapeHtml(e.participants.join(', '))}<br>` : '') + (e.location ? `地点: ${escapeHtml(e.location)}<br>` : '') + (e.impact ? `影响: ${escapeHtml(e.impact)}` : '');
+    } else {
+        descContent = escapeHtml(desc.slice(0, 200));
+    }
+
+    // 模糊记忆：有完整 content 时显示展开/收起按钮
+    let fuzzyToggleHTML = '';
+    if (isFuzzy && e.content && e.content.length > (e.summary || '').length) {
+        fuzzyToggleHTML = `<button class="bb-mem-fuzzy-toggle" data-id="${escapeHtml(e.id)}" title="展开查看完整内容" style="font-size:0.7em;margin-left:4px;cursor:pointer;opacity:0.5;background:none;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:4px;color:inherit;padding:0 6px;"><i class="fa-solid fa-chevron-down"></i> 展开</button>`;
+    }
+    // 隐藏的完整内容（默认不显示）
+    const fuzzyFullHTML = (isFuzzy && e.content) ? `<div class="bb-mem-fuzzy-full" data-id="${escapeHtml(e.id)}" style="display:none;margin-top:4px;padding:8px;background:rgba(255,152,0,0.06);border:1px dashed var(--SmartThemeBorderColor,#555);border-radius:6px;font-size:0.85em;line-height:1.5;color:var(--SmartThemeTextColor,#ddd);opacity:0.75;">${escapeHtml(e.content.slice(0, 500))}</div>` : '';
+
+    // 命中次数
+    const hitCountHTML = pillar === 'mem'
+        ? `<span title="命中次数"><i class="fa-solid fa-bullseye"></i> ${e.hitCount || 0}</span>`
+        : (e.hitCount ? `<span title="命中次数"><i class="fa-solid fa-bullseye"></i> ${e.hitCount}</span>` : '');
 
     return `
     <div class="bb-mem-item" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}">
@@ -286,12 +318,14 @@ function buildEntryItemHTML(e) {
         </div>
         ${descContent ? `
         <div style="margin:4px 0;padding:8px;background:var(--SmartThemeBlurTintColor, rgba(0,0,0,0.08));border:1px solid var(--SmartThemeBorderColor, #444);border-radius:6px;font-size:0.85em;line-height:1.5;">
-            ${descContent}
+            ${descContent}${fuzzyToggleHTML}
+            ${fuzzyFullHTML}
             ${tagRow}
         </div>` : ''}
         <div style="display:flex;align-items:center;font-size:0.75em;opacity:0.5;gap:12px;">
             ${storyTimeHTML}
             ${sourceFloorHTML}
+            ${hitCountHTML}
             ${createdDate ? `<span><i class="fa-regular fa-calendar-plus"></i> ${escapeHtml(createdDate)}</span>` : ''}
             ${updatedDate ? `<span><i class="fa-solid fa-pen"></i> ${escapeHtml(updatedDate)}</span>` : ''}
             <span style="flex:1;"></span>
@@ -625,6 +659,54 @@ function rebindItemActions(overlay, chatId) {
             showQuickEditForm(overlay, chatId, id, pillar);
         });
     });
+
+    // 升降格按钮
+    overlay.querySelectorAll('.bb-mem-tier-up').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            const mems = await getMemories(chatId);
+            const mem = mems.find(m => m.id === id);
+            if (!mem) return;
+            const tiers = ['transient', 'stable', 'core', 'eternal'];
+            const idx = tiers.indexOf(mem.memoryTier || 'transient');
+            const newTier = tiers[Math.min(idx + 1, 3)];
+            await updateMemory(chatId, id, { memoryTier: newTier, updatedAt: Date.now() });
+            showToast(`已升格为 ${newTier === 'transient' ? '模糊' : newTier}`, 'info');
+            await rerenderManagerList(overlay, chatId);
+        });
+    });
+    overlay.querySelectorAll('.bb-mem-tier-down').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            const mems = await getMemories(chatId);
+            const mem = mems.find(m => m.id === id);
+            if (!mem) return;
+            const tiers = ['transient', 'stable', 'core', 'eternal'];
+            const idx = tiers.indexOf(mem.memoryTier || 'transient');
+            const newTier = tiers[Math.max(idx - 1, 0)];
+            await updateMemory(chatId, id, { memoryTier: newTier, updatedAt: Date.now() });
+            showToast(`已降格为 ${newTier === 'transient' ? '模糊' : newTier}`, 'info');
+            await rerenderManagerList(overlay, chatId);
+        });
+    });
+
+    // 模糊记忆展开/收起
+    overlay.querySelectorAll('.bb-mem-fuzzy-toggle').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            const fullEl = overlay.querySelector(`.bb-mem-fuzzy-full[data-id="${id}"]`);
+            if (fullEl) {
+                const isVisible = fullEl.style.display !== 'none';
+                fullEl.style.display = isVisible ? 'none' : 'block';
+                btn.innerHTML = isVisible
+                    ? '<i class="fa-solid fa-chevron-down"></i> 展开'
+                    : '<i class="fa-solid fa-chevron-up"></i> 收起';
+            }
+        });
+    });
 }
 
 // ═══ 详细添加表单 ═══
@@ -721,7 +803,11 @@ function showQuickAddForm(overlay, chatId) {
                 <input class="text_pole bb-f-title" placeholder="记忆标题（3-8字）" style="width:100%;margin-bottom:8px;" />
                 <div style="display:flex;gap:8px;">
                     <div style="flex:1;"><label style="font-size:0.85em;">类型</label><select class="text_pole bb-f-type" style="width:100%;margin-bottom:8px;">${Object.values(MEMORY_TYPES).map(t => `<option value="${t.id}" ${t.id === 'event' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">等级</label><select class="text_pole bb-f-memoryTier" style="width:100%;margin-bottom:8px;"><option value="transient">模糊</option><option value="stable" selected>稳固</option><option value="core">核心</option><option value="eternal">永恒</option><option value="archived">归档</option></select></div>
+                </div>
+                <div style="display:flex;gap:8px;">
                     <div style="flex:1;"><label style="font-size:0.85em;">真值状态</label><select class="text_pole bb-f-truthStatus" style="width:100%;margin-bottom:8px;">${Object.entries(TRUTH_STATUS).map(([k,v]) => `<option value="${k}" ${k === 'true' ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
+                    <div style="flex:1;"></div>
                 </div>
                 <label style="font-size:0.85em;">内容</label>
                 <textarea class="text_pole bb-f-content" placeholder="记忆内容..." rows="3" style="width:100%;margin-bottom:8px;"></textarea>
@@ -885,6 +971,7 @@ function collectFormData(formEl, pillar) {
             title: g('bb-f-title'), type: formEl.querySelector('.bb-f-type')?.value || 'event',
             content: g('bb-f-content'), summary: g('bb-f-summary'), verbatim: g('bb-f-verbatim'),
             subject: g('bb-f-subject'), target: g('bb-f-target'),
+            memoryTier: formEl.querySelector('.bb-f-memoryTier')?.value || 'stable',
             truthStatus: formEl.querySelector('.bb-f-truthStatus')?.value || 'true',
             importance: parseInt(formEl.querySelector('.bb-f-importance')?.value || '50', 10) / 100,
             emotionalWeight: parseInt(formEl.querySelector('.bb-f-emotional')?.value || '0', 10) / 100,
@@ -987,6 +1074,7 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
                 case 'mem':
                     setVal('bb-f-title', prefill.title);
                     if (prefill.type) { const el = formOverlay.querySelector('.bb-f-type'); if (el) el.value = prefill.type; }
+                    if (prefill.memoryTier) { const el = formOverlay.querySelector('.bb-f-memoryTier'); if (el) el.value = prefill.memoryTier; }
                     if (prefill.truthStatus) { const el = formOverlay.querySelector('.bb-f-truthStatus'); if (el) el.value = prefill.truthStatus; }
                     setVal('bb-f-content', prefill.content);
                     setVal('bb-f-subject', prefill.subject);

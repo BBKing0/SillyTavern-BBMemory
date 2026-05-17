@@ -1372,7 +1372,7 @@ function injectFloatingHub() {
             <div id="bb_hub_hit_list" style="display:none;"></div>
             <div class="bb-floating-menu-item" id="bb_hub_extract_progress" style="display:flex;">
                 <i class="fa-solid fa-moon"></i>
-                <span>空闲 <strong id="bb_hub_extract_pct"></strong></span>
+                <span id="bb_hub_extract_label">空闲</span>
             </div>
             <div class="bb-floating-menu-item bb-floating-menu-action" data-action="toggle_visibility">
                 <i class="fa-solid fa-eye-slash"></i>
@@ -1732,25 +1732,25 @@ async function init() {
     // 进度回调（同步悬浮球 + 侧边栏）
     setAutoExtractProgressCallback((info) => {
         if (getSettings().debugLogging) {
-            console.log(`[BB-Memory] 提取进度: ${info.phase} ${info.current}/${info.total}`);
+            console.log(`[BB-Memory] 提取进度: ${info.phase} ${info.current}/${info.total}${info.text ? ' - ' + info.text : ''}`);
         }
         const isDone = info.current >= info.total && info.total > 0;
+        const label = info.text || (isDone ? '完成' : (info.phase ? (info.total > 0 ? Math.round((info.current / info.total) * 100) + '%' : '...') : ''));
 
         // 同步悬浮球进度
         const hubRow = document.getElementById('bb_hub_extract_progress');
         if (hubRow) {
             const icon = hubRow.querySelector('i');
-            const strong = hubRow.querySelector('strong');
+            const labelEl = document.getElementById('bb_hub_extract_label');
             if (isDone) {
                 if (icon) { icon.className = 'fa-solid fa-check-circle'; icon.style.color = '#4caf50'; }
-                if (strong) strong.textContent = '完成';
+                if (labelEl) labelEl.textContent = info.text || '完成';
             } else if (info.phase) {
                 if (icon) { icon.className = 'fa-solid fa-spinner fa-spin'; icon.style.color = ''; }
-                const pct = info.total > 0 ? Math.round((info.current / info.total) * 100) : 0;
-                if (strong) strong.textContent = pct + '%';
+                if (labelEl) labelEl.textContent = label;
             } else {
                 if (icon) { icon.className = 'fa-solid fa-moon'; icon.style.color = ''; }
-                if (strong) strong.textContent = '';
+                if (labelEl) labelEl.textContent = '空闲';
             }
         }
 
@@ -1761,11 +1761,10 @@ async function init() {
             const strong = sidebarRow.querySelector('strong');
             if (isDone) {
                 if (icon) { icon.className = 'fa-solid fa-check-circle'; icon.style.color = '#4caf50'; }
-                if (strong) strong.textContent = '完成';
+                if (strong) strong.textContent = info.text || '完成';
             } else if (info.phase) {
                 if (icon) { icon.className = 'fa-solid fa-spinner fa-spin'; icon.style.color = ''; }
-                const pct = info.total > 0 ? Math.round((info.current / info.total) * 100) : 0;
-                if (strong) strong.textContent = pct + '%';
+                if (strong) strong.textContent = label;
             } else {
                 if (icon) { icon.className = 'fa-solid fa-moon'; icon.style.color = ''; }
                 if (strong) strong.textContent = '空闲';
@@ -1782,7 +1781,7 @@ async function init() {
                 } else if (info.phase) {
                     progressEl.style.display = 'block';
                     const pct = info.total > 0 ? Math.round((info.current / info.total) * 100) : 0;
-                    progressEl.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> 提取进度: ${info.phase} ${info.current}/${info.total} (${pct}%)`;
+                    progressEl.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${info.text || ('提取进度: ' + info.phase + ' ' + info.current + '/' + info.total + ' (' + pct + '%)')}`;
                 } else {
                     progressEl.style.display = 'none';
                 }
