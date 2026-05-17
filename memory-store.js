@@ -69,6 +69,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     healthCheckIsolationThreshold: 0.30,   // 语义孤立检测阈值
     healthCheckStaleDays: 7,               // 长期休眠判定天数
     healthCheckStaleHitThreshold: 3,       // 休眠命中次数阈值
+    healthCheckThreadStaleDays: 30,        // 线程长期停滞判定天数
     // 时间线总结
     timelineSummaryEnabled: true,
     maxActiveThreads: 5,               // v6.7.0 活跃线程最大注入数
@@ -187,6 +188,7 @@ export async function addNpcProfile(chatId, data) {
         source: data.source || 'manual',
         sourceExchange: data.sourceExchange || '',
         sourceFloor: typeof data.sourceFloor === 'number' ? data.sourceFloor : -1,
+        creationFloor: typeof data.creationFloor === 'number' ? data.creationFloor : (typeof data.sourceFloor === 'number' ? data.sourceFloor : -1),
         sourceMessageHash: data.sourceMessageHash || '',
         sourceChatId: data.sourceChatId || '',
     };
@@ -260,6 +262,7 @@ export async function addItem(chatId, data) {
         source: data.source || 'manual',
         sourceExchange: data.sourceExchange || '',
         sourceFloor: typeof data.sourceFloor === 'number' ? data.sourceFloor : -1,
+        creationFloor: typeof data.creationFloor === 'number' ? data.creationFloor : (typeof data.sourceFloor === 'number' ? data.sourceFloor : -1),
         sourceMessageHash: data.sourceMessageHash || '',
         sourceChatId: data.sourceChatId || '',
     };
@@ -337,6 +340,7 @@ export async function addTimelineEntry(chatId, data) {
         source: data.source || 'manual',
         sourceExchange: data.sourceExchange || '',
         sourceFloor: typeof data.sourceFloor === 'number' ? data.sourceFloor : -1,
+        creationFloor: typeof data.creationFloor === 'number' ? data.creationFloor : (typeof data.sourceFloor === 'number' ? data.sourceFloor : -1),
         sourceMessageHash: data.sourceMessageHash || '',
         sourceChatId: data.sourceChatId || '',
     };
@@ -505,6 +509,7 @@ export async function addMemory(chatId, data) {
         sourceMessageIds: Array.isArray(data.sourceMessageIds) ? data.sourceMessageIds : [],
         sourceExchange: data.sourceExchange || '',
         sourceFloor: typeof data.sourceFloor === 'number' ? data.sourceFloor : -1,
+        creationFloor: typeof data.creationFloor === 'number' ? data.creationFloor : (typeof data.sourceFloor === 'number' ? data.sourceFloor : -1),
         sourceMessageHash: data.sourceMessageHash || '',
         sourceChatId: data.sourceChatId || '',
     };

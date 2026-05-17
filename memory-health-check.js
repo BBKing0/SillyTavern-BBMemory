@@ -78,18 +78,35 @@ export function detectFloorIssues(chatId, memories, npcs, items, timelines) {
         if (typeof entry.sourceFloor !== 'number' || entry.sourceFloor < 0) continue;
 
         const label = entry.title || entry.name || entry.event || entry.id;
+        // 获取创建楼层（兼容旧数据无此字段）
+        const creationFloor = typeof entry.creationFloor === 'number' ? entry.creationFloor : entry.sourceFloor;
+        const isUpdateOnly = (creationFloor >= 0 && creationFloor !== entry.sourceFloor);
 
         if (entry.sourceFloor >= chat.length || !chat[entry.sourceFloor]) {
-            // 楼层已删除
-            issues.push({
-                id: entry.id,
-                collection: entry._collection,
-                title: label,
-                type: 'floor_deleted',
-                detail: `源楼层 #${entry.sourceFloor} 已被删除`,
-                severity: 'warning',
-                entry,
-            });
+            // 楼层已删除 — 区分是创建楼层还是更新楼层
+            if (creationFloor === entry.sourceFloor || !isUpdateOnly) {
+                // 创建楼层被删 — 条目原始来源已不可追溯
+                issues.push({
+                    id: entry.id,
+                    collection: entry._collection,
+                    title: label,
+                    type: 'floor_creation_deleted',
+                    detail: `创建楼层 #${entry.sourceFloor} 已被删除（该条目原始来源已丢失）`,
+                    severity: 'warning',
+                    entry,
+                });
+            } else {
+                // 仅更新楼层被删 — 创建楼层仍存在
+                issues.push({
+                    id: entry.id,
+                    collection: entry._collection,
+                    title: label,
+                    type: 'floor_deleted',
+                    detail: `更新楼层 #${entry.sourceFloor} 已被删除（创建楼层 #${creationFloor} 仍存在，可回退）`,
+                    severity: 'info',
+                    entry,
+                });
+            }
         } else if (chat[entry.sourceFloor].is_user) {
             // 楼层类型变更
             issues.push({
@@ -298,6 +315,7 @@ export function detectSourceIntegrityIssues(chatId, memories, npcs, items, timel
     const issues = [];
     for (const entry of allEntries) {
         if (!entry.sourceExchange) continue;
+        if (entry.sourceFloor === -1) continue; // 跳过旧聊天楼层（用户保留的记忆）
         if (!chatExchangeHashes.has(entry.sourceExchange)) {
             issues.push({
                 id: entry.id,
@@ -314,16 +332,124 @@ export function detectSourceIntegrityIssues(chatId, memories, npcs, items, timel
 }
 
 // ═══════════════════════════════════════════════════════════
+//  时间线线程检测（v6.7.0 引入）
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 8. 空线程检测
+ */
+export function detectEmptyThreads(threads) {
+    if (!threads || !threads.length) return [];
+    return threads
+        .filter(t => !t.entries || t.entries.length === 0)
+        .map(t => ({
+            id: t.id,
+            title: t.name || t.id,
+            type: 'thread_empty',
+            detail: '线程没有任何条目，为空壳线程',
+            severity: 'warning',
+            entry: t,
+            _collection: 'thread',
+        }));
+}
+
+/**
+ * 9. 线程状态一致性检测
+ */
+export function detectThreadStatusMismatch(threads) {
+    if (!threads || !threads.length) return [];
+    const issues = [];
+    for (const t of threads) {
+        const entries = t.entries || [];
+        if (entries.length === 0) continue;
+        const hasOngoing = entries.some(e => e.status === 'ongoing');
+        const allEnded = entries.every(e => e.status === 'ended');
+
+        if (t.status === 'ended' && hasOngoing) {
+            issues.push({
+                id: t.id,
+                title: t.name || t.id,
+                type: 'thread_status_mismatch',
+                detail: `线程状态为「ended」但仍有 ${entries.filter(e => e.status === 'ongoing').length} 个进行中条目`,
+                severity: 'warning',
+                entry: t,
+                _collection: 'thread',
+            });
+        } else if (t.status === 'ongoing' && allEnded) {
+            issues.push({
+                id: t.id,
+                title: t.name || t.id,
+                type: 'thread_status_mismatch',
+                detail: '线程状态为「ongoing」但所有条目均已结束',
+                severity: 'warning',
+                entry: t,
+                _collection: 'thread',
+            });
+        }
+    }
+    return issues;
+}
+
+/**
+ * 10. 长期停滞线程检测
+ */
+export function detectStaleThreads(threads, staleDays = 30) {
+    if (!threads || !threads.length) return [];
+    const now = Date.now();
+    const staleMs = staleDays * 24 * 60 * 60 * 1000;
+
+    return threads
+        .filter(t => {
+            if (t.status !== 'ongoing') return false;
+            const age = now - (t.updatedAt || t.createdAt);
+            return age > staleMs;
+        })
+        .map(t => {
+            const ageDays = Math.floor((now - (t.updatedAt || t.createdAt)) / (24 * 60 * 60 * 1000));
+            return {
+                id: t.id,
+                title: t.name || t.id,
+                type: 'thread_stale',
+                detail: `${ageDays} 天未更新，状态仍为「ongoing」`,
+                severity: 'info',
+                entry: t,
+                _collection: 'thread',
+            };
+        });
+}
+
+/**
+ * 11. 活跃线程过多检测
+ */
+export function detectThreadOverload(threads, maxActiveThreads = 5) {
+    if (!threads || !threads.length) return [];
+    const active = threads.filter(t => t.status === 'ongoing' || t.status === 'paused' || t.status === 'resident');
+    if (active.length <= maxActiveThreads) return [];
+
+    return [{
+        id: '__thread_overload__',
+        title: '活跃线程过多',
+        type: 'thread_overload',
+        detail: `当前活跃线程 ${active.length} 条（ongoing+paused+resident），超过最大注入数 ${maxActiveThreads}。非 resident 线程可能不会被注入`,
+        severity: 'info',
+        entry: null,
+        _collection: 'thread',
+    }];
+}
+
+// ═══════════════════════════════════════════════════════════
 //  主编排器
 // ═══════════════════════════════════════════════════════════
 
 export async function runHealthCheck(chatId) {
     const settings = getSettings();
-    const [memories, npcs, items, timelines] = await Promise.all([
+    const { getTimelineThreads } = await import('./memory-store.js');
+    const [memories, npcs, items, timelines, threads] = await Promise.all([
         getMemories(chatId),
         getNpcProfiles(chatId),
         getItems(chatId),
         getTimeline(chatId),
+        getTimelineThreads(chatId).catch(() => []),
     ]);
 
     const results = {
@@ -332,7 +458,7 @@ export async function runHealthCheck(chatId) {
         categories: {},
     };
 
-    // Category 1: Floor continuity (含重roll)
+    // Category 1: Floor continuity (含重roll + creationFloor区分)
     results.categories.floor = {
         label: '楼层连续性',
         icon: 'fa-solid fa-layer-group',
@@ -389,6 +515,18 @@ export async function runHealthCheck(chatId) {
         issues: detectSourceIntegrityIssues(chatId, memories, npcs, items, timelines),
     };
 
+    // Category 8: Timeline threads (v6.9.0)
+    results.categories.threads = {
+        label: '时间线线程',
+        icon: 'fa-solid fa-threads',
+        issues: [
+            ...detectEmptyThreads(threads),
+            ...detectThreadStatusMismatch(threads),
+            ...detectStaleThreads(threads, settings.healthCheckThreadStaleDays ?? 30),
+            ...detectThreadOverload(threads, settings.maxActiveThreads ?? 5),
+        ],
+    };
+
     // Compute summary
     let totalIssues = 0;
     let score = 100;
@@ -399,7 +537,7 @@ export async function runHealthCheck(chatId) {
             score -= severityPenalty[issue.severity] || 3;
         }
     }
-    results.summary.totalEntries = memories.length + npcs.length + items.length + timelines.length;
+    results.summary.totalEntries = memories.length + npcs.length + items.length + timelines.length + (threads?.length || 0);
     results.summary.totalIssues = totalIssues;
     results.summary.healthScore = Math.max(0, score);
 
@@ -435,23 +573,36 @@ function getActionButtonsForIssue(issue) {
 
     switch (issue.type) {
         case 'floor_deleted':
+            btn('标记旧楼层', 'fix_floor', '#ff9800');
+            btn('删除', 'delete', '#f44336');
+            btn('忽略', 'ignore');
+            break;
         case 'floor_type_changed':
         case 'floor_rerolled':
+            btn('标记旧楼层', 'fix_floor', '#ff9800');
+            btn('删除', 'delete', '#f44336');
+            btn('忽略', 'ignore');
+            break;
+        case 'floor_creation_deleted':
+            btn('删除（创建源已失）', 'delete', '#f44336');
             btn('标记旧楼层', 'fix_floor', '#ff9800');
             btn('忽略', 'ignore');
             break;
         case 'embedding_isolated':
             btn('重新向量化', 're_embed', '#2196f3');
+            btn('删除', 'delete', '#f44336');
             btn('忽略', 'ignore');
             break;
         case 'tag_isolated':
         case 'untagged':
             btn('AI 建议', 'ai_tag', '#00bcd4');
             btn('手动添加', 'manual_tag', '#ff9800');
+            btn('删除', 'delete', '#f44336');
             btn('忽略', 'ignore');
             break;
         case 'missing_embedding':
             btn('生成向量', 're_embed', '#2196f3');
+            btn('删除', 'delete', '#f44336');
             btn('忽略', 'ignore');
             break;
         case 'near_duplicate':
@@ -467,6 +618,22 @@ function getActionButtonsForIssue(issue) {
             break;
         case 'orphaned_exchange':
             btn('清除来源', 'clear_source', '#f44336');
+            btn('删除', 'delete', '#f44336');
+            btn('忽略', 'ignore');
+            break;
+        case 'thread_empty':
+            btn('删除线程', 'thread_delete', '#f44336');
+            btn('忽略', 'ignore');
+            break;
+        case 'thread_status_mismatch':
+            btn('修正状态', 'thread_fix_status', '#2196f3');
+            btn('忽略', 'ignore');
+            break;
+        case 'thread_stale':
+            btn('标记暂停', 'thread_pause', '#ff9800');
+            btn('忽略', 'ignore');
+            break;
+        case 'thread_overload':
             btn('忽略', 'ignore');
             break;
         default:
@@ -654,9 +821,17 @@ async function handleHealthAction(op, issue, chatId, callbacks, rowEl) {
     switch (op) {
         case 'fix_floor': {
             const { id, collection } = issue;
-            await updateEntry(chatId, collection, id, { sourceFloor: -1, sourceMessageHash: '' });
+            const entry = issue.entry;
+            // 如果有 creationFloor 且不同于当前 sourceFloor，回退到创建楼层
+            const creationFloor = typeof entry.creationFloor === 'number' ? entry.creationFloor : entry.sourceFloor;
+            if (creationFloor >= 0 && creationFloor !== entry.sourceFloor) {
+                await updateEntry(chatId, collection, id, { sourceFloor: creationFloor, sourceMessageHash: '' });
+                notifyCallbacks(callbacks, `已回退到创建楼层 #${creationFloor}`);
+            } else {
+                await updateEntry(chatId, collection, id, { sourceFloor: -1, sourceMessageHash: '' });
+                notifyCallbacks(callbacks, '已标记为旧楼层');
+            }
             itemEl.remove();
-            notifyCallbacks(callbacks, '已标记为旧楼层');
             break;
         }
         case 'ignore': {
@@ -748,6 +923,49 @@ async function handleHealthAction(op, issue, chatId, callbacks, rowEl) {
             await updateEntry(chatId, collection, id, { sourceExchange: '', sourceFloor: -1, sourceMessageHash: '' });
             itemEl.remove();
             notifyCallbacks(callbacks, '已清除来源信息');
+            break;
+        }
+        case 'thread_delete': {
+            try {
+                const { removeTimelineThread } = await import('./memory-store.js');
+                await removeTimelineThread(chatId, issue.id);
+                itemEl.remove();
+                notifyCallbacks(callbacks, `已删除线程: ${(issue.title || issue.id).slice(0, 30)}`);
+            } catch (e) {
+                if (typeof toastr !== 'undefined') toastr.error('删除线程失败: ' + e.message);
+            }
+            break;
+        }
+        case 'thread_fix_status': {
+            try {
+                const { upsertTimelineThread } = await import('./memory-store.js');
+                const thread = issue.entry;
+                const hasOngoingEntries = (thread.entries || []).some(e => e.status === 'ongoing');
+                const allEnded = (thread.entries || []).length > 0 && (thread.entries || []).every(e => e.status === 'ended');
+                let newStatus = thread.status;
+                if (thread.status === 'ended' && hasOngoingEntries) {
+                    newStatus = 'ongoing';
+                } else if (thread.status === 'ongoing' && allEnded) {
+                    newStatus = 'ended';
+                }
+                await upsertTimelineThread(chatId, { ...thread, status: newStatus });
+                itemEl.remove();
+                notifyCallbacks(callbacks, `线程状态已修正为「${newStatus}」`);
+            } catch (e) {
+                if (typeof toastr !== 'undefined') toastr.error('修正线程状态失败: ' + e.message);
+            }
+            break;
+        }
+        case 'thread_pause': {
+            try {
+                const { upsertTimelineThread } = await import('./memory-store.js');
+                const thread = issue.entry;
+                await upsertTimelineThread(chatId, { ...thread, status: 'paused' });
+                itemEl.remove();
+                notifyCallbacks(callbacks, `线程已标记为暂停: ${(issue.title || issue.id).slice(0, 30)}`);
+            } catch (e) {
+                if (typeof toastr !== 'undefined') toastr.error('暂停线程失败: ' + e.message);
+            }
             break;
         }
     }
