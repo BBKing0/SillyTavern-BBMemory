@@ -9,7 +9,7 @@ import {
     getNpcProfiles, addNpcProfile, updateNpcProfile, removeNpcProfile,
     getItems, addItem, updateItem, removeItem,
     getTimeline, addTimelineEntry, updateTimelineEntry, removeTimelineEntry,
-    getTimelineThreads,
+    getTimelineThreads, upsertTimelineThread, removeTimelineThread,
     getMemories, addMemory, updateMemory, removeMemory,
     clearAllData, deleteByExchange, getMemoryStats, getSettings, updateSettings,
     exportMemories, importMemories, updateFactContent, addHiddenNote, removeHiddenNote,
@@ -120,7 +120,7 @@ function buildManagerHTML(npc, items, timeline, memories, chatId) {
                     <i class="fa-solid fa-box"></i> 物品
                 </button>
                 <button class="menu_button bb-mem-type-filter" data-type="timeline">
-                    <i class="fa-solid fa-clock"></i> 时间线
+                    <i class="fa-solid fa-clock"></i> 时间条目
                 </button>
                 <span style="flex:1;"></span>
                 <span class="bb-batch-count" id="bb_batch_count_label" style="display:none;font-size:0.8em;opacity:0.7;">已选 <strong id="bb_batch_count">0</strong> 条</span>
@@ -1424,27 +1424,55 @@ async function renderThreadPanel(overlay, chatId) {
             </button>
         </div>`;
 
-    for (const thread of threads) {
+    for (let ti = 0; ti < threads.length; ti++) {
+        const thread = threads[ti];
         const st = thread.status || 'ongoing';
         const entries = thread.entries || [];
+
+        // 状态切换按钮
+        const statusBtns = [];
+        if (st === 'ongoing') {
+            statusBtns.push(`<button class="menu_button bb-thread-btn-pause" data-thread-idx="${ti}" title="暂停">⏸</button>`);
+            statusBtns.push(`<button class="menu_button bb-thread-btn-end" data-thread-idx="${ti}" title="结束">✓</button>`);
+        } else if (st === 'paused') {
+            statusBtns.push(`<button class="menu_button bb-thread-btn-resume" data-thread-idx="${ti}" title="继续">▶</button>`);
+            statusBtns.push(`<button class="menu_button bb-thread-btn-end" data-thread-idx="${ti}" title="结束">✓</button>`);
+        } else if (st === 'ended') {
+            statusBtns.push(`<button class="menu_button bb-thread-btn-resume" data-thread-idx="${ti}" title="重新激活">▶</button>`);
+        }
+        if (st !== 'resident') {
+            statusBtns.push(`<button class="menu_button bb-thread-btn-resident" data-thread-idx="${ti}" title="设为常驻">★</button>`);
+        } else {
+            statusBtns.push(`<button class="menu_button bb-thread-btn-unresident" data-thread-idx="${ti}" title="取消常驻">☆</button>`);
+        }
+
         html += `
         <div class="bb-thread-card">
             <div class="bb-thread-header">
                 <span class="bb-thread-status" data-status="${st}">${statusIcon[st] || '●'} ${statusLabel[st] || st}</span>
                 <span class="bb-thread-type">${typeLabel[thread.type] || ''}</span>
                 <strong class="bb-thread-name">${escapeHtml(thread.name)}</strong>
-                ${thread.priority === 'high' ? '<span style="font-size:0.7em;opacity:0.5;">🔺高优先</span>' : ''}
+                ${thread.priority === 'high' ? '<span style="font-size:0.7em;opacity:0.5;">🔺</span>' : ''}
+                <div class="bb-thread-actions">
+                    ${statusBtns.join('')}
+                    <button class="menu_button bb-thread-btn-edit" data-thread-idx="${ti}" title="编辑线程"><i class="fa-solid fa-pen"></i></button>
+                    <button class="menu_button bb-thread-btn-delete" data-thread-idx="${ti}" title="删除线程"><i class="fa-solid fa-trash"></i></button>
+                </div>
             </div>`;
 
         if (entries.length) {
             html += '<div class="bb-thread-entries">';
-            for (const entry of entries) {
+            for (let ei = 0; ei < entries.length; ei++) {
+                const entry = entries[ei];
                 html += `
                 <div class="bb-thread-entry">
                     <span class="bb-thread-entry-status">${entryStatusIcon[entry.status] || '·'}</span>
                     <span class="bb-thread-entry-period">${escapeHtml(entry.period || '')}</span>
                     <span class="bb-thread-entry-event">${escapeHtml(entry.event || '')}</span>
                     ${entry.status === 'ongoing' ? '<span class="bb-thread-entry-ongoing">进行中</span>' : ''}
+                    <span style="flex:1;"></span>
+                    <button class="bb-thread-entry-edit menu_button" data-thread-idx="${ti}" data-entry-idx="${ei}" title="编辑条目"><i class="fa-solid fa-pen"></i></button>
+                    <button class="bb-thread-entry-del menu_button" data-thread-idx="${ti}" data-entry-idx="${ei}" title="删除条目" style="font-size:0.7em;padding:1px 5px;visibility:hidden;"><i class="fa-solid fa-xmark"></i></button>
                 </div>`;
             }
             html += '</div>';
@@ -1524,6 +1552,232 @@ async function renderThreadPanel(overlay, chatId) {
                 showQuickEditForm(overlay, chatId, { ...entry, _pillar: 'timeline' });
             }
         });
+    });
+
+    // ═══ v7.0.0 线程管理按钮绑定 ═══
+
+    // 编辑线程
+    panel.querySelectorAll('.bb-thread-btn-edit').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const idx = parseInt(btn.dataset.threadIdx);
+            const thread = threads[idx];
+            if (thread) showThreadEditForm(overlay, chatId, thread);
+        });
+    });
+
+    // 删除线程
+    panel.querySelectorAll('.bb-thread-btn-delete').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const idx = parseInt(btn.dataset.threadIdx);
+            const thread = threads[idx];
+            if (thread && confirm(`确认删除线程「${thread.name}」？`)) {
+                await removeTimelineThread(chatId, thread.id);
+                await renderThreadPanel(overlay, chatId);
+            }
+        });
+    });
+
+    // 状态切换：暂停
+    panel.querySelectorAll('.bb-thread-btn-pause').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const idx = parseInt(btn.dataset.threadIdx);
+            const thread = threads[idx];
+            if (thread) {
+                await upsertTimelineThread(chatId, { ...thread, status: 'paused' });
+                await renderThreadPanel(overlay, chatId);
+            }
+        });
+    });
+
+    // 状态切换：继续/重新激活
+    panel.querySelectorAll('.bb-thread-btn-resume').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const idx = parseInt(btn.dataset.threadIdx);
+            const thread = threads[idx];
+            if (thread) {
+                await upsertTimelineThread(chatId, { ...thread, status: 'ongoing' });
+                await renderThreadPanel(overlay, chatId);
+            }
+        });
+    });
+
+    // 状态切换：结束
+    panel.querySelectorAll('.bb-thread-btn-end').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const idx = parseInt(btn.dataset.threadIdx);
+            const thread = threads[idx];
+            if (thread) {
+                await upsertTimelineThread(chatId, { ...thread, status: 'ended' });
+                await renderThreadPanel(overlay, chatId);
+            }
+        });
+    });
+
+    // 设为常驻
+    panel.querySelectorAll('.bb-thread-btn-resident').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const idx = parseInt(btn.dataset.threadIdx);
+            const thread = threads[idx];
+            if (thread) {
+                await upsertTimelineThread(chatId, { ...thread, status: 'resident', priority: 'high' });
+                await renderThreadPanel(overlay, chatId);
+            }
+        });
+    });
+
+    // 取消常驻
+    panel.querySelectorAll('.bb-thread-btn-unresident').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const idx = parseInt(btn.dataset.threadIdx);
+            const thread = threads[idx];
+            if (thread) {
+                await upsertTimelineThread(chatId, { ...thread, status: 'ongoing' });
+                await renderThreadPanel(overlay, chatId);
+            }
+        });
+    });
+
+    // 编辑线程条目
+    panel.querySelectorAll('.bb-thread-entry-edit').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const ti = parseInt(btn.dataset.threadIdx);
+            const ei = parseInt(btn.dataset.entryIdx);
+            const thread = threads[ti];
+            if (thread && thread.entries[ei]) {
+                showThreadEntryEditForm(overlay, chatId, thread, ei);
+            }
+        });
+    });
+
+    // 删除线程条目
+    panel.querySelectorAll('.bb-thread-entry-del').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const ti = parseInt(btn.dataset.threadIdx);
+            const ei = parseInt(btn.dataset.entryIdx);
+            const thread = threads[ti];
+            if (thread && thread.entries[ei] && confirm(`确认删除条目「${thread.entries[ei].event}」？`)) {
+                thread.entries.splice(ei, 1);
+                await upsertTimelineThread(chatId, thread);
+                await renderThreadPanel(overlay, chatId);
+            }
+        });
+    });
+}
+
+// ═══════════════════════════════════════════════════════════
+//  v7.0.0 线程编辑表单
+// ═══════════════════════════════════════════════════════════
+
+function showThreadEditForm(overlay, chatId, thread) {
+    // 移除已有表单
+    document.querySelector('.bb-thread-form-overlay')?.remove();
+
+    const formOverlay = document.createElement('div');
+    formOverlay.className = 'bb-mem-form-overlay bb-thread-form-overlay';
+    formOverlay.innerHTML = `
+    <div class="bb-mem-form-popup" style="max-width:480px;">
+        <div class="bb-mem-form-header">
+            <h3><i class="fa-solid fa-timeline"></i> 编辑线程</h3>
+            <span class="bb-thread-form-close" style="cursor:pointer;font-size:1.2em;">&times;</span>
+        </div>
+        <div class="bb-mem-form-body">
+            <div class="bb-mem-form-row">
+                <label>线程名称</label>
+                <input type="text" class="text_pole bb-thread-form-name" value="${escapeHtml(thread.name || '')}" />
+            </div>
+            <div class="bb-mem-form-row">
+                <label>类型</label>
+                <select class="text_pole bb-thread-form-type">
+                    <option value="plot" ${thread.type === 'plot' ? 'selected' : ''}>主线剧情</option>
+                    <option value="emotional" ${thread.type === 'emotional' ? 'selected' : ''}>感情线</option>
+                    <option value="side" ${thread.type === 'side' ? 'selected' : ''}>支线</option>
+                    <option value="world" ${thread.type === 'world' ? 'selected' : ''}>世界观</option>
+                </select>
+            </div>
+            <div class="bb-mem-form-row">
+                <label>优先级</label>
+                <select class="text_pole bb-thread-form-priority">
+                    <option value="high" ${thread.priority === 'high' ? 'selected' : ''}>高</option>
+                    <option value="medium" ${thread.priority === 'medium' ? 'selected' : ''}>中</option>
+                    <option value="low" ${thread.priority === 'low' ? 'selected' : ''}>低</option>
+                </select>
+            </div>
+        </div>
+        <div class="bb-mem-form-footer">
+            <button class="menu_button bb-thread-form-save"><i class="fa-solid fa-check"></i> 保存</button>
+            <button class="menu_button bb-thread-form-cancel">取消</button>
+        </div>
+    </div>`;
+    document.body.appendChild(formOverlay);
+
+    const close = () => formOverlay.remove();
+    formOverlay.querySelector('.bb-thread-form-close')?.addEventListener('click', close);
+    formOverlay.querySelector('.bb-thread-form-cancel')?.addEventListener('click', close);
+    formOverlay.addEventListener('click', (e) => { if (e.target === formOverlay) close(); });
+
+    formOverlay.querySelector('.bb-thread-form-save')?.addEventListener('click', async () => {
+        const name = formOverlay.querySelector('.bb-thread-form-name')?.value?.trim();
+        const type = formOverlay.querySelector('.bb-thread-form-type')?.value;
+        const priority = formOverlay.querySelector('.bb-thread-form-priority')?.value;
+        if (!name) return;
+        await upsertTimelineThread(chatId, { ...thread, name, type, priority });
+        close();
+        await renderThreadPanel(overlay, chatId);
+    });
+}
+
+function showThreadEntryEditForm(overlay, chatId, thread, entryIdx) {
+    const entry = thread.entries[entryIdx];
+    if (!entry) return;
+    document.querySelector('.bb-thread-form-overlay')?.remove();
+
+    const formOverlay = document.createElement('div');
+    formOverlay.className = 'bb-mem-form-overlay bb-thread-form-overlay';
+    formOverlay.innerHTML = `
+    <div class="bb-mem-form-popup" style="max-width:480px;">
+        <div class="bb-mem-form-header">
+            <h3><i class="fa-solid fa-clock"></i> 编辑线程条目</h3>
+            <span class="bb-thread-form-close" style="cursor:pointer;font-size:1.2em;">&times;</span>
+        </div>
+        <div class="bb-mem-form-body">
+            <div class="bb-mem-form-row">
+                <label>时间区间</label>
+                <input type="text" class="text_pole bb-thread-form-period" value="${escapeHtml(entry.period || '')}" placeholder="如：123年1月-2月" />
+            </div>
+            <div class="bb-mem-form-row">
+                <label>事件描述</label>
+                <input type="text" class="text_pole bb-thread-form-event" value="${escapeHtml(entry.event || '')}" />
+            </div>
+            <div class="bb-mem-form-row">
+                <label>状态</label>
+                <select class="text_pole bb-thread-form-entry-status">
+                    <option value="ongoing" ${entry.status === 'ongoing' ? 'selected' : ''}>进行中</option>
+                    <option value="ended" ${entry.status === 'ended' ? 'selected' : ''}>已结束</option>
+                    <option value="milestone" ${entry.status === 'milestone' ? 'selected' : ''}>里程碑</option>
+                </select>
+            </div>
+        </div>
+        <div class="bb-mem-form-footer">
+            <button class="menu_button bb-thread-form-save"><i class="fa-solid fa-check"></i> 保存</button>
+            <button class="menu_button bb-thread-form-cancel">取消</button>
+        </div>
+    </div>`;
+    document.body.appendChild(formOverlay);
+
+    const close = () => formOverlay.remove();
+    formOverlay.querySelector('.bb-thread-form-close')?.addEventListener('click', close);
+    formOverlay.querySelector('.bb-thread-form-cancel')?.addEventListener('click', close);
+    formOverlay.addEventListener('click', (e) => { if (e.target === formOverlay) close(); });
+
+    formOverlay.querySelector('.bb-thread-form-save')?.addEventListener('click', async () => {
+        const period = formOverlay.querySelector('.bb-thread-form-period')?.value?.trim();
+        const event = formOverlay.querySelector('.bb-thread-form-event')?.value?.trim();
+        const status = formOverlay.querySelector('.bb-thread-form-entry-status')?.value;
+        if (!event) return;
+        thread.entries[entryIdx] = { period: period || '', event, status: status || 'ongoing' };
+        await upsertTimelineThread(chatId, thread);
+        close();
+        await renderThreadPanel(overlay, chatId);
     });
 }
 

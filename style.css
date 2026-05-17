@@ -1852,6 +1852,13 @@
    v6.8.0: 时间线线程面板
    ═══════════════════════════════════════ */
 
+#bb_thread_panel_content {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    padding: 0 2px;
+}
+
 .bb-thread-empty {
     text-align: center;
     padding: 40px 20px;
@@ -1942,6 +1949,38 @@
     padding: 1px 6px;
     border-radius: 8px;
     white-space: nowrap;
+}
+
+/* 线程管理按钮 */
+
+.bb-thread-actions {
+    display: flex;
+    gap: 3px;
+    flex-shrink: 0;
+}
+
+.bb-thread-actions .menu_button {
+    font-size: 0.72em;
+    padding: 2px 7px;
+    opacity: 0.7;
+    transition: opacity 0.2s;
+}
+
+.bb-thread-card:hover .bb-thread-actions .menu_button {
+    opacity: 1;
+}
+
+/* 线程条目编辑按钮 */
+
+.bb-thread-entry-edit {
+    visibility: hidden;
+    padding: 1px 5px !important;
+    font-size: 0.7em !important;
+    opacity: 0.6;
+}
+
+.bb-thread-entry:hover .bb-thread-entry-edit {
+    visibility: visible;
 }
 
 /* 详细时间线条目（折叠区） */
@@ -2510,6 +2549,51 @@
         flex: 1;
         overflow-y: auto;
         max-height: none;
+    }
+    /* v7.0.0 线程面板移动端 */
+    .bb-thread-header {
+        flex-wrap: wrap;
+        gap: 4px;
+    }
+    .bb-thread-name {
+        font-size: 0.9em;
+        min-width: 100%;
+    }
+    .bb-thread-actions {
+        flex-wrap: wrap;
+        gap: 2px;
+    }
+    .bb-thread-actions .menu_button {
+        font-size: 0.7em;
+        padding: 3px 5px;
+        min-height: 28px;
+        opacity: 1;
+    }
+    .bb-thread-detail-edit {
+        visibility: visible;
+        opacity: 0.6;
+    }
+    .bb-thread-detail-item {
+        flex-wrap: wrap;
+    }
+    .bb-thread-detail-time {
+        min-width: 70px;
+        font-size: 0.7em;
+    }
+    .bb-thread-detail-event {
+        font-size: 0.78em;
+        white-space: normal;
+    }
+    .bb-thread-entry-period {
+        min-width: 70px;
+        font-size: 0.7em;
+    }
+    .bb-thread-entry-event {
+        font-size: 0.78em;
+    }
+    .bb-thread-entry-edit {
+        visibility: visible;
+        opacity: 0.5;
     }
 }
 
