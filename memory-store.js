@@ -40,10 +40,12 @@ export const DEFAULT_SETTINGS = Object.freeze({
     extractionConfirmMode: 'semi', // 'active' | 'semi' | 'auto'
     activeConfirmStyle: 'popup',   // 'popup' | 'toast'
     contextWindowExchanges: 3,
-    extractionMode: 'merged',        // 'merged' | 'staged' — v6.2默认合并提取
     extractedMsgDisplay: 'transparent', // 'hidden' | 'transparent' | 'visible'
     extractionStyle: 'auto',             // 'auto' | 'daily' | 'drama' | 'custom'
     customExtractionBias: '',            // 自定义风格偏置（extractionStyle=custom 时生效）
+    // 自定义提示词（v7.7.1）
+    customCorePrinciples: '',            // 自定义核心原则（空=使用默认）
+    customExtractionDimensions: '',      // 自定义提取维度（空=使用默认）
     // Embedding
     embeddingEnabled: false,
     embeddingEndpoint: '',

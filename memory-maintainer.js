@@ -372,7 +372,10 @@ async function generateGroupSummary(chatId, group, _options = {}) {
         `${i + 1}. [${t.storyTime || '?'}] ${t.event}: ${t.summary}`
     ).join('\n');
 
-    const prompt = `将以下时间线条目合并为一条总结（JSON）：
+    const calDesc = getSettings().calendarDescription?.trim();
+    const calRef = calDesc ? `\n**世界历法参考**：${calDesc}\n（仅用于推断和整理故事时间）\n` : '';
+
+    const prompt = `将以下时间线条目合并为一条总结（JSON）：${calRef}
 ${lines}
 返回格式：{"n":"标题","c":"内容(100字)","m":"摘要(20字)","i":0.7}
 只输出JSON。`;
@@ -457,8 +460,10 @@ export async function regenerateThreadSummary(chatId, options = {}) {
         : '(无已有线程)';
 
     const maxActive = options.maxActiveThreads || settings.maxActiveThreads || 5;
+    const calRef2 = (settings.calendarDescription && settings.calendarDescription.trim())
+        ? `\n**世界历法参考**：${settings.calendarDescription.trim()}\n（仅用于推断和整理故事时间，无需计算天数）\n` : '';
 
-    const prompt = `你是一个故事时间线组织助手。根据时间线条目和已有线程，重新整理故事线程。
+    const prompt = `你是一个故事时间线组织助手。根据时间线条目和已有线程，重新整理故事线程。${calRef2}
 
 ═══════════════════════════════════════════════════════
 ## 时间线条目（按重要性排序）

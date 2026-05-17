@@ -452,7 +452,7 @@ function bindSidebarEvents() {
     bindSelect('#bb_extraction_confirm_mode', 'extractionConfirmMode');
     bindSelect('#bb_active_confirm_style', 'activeConfirmStyle');
 
-    bindSelect('#bb_extraction_mode', 'extractionMode');
+    // v7.7.1 提取模式固定为合并提取，移除 extractionMode 选择器
 
     // 提取风格
     bindSelect('#bb_extraction_style', 'extractionStyle');
@@ -478,6 +478,24 @@ function bindSidebarEvents() {
             updateSettings({ customExtractionBias: customBiasTextarea.value });
         });
     }
+
+    // v7.7.1 自定义提示词绑定
+    bindInput('#bb_custom_core_principles', 'customCorePrinciples', 'string');
+    bindInput('#bb_custom_extraction_dimensions', 'customExtractionDimensions', 'string');
+
+    // 恢复默认按钮
+    document.querySelector('#bb_reset_core_principles')?.addEventListener('click', () => {
+        updateSettings({ customCorePrinciples: '' });
+        const ta = document.querySelector('#bb_custom_core_principles');
+        if (ta) ta.value = '';
+        showToast('核心原则已恢复为默认', 'info');
+    });
+    document.querySelector('#bb_reset_extraction_dimensions')?.addEventListener('click', () => {
+        updateSettings({ customExtractionDimensions: '' });
+        const ta = document.querySelector('#bb_custom_extraction_dimensions');
+        if (ta) ta.value = '';
+        showToast('提取维度已恢复为默认', 'info');
+    });
 
     // 数字/文本输入
     bindInput('#bb_context_window', 'contextWindowExchanges', 'number');

@@ -354,14 +354,35 @@
                     <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
                 </div>
                 <div class="bb-settings-section-body">
-                    <div class="bb-mem-sidebar-section">
-                        <label for="bb_extraction_mode">提取模式</label>
-                        <select id="bb_extraction_mode" class="text_pole">
-                            <option value="staged">分阶段提取（默认）</option>
-                            <option value="merged">合并提取（省Token，测试中）</option>
-                        </select>
+                    <div class="bb-mem-empty">暂无测试功能发布</div>
+                </div>
+            </div>
+
+            <!-- 自定义设置 (v7.7.1) -->
+            <hr />
+            <div class="bb-settings-section">
+                <div class="bb-settings-section-header" data-section="custom">
+                    <span><i class="fa-solid fa-sliders"></i> 自定义设置</span>
+                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                </div>
+                <div class="bb-settings-section-body">
+                    <div class="bb-mem-hint" style="margin-bottom:8px;">
+                        <i class="fa-solid fa-circle-info"></i> 自定义 AI 提取的核心提示词。留空则使用默认值。
                     </div>
-                    <div class="bb-mem-hint">合并模式将4次API调用合并为1次，降低Token消耗。</div>
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_custom_core_principles">
+                            自定义核心原则
+                            <button class="menu_button" id="bb_reset_core_principles" style="font-size:0.7em;padding:2px 6px;margin-left:8px;">恢复默认</button>
+                        </label>
+                        <textarea id="bb_custom_core_principles" class="text_pole" rows="4" placeholder="留空使用默认核心原则..."></textarea>
+                    </div>
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_custom_extraction_dimensions">
+                            自定义提取维度
+                            <button class="menu_button" id="bb_reset_extraction_dimensions" style="font-size:0.7em;padding:2px 6px;margin-left:8px;">恢复默认</button>
+                        </label>
+                        <textarea id="bb_custom_extraction_dimensions" class="text_pole" rows="8" placeholder="留空使用默认提取维度..."></textarea>
+                    </div>
                 </div>
             </div>
 

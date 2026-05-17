@@ -589,6 +589,9 @@ function bindBatchEvents(overlay, chatId) {
         await rerenderManagerList(overlay, chatId);
         updateUI();
     });
+
+    // 初始化批量编辑按钮状态（修复初始 disabled 无法点击的问题）
+    updateUI();
 }
 
 // ═══ 条目操作 ═══
