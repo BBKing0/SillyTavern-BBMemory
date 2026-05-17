@@ -15,6 +15,7 @@ const STORAGE_KEYS = {
     item:     'bb_item_chat_',
     timeline: 'bb_timeline_chat_',
     mem:      'bb_mem_chat_',
+    threads:  'bb_timeline_threads_',  // v6.7.0 命名线程系统
 };
 
 const OLD_STORAGE_KEY = 'bb_memory_chat_';
@@ -70,6 +71,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     healthCheckStaleHitThreshold: 3,       // 休眠命中次数阈值
     // 时间线总结
     timelineSummaryEnabled: true,
+    maxActiveThreads: 5,               // v6.7.0 活跃线程最大注入数
     // 自动备份
     autoBackupEnabled: false,
     lastBackupTimestamp: 0,
@@ -388,6 +390,75 @@ export async function removeTimelineEntry(chatId, id) {
     if (filtered.length < timeline.length) {
         await saveCollection('timeline', chatId, filtered);
         scheduleAutoBackup(chatId);
+        return true;
+    }
+    return false;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  v6.7.0 命名线程系统 (Timeline Threads)
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 获取所有时间线线程
+ */
+export async function getTimelineThreads(chatId) {
+    return loadCollection('threads', chatId);
+}
+
+/**
+ * 保存时间线线程（全量替换）
+ */
+export async function saveTimelineThreads(chatId, threads) {
+    await saveCollection('threads', chatId, threads);
+    scheduleAutoBackup(chatId);
+}
+
+/**
+ * 更新或新增一个线程
+ * @param {string} chatId
+ * @param {object} threadData - { id?, name, type, status, priority, parentThreadId, entries, embedding }
+ */
+export async function upsertTimelineThread(chatId, threadData) {
+    const threads = await getTimelineThreads(chatId);
+    const now = Date.now();
+
+    if (threadData.id) {
+        const existing = threads.find(t => t.id === threadData.id);
+        if (existing) {
+            const { id: _id, createdAt: _ca, ...safe } = threadData;
+            Object.assign(existing, safe);
+            existing.updatedAt = now;
+            await saveTimelineThreads(chatId, threads);
+            return existing;
+        }
+    }
+
+    const thread = {
+        id: threadData.id || generateId(),
+        name: threadData.name || '',
+        type: threadData.type || 'plot',        // plot | emotional | side | world
+        status: threadData.status || 'ongoing',  // ongoing | paused | ended | archived | resident
+        priority: threadData.priority || 'medium', // high | medium | low
+        parentThreadId: threadData.parentThreadId || null,
+        entries: Array.isArray(threadData.entries) ? threadData.entries : [],
+        embedding: threadData.embedding || null,
+        createdAt: now,
+        updatedAt: now,
+    };
+    threads.push(thread);
+    await saveTimelineThreads(chatId, threads);
+    return thread;
+}
+
+/**
+ * 删除一个线程
+ */
+export async function removeTimelineThread(chatId, threadId) {
+    const threads = await getTimelineThreads(chatId);
+    const filtered = threads.filter(t => t.id !== threadId);
+    if (filtered.length < threads.length) {
+        await saveTimelineThreads(chatId, filtered);
         return true;
     }
     return false;

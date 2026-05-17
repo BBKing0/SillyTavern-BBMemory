@@ -10,7 +10,7 @@ import {
     getNpcProfiles, getItems, getTimeline, getMemories,
     updateNpcProfile, updateItem, updateTimelineEntry, updateMemory,
     removeNpcProfile, removeItem, removeTimelineEntry, removeMemory,
-    addMemory,
+    addMemory, getTimelineThreads, saveTimelineThreads,
 } from './memory-store.js';
 import { callCustomApi, callMainApi } from './auto-generator.js';
 
@@ -417,6 +417,117 @@ ${lines}
         });
         return { merged: false };
     } catch { return null; }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  v6.7.0 命名线程系统 — 线程总结生成
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 从时间线条目重新生成线程总结
+ * 读取所有时间线条目 + 现有线程，让 LLM 输出更新后的线程列表
+ */
+export async function regenerateThreadSummary(chatId, options = {}) {
+    const timeline = await getTimeline(chatId);
+    const existingThreads = await getTimelineThreads(chatId);
+    const settings = getSettings();
+
+    // 将时间线条目按重要性排序：ongoing + foreshadow 优先，ended 次之
+    const sorted = [...timeline].sort((a, b) => {
+        const scoreA = (a.status === 'ongoing' || a.status === 'foreshadow' ? 2 : a.status === 'ended' ? 1 : 0);
+        const scoreB = (b.status === 'ongoing' || b.status === 'foreshadow' ? 2 : b.status === 'ended' ? 1 : 0);
+        if (scoreA !== scoreB) return scoreB - scoreA;
+        return (b.storyTimeSort ?? 0) - (a.storyTimeSort ?? 0);
+    });
+
+    // 取最近的重要条目（最多 30 条，避免 prompt 太长）
+    const recentEntries = sorted.slice(0, 30);
+
+    // 构建时间线条目文本
+    const entriesText = recentEntries.map((t, i) =>
+        `${i + 1}. [${t.storyTime || '?'}] ${t.event} (${t.status || 'ongoing'})\n   ${t.summary}${t.impact ? ' // 影响: ' + t.impact : ''}`
+    ).join('\n');
+
+    // 构建已有线程文本
+    const threadsText = existingThreads.length > 0
+        ? existingThreads.map(t => {
+            const entries = (t.entries || []).map(e => `  ${e.period || ''} ${e.event || ''} [${e.status || ''}]`).join('\n');
+            return `- [${t.id}] ${t.name} (type:${t.type}, status:${t.status}, priority:${t.priority})${t.parentThreadId ? ', parent:' + t.parentThreadId : ''}\n${entries || '  (无条目)'}`;
+        }).join('\n')
+        : '(无已有线程)';
+
+    const maxActive = options.maxActiveThreads || settings.maxActiveThreads || 5;
+
+    const prompt = `你是一个故事时间线组织助手。根据时间线条目和已有线程，重新整理故事线程。
+
+═══════════════════════════════════════════════════════
+## 时间线条目（按重要性排序）
+═══════════════════════════════════════════════════════
+${entriesText || '(无)'}
+
+═══════════════════════════════════════════════════════
+## 已有线程
+═══════════════════════════════════════════════════════
+${threadsText}
+
+═══════════════════════════════════════════════════════
+## 任务
+═══════════════════════════════════════════════════════
+
+根据时间线条目，重新整理为命名线程。每条线程是一个独立的故事线索。
+
+规则：
+1. 每个线程有独立的 name（如"第一幕·战前"、"感情线·charA"、"支线·寻找圣剑"）
+2. 将相关的时间线条目归入对应线程的 entries 中
+3. 合并同类项——时间相近、主题相同的事件合并为一条 entry
+4. 保持活跃线程在 ${maxActive} 条以内（resident 不计入）
+5. 已结束的线程标记 status:"ended"（不注入，但可被向量检索）
+6. 重要的、贯穿始终的线程标记 status:"resident"（永远注入，永不降级）
+7. 线程类型 type: plot(主线剧情) / emotional(感情线) / side(支线) / world(世界观)
+
+返回纯JSON对象（不要markdown代码块）：
+{"threads":[{"id":"保留已有ID或生成新ID","name":"线程名","type":"plot|emotional|side|world","status":"ongoing|ended|paused|resident","priority":"high|medium|low","parentThreadId":null或父线程ID,"entries":[{"period":"时间区间","event":"事件描述","status":"ongoing|ended|milestone"}]}]}
+只输出JSON。`;
+
+    let responseText;
+    try {
+        if (settings.autoGenMode === 'custom' && settings.autoGenEndpoint) {
+            responseText = await callCustomApi(prompt);
+        } else {
+            responseText = await callMainApi(prompt);
+        }
+    } catch (e) {
+        console.warn('[BB-Memory] 线程总结生成API调用失败:', e.message);
+        return { threadCount: 0, error: e.message };
+    }
+
+    try {
+        let text = responseText.trim();
+        text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+        const match = text.match(/\{[\s\S]*\}/);
+        if (!match) {
+            console.warn('[BB-Memory] 线程总结响应未找到JSON');
+            return { threadCount: 0, error: 'No JSON found in response' };
+        }
+        const parsed = JSON.parse(match[0]);
+        const newThreads = Array.isArray(parsed.threads) ? parsed.threads : [];
+
+        // 保留已有线程的 id 和 createdAt
+        for (const nt of newThreads) {
+            const existing = existingThreads.find(t => t.id === nt.id);
+            if (existing) {
+                nt.createdAt = existing.createdAt;
+            }
+            nt.updatedAt = Date.now();
+        }
+
+        await saveTimelineThreads(chatId, newThreads);
+        console.log(`[BB-Memory] 线程总结更新: ${newThreads.length} 条线程`);
+        return { threadCount: newThreads.length };
+    } catch (e) {
+        console.warn('[BB-Memory] 线程总结JSON解析失败:', e.message);
+        return { threadCount: 0, error: e.message };
+    }
 }
 
 // ═══ 已维护记录 ═══

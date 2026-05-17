@@ -47,6 +47,13 @@
                 </button>
             </div>
 
+            <!-- 快捷按钮 行3：时间线线程 -->
+            <div class="bb-mem-sidebar-buttons">
+                <button id="bb_thread_refresh_btn" class="menu_button" title="从时间线条目重新生成故事线程总结">
+                    <i class="fa-solid fa-timeline"></i> 刷新时间线总结
+                </button>
+            </div>
+
             <!-- 跨设备备份 -->
             <div style="display:flex;gap:4px;margin:4px 0;">
                 <button id="bb_memory_backup_now" class="menu_button" title="立即备份到服务器" style="flex:1;font-size:0.8em;">
@@ -140,6 +147,12 @@
                         <input id="bb_timeline_summary_enabled" type="checkbox" checked />
                         <span>启用时间线总结</span>
                     </label>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_max_active_threads">最大活跃线程数</label>
+                        <small class="bb-mem-hint">活跃线程超过此数时自动限制注入（默认5）</small>
+                        <input id="bb_max_active_threads" type="number" class="text_pole" min="2" max="15" value="5" />
+                    </div>
 
                     <label class="checkbox_label" style="margin: 8px 0;">
                         <input id="bb_auto_backup_enabled" type="checkbox" />

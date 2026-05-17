@@ -6,7 +6,7 @@
  */
 
 import {
-    getSettings, getMemories, addMemory, updateMemory,
+    getSettings, updateSettings, getMemories, addMemory, updateMemory,
     upsertNpcProfile, upsertItem, upsertTimelineEntry,
     getNpcProfiles, getItems, getTimeline,
 } from './memory-store.js';
@@ -1146,6 +1146,23 @@ async function processLatestExchange(chatId) {
 
     // v6.3.0: markExchangeExtracted 同时处理 AI 和用户消息的隐藏
     await markExchangeExtracted(oldest.userIndex, oldest.aiIndex, oldest.hash);
+
+    // v6.7.0: 线程自动更新检测
+    if (getSettings().timelineSummaryEnabled) {
+        const counter = (getSettings()._threadUpdateCounter || 0) + 1;
+        const threshold = getSettings()._threadUpdateThreshold || 5;
+        updateSettings({ _threadUpdateCounter: counter });
+        if (counter >= threshold) {
+            updateSettings({ _threadUpdateCounter: 0 });
+            setTimeout(async () => {
+                try {
+                    const { regenerateThreadSummary } = await import('./memory-maintainer.js');
+                    await regenerateThreadSummary(chatId);
+                    console.log('[BB-Memory] 线程总结自动更新完成');
+                } catch (e) { /* 静默失败 */ }
+            }, 3000);
+        }
+    }
 
     setTimeout(() => refreshExtractionMarkers(), 200);
 }

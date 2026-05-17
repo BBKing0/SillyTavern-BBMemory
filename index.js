@@ -11,6 +11,7 @@ import {
     getNpcProfiles, addNpcProfile, updateNpcProfile, removeNpcProfile, upsertNpcProfile,
     getItems, addItem, updateItem, removeItem, upsertItem,
     getTimeline, addTimelineEntry, updateTimelineEntry, removeTimelineEntry, upsertTimelineEntry,
+    getTimelineThreads, saveTimelineThreads, upsertTimelineThread, removeTimelineThread,
     getMemories, addMemory, updateMemory, removeMemory,
     clearAllData, deleteByExchange, getMemoryStats, refreshAllSourceFloors,
     exportMemoriesToChatMetadata, importMemoriesFromChatMetadata,
@@ -22,7 +23,7 @@ import {
 import {
     getRelevantMemories, getResidentMemories, buildMemoryInjectionPrompt,
     mergeExpandedRelevantResults, simpleSearch, searchMemories,
-    getNpcForInjection, getItemsForInjection, getTimelineForInjection,
+    getNpcForInjection, getItemsForInjection, getTimelineForInjection, getThreadSummaryForInjection,
 } from './retriever.js';
 
 import { MEMORY_TYPES, TRUTH_STATUS, HIDDEN_NOTE_TYPES } from './memory-types.js';
@@ -43,7 +44,7 @@ import {
     MEMORY_STATUS, checkMaintenanceNeeded, dismissMaintenanceRemind,
     performMaintenance,
     fuzzyMemory, archiveMemory, restoreMemory, autoMaintain,
-    generateTimelineSummary,
+    generateTimelineSummary, regenerateThreadSummary,
     getMaintenanceResolved, clearMaintenanceResolved,
 } from './memory-maintainer.js';
 
@@ -100,11 +101,12 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     }
 
     // 4. 加载数据
-    const [npc, items, timeline, memories] = await Promise.all([
+    const [npc, items, timeline, memories, threads] = await Promise.all([
         getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+        getTimelineThreads(chatId),
     ]);
 
-    const hasData = npc.length + items.length + timeline.length + memories.length > 0;
+    const hasData = npc.length + items.length + timeline.length + memories.length + threads.length > 0;
     if (!hasData) { clearInjection(); return chat; }
 
     // 5. 降格检查
@@ -122,6 +124,9 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     const npcForInjection = getNpcForInjection(npc, userMessage);
     const itemsForInjection = getItemsForInjection(items, userMessage);
     const tlForInjection = getTimelineForInjection(timeline);
+    const threadSummary = settings.timelineSummaryEnabled
+        ? getThreadSummaryForInjection(threads, settings.maxActiveThreads || 5)
+        : { text: '', threads: [] };
     const residentMems = getResidentMemories(memories);
     const relevantResults = getRelevantMemories(memories, userMessage, {
         maxResults: settings.maxResults || 10,
@@ -132,7 +137,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     const merged = mergeExpandedRelevantResults(memories, userMessage, relevantResults, excludeIds, 12, settings.maxResults, queryEmbedding);
 
     if (!npcForInjection.length && !itemsForInjection.length &&
-        !tlForInjection.ongoing.length && !tlForInjection.ended.length && !merged.length) {
+        !tlForInjection.ongoing.length && !tlForInjection.ended.length && !merged.length && !threadSummary.text) {
         clearInjection(); return chat;
     }
 
@@ -148,6 +153,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         npcProfiles: npcForInjection,
         items: itemsForInjection,
         timeline: tlForInjection,
+        threadSummary,
         relevantResults: merged,
         settings,
     });
@@ -162,7 +168,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     }
 
     if (settings.debugLogging) {
-        console.log(`[BB-Memory] 注入: NPC${stats.npcCount} 物品${stats.itemCount} 时间线${stats.timelineCount} 记忆${stats.memoryCount} | ~${tokenEstimate} tokens`);
+        console.log(`[BB-Memory] 注入: 线程${stats.threadCount} NPC${stats.npcCount} 物品${stats.itemCount} 时间线${stats.timelineCount} 记忆${stats.memoryCount} | ~${tokenEstimate} tokens`);
     }
 
     // 11. 存储命中追踪
@@ -492,6 +498,7 @@ function bindSidebarEvents() {
     bindInput('#bb_maintenance_npc_threshold', 'maintenanceNpcThreshold', 'number');
     bindInput('#bb_maintenance_item_threshold', 'maintenanceItemThreshold', 'number');
     bindInput('#bb_diversity_limit', 'diversityLimitPerTag', 'number');
+    bindInput('#bb_max_active_threads', 'maxActiveThreads', 'number');
     bindInput('#bb_health_check_duplicate_threshold', 'healthCheckDuplicateThreshold', 'number');
     bindInput('#bb_health_check_isolation_threshold', 'healthCheckIsolationThreshold', 'number');
     bindInput('#bb_health_check_stale_days', 'healthCheckStaleDays', 'number');
@@ -601,6 +608,23 @@ function bindSidebarEvents() {
             showToast('维护检查出错: ' + e.message, 'error');
             // 仍然打开面板（空数据模式）
             showMaintenancePopup(chatId, { issues: [], issueCount: 0, totalItems: 0, needed: false });
+        }
+    });
+    // v6.7.0 刷新时间线总结
+    document.querySelector('#bb_thread_refresh_btn')?.addEventListener('click', async () => {
+        const chatId = getChatId();
+        if (!chatId) return;
+        showToast('正在生成时间线总结...', 'info');
+        try {
+            const result = await regenerateThreadSummary(chatId);
+            if (result.threadCount > 0) {
+                showToast(`时间线总结完成：${result.threadCount} 条线程`, 'success');
+            } else {
+                showToast('时间线总结完成：本轮无需更新', 'info');
+            }
+        } catch (e) {
+            console.warn('[BB-Memory] 线程总结失败:', e.message);
+            showToast('线程总结失败: ' + e.message, 'error');
         }
     });
     // 世界书导入

@@ -18,6 +18,7 @@ import {
 } from './entity-tiers.js';
 import {
     getNpcProfiles, getItems, getTimeline, getMemories,
+    getTimelineThreads,
 } from './memory-store.js';
 
 // ═══════════════════════════════════════════════════════════
@@ -272,6 +273,61 @@ export function getTimelineForInjection(timeline) {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  v6.7.0 命名线程系统 — 线程总结注入
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 从线程数据构建注入文本
+ * @param {Array} threads - getTimelineThreads 的结果
+ * @param {number} maxActive - 最大活跃线程数
+ * @returns {object} { text: string, threads: Array }
+ */
+export function getThreadSummaryForInjection(threads, maxActive = 5) {
+    if (!threads || !threads.length) return { text: '', threads: [] };
+
+    // 优先级排序：resident > high > medium > low
+    const priorityOrder = { resident: 0, high: 1, medium: 2, low: 3 };
+    const sorted = [...threads].sort((a, b) => {
+        const pa = priorityOrder[a.priority || 'medium'] ?? 2;
+        const pb = priorityOrder[b.priority || 'medium'] ?? 2;
+        if (pa !== pb) return pa - pb;
+        return (b.updatedAt || 0) - (a.updatedAt || 0);
+    });
+
+    // Resident 线程不计入 maxActive 限制
+    const residents = sorted.filter(t => t.status === 'resident');
+    const nonResidents = sorted.filter(t => t.status !== 'resident');
+
+    // Active 线程（ongoing + paused），受 maxActive 限制
+    const active = nonResidents.filter(t => t.status === 'ongoing' || t.status === 'paused');
+    const limited = active.slice(0, maxActive);
+
+    // 合并：resident 线程 + 限制后的活跃线程
+    const forInjection = [...residents, ...limited];
+
+    if (!forInjection.length) return { text: '', threads: [] };
+
+    const lines = ['【故事线程地图】'];
+    for (const thread of forInjection) {
+        const statusMark = thread.status === 'resident' ? '★常驻' :
+                          thread.status === 'ongoing' ? '●进行中' :
+                          thread.status === 'paused' ? '⏸暂停' : '';
+        const typeMark = thread.type === 'emotional' ? '[感情]' :
+                         thread.type === 'side' ? '[支线]' :
+                         thread.type === 'world' ? '[世界]' : '';
+        lines.push(`${statusMark} ${typeMark} ${thread.name}`);
+        for (const entry of (thread.entries || [])) {
+            const entryStatus = entry.status === 'ongoing' ? '→' :
+                               entry.status === 'ended' ? '✓' :
+                               entry.status === 'milestone' ? '◆' : '·';
+            lines.push(`  ${entryStatus} ${entry.period || ''} ${entry.event || ''}`);
+        }
+    }
+
+    return { text: lines.join('\n'), threads: forInjection };
+}
+
+// ═══════════════════════════════════════════════════════════
 //  格式化
 // ═══════════════════════════════════════════════════════════
 
@@ -338,13 +394,26 @@ function formatMemoryLine(m) {
  * @param {object} params.settings
  * @returns {{ text: string, tokenEstimate: number, stats: object }}
  */
-export function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, relevantResults, settings }) {
+export function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, threadSummary, relevantResults, settings }) {
     const tokenBudget = settings.tokenBudget || 800;
     let tokenUsed = 0;
-    const stats = { npcCount: 0, itemCount: 0, timelineCount: 0, memoryCount: 0 };
+    const stats = { npcCount: 0, itemCount: 0, timelineCount: 0, memoryCount: 0, threadCount: 0 };
     const truncated = [];
 
     const sections = [];
+
+    // ── 区块 0：故事线程地图（v6.7.0 — 最前，给 LLM 全局叙事视野）──
+    if (threadSummary && threadSummary.text) {
+        const threadText = threadSummary.text;
+        const threadTokens = estimateTokens(threadText);
+        if (threadTokens <= tokenBudget * 0.2) {
+            sections.push(threadText);
+            tokenUsed += threadTokens;
+            stats.threadCount = threadSummary.threads?.length || 0;
+        } else {
+            truncated.push('线程地图(超出token预算)');
+        }
+    }
 
     // ── 区块 1：角色档案 ──
     if (npcProfiles?.length) {
