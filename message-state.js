@@ -178,7 +178,13 @@ export async function syncMessageVisibility(windowOverride) {
         const msg = chat[i];
         if (msg.is_system || msg.is_user) continue;
 
-        if (!msg.is_hidden && !msg._bbmem_extracted && !msg._bbmem_pendingExtraction && !msg._bbmem_skipped) {
+        if (msg._bbmem_skipped && !msg.is_hidden) {
+            // 已跳过的消息超出窗口后自动隐藏
+            msg.is_hidden = true;
+            msg._bbmem_hideSource = 'plugin';
+            hiddenCount++;
+            changed = true;
+        } else if (!msg.is_hidden && !msg._bbmem_extracted && !msg._bbmem_pendingExtraction && !msg._bbmem_skipped) {
             msg._bbmem_pendingExtraction = true;
             hiddenCount++;
             changed = true;

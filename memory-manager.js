@@ -91,6 +91,8 @@ function buildManagerHTML(npc, items, timeline, memories, chatId) {
                     <option value="created_asc">创建时间 ↑</option>
                     <option value="updated_desc">修改时间 ↓</option>
                     <option value="updated_asc">修改时间 ↑</option>
+                    <option value="floor_desc">楼层 ↓</option>
+                    <option value="floor_asc">楼层 ↑</option>
                 </select>
                 <button class="menu_button bb-mem-toolbar-btn" id="bb_mgr_add">
                     <i class="fa-solid fa-plus"></i> 添加
@@ -315,7 +317,7 @@ function bindManagerEvents(overlay, chatId) {
             overlay.querySelectorAll('.bb-mgr-tabs > .bb-mgr-tab').forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
             overlay.querySelectorAll('.bb-mgr-panel').forEach(p => {
-                p.style.display = p.dataset.panel === panelName ? 'block' : 'none';
+                p.style.display = p.dataset.panel === panelName ? 'flex' : 'none';
             });
             if (panelName === 'slots') {
                 await renderSlotsPanel(overlay, chatId);
@@ -1394,6 +1396,12 @@ async function rerenderManagerList(overlay, chatId) {
     const sortEl = overlay.querySelector('#bb_mgr_sort');
     const sortMode = sortEl ? sortEl.value : 'created_desc';
     allEntries.sort((a, b) => {
+        if (sortMode.startsWith('floor')) {
+            // 楼层排序：无 sourceFloor 的排最后，旧聊天记忆(-1)在正序时排倒数第二
+            const aFloor = typeof a.sourceFloor === 'number' ? a.sourceFloor : -999;
+            const bFloor = typeof b.sourceFloor === 'number' ? b.sourceFloor : -999;
+            return sortMode.endsWith('asc') ? aFloor - bFloor : bFloor - aFloor;
+        }
         const aTime = sortMode.startsWith('updated') ? (a.updatedAt || 0) : (a.createdAt || 0);
         const bTime = sortMode.startsWith('updated') ? (b.updatedAt || 0) : (b.createdAt || 0);
         return sortMode.endsWith('asc') ? aTime - bTime : bTime - aTime;
