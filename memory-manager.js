@@ -9,6 +9,7 @@ import {
     getNpcProfiles, addNpcProfile, updateNpcProfile, removeNpcProfile,
     getItems, addItem, updateItem, removeItem,
     getTimeline, addTimelineEntry, updateTimelineEntry, removeTimelineEntry,
+    getTimelineThreads,
     getMemories, addMemory, updateMemory, removeMemory,
     clearAllData, deleteByExchange, getMemoryStats, getSettings, updateSettings,
     exportMemories, importMemories, updateFactContent, addHiddenNote, removeHiddenNote,
@@ -74,6 +75,9 @@ function buildManagerHTML(npc, items, timeline, memories, chatId) {
             </button>
             <button class="bb-mgr-tab" data-tab="dashboard">
                 <i class="fa-solid fa-gauge-high"></i> 仪表盘
+            </button>
+            <button class="bb-mgr-tab" data-tab="threads">
+                <i class="fa-solid fa-timeline"></i> 时间线
             </button>
         </div>
 
@@ -173,6 +177,13 @@ function buildManagerHTML(npc, items, timeline, memories, chatId) {
         <!-- 仪表盘标签页 -->
         <div class="bb-mgr-panel" data-panel="dashboard" style="display:none;">
             <div id="bb_dashboard_content">
+                <div class="bb-mem-empty"><i class="fa-solid fa-spinner fa-spin"></i> 加载中...</div>
+            </div>
+        </div>
+
+        <!-- v6.8.0 时间线线程标签页 -->
+        <div class="bb-mgr-panel" data-panel="threads" style="display:none;">
+            <div id="bb_thread_panel_content">
                 <div class="bb-mem-empty"><i class="fa-solid fa-spinner fa-spin"></i> 加载中...</div>
             </div>
         </div>
@@ -325,6 +336,8 @@ function bindManagerEvents(overlay, chatId) {
                 await renderSlotsPanel(overlay, chatId);
             } else if (panelName === 'dashboard') {
                 await renderDashboardPanel(overlay, chatId);
+            } else if (panelName === 'threads') {
+                await renderThreadPanel(overlay, chatId);
             }
         });
     });
@@ -1375,6 +1388,143 @@ async function updateCurrentSlotBar(overlay, chatId) {
 
     if (nameEl) nameEl.textContent = currentSlot;
     if (countEl) countEl.textContent = String(totalCount);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  v6.8.0 时间线线程面板
+// ═══════════════════════════════════════════════════════════
+
+async function renderThreadPanel(overlay, chatId) {
+    const panel = overlay.querySelector('#bb_thread_panel_content');
+    if (!panel) return;
+
+    const threads = await getTimelineThreads(chatId);
+    const timeline = await getTimeline(chatId);
+
+    if (!threads.length) {
+        panel.innerHTML = `
+            <div class="bb-thread-empty">
+                <i class="fa-solid fa-timeline" style="font-size:2em;opacity:0.3;"></i>
+                <p>暂无时间线线程</p>
+                <p style="font-size:0.8em;opacity:0.5;">提取记忆后，点击侧边栏「刷新时间线总结」生成</p>
+            </div>`;
+        return;
+    }
+
+    const statusLabel = { ongoing: '进行中', ended: '已结束', paused: '暂停', resident: '★常驻', archived: '已归档' };
+    const statusIcon = { ongoing: '●', ended: '✓', paused: '⏸', resident: '★', archived: '📦' };
+    const entryStatusIcon = { ongoing: '→', ended: '✓', milestone: '◆', paused: '⏸' };
+    const typeLabel = { plot: '', emotional: '[感情]', side: '[支线]', world: '[世界]' };
+
+    let html = `
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <span style="font-weight:bold;">${threads.length} 条线程</span>
+            <button class="menu_button" id="bb_thread_refresh_inline" style="font-size:0.85em;">
+                <i class="fa-solid fa-rotate"></i> 刷新总结
+            </button>
+        </div>`;
+
+    for (const thread of threads) {
+        const st = thread.status || 'ongoing';
+        const entries = thread.entries || [];
+        html += `
+        <div class="bb-thread-card">
+            <div class="bb-thread-header">
+                <span class="bb-thread-status" data-status="${st}">${statusIcon[st] || '●'} ${statusLabel[st] || st}</span>
+                <span class="bb-thread-type">${typeLabel[thread.type] || ''}</span>
+                <strong class="bb-thread-name">${escapeHtml(thread.name)}</strong>
+                ${thread.priority === 'high' ? '<span style="font-size:0.7em;opacity:0.5;">🔺高优先</span>' : ''}
+            </div>`;
+
+        if (entries.length) {
+            html += '<div class="bb-thread-entries">';
+            for (const entry of entries) {
+                html += `
+                <div class="bb-thread-entry">
+                    <span class="bb-thread-entry-status">${entryStatusIcon[entry.status] || '·'}</span>
+                    <span class="bb-thread-entry-period">${escapeHtml(entry.period || '')}</span>
+                    <span class="bb-thread-entry-event">${escapeHtml(entry.event || '')}</span>
+                    ${entry.status === 'ongoing' ? '<span class="bb-thread-entry-ongoing">进行中</span>' : ''}
+                </div>`;
+            }
+            html += '</div>';
+        } else {
+            html += '<div style="font-size:0.75em;opacity:0.3;padding:4px 24px;">无条目</div>';
+        }
+
+        html += '</div>';
+    }
+
+    // 详细时间线条目（折叠区）
+    if (timeline.length) {
+        const tlId = 'bb_thread_detail_timeline';
+        html += `
+        <div class="bb-thread-detail-section">
+            <button class="bb-thread-detail-toggle" id="${tlId}_toggle" data-collapsed="true">
+                <i class="fa-solid fa-chevron-right"></i>
+                详细时间线条目 (${timeline.length}条) — 点击展开
+            </button>
+            <div class="bb-thread-detail-list" id="${tlId}_list" style="display:none;">
+                ${timeline.sort((a, b) => (a.storyTimeSort ?? 0) - (b.storyTimeSort ?? 0)).map(t => {
+                    const tStatus = t.status === 'ongoing' ? '进行中' : t.status === 'ended' ? '已结束' : t.status === 'foreshadow' ? '伏笔' : t.status || '';
+                    return `
+                    <div class="bb-thread-detail-item">
+                        <span class="bb-thread-detail-time">${escapeHtml(t.storyTime || '?')}</span>
+                        <span class="bb-thread-detail-event">${escapeHtml(t.event || t.summary || '')}</span>
+                        ${tStatus ? `<span class="bb-thread-detail-status">${tStatus}</span>` : ''}
+                        <span style="flex:1;"></span>
+                        <button class="bb-thread-detail-edit menu_button" data-id="${t.id}" title="编辑"><i class="fa-solid fa-pen"></i></button>
+                    </div>`;
+                }).join('')}
+            </div>
+        </div>`;
+    }
+
+    panel.innerHTML = html;
+
+    // 绑定刷新按钮
+    panel.querySelector('#bb_thread_refresh_inline')?.addEventListener('click', async () => {
+        const btn = panel.querySelector('#bb_thread_refresh_inline');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 生成中...';
+        try {
+            const { regenerateThreadSummary } = await import('./memory-maintainer.js');
+            const result = await regenerateThreadSummary(chatId);
+            if (result.threadCount > 0) {
+                await renderThreadPanel(overlay, chatId);
+            } else {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fa-solid fa-rotate"></i> 刷新总结';
+            }
+        } catch (e) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa-solid fa-rotate"></i> 刷新总结';
+        }
+    });
+
+    // 绑定详细条目折叠
+    const toggle = panel.querySelector(`#${tlId}_toggle`);
+    const list = panel.querySelector(`#${tlId}_list`);
+    if (toggle && list) {
+        toggle.addEventListener('click', () => {
+            const collapsed = toggle.dataset.collapsed === 'true';
+            toggle.dataset.collapsed = collapsed ? 'false' : 'true';
+            list.style.display = collapsed ? '' : 'none';
+            toggle.querySelector('i').className = collapsed ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-right';
+            toggle.innerHTML = toggle.innerHTML.replace(collapsed ? '点击展开' : '点击收起', collapsed ? '点击收起' : '点击展开');
+        });
+    }
+
+    // 绑定详细条目编辑按钮
+    panel.querySelectorAll('.bb-thread-detail-edit').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const id = btn.dataset.id;
+            const entry = timeline.find(t => t.id === id);
+            if (entry) {
+                showQuickEditForm(overlay, chatId, { ...entry, _pillar: 'timeline' });
+            }
+        });
+    });
 }
 
 async function rerenderManagerList(overlay, chatId) {
