@@ -1527,7 +1527,10 @@ async function renderThreadPanel(overlay, chatId) {
     const threads = await getTimelineThreads(chatId);
     const timeline = await getTimeline(chatId);
 
-    if (!threads.length) {
+    // v7.6.0 过滤已归档线程
+    const activeThreads = threads.filter(t => t.status !== 'archived');
+
+    if (!activeThreads.length) {
         panel.innerHTML = `
             <div class="bb-thread-empty">
                 <i class="fa-solid fa-timeline" style="font-size:2em;opacity:0.3;"></i>
@@ -1560,14 +1563,14 @@ async function renderThreadPanel(overlay, chatId) {
 
     let html = `
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-            <span style="font-weight:bold;">${threads.length} 条线程</span>
+            <span style="font-weight:bold;">${activeThreads.length} 条线程</span>
             <button class="menu_button" id="bb_thread_refresh_inline" style="font-size:0.85em;">
                 <i class="fa-solid fa-rotate"></i> 刷新总结
             </button>
         </div>`;
 
-    for (let ti = 0; ti < threads.length; ti++) {
-        const thread = threads[ti];
+    for (let ti = 0; ti < activeThreads.length; ti++) {
+        const thread = activeThreads[ti];
         const st = thread.status || 'ongoing';
         const entries = thread.entries || [];
 
@@ -1602,6 +1605,7 @@ async function renderThreadPanel(overlay, chatId) {
                 <div class="bb-thread-actions">
                     ${statusBtns.join('')}
                     <button class="menu_button bb-thread-btn-edit" data-thread-idx="${ti}" title="编辑线程"><i class="fa-solid fa-pen"></i></button>
+                    <button class="menu_button bb-thread-btn-archive" data-thread-idx="${ti}" title="归档线程"><i class="fa-solid fa-box-archive"></i></button>
                     <button class="menu_button bb-thread-btn-delete" data-thread-idx="${ti}" title="删除线程"><i class="fa-solid fa-trash"></i></button>
                 </div>
             </div>
@@ -1736,14 +1740,14 @@ async function renderThreadPanel(overlay, chatId) {
     // 编辑线程
     bindThreadBtn('.bb-thread-btn-edit', async (btn) => {
         const idx = parseInt(btn.dataset.threadIdx);
-        const thread = threads[idx];
+        const thread = activeThreads[idx];
         if (thread) showThreadEditForm(overlay, chatId, thread);
     });
 
     // 删除线程
     bindThreadBtn('.bb-thread-btn-delete', async (btn) => {
         const idx = parseInt(btn.dataset.threadIdx);
-        const thread = threads[idx];
+        const thread = activeThreads[idx];
         if (thread && confirm(`确认删除线程「${thread.name}」？`)) {
             const result = await removeTimelineThread(chatId, thread.id);
             console.log('[BB-Memory] 删除线程结果:', result, 'chatId:', chatId, 'threadId:', thread.id);
@@ -1751,10 +1755,21 @@ async function renderThreadPanel(overlay, chatId) {
         }
     });
 
+    // v7.6.0 归档线程
+    bindThreadBtn('.bb-thread-btn-archive', async (btn) => {
+        const idx = parseInt(btn.dataset.threadIdx);
+        const thread = activeThreads[idx];
+        if (thread) {
+            await upsertTimelineThread(chatId, { ...thread, status: 'archived' });
+            showToast('已归档线程', 'success');
+            await renderThreadPanel(overlay, chatId);
+        }
+    });
+
     // 状态切换：暂停
     bindThreadBtn('.bb-thread-btn-pause', async (btn) => {
         const idx = parseInt(btn.dataset.threadIdx);
-        const thread = threads[idx];
+        const thread = activeThreads[idx];
         if (thread) {
             console.log('[BB-Memory] 暂停线程:', thread.name, 'chatId:', chatId);
             await upsertTimelineThread(chatId, { ...thread, status: 'paused' });
@@ -1765,7 +1780,7 @@ async function renderThreadPanel(overlay, chatId) {
     // 状态切换：继续/重新激活
     bindThreadBtn('.bb-thread-btn-resume', async (btn) => {
         const idx = parseInt(btn.dataset.threadIdx);
-        const thread = threads[idx];
+        const thread = activeThreads[idx];
         if (thread) {
             await upsertTimelineThread(chatId, { ...thread, status: 'ongoing' });
             await renderThreadPanel(overlay, chatId);
@@ -1775,7 +1790,7 @@ async function renderThreadPanel(overlay, chatId) {
     // 状态切换：结束
     bindThreadBtn('.bb-thread-btn-end', async (btn) => {
         const idx = parseInt(btn.dataset.threadIdx);
-        const thread = threads[idx];
+        const thread = activeThreads[idx];
         if (thread) {
             await upsertTimelineThread(chatId, { ...thread, status: 'ended' });
             await renderThreadPanel(overlay, chatId);
@@ -1785,7 +1800,7 @@ async function renderThreadPanel(overlay, chatId) {
     // 设为常驻
     bindThreadBtn('.bb-thread-btn-resident', async (btn) => {
         const idx = parseInt(btn.dataset.threadIdx);
-        const thread = threads[idx];
+        const thread = activeThreads[idx];
         if (thread) {
             await upsertTimelineThread(chatId, { ...thread, status: 'resident', priority: 'high' });
             await renderThreadPanel(overlay, chatId);
@@ -1795,7 +1810,7 @@ async function renderThreadPanel(overlay, chatId) {
     // 取消常驻
     bindThreadBtn('.bb-thread-btn-unresident', async (btn) => {
         const idx = parseInt(btn.dataset.threadIdx);
-        const thread = threads[idx];
+        const thread = activeThreads[idx];
         if (thread) {
             await upsertTimelineThread(chatId, { ...thread, status: 'ongoing' });
             await renderThreadPanel(overlay, chatId);
@@ -1806,7 +1821,7 @@ async function renderThreadPanel(overlay, chatId) {
     bindThreadBtn('.bb-thread-entry-edit', async (btn) => {
         const ti = parseInt(btn.dataset.threadIdx);
         const ei = parseInt(btn.dataset.entryIdx);
-        const thread = threads[ti];
+        const thread = activeThreads[ti];
         if (thread && thread.entries[ei]) {
             showThreadEntryEditForm(overlay, chatId, thread, ei);
         }
@@ -1816,7 +1831,7 @@ async function renderThreadPanel(overlay, chatId) {
     bindThreadBtn('.bb-thread-entry-del', async (btn) => {
         const ti = parseInt(btn.dataset.threadIdx);
         const ei = parseInt(btn.dataset.entryIdx);
-        const thread = threads[ti];
+        const thread = activeThreads[ti];
         if (thread && thread.entries[ei] && confirm(`确认删除条目「${thread.entries[ei].event}」？`)) {
             thread.entries.splice(ei, 1);
             await upsertTimelineThread(chatId, thread);
@@ -2014,8 +2029,9 @@ async function renderArchiveWarehouse(overlay, chatId) {
     if (!panel) return;
 
     try {
-        const [npc, items, timeline, memories] = await Promise.all([
+        const [npc, items, timeline, memories, threads] = await Promise.all([
             getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+            getTimelineThreads(chatId),
         ]);
 
         const allArchived = [
@@ -2023,12 +2039,14 @@ async function renderArchiveWarehouse(overlay, chatId) {
             ...items.filter(e => isArchived(e)).map(e => ({ ...e, _pillar: 'item' })),
             ...timeline.filter(e => isArchived(e)).map(e => ({ ...e, _pillar: 'timeline' })),
             ...memories.filter(e => isArchived(e)).map(e => ({ ...e, _pillar: 'mem' })),
+            ...threads.filter(t => t.status === 'archived').map(t => ({ ...t, _pillar: 'thread', title: t.name, summary: t.summary || '' })),
         ];
 
         const pillarConfig = {
             npc: { icon: 'fa-user', label: 'NPC', color: '#ba68c8' },
             item: { icon: 'fa-box', label: '物品', color: '#4fc3f7' },
             timeline: { icon: 'fa-clock', label: '时间线', color: '#ffb74d' },
+            thread: { icon: 'fa-timeline', label: '线程', color: '#ce93d8' },
             mem: { icon: 'fa-brain', label: '记忆', color: '#81c784' },
         };
         const tierLabels = { transient: '瞬时', stable: '稳固', core: '核心', eternal: '永恒' };
@@ -2090,6 +2108,7 @@ async function renderArchiveWarehouse(overlay, chatId) {
                 if (pillar === 'npc') await removeNpcProfile(chatId, id);
                 else if (pillar === 'item') await removeItem(chatId, id);
                 else if (pillar === 'timeline') await removeTimelineEntry(chatId, id);
+                else if (pillar === 'thread') await removeTimelineThread(chatId, id);
                 else await removeMemory(chatId, id);
                 showToast('已删除归档条目', 'info');
                 await renderArchiveWarehouse(overlay, chatId);

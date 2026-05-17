@@ -566,9 +566,9 @@ export function isArchived(entry) {
 }
 
 /**
- * 归档指定条目（支持四柱）
+ * 归档指定条目（支持四柱 + 线程）
  * @param {string} chatId
- * @param {string} type - 'npc' | 'item' | 'timeline' | 'mem'
+ * @param {string} type - 'npc' | 'item' | 'timeline' | 'mem' | 'thread'
  * @param {string} id
  */
 export async function archiveEntry(chatId, type, id) {
@@ -576,6 +576,7 @@ export async function archiveEntry(chatId, type, id) {
         case 'npc': return updateNpcProfile(chatId, id, { archived: true });
         case 'item': return updateItem(chatId, id, { archived: true });
         case 'timeline': return updateTimelineEntry(chatId, id, { archived: true, isActive: false });
+        case 'thread': return upsertTimelineThread(chatId, { id, status: 'archived' });
         default: return updateMemory(chatId, id, { archived: true, status: 'archived' });
     }
 }
@@ -583,7 +584,7 @@ export async function archiveEntry(chatId, type, id) {
 /**
  * 从归档恢复条目（保持原等级不变）
  * @param {string} chatId
- * @param {string} type - 'npc' | 'item' | 'timeline' | 'mem'
+ * @param {string} type - 'npc' | 'item' | 'timeline' | 'mem' | 'thread'
  * @param {string} id
  */
 export async function restoreEntry(chatId, type, id) {
@@ -591,6 +592,7 @@ export async function restoreEntry(chatId, type, id) {
         case 'npc': return updateNpcProfile(chatId, id, { archived: false });
         case 'item': return updateItem(chatId, id, { archived: false });
         case 'timeline': return updateTimelineEntry(chatId, id, { archived: false, isActive: true, status: 'ongoing' });
+        case 'thread': return upsertTimelineThread(chatId, { id, status: 'ongoing' });
         default: return updateMemory(chatId, id, { archived: false, status: 'active' });
     }
 }
