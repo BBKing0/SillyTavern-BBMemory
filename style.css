@@ -1917,6 +1917,7 @@
     padding: 4px 14px;
     font-size: 0.85em;
     border-bottom: 1px solid rgba(128,128,128,0.08);
+    flex-wrap: wrap;
 }
 
 .bb-thread-entry:last-child {
@@ -1928,18 +1929,25 @@
     text-align: center;
     font-size: 0.7em;
     opacity: 0.5;
+    flex-shrink: 0;
 }
 
 .bb-thread-entry-period {
-    min-width: 120px;
+    flex: 0 0 auto;
+    max-width: 220px;
+    min-width: 80px;
     font-family: var(--SmartThemeCodeFont, monospace);
     font-size: 0.85em;
     opacity: 0.7;
     color: var(--SmartThemeEmColor, #aaa);
+    overflow-wrap: break-word;
+    word-break: break-word;
 }
 
 .bb-thread-entry-event {
     flex: 1;
+    min-width: 120px;
+    word-break: break-word;
 }
 
 .bb-thread-entry-ongoing {
@@ -1955,31 +1963,43 @@
 
 .bb-thread-actions {
     display: flex;
-    gap: 3px;
+    gap: 4px;
     flex-shrink: 0;
+    position: relative;
+    z-index: 1;
 }
 
 .bb-thread-actions .menu_button {
-    font-size: 0.72em;
-    padding: 2px 7px;
-    opacity: 0.7;
+    font-size: 0.75em;
+    padding: 4px 8px;
+    min-width: 28px;
+    min-height: 28px;
+    cursor: pointer;
+    opacity: 0.65;
     transition: opacity 0.2s;
+    position: relative;
+    z-index: 1;
 }
 
 .bb-thread-card:hover .bb-thread-actions .menu_button {
     opacity: 1;
 }
 
-/* 线程条目编辑按钮 */
+/* 线程条目编辑/删除按钮 */
 
-.bb-thread-entry-edit {
+.bb-thread-entry-edit,
+.bb-thread-entry-del {
     visibility: hidden;
-    padding: 1px 5px !important;
-    font-size: 0.7em !important;
-    opacity: 0.6;
+    padding: 2px 6px !important;
+    font-size: 0.72em !important;
+    min-width: 24px;
+    min-height: 24px;
+    cursor: pointer;
+    opacity: 0.5;
 }
 
-.bb-thread-entry:hover .bb-thread-entry-edit {
+.bb-thread-entry:hover .bb-thread-entry-edit,
+.bb-thread-entry:hover .bb-thread-entry-del {
     visibility: visible;
 }
 
@@ -2585,15 +2605,20 @@
         white-space: normal;
     }
     .bb-thread-entry-period {
-        min-width: 70px;
+        min-width: 60px;
+        max-width: 140px;
         font-size: 0.7em;
     }
     .bb-thread-entry-event {
         font-size: 0.78em;
+        min-width: 80px;
     }
-    .bb-thread-entry-edit {
-        visibility: visible;
+    .bb-thread-entry-edit,
+    .bb-thread-entry-del {
+        visibility: visible !important;
         opacity: 0.5;
+        min-width: 28px;
+        min-height: 28px;
     }
 }
 
