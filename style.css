@@ -311,6 +311,11 @@
 .bb-mgr-panel .bb-mem-footer {
     flex-shrink: 0;
 }
+.bb-mgr-panel #bb_dashboard_content {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+}
 
 .bb-mem-footer .menu_button {
     flex: 1;
@@ -883,6 +888,18 @@
     vertical-align: middle;
 }
 
+.bb-mem-fuzzy-tag {
+    display: inline-block;
+    font-size: 0.7em;
+    padding: 1px 6px;
+    border-radius: 8px;
+    color: #888;
+    background: rgba(128,128,128,0.1);
+    border: 1px solid rgba(128,128,128,0.25);
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
 .bb-status-badge i {
     margin-right: 2px;
     font-size: 0.85em;
@@ -1369,6 +1386,7 @@
         width: 100%;
         max-width: 100%;
         max-height: 100vh;
+        max-height: 100dvh;
         border-radius: 0;
     }
     .bb-mem-popup-header {

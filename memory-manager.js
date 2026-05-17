@@ -216,6 +216,8 @@ function buildEntryItemHTML(e) {
             const tierLabels = { stable: '稳固', core: '核心', eternal: '永恒', archived: '归档' };
             const c = tierColors[e.memoryTier] || '#888';
             statusBadges += `<span class="bb-item-badge" style="background:${c}22;color:${c};border:1px solid ${c}44;">${tierLabels[e.memoryTier] || e.memoryTier}</span>`;
+        } else if (e.memoryTier === 'transient') {
+            statusBadges += '<span class="bb-mem-fuzzy-tag">模糊</span>';
         }
         const typeDef = MEMORY_TYPES[e.type];
         if (typeDef) statusBadges += `<span class="bb-item-badge" style="font-size:0.7em;">${typeDef.label}</span>`;

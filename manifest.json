@@ -4,9 +4,9 @@
     "js": "index.js",
     "css": "style.css",
     "author": "BB-Memory Dev",
-    "version": "6.5.0",
+    "version": "6.6.0",
     "homePage": "https://github.com/BBKing0/SillyTavern-BBMemory",
     "auto_update": true,
     "generate_interceptor": "bbMemoryInterceptor",
-    "description": "智能长期记忆扩展 v6.4.5 - 跳过消息窗口隐藏 + 手机端存档滚动修复 + 楼层排序"
+    "description": "智能长期记忆扩展 v6.6.0 - 手动提取楼层范围 + 备份恢复反馈 + 模糊记忆完善 + 手机端适配"
 }

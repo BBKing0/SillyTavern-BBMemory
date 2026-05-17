@@ -266,7 +266,52 @@ async function handleWorldBookImportWithAI(chatId, jsonString) {
 //  初始化记忆（新功能）
 // ═══════════════════════════════════════════════════════════
 
-async function handleInitMemory(chatId) {
+function promptFloorRange() {
+    return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;';
+        const dialog = document.createElement('div');
+        dialog.style.cssText = 'background:var(--SmartThemeBlurTintColor,#1a1a2e);border:1px solid var(--SmartThemeBorderColor,#444);border-radius:12px;padding:20px 24px;min-width:280px;max-width:360px;box-shadow:0 8px 32px rgba(0,0,0,0.4);';
+        dialog.innerHTML = `
+            <div style="font-size:1.1em;font-weight:bold;margin-bottom:12px;color:var(--SmartThemeTextColor,#ddd);">
+                <i class="fa-solid fa-layer-group"></i> 手动提取 — 选择楼层范围
+            </div>
+            <div style="font-size:0.8em;opacity:0.6;margin-bottom:10px;color:var(--SmartThemeTextColor,#ddd);">
+                输入楼层范围（如 <b>0-10</b>），留空则提取最近 8 轮对话
+            </div>
+            <input id="bb_floor_range_input" type="text" placeholder="如 0-10（留空=最近8轮）"
+                style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid var(--SmartThemeBorderColor,#555);background:var(--SmartThemeInputColor,#1a1a2e);color:var(--SmartThemeTextColor,#ddd);font-size:0.95em;box-sizing:border-box;margin-bottom:14px;" />
+            <div style="display:flex;gap:8px;justify-content:flex-end;">
+                <button id="bb_floor_range_cancel" class="menu_button" style="opacity:0.6;">取消</button>
+                <button id="bb_floor_range_ok" class="menu_button" style="background:var(--SmartThemeQuoteColor,#4caf50);color:#fff;">开始提取</button>
+            </div>
+        `;
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+
+        const input = dialog.querySelector('#bb_floor_range_input');
+        const okBtn = dialog.querySelector('#bb_floor_range_ok');
+        const cancelBtn = dialog.querySelector('#bb_floor_range_cancel');
+
+        const cleanup = (value) => {
+            overlay.remove();
+            resolve(value);
+        };
+
+        okBtn.addEventListener('click', () => cleanup(input.value.trim()));
+        cancelBtn.addEventListener('click', () => cleanup(''));
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') cleanup(input.value.trim());
+            if (e.key === 'Escape') cleanup('');
+        });
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) cleanup('');
+        });
+        setTimeout(() => input.focus(), 100);
+    });
+}
+
+async function handleInitMemory(chatId, rangeStr = '') {
     const ctx = SillyTavern.getContext();
 
     // 收集上下文
@@ -294,12 +339,20 @@ async function handleInitMemory(chatId) {
         }
     } catch { /* ignore */ }
 
-    // 聊天记录
+    // 聊天记录 — 支持楼层范围
     try {
         const chat = ctx.chat || [];
-        const recent = chat.filter(m => m.mes?.trim()).slice(-8);
-        if (recent.length) {
-            contextText += `【最近对话】\n${recent.map(m => `${m.is_user ? '用户' : m.name || '角色'}: ${m.mes}`).join('\n')}`;
+        let messages;
+        if (rangeStr && rangeStr.includes('-')) {
+            const parts = rangeStr.split('-');
+            const start = Math.max(0, parseInt(parts[0], 10) || 0);
+            const end = Math.min(chat.length - 1, parseInt(parts[1], 10) || chat.length - 1);
+            messages = chat.slice(start, end + 1).filter(m => m.mes?.trim());
+        } else {
+            messages = chat.filter(m => m.mes?.trim()).slice(-8);
+        }
+        if (messages.length) {
+            contextText += `【最近对话】\n${messages.map(m => `${m.is_user ? '用户' : m.name || '角色'}: ${m.mes}`).join('\n')}`;
         }
     } catch { /* ignore */ }
 
@@ -447,23 +500,45 @@ function bindSidebarEvents() {
     bindInput('#bb_calendar_description', 'calendarDescription', 'string');
 
     // 按钮
-    document.querySelector('#bb_memory_backup_now')?.addEventListener('click', async () => {
+    document.querySelector('#bb_memory_backup_now')?.addEventListener('click', async function () {
         const chatId = getChatId();
         if (!chatId) return;
-        const result = await exportMemoriesToChatMetadata(chatId);
-        showToast(`备份完成：${result.count} 条`, 'success');
+        const origHTML = this.innerHTML;
+        this.disabled = true;
+        this.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 备份中...';
+        try {
+            const result = await exportMemoriesToChatMetadata(chatId);
+            showToast(`备份完成：${result.count} 条 (${(result.size/1024).toFixed(1)}KB)`, 'success');
+        } catch (e) {
+            showToast(`备份失败: ${e.message}`, 'error');
+        } finally {
+            this.disabled = false;
+            this.innerHTML = origHTML;
+        }
     });
-    document.querySelector('#bb_memory_restore_now')?.addEventListener('click', async () => {
+    document.querySelector('#bb_memory_restore_now')?.addEventListener('click', async function () {
         const chatId = getChatId();
         if (!chatId) return;
-        const result = await importMemoriesFromChatMetadata(chatId);
-        showToast(`恢复：${result.restored} 条新增，${result.skipped} 条跳过`, 'success');
+        const origHTML = this.innerHTML;
+        this.disabled = true;
+        this.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 恢复中...';
+        try {
+            const result = await importMemoriesFromChatMetadata(chatId);
+            showToast(`恢复完成：${result.restored} 条新增，${result.skipped} 条跳过`, 'success');
+        } catch (e) {
+            showToast(`恢复失败: ${e.message}`, 'error');
+        } finally {
+            this.disabled = false;
+            this.innerHTML = origHTML;
+        }
     });
     document.querySelector('#bb_init_memory_btn')?.addEventListener('click', async () => {
         const chatId = getChatId();
         if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        const range = await promptFloorRange();
+        if (range === '') return;
         try {
-            const results = await handleInitMemory(chatId);
+            const results = await handleInitMemory(chatId, range);
             showToast(`初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 记忆 ${results.memories}`, 'success');
         } catch (e) {
             showToast(`初始化失败: ${e.message}`, 'error');
@@ -481,9 +556,11 @@ function bindSidebarEvents() {
     document.querySelector('#bb_memory_extract_btn')?.addEventListener('click', async () => {
         const chatId = getChatId();
         if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        const range = await promptFloorRange();
+        if (range === '') return; // 用户取消
         showToast('正在收集上下文并提取记忆...', 'info');
         try {
-            const results = await handleInitMemory(chatId);
+            const results = await handleInitMemory(chatId, range);
             showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 记忆 ${results.memories}`, 'success');
         } catch (e) {
             showToast(`提取失败: ${e.message}`, 'error');
@@ -988,13 +1065,16 @@ function registerSlashCommands() {
     addCmd('bb-init', async (args) => {
         const chatId = getChatId();
         if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        // 支持参数传楼层范围，如 /bb-init 0-10；无参数则弹窗
+        const range = (args && args.trim()) ? args.trim() : await promptFloorRange();
+        if (range === '') return;
         try {
-            const results = await handleInitMemory(chatId);
+            const results = await handleInitMemory(chatId, range);
             showToast(`初始化：NPC${results.npc}/物品${results.items}/时间线${results.timeline}/记忆${results.memories}`, 'success');
         } catch (e) {
             showToast(`初始化失败: ${e.message}`, 'error');
         }
-    }, '初始化 BB-Memory 记忆（从角色卡+世界书+对话）');
+    }, '初始化 BB-Memory 记忆（可选参数: 楼层范围如 0-10）');
 
     addCmd('bb-backup', async () => {
         const chatId = getChatId();
@@ -1530,9 +1610,13 @@ async function handleFloatingMenuAction(action) {
         }
         case 'manual_extract': {
             if (!chatId) return;
+            const menu = document.getElementById('bb_floating_menu');
+            if (menu) { menu.style.display = 'none'; floatingMenuVisible = false; }
+            const range = await promptFloorRange();
+            if (range === '') return;
             showToast('正在提取记忆...', 'info');
             try {
-                const results = await handleInitMemory(chatId);
+                const results = await handleInitMemory(chatId, range);
                 showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 记忆 ${results.memories}`, 'success');
                 refreshSidebar();
             } catch (e) {

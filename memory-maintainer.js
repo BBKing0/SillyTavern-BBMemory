@@ -310,7 +310,15 @@ export async function autoMaintain(chatId, issues) {
 }
 
 export async function fuzzyMemory(chatId, memoryId) {
-    return updateMemory(chatId, memoryId, { memoryTier: 'transient' });
+    const updates = { memoryTier: 'transient' };
+    // 若无 summary，从 content 截取前 50 字作为摘要
+    const memories = await getMemories(chatId);
+    const mem = memories.find(m => m.id === memoryId);
+    if (mem && !mem.summary && mem.content) {
+        updates.summary = mem.content.slice(0, 50).replace(/\n/g, ' ').trim();
+        if (mem.content.length > 50) updates.summary += '…';
+    }
+    return updateMemory(chatId, memoryId, updates);
 }
 
 export async function archiveMemory(chatId, memoryId) {

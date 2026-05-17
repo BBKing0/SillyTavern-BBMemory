@@ -312,7 +312,12 @@ function formatMemoryLine(m) {
         const ts = TRUTH_STATUS[m.truthStatus];
         if (ts) parts.push(`{${ts.label}}`);
     }
-    parts.push(m.summary || m.content);
+    // 模糊记忆（transient）优先用 summary，其他记忆用完整 content
+    if (m.memoryTier === 'transient' && m.summary) {
+        parts.push(m.summary);
+    } else {
+        parts.push(m.content || m.summary);
+    }
     if (m.verbatim) parts.push(`「${m.verbatim}」`);
     if (m.subject && m.target) parts.push(`(${m.subject} → ${m.target})`);
     else if (m.subject) parts.push(`(${m.subject})`);
