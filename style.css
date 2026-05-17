@@ -1985,22 +1985,48 @@
     opacity: 1;
 }
 
-/* 线程条目编辑/删除按钮 */
+/* 线程折叠 */
+
+.bb-thread-collapse-toggle {
+    cursor: pointer;
+    user-select: none;
+}
+
+.bb-thread-chevron {
+    font-size: 0.7em;
+    opacity: 0.5;
+    transition: transform 0.2s;
+    flex-shrink: 0;
+}
+
+/* 线程摘要 */
+
+.bb-thread-summary {
+    font-size: 0.8em;
+    opacity: 0.6;
+    font-style: italic;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 300px;
+}
+
+/* 线程条目编辑/删除按钮 — 常驻 */
 
 .bb-thread-entry-edit,
 .bb-thread-entry-del {
-    visibility: hidden;
     padding: 2px 6px !important;
     font-size: 0.72em !important;
     min-width: 24px;
     min-height: 24px;
     cursor: pointer;
-    opacity: 0.5;
+    opacity: 0.35;
+    flex-shrink: 0;
 }
 
 .bb-thread-entry:hover .bb-thread-entry-edit,
 .bb-thread-entry:hover .bb-thread-entry-del {
-    visibility: visible;
+    opacity: 0.7;
 }
 
 /* 详细时间线条目（折叠区） */

@@ -445,6 +445,7 @@ export async function upsertTimelineThread(chatId, threadData) {
         status: threadData.status || 'ongoing',  // ongoing | paused | ended | archived | resident
         priority: threadData.priority || 'medium', // high | medium | low
         parentThreadId: threadData.parentThreadId || null,
+        summary: threadData.summary || '',        // v7.3.0 线程一句话总结
         entries: Array.isArray(threadData.entries) ? threadData.entries : [],
         embedding: threadData.embedding || null,
         createdAt: now,

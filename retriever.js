@@ -315,7 +315,8 @@ export function getThreadSummaryForInjection(threads, maxActive = 5) {
         const typeMark = thread.type === 'emotional' ? '[感情]' :
                          thread.type === 'side' ? '[支线]' :
                          thread.type === 'world' ? '[世界]' : '';
-        lines.push(`${statusMark} ${typeMark} ${thread.name}`);
+        const summarySuffix = thread.summary ? ` — ${thread.summary}` : '';
+        lines.push(`${statusMark} ${typeMark} ${thread.name}${summarySuffix}`);
         for (const entry of (thread.entries || [])) {
             const entryStatus = entry.status === 'ongoing' ? '→' :
                                entry.status === 'ended' ? '✓' :

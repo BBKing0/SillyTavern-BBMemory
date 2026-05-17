@@ -1534,22 +1534,26 @@ async function renderThreadPanel(overlay, chatId) {
             statusBtns.push(`<button class="menu_button bb-thread-btn-unresident" data-thread-idx="${ti}" title="取消常驻">☆</button>`);
         }
 
+        const hasOngoing = entries.some(e => e.status === 'ongoing');
+        const cardId = `bb_thread_card_${ti}`;
+
         html += `
         <div class="bb-thread-card">
-            <div class="bb-thread-header">
+            <div class="bb-thread-header bb-thread-collapse-toggle" data-card-id="${cardId}">
+                <i class="fa-solid ${hasOngoing ? 'fa-chevron-down' : 'fa-chevron-right'} bb-thread-chevron"></i>
                 <span class="bb-thread-status" data-status="${st}">${statusIcon[st] || '●'} ${statusLabel[st] || st}</span>
                 <span class="bb-thread-type">${typeLabel[thread.type] || ''}</span>
                 <strong class="bb-thread-name">${escapeHtml(thread.name)}</strong>
-                ${thread.priority === 'high' ? '<span style="font-size:0.7em;opacity:0.5;">🔺</span>' : ''}
+                ${thread.summary ? `<span class="bb-thread-summary">— ${escapeHtml(thread.summary)}</span>` : ''}
                 <div class="bb-thread-actions">
                     ${statusBtns.join('')}
                     <button class="menu_button bb-thread-btn-edit" data-thread-idx="${ti}" title="编辑线程"><i class="fa-solid fa-pen"></i></button>
                     <button class="menu_button bb-thread-btn-delete" data-thread-idx="${ti}" title="删除线程"><i class="fa-solid fa-trash"></i></button>
                 </div>
-            </div>`;
+            </div>
+            <div class="bb-thread-entries" id="${cardId}_entries" style="${hasOngoing ? '' : 'display:none;'}">`;
 
         if (entries.length) {
-            html += '<div class="bb-thread-entries">';
             for (let ei = 0; ei < entries.length; ei++) {
                 const entry = entries[ei];
                 html += `
@@ -1558,22 +1562,20 @@ async function renderThreadPanel(overlay, chatId) {
                     <span class="bb-thread-entry-period">${escapeHtml(entry.period || '')}</span>
                     <span class="bb-thread-entry-event">${escapeHtml(entry.event || '')}</span>
                     ${entry.status === 'ongoing' ? '<span class="bb-thread-entry-ongoing">进行中</span>' : ''}
-                    <span style="flex:1;"></span>
-                    <button class="bb-thread-entry-edit menu_button" data-thread-idx="${ti}" data-entry-idx="${ei}" title="编辑条目"><i class="fa-solid fa-pen"></i></button>
-                    <button class="bb-thread-entry-del menu_button" data-thread-idx="${ti}" data-entry-idx="${ei}" title="删除条目" style="font-size:0.7em;padding:1px 5px;visibility:hidden;"><i class="fa-solid fa-xmark"></i></button>
+                    <button class="bb-thread-entry-edit menu_button" data-thread-idx="${ti}" data-entry-idx="${ei}" title="编辑"><i class="fa-solid fa-pen"></i></button>
+                    <button class="bb-thread-entry-del menu_button" data-thread-idx="${ti}" data-entry-idx="${ei}" title="删除"><i class="fa-solid fa-xmark"></i></button>
                 </div>`;
             }
-            html += '</div>';
         } else {
             html += '<div style="font-size:0.75em;opacity:0.3;padding:4px 24px;">无条目</div>';
         }
 
-        html += '</div>';
+        html += '</div></div>';
     }
 
     // 详细时间线条目（折叠区）
+    const tlId = 'bb_thread_detail_timeline';
     if (timeline.length) {
-        const tlId = 'bb_thread_detail_timeline';
         html += `
         <div class="bb-thread-detail-section">
             <button class="bb-thread-detail-toggle" id="${tlId}_toggle" data-collapsed="true">
@@ -1638,6 +1640,24 @@ async function renderThreadPanel(overlay, chatId) {
             const entry = timeline.find(t => t.id === id);
             if (entry) {
                 showQuickEditForm(overlay, chatId, { ...entry, _pillar: 'timeline' });
+            }
+        });
+    });
+
+    // ═══ v7.3.0 线程折叠/展开 ═══
+    panel.querySelectorAll('.bb-thread-collapse-toggle').forEach(header => {
+        header.addEventListener('click', (e) => {
+            // 不拦截按钮点击
+            if (e.target.closest('.menu_button')) return;
+            const cardId = header.dataset.cardId;
+            const entries = panel.querySelector(`#${cardId}_entries`);
+            const chevron = header.querySelector('.bb-thread-chevron');
+            if (entries) {
+                const isHidden = entries.style.display === 'none';
+                entries.style.display = isHidden ? '' : 'none';
+                if (chevron) {
+                    chevron.className = isHidden ? 'fa-solid fa-chevron-down bb-thread-chevron' : 'fa-solid fa-chevron-right bb-thread-chevron';
+                }
             }
         });
     });
@@ -1788,6 +1808,10 @@ function showThreadEditForm(overlay, chatId, thread) {
                     <option value="low" ${thread.priority === 'low' ? 'selected' : ''}>低</option>
                 </select>
             </div>
+            <div class="bb-mem-form-row">
+                <label>一句话总结 <small>注入时显示在AI上下文中</small></label>
+                <textarea class="text_pole bb-thread-form-summary" rows="2" placeholder="如：从北境初遇到战后表白，经历三年分离与重逢">${escapeHtml(thread.summary || '')}</textarea>
+            </div>
         </div>
         <div class="bb-mem-form-footer">
             <button class="menu_button bb-thread-form-save"><i class="fa-solid fa-check"></i> 保存</button>
@@ -1806,9 +1830,10 @@ function showThreadEditForm(overlay, chatId, thread) {
             const name = formOverlay.querySelector('.bb-thread-form-name')?.value?.trim();
             const type = formOverlay.querySelector('.bb-thread-form-type')?.value;
             const priority = formOverlay.querySelector('.bb-thread-form-priority')?.value;
+            const summary = formOverlay.querySelector('.bb-thread-form-summary')?.value?.trim();
             if (!name) return;
             console.log('[BB-Memory] 保存线程编辑:', name, type, priority);
-            await upsertTimelineThread(chatId, { ...thread, name, type, priority });
+            await upsertTimelineThread(chatId, { ...thread, name, type, priority, summary: summary || '' });
             close();
             await renderThreadPanel(overlay, chatId);
         } catch (err) {
