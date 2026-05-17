@@ -241,8 +241,8 @@ function buildEntryItemHTML(e) {
             if (e.memoryTier !== 'eternal' && currentTierIdx < tierOrder.length - 1) {
                 statusBadges += `<button class="bb-mem-tier-btn bb-mem-tier-up" data-id="${escapeHtml(e.id)}" title="升格" style="font-size:0.65em;padding:0 4px;line-height:1.4;cursor:pointer;opacity:0.5;"><i class="fa-solid fa-chevron-up"></i></button>`;
             }
-            // 非transient可降格
-            if (currentTierIdx > 1) {
+            // 非transient可降格（stable/core/eternal 均可降）
+            if (currentTierIdx > 0) {
                 statusBadges += `<button class="bb-mem-tier-btn bb-mem-tier-down" data-id="${escapeHtml(e.id)}" title="降格" style="font-size:0.65em;padding:0 4px;line-height:1.4;cursor:pointer;opacity:0.5;"><i class="fa-solid fa-chevron-down"></i></button>`;
             }
         }

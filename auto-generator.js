@@ -1183,7 +1183,7 @@ async function processLatestExchange(chatId) {
  * @returns {object} { npc, items, timeline, memories }
  */
 export async function extractFromContext(chatId, contextText, options = {}) {
-    const { onProgress } = options;
+    const { onProgress, sourceInfo } = options;
 
     const buildContextPrompt = (template) => {
         return template
@@ -1200,7 +1200,7 @@ export async function extractFromContext(chatId, contextText, options = {}) {
         const resp = await callApi(npcPrompt);
         const npcs = parseNpcResponse(resp);
         for (const npc of npcs) {
-            await upsertNpcProfile(chatId, npc);
+            await upsertNpcProfile(chatId, { ...npc, ...(sourceInfo || {}) });
             results.npc++;
         }
     } catch (e) { console.warn('[BB-Memory] 初始化NPC提取失败:', e.message); }
@@ -1212,7 +1212,7 @@ export async function extractFromContext(chatId, contextText, options = {}) {
         const resp = await callApi(itemPrompt);
         const items = parseItemResponse(resp);
         for (const item of items) {
-            await upsertItem(chatId, item);
+            await upsertItem(chatId, { ...item, ...(sourceInfo || {}) });
             results.items++;
         }
     } catch (e) { console.warn('[BB-Memory] 初始化物品提取失败:', e.message); }
@@ -1224,7 +1224,7 @@ export async function extractFromContext(chatId, contextText, options = {}) {
         const resp = await callApi(tlPrompt);
         const entries = parseTimelineResponse(resp);
         for (const entry of entries) {
-            await upsertTimelineEntry(chatId, entry);
+            await upsertTimelineEntry(chatId, { ...entry, ...(sourceInfo || {}) });
             results.timeline++;
         }
     } catch (e) { console.warn('[BB-Memory] 初始化时间线提取失败:', e.message); }
@@ -1239,7 +1239,7 @@ export async function extractFromContext(chatId, contextText, options = {}) {
             const embedding = getSettings().embeddingEnabled && getSettings().embeddingEndpoint
                 ? await embedMemoryEntry(mem)
                 : null;
-            await addMemory(chatId, { ...mem, embedding });
+            await addMemory(chatId, { ...mem, embedding, ...(sourceInfo || {}) });
             results.memories++;
         }
     } catch (e) { console.warn('[BB-Memory] 初始化记忆提取失败:', e.message); }

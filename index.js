@@ -346,6 +346,7 @@ async function handleInitMemory(chatId, rangeStr = '') {
     } catch { /* ignore */ }
 
     // 聊天记录 — 支持楼层范围
+    let sourceFloor = undefined;
     try {
         const chat = ctx.chat || [];
         let messages;
@@ -354,6 +355,7 @@ async function handleInitMemory(chatId, rangeStr = '') {
             const start = Math.max(0, parseInt(parts[0], 10) || 0);
             const end = Math.min(chat.length - 1, parseInt(parts[1], 10) || chat.length - 1);
             messages = chat.slice(start, end + 1).filter(m => m.mes?.trim());
+            sourceFloor = start; // 标记为范围起始楼层
         } else {
             messages = chat.filter(m => m.mes?.trim()).slice(-8);
         }
@@ -373,7 +375,8 @@ async function handleInitMemory(chatId, rangeStr = '') {
         if (progressEl) progressEl.textContent = `初始化记忆: ${info.progress || ''}`;
     };
 
-    const results = await extractFromContext(chatId, contextText, { onProgress: updateProgress });
+    const sourceInfo = typeof sourceFloor === 'number' ? { sourceFloor } : {};
+    const results = await extractFromContext(chatId, contextText, { onProgress: updateProgress, sourceInfo });
 
     if (progressEl) {
         progressEl.textContent = `初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 记忆 ${results.memories}`;

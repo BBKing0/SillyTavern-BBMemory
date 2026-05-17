@@ -4,9 +4,9 @@
     "js": "index.js",
     "css": "style.css",
     "author": "BB-Memory Dev",
-    "version": "7.3.0",
+    "version": "7.4.0",
     "homePage": "https://github.com/BBKing0/SillyTavern-BBMemory",
     "auto_update": true,
     "generate_interceptor": "bbMemoryInterceptor",
-    "description": "智能长期记忆扩展 v7.1.0 - 模糊记忆升格/切换 + 升降格按钮 + 命中次数 + 提取分步进度"
+    "description": "智能长期记忆扩展 v7.4.0 - 修复手动提取楼层标记 + 稳固降格模糊"
 }
