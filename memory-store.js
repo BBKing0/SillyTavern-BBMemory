@@ -158,6 +158,33 @@ async function saveCollection(type, chatId, data) {
     await lf.setItem(storageKey(type, chatId), data);
 }
 
+// ═══ v7.8.0 按聊天存储的日历描述 ═══
+
+const CALENDAR_KEY = 'bb_calendar_chat_';
+
+/**
+ * 获取当前聊天的日历描述（per-chat，跟随角色切换）
+ */
+export function getCalendarDescription(chatId) {
+    if (!chatId) return '';
+    const lf = getLocalForage();
+    // 异步读，但为兼容同步调用者返回 Promise
+    return lf.getItem(CALENDAR_KEY + chatId).then(v => (typeof v === 'string') ? v : '');
+}
+
+/**
+ * 设置当前聊天的日历描述
+ */
+export async function setCalendarDescription(chatId, value) {
+    if (!chatId) return;
+    const lf = getLocalForage();
+    if (value && value.trim()) {
+        await lf.setItem(CALENDAR_KEY + chatId, value.trim());
+    } else {
+        await lf.removeItem(CALENDAR_KEY + chatId);
+    }
+}
+
 // ═══════════════════════════════════════════════════════════
 //  NPC 档案 CRUD
 // ═══════════════════════════════════════════════════════════
@@ -605,7 +632,7 @@ export async function restoreEntry(chatId, type, id) {
 
 const TIER_ORDER = ['transient', 'stable', 'core', 'eternal'];
 const PROMOTE_THRESHOLDS = { stable: 3, core: 8 };
-const DEMOTE_MISS_ROUNDS = { core: 30, stable: 60 };    // N 轮未命中触发降格
+const DEMOTE_MISS_ROUNDS = { core: 30, stable: 20 };    // N 轮未命中触发降格 (v7.8.0 stable 60→20)
 const MAINTENANCE_MISS_ROUNDS = 30;                      // transient 未命中提醒
 const PROMOTION_COOLDOWN_MS = 15 * 60 * 1000;            // 15 分钟冷却（模拟"轮"）
 
@@ -969,7 +996,40 @@ export async function importMemoriesFromChatMetadata(chatId) {
         }
     }
 
+    // v7.8.0 恢复槽位数据到 localforage
+    const slotData = ctx.chatMetadata?.bb_memory_slots;
+    if (slotData && typeof slotData === 'object') {
+        const lf = SillyTavern.libs.localforage;
+        for (const [fp, slots] of Object.entries(slotData)) {
+            if (slots && typeof slots === 'object') {
+                for (const [slotName, data] of Object.entries(slots)) {
+                    if (data && typeof data === 'object') {
+                        const charId = getCharIdFromChat(chatId);
+                        if (charId) {
+                            const key = `bb_memory_slot_${charId}_${slotName}`;
+                            const existing = await lf.getItem(key);
+                            if (existing === null || existing === undefined) {
+                                await lf.setItem(key, data);
+                                restored++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     return { restored, skipped };
+}
+
+function getCharIdFromChat(chatId) {
+    try {
+        const ctx = getContext();
+        if (ctx.chatId === chatId) {
+            return ctx.characterId !== undefined && ctx.characterId !== null ? String(ctx.characterId) : null;
+        }
+    } catch { return null; }
+    return null;
 }
 
 // ═══════════════════════════════════════════════════════════

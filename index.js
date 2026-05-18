@@ -18,6 +18,7 @@ import {
     migrateV4ToV5, recordHits, checkDemotions,
     exportMemories, importMemories, updateFactContent, addHiddenNote, removeHiddenNote,
     scheduleAutoBackup, extractKeywords,
+    getCalendarDescription, setCalendarDescription,
 } from './memory-store.js';
 
 import {
@@ -511,7 +512,22 @@ function bindSidebarEvents() {
     bindInput('#bb_health_check_stale_days', 'healthCheckStaleDays', 'number');
     bindInput('#bb_health_check_stale_hit_threshold', 'healthCheckStaleHitThreshold', 'number');
     bindInput('#bb_injection_template', 'injectionTemplate', 'string');
-    bindInput('#bb_calendar_description', 'calendarDescription', 'string');
+    // v7.8.0 日历描述改为 per-chat 存储
+    const calTextarea = document.querySelector('#bb_calendar_description');
+    if (calTextarea) {
+        // 加载当前聊天的日历
+        (async () => {
+            const chatId = getChatId();
+            if (chatId) {
+                const val = await getCalendarDescription(chatId);
+                calTextarea.value = val || '';
+            }
+        })();
+        calTextarea.addEventListener('change', async () => {
+            const chatId = getChatId();
+            if (chatId) await setCalendarDescription(chatId, calTextarea.value);
+        });
+    }
 
     // 按钮
     document.querySelector('#bb_memory_backup_now')?.addEventListener('click', async function () {
@@ -1232,6 +1248,15 @@ async function onChatChanged() {
         refreshExtractionMarkers();
     }, 800);
 
+    // v7.8.0 加载 per-chat 日历描述到 UI
+    (async () => {
+        const calTextarea = document.querySelector('#bb_calendar_description');
+        if (calTextarea) {
+            const val = await getCalendarDescription(chatId);
+            calTextarea.value = val || '';
+        }
+    })();
+
     // 维护提醒（3秒后）
     setTimeout(async () => {
         try {
@@ -1517,7 +1542,7 @@ async function refreshFloatingHubData() {
         if (chatId) {
             try {
                 const mems = await getMemories(chatId);
-                const hits = mems.filter(m => (m.hitScore || m.lastHitScore || 0) > 0);
+                const hits = mems.filter(m => (m.hitCount || 0) > 0);
                 const count = hits.length;
                 if (hitCountEl) hitCountEl.textContent = String(count);
                 if (badge) {
@@ -1711,6 +1736,7 @@ async function init() {
             console.log(`[BB-Memory] 提取进度: ${info.phase} ${info.current}/${info.total}${info.text ? ' - ' + info.text : ''}`);
         }
         const isDone = info.current >= info.total && info.total > 0;
+        const isFailed = isDone && info.text && /失败|错误/.test(info.text);
         const label = info.text || (isDone ? '完成' : (info.phase ? (info.total > 0 ? Math.round((info.current / info.total) * 100) + '%' : '...') : ''));
 
         // 同步悬浮球进度
@@ -1719,7 +1745,10 @@ async function init() {
             const icon = hubRow.querySelector('i');
             const labelEl = document.getElementById('bb_hub_extract_label');
             if (isDone) {
-                if (icon) { icon.className = 'fa-solid fa-check-circle'; icon.style.color = '#4caf50'; }
+                if (icon) {
+                    icon.className = isFailed ? 'fa-solid fa-exclamation-triangle' : 'fa-solid fa-check-circle';
+                    icon.style.color = isFailed ? '#f44336' : '#4caf50';
+                }
                 if (labelEl) labelEl.textContent = info.text || '完成';
             } else if (info.phase) {
                 if (icon) { icon.className = 'fa-solid fa-spinner fa-spin'; icon.style.color = ''; }
@@ -1736,7 +1765,10 @@ async function init() {
             const icon = sidebarRow.querySelector('i');
             const strong = sidebarRow.querySelector('strong');
             if (isDone) {
-                if (icon) { icon.className = 'fa-solid fa-check-circle'; icon.style.color = '#4caf50'; }
+                if (icon) {
+                    icon.className = isFailed ? 'fa-solid fa-exclamation-triangle' : 'fa-solid fa-check-circle';
+                    icon.style.color = isFailed ? '#f44336' : '#4caf50';
+                }
                 if (strong) strong.textContent = info.text || '完成';
             } else if (info.phase) {
                 if (icon) { icon.className = 'fa-solid fa-spinner fa-spin'; icon.style.color = ''; }

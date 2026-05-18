@@ -10,7 +10,7 @@ import {
     getNpcProfiles, getItems, getTimeline, getMemories,
     removeNpcProfile, removeItem, removeTimelineEntry, removeMemory,
     updateNpcProfile, updateItem, updateTimelineEntry, updateMemory,
-    getMemoryStats,
+    addTimelineEntry, getMemoryStats,
 } from './memory-store.js';
 import { simpleSearch } from './retriever.js';
 
@@ -218,15 +218,21 @@ function buildTimelineBrowseHTML(timeline) {
             ${statuses.map(s => `<button class="bb-browse-filter-btn" data-filter="${s}">${statusLabels[s]}</button>`).join('')}
             <button class="bb-browse-filter-btn active" data-filter="all">全部</button>
         </div>
-        <select class="bb-browse-sort" id="bb_timeline_sort">
-            <option value="story_asc">按故事时间升序</option>
-            <option value="story_desc">按故事时间降序</option>
-            <option value="created_desc">按创建时间降序</option>
-        </select>
+        <div style="display:flex;gap:4px;align-items:center;">
+            <select class="bb-browse-sort" id="bb_timeline_sort">
+                <option value="story_asc">按故事时间升序</option>
+                <option value="story_desc">按故事时间降序</option>
+                <option value="created_desc">按创建时间降序</option>
+            </select>
+            <button class="bb-item-btn" id="bb_btn_new_timeline" data-action="new-timeline" style="background:#4caf50;color:#fff;font-size:0.8em;padding:4px 10px;white-space:nowrap;">
+                <i class="fa-solid fa-plus"></i> 新建
+            </button>
+        </div>
     </div>
     <div class="bb-browse-list" id="bb_timeline_list">
         ${timeline.map(t => buildTimelineItemHTML(t)).join('')}
-    </div>`;
+    </div>
+    <div id="bb_timeline_add_form" style="display:none;margin-top:8px;padding:10px;border:1px solid var(--SmartThemeBorderColor,#444);border-radius:8px;background:var(--SmartThemeBlurTintColor,rgba(0,0,0,0.2));"></div>`;
 }
 
 function buildTimelineItemHTML(t) {
@@ -374,6 +380,62 @@ function bindBrowseEvents(win, chatId) {
     });
     win.querySelector('#bb_mem_sort')?.addEventListener('change', (e) => {
         sortMemories(win, e.target.value);
+    });
+
+    // v7.8.0 新建时间线
+    win.querySelector('#bb_btn_new_timeline')?.addEventListener('click', () => {
+        const formEl = win.querySelector('#bb_timeline_add_form');
+        if (!formEl) return;
+        formEl.style.display = formEl.style.display === 'none' ? '' : 'none';
+        formEl.innerHTML = `
+            <div style="display:flex;flex-direction:column;gap:6px;">
+                <label style="font-size:0.85em;font-weight:bold;"><i class="fa-solid fa-plus"></i> 新建时间线</label>
+                <input class="text_pole" id="bb_new_tl_event" placeholder="事件描述 *" style="font-size:0.85em;">
+                <div style="display:flex;gap:6px;">
+                    <input class="text_pole" id="bb_new_tl_storyTime" placeholder="故事时间（如：第三天清晨）" style="font-size:0.85em;flex:1;">
+                    <select class="text_pole" id="bb_new_tl_status" style="font-size:0.85em;width:auto;">
+                        <option value="ongoing">进行中</option>
+                        <option value="ended">已结束</option>
+                        <option value="foreshadow">伏笔</option>
+                    </select>
+                </div>
+                <input class="text_pole" id="bb_new_tl_participants" placeholder="参与者（逗号分隔）" style="font-size:0.85em;">
+                <input class="text_pole" id="bb_new_tl_location" placeholder="地点" style="font-size:0.85em;">
+                <input class="text_pole" id="bb_new_tl_impact" placeholder="影响" style="font-size:0.85em;">
+                <div style="display:flex;gap:6px;">
+                    <button class="bb-item-btn" id="bb_new_tl_save" style="background:#4caf50;color:#fff;font-size:0.85em;">保存</button>
+                    <button class="bb-item-btn" id="bb_new_tl_cancel" style="font-size:0.85em;">取消</button>
+                </div>
+            </div>`;
+        // 保存
+        formEl.querySelector('#bb_new_tl_save')?.addEventListener('click', async () => {
+            const event = formEl.querySelector('#bb_new_tl_event')?.value?.trim();
+            if (!event) { alert('请输入事件描述'); return; }
+            const status = formEl.querySelector('#bb_new_tl_status')?.value || 'ongoing';
+            await addTimelineEntry(chatId, {
+                event, summary: event,
+                storyTime: formEl.querySelector('#bb_new_tl_storyTime')?.value?.trim() || '',
+                status, isActive: status === 'ongoing',
+                participants: (formEl.querySelector('#bb_new_tl_participants')?.value || '').split(/[,，]/).map(s => s.trim()).filter(Boolean),
+                location: formEl.querySelector('#bb_new_tl_location')?.value?.trim() || '',
+                impact: formEl.querySelector('#bb_new_tl_impact')?.value?.trim() || '',
+                memoryTier: 'stable',
+            });
+            formEl.style.display = 'none';
+            // 刷新时间线面板
+            const timeline = await getTimeline(chatId);
+            const panels = win.querySelector('.bb-assistant-panels');
+            if (panels) panels.querySelector('[data-panel="timeline"]').innerHTML = buildTimelineBrowseHTML(timeline);
+            if (win.querySelector('.bb-assistant-tab[data-tab="timeline"] .bb-tab-count')) {
+                win.querySelector('.bb-assistant-tab[data-tab="timeline"] .bb-tab-count').textContent = timeline.length;
+            }
+            // 重新绑定事件
+            bindAssistantEvents(win, chatId);
+        });
+        // 取消
+        formEl.querySelector('#bb_new_tl_cancel')?.addEventListener('click', () => {
+            formEl.style.display = 'none';
+        });
     });
 
     // Delete buttons

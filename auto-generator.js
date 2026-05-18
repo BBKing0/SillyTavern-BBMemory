@@ -9,6 +9,7 @@ import {
     getSettings, updateSettings, getMemories, addMemory, updateMemory,
     upsertNpcProfile, upsertItem, upsertTimelineEntry,
     getNpcProfiles, getItems, getTimeline,
+    getCalendarDescription,
 } from './memory-store.js';
 import {
     getExtractableExchanges, markExchangeExtracted, isExchangeProcessed,
@@ -692,7 +693,7 @@ async function extractMemoryStage(chatId, userMessage, aiMessage, sourceInfo) {
                 }
             }
 
-            await addMemory(chatId, { ...mem, embedding, ...(sourceInfo || {}) });
+            await addMemory(chatId, { ...mem, embedding, memoryTier: 'stable', ...(sourceInfo || {}) });
             if (embedding) activeMemories.push({ embedding });
             count++;
         }
@@ -1113,9 +1114,9 @@ function getStyleBias() {
  * v7.7.1 动态构建合并提取提示词
  * 支持自定义核心原则、提取维度，以及注入故事历法描述
  */
-function buildMergedPrompt(settings, styleBias) {
+function buildMergedPrompt(settings, styleBias, calDesc) {
     const s = settings || {};
-    const calDesc = (s.calendarDescription && s.calendarDescription.trim()) || '';
+    calDesc = (calDesc && calDesc.trim()) || '';
     const calRef = calDesc ? `\n**世界历法参考**：${calDesc}\n（仅用于推断故事时间，无需计算天数）` : '';
 
     let prompt = MERGED_EXTRACTION_PROMPT;
@@ -1140,7 +1141,8 @@ function buildMergedPrompt(settings, styleBias) {
 async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
     const settings = getSettings();
     const styleBias = getStyleBias();
-    const prompt = buildMergedPrompt(settings, styleBias)
+    const calDesc = await getCalendarDescription(chatId);
+    const prompt = buildMergedPrompt(settings, styleBias, calDesc)
         .replace('{{userMessage}}', userMessage || '(无)')
         .replace('{{aiMessage}}', cleanAiMessage(aiMessage) || '(无)');
     try {
@@ -1181,7 +1183,7 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
                     }
                 }
             }
-            await addMemory(chatId, { ...mem, embedding, ...(sourceInfo || {}) });
+            await addMemory(chatId, { ...mem, embedding, memoryTier: 'stable', ...(sourceInfo || {}) });
             if (embedding) activeMemories.push({ embedding });
             total++;
         }
@@ -1191,7 +1193,7 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
         return total;
     } catch (e) {
         console.warn('[BB-Memory] 合并提取失败:', e.message);
-        reportProgress('merged', 5, 5, '提取失败');
+        reportProgress('merged', 5, 5, '提取失败: ' + (e.message || '未知错误'));
         return 0;
     }
 }
@@ -1287,7 +1289,8 @@ export async function extractFromContext(chatId, contextText, options = {}) {
 
     const settings = getSettings();
     const styleBias = getStyleBias();
-    const prompt = buildMergedPrompt(settings, styleBias)
+    const calDesc = await getCalendarDescription(chatId);
+    const prompt = buildMergedPrompt(settings, styleBias, calDesc)
         .replace('{{userMessage}}', contextText)
         .replace('{{aiMessage}}', '(见上下文)');
 
@@ -1316,7 +1319,7 @@ export async function extractFromContext(chatId, contextText, options = {}) {
             const embedding = (settings.embeddingEnabled && settings.embeddingEndpoint)
                 ? await embedMemoryEntry(mem)
                 : null;
-            await addMemory(chatId, { ...mem, embedding, ...(sourceInfo || {}) });
+            await addMemory(chatId, { ...mem, embedding, memoryTier: 'stable', ...(sourceInfo || {}) });
             results.memories++;
         }
     } catch (e) { console.warn('[BB-Memory] 合并提取失败:', e.message); }
@@ -1388,7 +1391,7 @@ export async function saveExtractedMemories(chatId, candidateMemories, onProgres
             }
         }
 
-        await addMemory(chatId, { ...mem, embedding, source: mem.source || 'auto' });
+        await addMemory(chatId, { ...mem, embedding, memoryTier: 'stable', source: mem.source || 'auto' });
         if (embedding) activeMemories.push({ embedding });
         count++;
         if (onProgress) onProgress(count, candidateMemories.length);

@@ -4,9 +4,9 @@
     "js": "index.js",
     "css": "style.css",
     "author": "BB-Memory Dev",
-    "version": "7.7.1",
+    "version": "7.8.0",
     "homePage": "https://github.com/BBKing0/SillyTavern-BBMemory",
     "auto_update": true,
     "generate_interceptor": "bbMemoryInterceptor",
-    "description": "智能长期记忆扩展 v7.7.1 - 合并提取 + 自定义提示词 + 故事日历接线 + 批量修复"
+    "description": "智能长期记忆扩展 v7.8.0 - 跨设备存档 + 稳固记忆默认 + 新建时间线 + 命中修复"
 }

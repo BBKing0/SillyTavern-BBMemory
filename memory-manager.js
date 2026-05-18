@@ -1247,7 +1247,7 @@ async function renderSlotsPanel(overlay, chatId) {
                         <div class="bb-slot-info">
                             <span class="bb-slot-name">
                                 <i class="fa-solid fa-floppy-disk"></i> ${escapeHtml(s.name)}
-                                ${s.name === currentSlot ? '<span class="bb-slot-default-badge">当前</span>' : ''}
+                                ${s.name === currentSlot ? '<span class="bb-slot-default-badge">当前</span>' : ''}${s._remote ? '<span class="bb-slot-default-badge" style="background:#2196f3;">云端</span>' : ''}
                             </span>
                             <span class="bb-slot-count">${s.count} 条记忆</span>
                         </div>

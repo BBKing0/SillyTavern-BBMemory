@@ -11,6 +11,7 @@ import {
     updateNpcProfile, updateItem, updateTimelineEntry, updateMemory,
     removeNpcProfile, removeItem, removeTimelineEntry, removeMemory,
     addMemory, getTimelineThreads, saveTimelineThreads,
+    getCalendarDescription,
 } from './memory-store.js';
 import { callCustomApi, callMainApi } from './auto-generator.js';
 
@@ -372,7 +373,7 @@ async function generateGroupSummary(chatId, group, _options = {}) {
         `${i + 1}. [${t.storyTime || '?'}] ${t.event}: ${t.summary}`
     ).join('\n');
 
-    const calDesc = getSettings().calendarDescription?.trim();
+    const calDesc = (await getCalendarDescription(chatId))?.trim();
     const calRef = calDesc ? `\n**世界历法参考**：${calDesc}\n（仅用于推断和整理故事时间）\n` : '';
 
     const prompt = `将以下时间线条目合并为一条总结（JSON）：${calRef}
@@ -460,8 +461,9 @@ export async function regenerateThreadSummary(chatId, options = {}) {
         : '(无已有线程)';
 
     const maxActive = options.maxActiveThreads || settings.maxActiveThreads || 5;
-    const calRef2 = (settings.calendarDescription && settings.calendarDescription.trim())
-        ? `\n**世界历法参考**：${settings.calendarDescription.trim()}\n（仅用于推断和整理故事时间，无需计算天数）\n` : '';
+    const calDesc2 = (await getCalendarDescription(chatId))?.trim();
+    const calRef2 = calDesc2
+        ? `\n**世界历法参考**：${calDesc2}\n（仅用于推断和整理故事时间，无需计算天数）\n` : '';
 
     const prompt = `你是一个故事时间线组织助手。根据时间线条目和已有线程，重新整理故事线程。${calRef2}
 
