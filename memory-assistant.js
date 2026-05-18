@@ -329,7 +329,6 @@ function bindAssistantEvents(win, chatId) {
         if (tabs[2]) tabs[2].textContent = timeline.length;
         if (tabs[3]) tabs[3].textContent = memories.length;
         bindBrowseEvents(win, chatId);
-        bindAssistantEvents(win, chatId);   // v7.9.0 刷新后重新绑定（含新建时间线等按钮）
         switchTab(win, currentTab);
     });
 
@@ -430,8 +429,8 @@ function bindBrowseEvents(win, chatId) {
             if (win.querySelector('.bb-assistant-tab[data-tab="timeline"] .bb-tab-count')) {
                 win.querySelector('.bb-assistant-tab[data-tab="timeline"] .bb-tab-count').textContent = timeline.length;
             }
-            // 重新绑定事件
-            bindAssistantEvents(win, chatId);
+            // v7.9.0 重新绑定浏览事件（避免递归累积）
+            bindBrowseEvents(win, chatId);
         });
         // 取消
         formEl.querySelector('#bb_new_tl_cancel')?.addEventListener('click', () => {

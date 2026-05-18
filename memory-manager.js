@@ -1534,11 +1534,18 @@ async function renderThreadPanel(overlay, chatId) {
             <div class="bb-thread-empty">
                 <i class="fa-solid fa-timeline" style="font-size:2em;opacity:0.3;"></i>
                 <p>暂无时间线线程</p>
+                <button class="menu_button" id="bb_thread_new_empty" style="margin-top:8px;background:#4caf50;color:#fff;margin-right:6px;">
+                    <i class="fa-solid fa-plus"></i> 新建线程
+                </button>
                 <button class="menu_button" id="bb_thread_refresh_empty" style="margin-top:8px;">
                     <i class="fa-solid fa-rotate"></i> 刷新时间线总结
                 </button>
             </div>`;
         // v7.5.0 空状态内联刷新按钮
+        // v7.9.0 空状态新建线程
+        panel.querySelector('#bb_thread_new_empty')?.addEventListener('click', () => {
+            showThreadCreateForm(overlay, chatId);
+        });
         panel.querySelector('#bb_thread_refresh_empty')?.addEventListener('click', async () => {
             const btn = panel.querySelector('#bb_thread_refresh_empty');
             btn.disabled = true;
