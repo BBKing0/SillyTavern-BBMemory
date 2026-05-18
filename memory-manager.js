@@ -1563,6 +1563,9 @@ async function renderThreadPanel(overlay, chatId) {
     let html = `
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
             <span style="font-weight:bold;">${activeThreads.length} 条线程</span>
+            <button class="menu_button" id="bb_thread_new_btn" style="font-size:0.85em;background:#4caf50;color:#fff;">
+                <i class="fa-solid fa-plus"></i> 新建线程
+            </button>
             <button class="menu_button" id="bb_thread_refresh_inline" style="font-size:0.85em;">
                 <i class="fa-solid fa-rotate"></i> 刷新总结
             </button>
@@ -1676,6 +1679,11 @@ async function renderThreadPanel(overlay, chatId) {
             btn.disabled = false;
             btn.innerHTML = '<i class="fa-solid fa-rotate"></i> 刷新总结';
         }
+    });
+
+    // v7.9.0 新建线程
+    panel.querySelector('#bb_thread_new_btn')?.addEventListener('click', () => {
+        showThreadCreateForm(overlay, chatId);
     });
 
     // 绑定详细条目折叠
@@ -1907,6 +1915,73 @@ function showThreadEditForm(overlay, chatId, thread) {
             await renderThreadPanel(overlay, chatId);
         } catch (err) {
             console.error('[BB-Memory] 保存线程失败:', err.message || err);
+        }
+    });
+}
+
+// v7.9.0 新建线程表单
+function showThreadCreateForm(overlay, chatId) {
+    document.querySelector('.bb-thread-form-overlay')?.remove();
+
+    const formOverlay = document.createElement('div');
+    formOverlay.className = 'bb-mem-form-overlay bb-thread-form-overlay';
+    formOverlay.innerHTML = `
+    <div class="bb-mem-form-popup" style="max-width:480px;">
+        <div class="bb-mem-form-header">
+            <h3><i class="fa-solid fa-plus"></i> 新建线程</h3>
+            <span class="bb-thread-form-close" style="cursor:pointer;font-size:1.2em;">&times;</span>
+        </div>
+        <div class="bb-mem-form-body">
+            <div class="bb-mem-form-row">
+                <label>线程名称 *</label>
+                <input type="text" class="text_pole bb-thread-form-name" placeholder="如：主线·战前动员" />
+            </div>
+            <div class="bb-mem-form-row">
+                <label>类型</label>
+                <select class="text_pole bb-thread-form-type">
+                    <option value="plot" selected>主线剧情</option>
+                    <option value="emotional">感情线</option>
+                    <option value="side">支线</option>
+                    <option value="world">世界观</option>
+                </select>
+            </div>
+            <div class="bb-mem-form-row">
+                <label>优先级</label>
+                <select class="text_pole bb-thread-form-priority">
+                    <option value="high">高</option>
+                    <option value="medium" selected>中</option>
+                    <option value="low">低</option>
+                </select>
+            </div>
+            <div class="bb-mem-form-row">
+                <label>一句话总结 <small>注入时显示在AI上下文中</small></label>
+                <textarea class="text_pole bb-thread-form-summary" rows="2" placeholder="如：从北境初遇到战后表白，经历三年分离与重逢"></textarea>
+            </div>
+        </div>
+        <div class="bb-mem-form-footer">
+            <button class="menu_button bb-thread-form-save"><i class="fa-solid fa-check"></i> 创建</button>
+            <button class="menu_button bb-thread-form-cancel">取消</button>
+        </div>
+    </div>`;
+    document.body.appendChild(formOverlay);
+
+    const close = () => formOverlay.remove();
+    formOverlay.querySelector('.bb-thread-form-close')?.addEventListener('click', close);
+    formOverlay.querySelector('.bb-thread-form-cancel')?.addEventListener('click', close);
+    formOverlay.addEventListener('click', (e) => { if (e.target === formOverlay) close(); });
+
+    formOverlay.querySelector('.bb-thread-form-save')?.addEventListener('click', async () => {
+        try {
+            const name = formOverlay.querySelector('.bb-thread-form-name')?.value?.trim();
+            if (!name) return;
+            const type = formOverlay.querySelector('.bb-thread-form-type')?.value || 'plot';
+            const priority = formOverlay.querySelector('.bb-thread-form-priority')?.value || 'medium';
+            const summary = formOverlay.querySelector('.bb-thread-form-summary')?.value?.trim() || '';
+            await upsertTimelineThread(chatId, { name, type, priority, summary, status: 'ongoing', entries: [] });
+            close();
+            await renderThreadPanel(overlay, chatId);
+        } catch (err) {
+            console.error('[BB-Memory] 创建线程失败:', err.message || err);
         }
     });
 }
