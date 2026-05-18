@@ -329,6 +329,7 @@ function bindAssistantEvents(win, chatId) {
         if (tabs[2]) tabs[2].textContent = timeline.length;
         if (tabs[3]) tabs[3].textContent = memories.length;
         bindBrowseEvents(win, chatId);
+        bindAssistantEvents(win, chatId);   // v7.9.0 刷新后重新绑定（含新建时间线等按钮）
         switchTab(win, currentTab);
     });
 

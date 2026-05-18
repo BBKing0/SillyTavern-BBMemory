@@ -4,9 +4,9 @@
     "js": "index.js",
     "css": "style.css",
     "author": "BB-Memory Dev",
-    "version": "7.8.0",
+    "version": "7.9.0",
     "homePage": "https://github.com/BBKing0/SillyTavern-BBMemory",
     "auto_update": true,
     "generate_interceptor": "bbMemoryInterceptor",
-    "description": "智能长期记忆扩展 v7.8.0 - 跨设备存档 + 稳固记忆默认 + 新建时间线 + 命中修复"
+    "description": "智能长期记忆扩展 v7.9.0 - 悬浮窗快捷保存 + 提取失败红点 + 换楼刷新侧边栏 + 备份反馈增强"
 }

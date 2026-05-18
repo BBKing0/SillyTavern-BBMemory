@@ -448,6 +448,18 @@ function bindSidebarEvents() {
     bindCheckbox('#bb_timeline_summary_enabled', 'timelineSummaryEnabled');
     bindCheckbox('#bb_auto_backup_enabled', 'autoBackupEnabled');
 
+    // v7.9.0 自动备份状态指示器
+    const updateAutoBackupStatus = () => {
+        const el = document.querySelector('#bb_auto_backup_status');
+        if (!el) return;
+        const enabled = getSettings().autoBackupEnabled;
+        el.innerHTML = enabled
+            ? '<i class="fa-solid fa-circle" style="color:#4caf50;"></i> 自动备份已开启（5秒防抖）'
+            : '<i class="fa-solid fa-circle" style="color:#ff9800;"></i> 自动备份已关闭';
+    };
+    document.querySelector('#bb_auto_backup_enabled')?.addEventListener('change', updateAutoBackupStatus);
+    updateAutoBackupStatus();
+
     // 选择器
     bindSelect('#bb_auto_gen_mode', 'autoGenMode');
     bindSelect('#bb_extraction_confirm_mode', 'extractionConfirmMode');
@@ -538,7 +550,7 @@ function bindSidebarEvents() {
         this.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 备份中...';
         try {
             const result = await exportMemoriesToChatMetadata(chatId);
-            showToast(`备份完成：${result.count} 条 (${(result.size/1024).toFixed(1)}KB)`, 'success');
+            showToast(`备份完成：${result.count} 条 (${(result.size/1024).toFixed(1)}KB) → 已保存到服务器`, 'success');
         } catch (e) {
             showToast(`备份失败: ${e.message}`, 'error');
         } finally {
@@ -554,7 +566,11 @@ function bindSidebarEvents() {
         this.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 恢复中...';
         try {
             const result = await importMemoriesFromChatMetadata(chatId);
-            showToast(`恢复完成：${result.restored} 条新增，${result.skipped} 条跳过`, 'success');
+            if (result.restored === 0 && result.skipped === 0) {
+                showToast('暂无备份数据可恢复', 'info');
+            } else {
+                showToast(`恢复完成：${result.restored} 条新增，${result.skipped} 条跳过`, 'success');
+            }
         } catch (e) {
             showToast(`恢复失败: ${e.message}`, 'error');
         } finally {
@@ -648,6 +664,18 @@ function bindSidebarEvents() {
         } catch (e) {
             console.warn('[BB-Memory] 线程总结失败:', e.message);
             showToast('线程总结失败: ' + e.message, 'error');
+        }
+    });
+    // v7.9.0 换楼刷新（从悬浮窗移到侧边栏）
+    document.querySelector('#bb_floor_refresh_btn')?.addEventListener('click', async () => {
+        const chatId = getChatId();
+        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        const stats = await refreshAllSourceFloors(chatId);
+        const total = stats.npc + stats.items + stats.timeline + stats.memories;
+        if (total === 0) {
+            showToast('当前没有需要刷新的楼层记忆', 'info');
+        } else {
+            showToast(`已标记 ${total} 条记忆为旧聊天来源（NPC:${stats.npc} 物品:${stats.items} 时间线:${stats.timeline} 记忆:${stats.memories}）`, 'success');
         }
     });
     document.querySelector('#bb_embedding_reindex_btn')?.addEventListener('click', async () => {
@@ -1365,6 +1393,10 @@ function injectFloatingHub() {
                 <i class="fa-solid fa-floppy-disk"></i>
                 <span>存档: <strong>default</strong> · <strong>0</strong> 条</span>
             </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="quick_save">
+                <i class="fa-solid fa-floppy-disk"></i>
+                <span>快速保存</span>
+            </div>
             <div class="bb-floating-menu-item bb-floating-menu-action" id="bb_hub_hit_info" data-action="toggle_hit_list">
                 <i class="fa-solid fa-bullseye"></i>
                 <span>命中: <strong id="bb_hub_hit_count">-</strong> 条</span>
@@ -1386,10 +1418,6 @@ function injectFloatingHub() {
             <div class="bb-floating-menu-item bb-floating-menu-action" data-action="manual_extract">
                 <i class="fa-solid fa-wand-magic-sparkles"></i>
                 <span>手动提取</span>
-            </div>
-            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="floor_refresh">
-                <i class="fa-solid fa-arrows-rotate"></i>
-                <span>换楼刷新</span>
             </div>
             <div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_maintenance">
                 <i class="fa-solid fa-toolbox"></i>
@@ -1536,22 +1564,17 @@ function toggleFloatingMenu() {
 
 async function refreshFloatingHubData() {
     const hitCountEl = document.getElementById('bb_hub_hit_count');
-    const badge = document.getElementById('bb_hub_badge');
-    if (hitCountEl || badge) {
+    if (hitCountEl) {
         const chatId = getChatId();
         if (chatId) {
             try {
                 const mems = await getMemories(chatId);
                 const hits = mems.filter(m => (m.hitCount || 0) > 0);
-                const count = hits.length;
-                if (hitCountEl) hitCountEl.textContent = String(count);
-                if (badge) {
-                    badge.textContent = count > 99 ? '99+' : String(count);
-                    badge.style.display = count > 0 ? 'block' : 'none';
-                }
+                hitCountEl.textContent = String(hits.length);
             } catch { /* ignore */ }
         }
     }
+    // v7.9.0 红点角标由提取失败控制，此处不做更新
 
     // 更新存档信息
     const slotInfo = document.getElementById('bb_hub_slot_info');
@@ -1653,14 +1676,18 @@ async function handleFloatingMenuAction(action) {
             if (chatId) openMemoryManager(chatId);
             break;
         }
-        case 'floor_refresh': {
+        case 'quick_save': {
             if (!chatId) return;
-            const stats = await refreshAllSourceFloors(chatId);
-            const total = stats.npc + stats.items + stats.timeline + stats.memories;
-            if (total === 0) {
-                showToast('当前没有需要刷新的楼层记忆', 'info');
-            } else {
-                showToast(`已标记 ${total} 条记忆为旧聊天来源`, 'success');
+            try {
+                const charId = getCharacterId();
+                if (!charId) { showToast('无法获取角色ID', 'error'); break; }
+                const slotName = getSettings().currentSlotName || 'default';
+                const count = await saveToSlot(charId, chatId, slotName);
+                showToast(`已保存 ${count} 条到「${slotName}」`, 'success');
+                // 刷新悬浮窗存档信息
+                setTimeout(() => refreshFloatingHubData(), 300);
+            } catch (e) {
+                showToast(`快速保存失败: ${e.message}`, 'error');
             }
             break;
         }
@@ -1739,8 +1766,9 @@ async function init() {
         const isFailed = isDone && info.text && /失败|错误/.test(info.text);
         const label = info.text || (isDone ? '完成' : (info.phase ? (info.total > 0 ? Math.round((info.current / info.total) * 100) + '%' : '...') : ''));
 
-        // 同步悬浮球进度
+        // 同步悬浮球进度 + v7.9.0 失败红点
         const hubRow = document.getElementById('bb_hub_extract_progress');
+        const badge = document.getElementById('bb_hub_badge');
         if (hubRow) {
             const icon = hubRow.querySelector('i');
             const labelEl = document.getElementById('bb_hub_extract_label');
@@ -1750,12 +1778,22 @@ async function init() {
                     icon.style.color = isFailed ? '#f44336' : '#4caf50';
                 }
                 if (labelEl) labelEl.textContent = info.text || '完成';
+                // 失败时显示红点
+                if (badge) {
+                    badge.textContent = '';
+                    badge.style.display = isFailed ? 'block' : 'none';
+                    badge.style.minWidth = isFailed ? '12px' : '';
+                    badge.style.height = isFailed ? '12px' : '';
+                    badge.style.borderRadius = isFailed ? '50%' : '';
+                }
             } else if (info.phase) {
                 if (icon) { icon.className = 'fa-solid fa-spinner fa-spin'; icon.style.color = ''; }
                 if (labelEl) labelEl.textContent = label;
+                if (badge) badge.style.display = 'none';
             } else {
                 if (icon) { icon.className = 'fa-solid fa-moon'; icon.style.color = ''; }
                 if (labelEl) labelEl.textContent = '空闲';
+                if (badge) badge.style.display = 'none';
             }
         }
 

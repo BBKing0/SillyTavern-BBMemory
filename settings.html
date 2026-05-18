@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v7.8.0</b>
+            <b>BB-Memory v7.9.0</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -47,10 +47,13 @@
                 </button>
             </div>
 
-            <!-- 快捷按钮 行3：时间线线程 -->
+            <!-- 快捷按钮 行3：时间线线程 + 换楼刷新 -->
             <div class="bb-mem-sidebar-buttons">
                 <button id="bb_thread_refresh_btn" class="menu_button" title="从时间线条目重新生成故事线程总结">
                     <i class="fa-solid fa-timeline"></i> 刷新时间线总结
+                </button>
+                <button id="bb_floor_refresh_btn" class="menu_button" title="将所有记忆的来源楼层标记为旧聊天（开新聊天后使用）">
+                    <i class="fa-solid fa-arrows-rotate"></i> 换楼刷新
                 </button>
             </div>
 
@@ -63,8 +66,11 @@
                     <i class="fa-solid fa-cloud-download"></i> 恢复
                 </button>
             </div>
-            <div style="font-size:0.7em;opacity:0.5;margin-bottom:6px;">
+            <div style="font-size:0.7em;opacity:0.5;margin-bottom:2px;">
                 备份将记忆数据保存到服务器（跨设备同步）。开启下方"自动备份"后可自动执行，无需手动操作。
+            </div>
+            <div id="bb_auto_backup_status" style="font-size:0.7em;margin-bottom:6px;color:#ff9800;">
+                <i class="fa-solid fa-circle"></i> 自动备份已关闭
             </div>
 
             <!-- 命中记忆 -->
