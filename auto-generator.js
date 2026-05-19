@@ -1211,51 +1211,81 @@ async function processLatestExchange(chatId) {
     if (!exchanges.length) return;
 
     // v6.3.0: 恢复阈值检查 — 等攒够窗口数量的待提取 exchange 后才开始提取
-    // 防止每个消息都触发提取，保护保留窗口
     const minPending = settings.contextWindowExchanges ?? 3;
     if (exchanges.length < minPending) return;
 
-    const oldest = exchanges[0];
+    // v8.0.0 批量提取：每次取 batchExtractionCount 个 exchange，并行请求 API
+    const batchCount = Math.min(settings.batchExtractionCount || 1, exchanges.length);
+    const batch = exchanges.slice(0, batchCount);
 
-    // 检查已处理
-    if (await isExchangeProcessed(chatId, oldest.hash)) return;
-
-    const sourceInfo = { sourceExchange: oldest.hash, sourceFloor: oldest.aiIndex, sourceChatId: chatId, sourceMessageHash: cyrb53Hash(oldest.aiMessage?.mes || '') };
+    // 检查 batch 中第一个是否已处理
+    if (await isExchangeProcessed(chatId, batch[0].hash)) return;
 
     // META_DIALOGUE 检测辅助
     const checkMetaDialogue = (text) => text && text.trim().toUpperCase().startsWith('META_DIALOGUE');
 
+    // 记录成功处理的 exchange（用于后续标记）
+    const succeeded = [];
+
     try {
         if (confirmMode === 'active') {
-            // Active 模式：解析但不保存
-            const prompt = buildStagePrompt(MEMORY_EXTRACTION_PROMPT, oldest.userMessage, oldest.aiMessage);
-            const responseText = await callApi(prompt);
-            if (checkMetaDialogue(responseText)) {
-                console.log('[BB-Memory] Active模式检测到纯元对话，跳过');
-                return;
-            }
-            const candidates = parseMemoryResponse(responseText);
-            if (candidates.length > 0) {
-                pendingAutoCandidates.push(...candidates.map(c => ({ ...c, _chatId: chatId })));
+            // Active 模式：逐个处理（每轮需要用户确认，不适合并行）
+            for (const ex of batch) {
+                if (await isExchangeProcessed(chatId, ex.hash)) continue;
+                const prompt = buildStagePrompt(MEMORY_EXTRACTION_PROMPT, ex.userMessage, ex.aiMessage);
+                const responseText = await callApi(prompt);
+                if (checkMetaDialogue(responseText)) {
+                    console.log('[BB-Memory] Active模式检测到纯元对话，跳过');
+                    continue;
+                }
+                const candidates = parseMemoryResponse(responseText);
+                if (candidates.length > 0) {
+                    pendingAutoCandidates.push(...candidates.map(c => ({ ...c, _chatId: chatId })));
+                }
+                succeeded.push(ex);
             }
         } else {
-            // 合并提取模式（v7.7.1 唯一模式）：1次API调用提取全部四类
-            const mergedResult = await extractMergedStage(chatId, oldest.userMessage, oldest.aiMessage, sourceInfo);
-            if (mergedResult && mergedResult.isMetaDialogue) {
-                console.log('[BB-Memory] 跳过元对话 exchange，不标记已提取');
-                return;
+            // v8.0.0 并行请求：每个 exchange 独立调用 API，同时发出
+            const tasks = batch.map(async (ex) => {
+                if (await isExchangeProcessed(chatId, ex.hash)) return null;
+                const sourceInfo = {
+                    sourceExchange: ex.hash,
+                    sourceFloor: ex.aiIndex,
+                    sourceChatId: chatId,
+                    sourceMessageHash: cyrb53Hash(ex.aiMessage?.mes || ''),
+                };
+                try {
+                    const result = await extractMergedStage(chatId, ex.userMessage, ex.aiMessage, sourceInfo);
+                    if (result && result.isMetaDialogue) {
+                        console.log('[BB-Memory] 并行提取：检测到纯元对话，跳过');
+                        return null;
+                    }
+                    return ex;
+                } catch (e) {
+                    console.warn('[BB-Memory] 并行提取单个 exchange 失败:', e.message);
+                    return null;
+                }
+            });
+
+            const results = await Promise.allSettled(tasks);
+            for (const r of results) {
+                if (r.status === 'fulfilled' && r.value) {
+                    succeeded.push(r.value);
+                }
             }
         }
     } catch (e) {
         console.warn('[BB-Memory] 提取处理异常:', e.message);
     }
 
-    // v6.3.0: markExchangeExtracted 同时处理 AI 和用户消息的隐藏
-    await markExchangeExtracted(oldest.userIndex, oldest.aiIndex, oldest.hash);
+    // v8.0.0 批量标记所有成功处理的 exchange
+    for (const ex of succeeded) {
+        await markExchangeExtracted(ex.userIndex, ex.aiIndex, ex.hash);
+    }
 
-    // v6.7.0: 线程自动更新检测
+    // v6.7.0: 线程自动更新检测（按成功处理的 exchange 数计数）
     if (getSettings().timelineSummaryEnabled) {
-        const counter = (getSettings()._threadUpdateCounter || 0) + 1;
+        const counter = (getSettings()._threadUpdateCounter || 0) + succeeded.length;
         const threshold = getSettings()._threadUpdateThreshold || 5;
         updateSettings({ _threadUpdateCounter: counter });
         if (counter >= threshold) {

@@ -269,7 +269,7 @@ export function buildMaintenanceHTML(result) {
             <span class="bb-maint-total">共 ${result.issueCount} 条待处理</span>
         </div>
         <div class="bb-maintenance-stats">
-            总条目: ${result.totalItems || 0} | NPC: ${result.stats?.npc || 0} | 物品: ${result.stats?.items || 0} | 时间线: ${result.stats?.timeline || 0} | 记忆: ${result.stats?.memories || 0}
+            记忆: ${result.stats?.memories || 0} 条 | NPC: ${result.stats?.npc || 0} | 物品: ${result.stats?.items || 0} | 时间线: ${result.stats?.timeline || 0}
         </div>
         ${sections}
         <div class="bb-maintenance-actions">

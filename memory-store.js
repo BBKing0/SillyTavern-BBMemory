@@ -27,6 +27,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // 检索
     tokenBudget: 800,
     maxResults: 10,
+    // v8.0.0 各柱注入上限（独立于 maxResults，后者仅控制记忆条目）
+    npcInjectionMax: 8,
+    itemInjectionMax: 5,
+    timelineEndedMax: 3,
     shortTermWindow: 5,
     // AI 自动生成
     autoGenEnabled: false,
@@ -40,6 +44,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     extractionConfirmMode: 'semi', // 'active' | 'semi' | 'auto'
     activeConfirmStyle: 'popup',   // 'popup' | 'toast'
     contextWindowExchanges: 3,
+    batchExtractionCount: 2,         // v8.0.0 每次并行请求的 exchange 数
     extractedMsgDisplay: 'transparent', // 'hidden' | 'transparent' | 'visible'
     extractionStyle: 'auto',             // 'auto' | 'daily' | 'drama' | 'custom'
     customExtractionBias: '',            // 自定义风格偏置（extractionStyle=custom 时生效）
@@ -366,6 +371,7 @@ export async function addTimelineEntry(chatId, data) {
         memoryTier: data.memoryTier || 'transient',
         archived: data.archived || false,
         relatedEventIds: Array.isArray(data.relatedEventIds) ? data.relatedEventIds : [],
+        subEntries: Array.isArray(data.subEntries) ? data.subEntries : [],  // v8.0.0 子条目
         createdAt: now,
         updatedAt: now,
         lastHitAt: null,
@@ -972,24 +978,37 @@ export async function importMemoriesFromChatMetadata(chatId) {
         }
     }
 
-    // 恢复时间线
+    // 恢复时间线（id 去重 + event+storyTime 指纹去重，防止跨设备重复）
     if (Array.isArray(backup.timeline)) {
         const existing = await getTimeline(chatId);
         const existingIds = new Set(existing.map(e => e.id));
+        const existingKeys = new Set(existing.map(e => `${(e.event || '').toLowerCase().trim()}|${e.storyTime || ''}`));
         for (const entry of backup.timeline) {
             if (existingIds.has(entry.id)) { skipped++; continue; }
+            const entryKey = `${(entry.event || '').toLowerCase().trim()}|${entry.storyTime || ''}`;
+            if (existingKeys.has(entryKey)) { skipped++; continue; }
+            existingKeys.add(entryKey);
             const { id: _id, ...data } = entry;
             await addTimelineEntry(chatId, { ...data, id: undefined });
             restored++;
         }
     }
 
-    // 恢复记忆
+    // 恢复记忆（id 去重 + title+content前80字符 指纹去重，防止跨设备重复）
     if (Array.isArray(backup.memories)) {
         const existing = await getMemories(chatId);
         const existingIds = new Set(existing.map(e => e.id));
+        const existingKeys = new Set(existing.map(e => {
+            const t = (e.title || '').toLowerCase().trim();
+            const c = (e.content || '').toLowerCase().trim().slice(0, 80);
+            return `${t}|${c}`;
+        }));
         for (const entry of backup.memories) {
             if (existingIds.has(entry.id)) { skipped++; continue; }
+            const et = (entry.title || '').toLowerCase().trim();
+            const ec = (entry.content || '').toLowerCase().trim().slice(0, 80);
+            if (existingKeys.has(`${et}|${ec}`)) { skipped++; continue; }
+            existingKeys.add(`${et}|${ec}`);
             const { id: _id, ...data } = entry;
             await addMemory(chatId, { ...data, id: undefined });
             restored++;

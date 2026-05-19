@@ -48,7 +48,6 @@ export async function openMemoryManager(chatId) {
 // ═══ HTML 构建 ═══
 
 function buildManagerHTML(npc, items, timeline, memories, chatId) {
-    const totalCount = npc.length + items.length + timeline.length + memories.length;
     const allEntries = [
         ...npc.map(e => ({ ...e, _pillar: 'npc' })),
         ...items.map(e => ({ ...e, _pillar: 'item' })),
@@ -89,7 +88,7 @@ function buildManagerHTML(npc, items, timeline, memories, chatId) {
         <div class="bb-mgr-panel" data-panel="memories">
             <div class="bb-current-slot-bar">
                 <span><i class="fa-solid fa-floppy-disk"></i> 存档: <strong id="bb_current_slot_name">default</strong></span>
-                <span>条目: <strong id="bb_current_slot_count">0</strong> 条</span>
+                <span>记忆: <strong id="bb_current_slot_count">0</strong> 条</span>
             </div>
 
             <div class="bb-mem-toolbar">
@@ -150,7 +149,7 @@ function buildManagerHTML(npc, items, timeline, memories, chatId) {
             </div>
 
             <div class="bb-mem-stats">
-                共 <strong>${totalCount}</strong> 条（NPC ${npc.length} / 物品 ${items.length} / 时间线 ${timeline.length} / 记忆 ${memories.length}）
+                <strong>${memories.length}</strong> 条记忆 · NPC ${npc.length} / 物品 ${items.length} / 时间线 ${timeline.length}
             </div>
 
             <div class="bb-mem-list" id="bb_mgr_list">${listHTML}</div>
@@ -329,6 +328,10 @@ function buildEntryItemHTML(e) {
             ${fuzzyFullHTML}
             ${tagRow}
         </div>` : ''}
+        ${pillar === 'timeline' && Array.isArray(e.subEntries) && e.subEntries.length > 0 ? `
+        <div class="bb-timeline-subs">
+            ${e.subEntries.map(sub => `<div class="bb-timeline-sub">· ${escapeHtml(sub.description || '')}</div>`).join('')}
+        </div>` : ''}
         <div style="display:flex;align-items:center;font-size:0.75em;opacity:0.5;gap:12px;">
             ${storyTimeHTML}
             ${sourceFloorHTML}
@@ -357,6 +360,24 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = String(text || '');
     return div.innerHTML;
+}
+
+// v8.0.0 子条目辅助函数
+function generateSubEntryId() {
+    return 'sub_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+}
+
+function addSubEntryRow(container, description, id) {
+    const row = document.createElement('div');
+    row.className = 'bb-subentry-row';
+    row.dataset.subId = id || '';
+    row.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:4px;';
+    row.innerHTML = `
+        <input class="text_pole bb-subentry-desc" placeholder="子条目描述..." value="${escapeHtml(description || '')}" style="flex:1;" />
+        <button type="button" class="menu_button bb-subentry-remove" title="删除子条目" style="font-size:0.75em;padding:4px 6px;opacity:0.5;flex-shrink:0;"><i class="fa-solid fa-times"></i></button>
+    `;
+    row.querySelector('.bb-subentry-remove').addEventListener('click', () => row.remove());
+    container.appendChild(row);
 }
 
 // ═══ 事件绑定 ═══
@@ -943,6 +964,9 @@ function buildPillarFormFields_inner(p) {
             <label style="font-size:0.85em;">事件描述</label><textarea class="text_pole bb-f-event" placeholder="事件内容..." rows="3" style="width:100%;margin-bottom:8px;"></textarea>
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">参与者</label><input class="text_pole bb-f-participants" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">地点</label><input class="text_pole bb-f-location" placeholder="事件地点" style="width:100%;margin-bottom:8px;" /></div></div>
             <label style="font-size:0.85em;">影响</label><input class="text_pole bb-f-impact" placeholder="对剧情的影响" style="width:100%;margin-bottom:8px;" />
+            <label style="font-size:0.85em;">子条目</label>
+            <div class="bb-subentries-container" style="margin-bottom:8px;"></div>
+            <button type="button" class="menu_button bb-subentry-add" style="font-size:0.8em;width:100%;margin-bottom:8px;"><i class="fa-solid fa-plus"></i> 添加子条目</button>
             <label style="font-size:0.85em;">标签</label><input class="text_pole bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
         case 'mem': default: return `
             <label style="font-size:0.85em;">标题 <span style="color:#f44336;">*</span></label><input class="text_pole bb-f-title" placeholder="记忆标题（3-8字）" style="width:100%;margin-bottom:8px;" />
@@ -975,15 +999,23 @@ function collectFormData(formEl, pillar) {
             keepPermanent: formEl.querySelector('.bb-f-keepPermanent')?.checked || false,
             tags, source: 'manual',
         };
-        case 'timeline': return {
-            title: g('bb-f-title'), storyTime: g('bb-f-storyTime'),
-            status: formEl.querySelector('.bb-f-status')?.value || 'ongoing',
-            event: g('bb-f-event'), content: g('bb-f-event'),
-            participants: g('bb-f-participants').split(/[,，]/).map(s => s.trim()).filter(Boolean),
-            location: g('bb-f-location'), impact: g('bb-f-impact'),
-            isActive: (formEl.querySelector('.bb-f-status')?.value || 'ongoing') === 'ongoing',
-            tags, source: 'manual',
-        };
+        case 'timeline': {
+            const subs = [];
+            formEl.querySelectorAll('.bb-subentry-row').forEach(row => {
+                const desc = row.querySelector('.bb-subentry-desc')?.value?.trim();
+                const id = row.dataset.subId || '';
+                if (desc) subs.push({ id: id || generateSubEntryId(), description: desc, createdAt: Date.now() });
+            });
+            return {
+                title: g('bb-f-title'), storyTime: g('bb-f-storyTime'),
+                status: formEl.querySelector('.bb-f-status')?.value || 'ongoing',
+                event: g('bb-f-event'), content: g('bb-f-event'),
+                participants: g('bb-f-participants').split(/[,，]/).map(s => s.trim()).filter(Boolean),
+                location: g('bb-f-location'), impact: g('bb-f-impact'),
+                isActive: (formEl.querySelector('.bb-f-status')?.value || 'ongoing') === 'ongoing',
+                subEntries: subs, tags, source: 'manual',
+            };
+        }
         case 'mem': default: return {
             title: g('bb-f-title'), type: formEl.querySelector('.bb-f-type')?.value || 'event',
             content: g('bb-f-content'), summary: g('bb-f-summary'), verbatim: g('bb-f-verbatim'),
@@ -1088,6 +1120,15 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
                     setVal('bb-f-location', prefill.location);
                     setVal('bb-f-impact', prefill.impact);
                     setVal('bb-f-tags', tagsStr);
+                    // v8.0.0 预填子条目
+                    if (Array.isArray(prefill.subEntries)) {
+                        const container = formOverlay.querySelector('.bb-subentries-container');
+                        if (container) {
+                            prefill.subEntries.forEach(sub => {
+                                addSubEntryRow(container, sub.description || '', sub.id);
+                            });
+                        }
+                    }
                     break;
                 case 'mem':
                     setVal('bb-f-title', prefill.title);
@@ -1136,6 +1177,12 @@ function bindFormEvents_inner(formOverlay, chatId, pillar, editInfo) {
         if (val) val.textContent = this.value;
     });
 
+    // v8.0.0 子条目添加按钮
+    formOverlay.querySelector('.bb-subentry-add')?.addEventListener('click', () => {
+        const container = formOverlay.querySelector('.bb-subentries-container');
+        if (container) addSubEntryRow(container, '');
+    });
+
     formOverlay.querySelector('.bb-form-save')?.addEventListener('click', async () => {
         const btn = formOverlay.querySelector('.bb-form-save');
         const origHTML = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 保存中...';
@@ -1173,7 +1220,7 @@ function bindFormEvents_inner(formOverlay, chatId, pillar, editInfo) {
 
 // ═══ 存档标签页 ═══
 
-async function renderSlotsPanel(overlay, chatId) {
+async function renderSlotsPanel(overlay, chatId, cachedData = null) {
     const slotsEl = overlay.querySelector('#bb_mgr_slots');
     if (!slotsEl) return;
 
@@ -1185,10 +1232,11 @@ async function renderSlotsPanel(overlay, chatId) {
 
     try {
         const slots = await listSlots(charId);
-        const [npc, items, timeline, memories] = await Promise.all([
-            getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
-        ]);
-        const totalCount = npc.length + items.length + timeline.length + memories.length;
+        const [npc, items, timeline, memories] = cachedData
+            ? [cachedData.npc || [], cachedData.items || [], cachedData.timeline || [], cachedData.memories || []]
+            : await Promise.all([
+                getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+            ]);
 
         // Sort slots
         const sortMode = slotsEl.dataset.slotSort || 'name_asc';
@@ -1217,7 +1265,7 @@ async function renderSlotsPanel(overlay, chatId) {
         slotsEl.innerHTML = `
             <div class="bb-slots-info">
                 <i class="fa-solid fa-circle-info"></i>
-                当前聊天 <strong>${totalCount}</strong> 条数据 · 角色ID: ${escapeHtml(charId)}
+                记忆 <strong>${memories.length}</strong> 条 · NPC ${npc.length} / 物品 ${items.length} / 时间线 ${timeline.length} · 角色ID: ${escapeHtml(charId)}
             </div>
 
             <div class="bb-slots-create" style="margin-bottom:10px;">
@@ -1288,11 +1336,11 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
         btn.addEventListener('click', async () => {
             const slotName = btn.dataset.slot;
             try {
-                const count = await saveToSlot(charId, chatId, slotName);
-                showToast(`已保存 ${count} 条到「${slotName}」`, 'success');
+                const result = await saveToSlot(charId, chatId, slotName);
+                showToast(`已保存 ${result.count} 条到「${slotName}」`, 'success');
                 updateSettings({ currentSlotName: slotName });
-                await renderSlotsPanel(overlay, chatId);
-                updateCurrentSlotBar(overlay, chatId);
+                await renderSlotsPanel(overlay, chatId, result.data);
+                updateCurrentSlotBar(overlay, chatId, result.data);
             } catch (err) { showToast(`保存失败: ${err.message}`, 'error'); }
         });
     });
@@ -1303,13 +1351,14 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
             const ok = confirm(`确定从「${slotName}」加载吗？当前数据将被覆盖！`);
             if (!ok) return;
             try {
-                const count = await loadFromSlot(charId, chatId, slotName);
-                showToast(`已从「${slotName}」加载 ${count} 条`, 'success');
+                const result = await loadFromSlot(charId, chatId, slotName);
+                showToast(`已从「${slotName}」加载 ${result.count} 条`, 'success');
                 updateSettings({ currentSlotName: slotName });
-                await renderSlotsPanel(overlay, chatId);
-                updateCurrentSlotBar(overlay, chatId);
-                await rerenderManagerList(overlay, chatId);
-                // v7.5.0 清除面板缓存，强制下次切换时重新加载
+                // v8.0.0 传入缓存数据，避免重复读 localforage
+                await renderSlotsPanel(overlay, chatId, result.data);
+                updateCurrentSlotBar(overlay, chatId, result.data);
+                await rerenderManagerList(overlay, chatId, result.data);
+                // 清除面板缓存，强制下次切换时重新加载
                 const dashContent = overlay.querySelector('#bb_dashboard_content');
                 if (dashContent) dashContent.innerHTML = '<div class="bb-mem-empty"><i class="fa-solid fa-spinner fa-spin"></i> 加载中...</div>';
                 const threadContent = overlay.querySelector('#bb_thread_panel_content');
@@ -1499,20 +1548,21 @@ async function renderDashboardPanel(overlay, chatId) {
 
 // ═══ 工具函数 ═══
 
-async function updateCurrentSlotBar(overlay, chatId) {
+async function updateCurrentSlotBar(overlay, chatId, cachedData = null) {
     const nameEl = overlay.querySelector('#bb_current_slot_name');
     const countEl = overlay.querySelector('#bb_current_slot_count');
     if (!nameEl && !countEl) return;
 
-    const [npc, items, timeline, memories] = await Promise.all([
-        getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
-    ]);
-    const totalCount = npc.length + items.length + timeline.length + memories.length;
+    const [npc, items, timeline, memories] = cachedData
+        ? [cachedData.npc || [], cachedData.items || [], cachedData.timeline || [], cachedData.memories || []]
+        : await Promise.all([
+            getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+        ]);
     const settings = getSettings();
     const currentSlot = settings.currentSlotName || 'default';
 
     if (nameEl) nameEl.textContent = currentSlot;
-    if (countEl) countEl.textContent = String(totalCount);
+    if (countEl) countEl.textContent = String(memories.length);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2052,10 +2102,12 @@ function showThreadEntryEditForm(overlay, chatId, thread, entryIdx) {
     });
 }
 
-async function rerenderManagerList(overlay, chatId) {
-    const [npc, items, timeline, memories] = await Promise.all([
-        getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
-    ]);
+async function rerenderManagerList(overlay, chatId, cachedData = null) {
+    const [npc, items, timeline, memories] = cachedData
+        ? [cachedData.npc || [], cachedData.items || [], cachedData.timeline || [], cachedData.memories || []]
+        : await Promise.all([
+            getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+        ]);
 
     let allEntries = [
         ...npc.map(e => ({ ...e, _pillar: 'npc' })),
@@ -2087,10 +2139,9 @@ async function rerenderManagerList(overlay, chatId) {
         return sortMode.endsWith('asc') ? aTime - bTime : bTime - aTime;
     });
 
-    const totalCount = npc.length + items.length + timeline.length + memories.length;
     const statsEl = overlay.querySelector('.bb-mem-stats');
     if (statsEl) {
-        statsEl.innerHTML = `共 <strong>${totalCount}</strong> 条（NPC ${npc.length} / 物品 ${items.length} / 时间线 ${timeline.length} / 记忆 ${memories.length}）`;
+        statsEl.innerHTML = `<strong>${memories.length}</strong> 条记忆 · NPC ${npc.length} / 物品 ${items.length} / 时间线 ${timeline.length}`;
     }
 
     const listEl = overlay.querySelector('#bb_mgr_list');

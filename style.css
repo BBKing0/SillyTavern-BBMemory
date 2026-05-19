@@ -2395,6 +2395,12 @@
     to { opacity: 1; max-height: 300px; }
 }
 
+/* v8.0.0 顶部通知动画 */
+@keyframes bbNotifIn {
+    from { opacity: 0; transform: translateY(-16px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
 .bb-hit-detail-card {
     padding: 8px 10px;
     border-radius: 6px;
@@ -2926,6 +2932,20 @@
     font-size: 0.9em;
     color: var(--SmartThemeEmColor, #888);
     user-select: none;
+}
+
+/* v8.0.0 时间线子条目 */
+.bb-timeline-subs {
+    margin: 4px 0 0 0;
+    padding-left: 12px;
+    border-left: 2px solid var(--SmartThemeBorderColor, #444);
+}
+
+.bb-timeline-sub {
+    font-size: 0.82em;
+    opacity: 0.75;
+    padding: 2px 0;
+    color: var(--SmartThemeTextColor, #ddd);
 }
 
 /* 故事时间在浏览列表中的显示 */

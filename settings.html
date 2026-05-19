@@ -97,8 +97,23 @@
                 <div class="bb-settings-section-body">
 
                     <div class="bb-mem-sidebar-section">
-                        <label for="bb_max_results">最大检索数</label>
+                        <label for="bb_max_results">最大检索数（仅记忆条目）</label>
                         <input id="bb_max_results" type="number" class="text_pole" min="1" max="30" value="10" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_npc_injection_max">NPC 注入上限</label>
+                        <input id="bb_npc_injection_max" type="number" class="text_pole" min="1" max="30" value="8" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_item_injection_max">物品注入上限</label>
+                        <input id="bb_item_injection_max" type="number" class="text_pole" min="1" max="20" value="5" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_timeline_ended_max">时间线已结束事件上限</label>
+                        <input id="bb_timeline_ended_max" type="number" class="text_pole" min="1" max="15" value="3" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
@@ -255,6 +270,12 @@
                         <input id="bb_context_window" type="number" class="text_pole" min="1" max="20" value="3" />
                     </div>
                     <div class="bb-mem-hint">保留最近N个AI回复在上下文中，超出窗口的将被提取并隐藏。</div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_batch_extraction">并行提取数</label>
+                        <input id="bb_batch_extraction" type="number" class="text_pole" min="1" max="5" value="2" />
+                    </div>
+                    <div class="bb-mem-hint">同时发送的API请求数，每个exchange独立调用（增大可提速，默认2）。</div>
 
                     <div id="bb_memory_custom_api_section">
                         <div class="bb-mem-sidebar-section">

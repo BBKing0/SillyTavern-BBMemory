@@ -138,6 +138,32 @@ async function mergeRemoteSlots(charId, localSlots) {
     return result;
 }
 
+/**
+ * v8.0.0 从 chatMetadata 主动同步远端槽数据到本地 localforage
+ * 解决跨设备登录后槽数据不互通的问题
+ */
+export async function syncSlotsFromRemote(charId) {
+    if (!charId) return 0;
+    const fp = getCharFingerprint();
+    if (!fp) return 0;
+    const remote = getRemoteSlotsData();
+    const rSlots = remote[fp] || {};
+    let synced = 0;
+    const lf = getLocalForage();
+    for (const [name, data] of Object.entries(rSlots)) {
+        if (!data || typeof data !== 'object') continue;
+        const key = slotKey(charId, name);
+        try {
+            const existing = await lf.getItem(key);
+            if (existing === null || existing === undefined) {
+                await lf.setItem(key, data);
+                synced++;
+            }
+        } catch { /* ignore */ }
+    }
+    return synced;
+}
+
 // ═══ 槽列表 ═══
 
 /**
@@ -209,7 +235,7 @@ export async function saveToSlot(charId, chatId, slotName) {
     const slots = await listSlots(charId);
     await updateSlotIndex(charId, slots);
 
-    return totalCount(data);
+    return { count: totalCount(data), data };
 }
 
 /**
@@ -262,7 +288,7 @@ export async function loadFromSlot(charId, chatId, slotName) {
 
     await writeAllPillarData(chatId, data);
 
-    return totalCount(data);
+    return { count: totalCount(data), data };
 }
 
 /**

@@ -18,7 +18,7 @@ import {
 } from './entity-tiers.js';
 import {
     getNpcProfiles, getItems, getTimeline, getMemories,
-    getTimelineThreads, isArchived,
+    getTimelineThreads, isArchived, getSettings,
 } from './memory-store.js';
 
 // ═══════════════════════════════════════════════════════════
@@ -240,7 +240,7 @@ export function getNpcForInjection(npcProfiles, queryText) {
     // 排序：tier 优先
     const tierOrder = { core: 0, important: 1, minor: 2, background: 3 };
     result.sort((a, b) => (tierOrder[a.npcTier] || 2) - (tierOrder[b.npcTier] || 2));
-    return result.slice(0, 8);
+    return result.slice(0, getSettings().npcInjectionMax ?? 8);
 }
 
 /**
@@ -258,7 +258,7 @@ export function getItemsForInjection(items, queryText) {
     }
     const tierOrder = { key: 0, equipped: 1, clue: 2, consumable: 3, background: 4 };
     result.sort((a, b) => (tierOrder[a.itemTier] || 3) - (tierOrder[b.itemTier] || 3));
-    return result.slice(0, 5);
+    return result.slice(0, getSettings().itemInjectionMax ?? 5);
 }
 
 /**
@@ -270,7 +270,7 @@ export function getTimelineForInjection(timeline) {
     const ended = active
         .filter(t => !t.isActive || t.status === 'ended')
         .sort((a, b) => (b.storyTimeSort ?? b.updatedAt ?? 0) - (a.storyTimeSort ?? a.updatedAt ?? 0))
-        .slice(0, 3);
+        .slice(0, getSettings().timelineEndedMax ?? 3);
     const foreshadow = active.filter(t => t.status === 'foreshadow');
     return { ongoing, ended, foreshadow };
 }

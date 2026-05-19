@@ -262,9 +262,10 @@ function getExtensionFolder() {
 function promptFloorRange() {
     return new Promise((resolve) => {
         const overlay = document.createElement('div');
-        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;';
+        overlay.className = 'bb-floor-select-overlay';
         const dialog = document.createElement('div');
-        dialog.style.cssText = 'background:var(--SmartThemeBlurTintColor,#1a1a2e);border:1px solid var(--SmartThemeBorderColor,#444);border-radius:12px;padding:20px 24px;min-width:280px;max-width:360px;box-shadow:0 8px 32px rgba(0,0,0,0.4);';
+        dialog.className = 'bb-mem-form-popup';
+        dialog.style.cssText = 'min-width:280px;max-width:360px;';
         dialog.innerHTML = `
             <div style="font-size:1.1em;font-weight:bold;margin-bottom:12px;color:var(--SmartThemeTextColor,#ddd);">
                 <i class="fa-solid fa-layer-group"></i> 手动提取 — 选择楼层范围
@@ -396,6 +397,40 @@ function showToast(msg, type = 'info') {
     } catch { /* ignore */ }
 }
 
+// v8.0.0 顶部浮动通知（比 toastr 更显眼，用于重要操作反馈）
+function showTopNotification(msg, type = 'info') {
+    // 先尝试 toastr
+    try {
+        const ctx = SillyTavern.getContext();
+        if (typeof ctx.toastr?.[type] === 'function') {
+            ctx.toastr[type](msg, '', { timeOut: 3500 });
+        }
+    } catch { /* ignore */ }
+
+    // 创建顶部浮动通知
+    let container = document.getElementById('bb_notification_container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'bb_notification_container';
+        container.style.cssText = 'position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:999999;display:flex;flex-direction:column;gap:8px;max-width:400px;width:90%;pointer-events:none;';
+        document.body.appendChild(container);
+    }
+
+    const colors = { success: '#4caf50', error: '#f44336', info: '#2196f3', warning: '#ff9800' };
+    const notif = document.createElement('div');
+    notif.style.cssText = `background:${colors[type] || colors.info};color:#fff;padding:12px 18px;border-radius:8px;font-size:0.92em;box-shadow:0 4px 16px rgba(0,0,0,0.35);animation:bbNotifIn 0.35s ease;text-align:center;pointer-events:auto;font-weight:500;`;
+    notif.textContent = msg;
+
+    container.appendChild(notif);
+
+    setTimeout(() => {
+        notif.style.opacity = '0';
+        notif.style.transform = 'translateY(-10px)';
+        notif.style.transition = 'opacity 0.3s, transform 0.3s';
+        setTimeout(() => { notif.remove(); }, 300);
+    }, 3500);
+}
+
 // ═══════════════════════════════════════════════════════════
 //  设置面板绑定
 // ═══════════════════════════════════════════════════════════
@@ -512,8 +547,12 @@ function bindSidebarEvents() {
 
     // 数字/文本输入
     bindInput('#bb_context_window', 'contextWindowExchanges', 'number');
+    bindInput('#bb_batch_extraction', 'batchExtractionCount', 'number');
     bindInput('#bb_token_budget', 'tokenBudget', 'number');
     bindInput('#bb_max_results', 'maxResults', 'number');
+    bindInput('#bb_npc_injection_max', 'npcInjectionMax', 'number');
+    bindInput('#bb_item_injection_max', 'itemInjectionMax', 'number');
+    bindInput('#bb_timeline_ended_max', 'timelineEndedMax', 'number');
     bindInput('#bb_maintenance_mem_threshold', 'maintenanceMemThreshold', 'number');
     bindInput('#bb_maintenance_npc_threshold', 'maintenanceNpcThreshold', 'number');
     bindInput('#bb_maintenance_item_threshold', 'maintenanceItemThreshold', 'number');
@@ -1303,6 +1342,15 @@ async function onChatChanged() {
                 if (result.restored > 0 && settings.debugLogging) {
                     console.log(`[BB-Memory] 自动恢复: ${result.restored} 条`);
                 }
+                // v8.0.0 同步远端槽数据到本地
+                const charId = getCharacterId();
+                if (charId) {
+                    const { syncSlotsFromRemote } = await import('./memory-slots.js');
+                    const synced = await syncSlotsFromRemote(charId);
+                    if (synced > 0 && settings.debugLogging) {
+                        console.log(`[BB-Memory] 从云端同步了 ${synced} 个存档槽`);
+                    }
+                }
             } catch { /* ignore */ }
         }, 5000);
     }
@@ -1680,14 +1728,14 @@ async function handleFloatingMenuAction(action) {
             if (!chatId) return;
             try {
                 const charId = getCharacterId();
-                if (!charId) { showToast('无法获取角色ID', 'error'); break; }
+                if (!charId) { showTopNotification('无法获取角色ID', 'error'); break; }
                 const slotName = getSettings().currentSlotName || 'default';
-                const count = await saveToSlot(charId, chatId, slotName);
-                showToast(`已保存 ${count} 条到「${slotName}」`, 'success');
-                // 刷新悬浮窗存档信息
+                const result = await saveToSlot(charId, chatId, slotName);
+                const count = typeof result === 'object' ? result.count : result;
+                showTopNotification(`已保存 ${count} 条到「${slotName}」`, 'success');
                 setTimeout(() => refreshFloatingHubData(), 300);
             } catch (e) {
-                showToast(`快速保存失败: ${e.message}`, 'error');
+                showTopNotification(`快速保存失败: ${e.message}`, 'error');
             }
             break;
         }
@@ -1920,9 +1968,8 @@ function refreshSidebar() {
         if (!chatId) return;
         try {
             const stats = await getMemoryStats(chatId);
-            const total = stats.npc.total + stats.items.total + stats.timeline.total + stats.memories.total;
             const el = document.querySelector('#bb_memory_count');
-            if (el) el.textContent = total;
+            if (el) el.textContent = stats.memories.total;
         } catch { /* ignore */ }
     };
     updateCount();
