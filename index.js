@@ -606,6 +606,13 @@ function bindSidebarEvents() {
     bindInput('#bb_health_check_stale_days', 'healthCheckStaleDays', 'number');
     bindInput('#bb_health_check_stale_hit_threshold', 'healthCheckStaleHitThreshold', 'number');
     bindInput('#bb_injection_template', 'injectionTemplate', 'string');
+    // API 配置字段绑定
+    bindInput('#bb_auto_gen_endpoint', 'autoGenEndpoint', 'string');
+    bindInput('#bb_auto_gen_api_key', 'autoGenApiKey', 'string');
+    bindInput('#bb_auto_gen_model', 'autoGenModel', 'string');
+    bindInput('#bb_embedding_endpoint', 'embeddingEndpoint', 'string');
+    bindInput('#bb_embedding_api_key', 'embeddingApiKey', 'string');
+    bindInput('#bb_embedding_model', 'embeddingModel', 'string');
     // v7.8.0 日历描述改为 per-chat 存储
     const calTextarea = document.querySelector('#bb_calendar_description');
     if (calTextarea) {
