@@ -175,7 +175,13 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     // 11. 存储命中追踪
     lastRetrievalResult = {
         chatId, timestamp: Date.now(),
-        hits: merged.map(r => ({ id: r.memory.id, title: r.memory.title, type: r.memory.type, score: r.score, level: r.level })),
+        hits: merged.map(r => ({ id: r.memory.id, title: r.memory.title, type: r.memory.type, score: r.score, level: r.level, cognitiveType: r.memory.cognitiveType })),
+        npcHits: npcForInjection.map(n => ({ id: n.id, name: n.name, npcTier: n.npcTier })),
+        itemHits: itemsForInjection.map(i => ({ id: i.id, name: i.name, itemTier: i.itemTier })),
+        timelineHits: {
+            ongoing: tlForInjection.ongoing.map(t => ({ id: t.id, title: t.title, status: t.status })),
+            ended: tlForInjection.ended.map(t => ({ id: t.id, title: t.title, status: t.status })),
+        },
         stats,
     };
     // 同步侧边栏命中列表
@@ -430,6 +436,43 @@ function showTopNotification(msg, type = 'info') {
         setTimeout(() => { notif.remove(); }, 300);
     }, 3500);
 }
+
+// v8.1.0 错误弹窗（提取/向量化失败时显示详细信息）
+function showErrorPopup(title, message, details = '') {
+    // 同时 toast
+    try {
+        const ctx = SillyTavern.getContext();
+        if (typeof ctx.toastr?.error === 'function') {
+            ctx.toastr.error(title + ': ' + message, '', { timeOut: 5000 });
+        }
+    } catch { /* ignore */ }
+
+    // 弹窗
+    const overlay = document.createElement('div');
+    overlay.className = 'bb-error-popup-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:1000002;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;padding:20px;';
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = 'background:var(--SmartThemeChatTintColor,#1e1e2e);color:var(--SmartThemeBodyColor,#e0e0e0);border:1px solid #f44336;border-radius:12px;padding:20px 22px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(244,67,54,0.2);';
+    dialog.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+            <i class="fa-solid fa-circle-exclamation" style="color:#f44336;font-size:1.3em;"></i>
+            <span style="font-weight:bold;font-size:1.05em;color:#f44336;">${escapeHtml(title)}</span>
+        </div>
+        <div style="font-size:0.9em;margin-bottom:6px;color:var(--SmartThemeBodyColor,#ddd);">${escapeHtml(message)}</div>
+        ${details ? `<div style="font-size:0.78em;opacity:0.6;margin-bottom:6px;word-break:break-all;max-height:80px;overflow-y:auto;background:rgba(0,0,0,0.2);padding:8px;border-radius:6px;">${escapeHtml(details)}</div>` : ''}
+        <div style="font-size:0.75em;opacity:0.4;margin-bottom:12px;">请检查相关 API 配置后重试</div>
+        <button class="menu_button" style="width:100%;">关闭</button>
+    `;
+    dialog.querySelector('button').addEventListener('click', () => overlay.remove());
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+}
+
+// 全局暴露，供 auto-generator.js 调用
+globalThis.bbShowErrorPopup = showErrorPopup;
 
 // ═══════════════════════════════════════════════════════════
 //  设置面板绑定
@@ -1393,30 +1436,7 @@ async function renderHubHitList(listEl, chatId) {
         return;
     }
 
-    let html = result.hits.map(h => renderHubHitItem(h, typeIcons, levelColors, false)).join('');
-
-    // 追加概率最高但未命中的 5 条记忆
-    try {
-        const allMemories = await getMemories(chatId);
-        const hitIds = new Set(result.hits.map(h => h.id));
-        const nonHitMemories = allMemories.filter(m => !hitIds.has(m.id));
-        nonHitMemories.sort((a, b) => (b.strength || 0) * (b.importance || 0) - (a.strength || 0) * (a.importance || 0));
-        const top5 = nonHitMemories.slice(0, 5);
-        if (top5.length > 0) {
-            html += '<div class="bb-hub-hit-item" style="opacity:0.4;justify-content:center;font-size:0.7em;border-top:1px solid var(--SmartThemeBorderColor,#444);margin-top:2px;padding-top:4px;">— 未命中高分记忆 —</div>';
-            html += top5.map(m => renderHubHitItem({
-                id: m.id,
-                title: m.title || (m.content || '').slice(0, 30),
-                cognitiveType: m.cognitiveType || 'fact',
-                score: (m.strength || 0) * (m.importance || 0),
-                level: m.resident ? 'L4' : 'L1',
-            }, typeIcons, levelColors, true)).join('');
-        }
-    } catch (e) {
-        // 获取全量记忆失败时忽略
-    }
-
-    listEl.innerHTML = html;
+    listEl.innerHTML = result.hits.map(h => renderHubHitItem(h, typeIcons, levelColors, false)).join('');
 }
 
 function injectFloatingHub() {
@@ -1982,7 +2002,14 @@ function updateSidebarHitList() {
     const tsEl = document.getElementById('bb_hit_timestamp');
     if (!listEl) return;
 
-    if (!result || !result.hits || !result.hits.length) {
+    const hasAny = result && (
+        (result.hits && result.hits.length) ||
+        (result.npcHits && result.npcHits.length) ||
+        (result.itemHits && result.itemHits.length) ||
+        (result.timelineHits && (result.timelineHits.ongoing.length + result.timelineHits.ended.length))
+    );
+
+    if (!hasAny) {
         listEl.innerHTML = '<div style="opacity:0.4;text-align:center;font-size:0.8em;">暂无命中</div>';
         return;
     }
@@ -1994,21 +2021,73 @@ function updateSidebarHitList() {
 
     const typeIcons = { fact: 'fa-lightbulb', episode: 'fa-film', emotion: 'fa-heart', habit: 'fa-repeat' };
     const levelColors = { L4: '#ce93d8', L3: '#4fc3f7', L2: '#ffb74d', L1: '#9e9e9e' };
+    const tierColors = { core: '#ce93d8', important: '#4fc3f7', minor: '#ffb74d', background: '#9e9e9e', key: '#ce93d8', equipped: '#4fc3f7', clue: '#ffb74d', consumable: '#9e9e9e' };
 
-    listEl.innerHTML = result.hits.map(h => {
-        const icon = typeIcons[h.cognitiveType] || 'fa-circle';
-        const color = levelColors[h.level] || '#888';
-        const scorePct = Math.round(h.score * 100);
-        const shortTitle = (h.title || '').length > 18
-            ? escapeHtml(h.title.slice(0, 18)) + '...'
-            : escapeHtml(h.title);
-        return `<div class="bb-hub-hit-item" title="${escapeHtml(h.title)}" style="cursor:default;">
-            <i class="fa-solid ${icon}" style="color:${color};font-size:0.7em;"></i>
-            <span class="bb-hub-hit-title">${shortTitle}</span>
-            <span class="bb-hub-hit-level" style="color:${color}">${h.level}</span>
-            <span class="bb-hub-hit-score">${scorePct}%</span>
-        </div>`;
-    }).join('');
+    let html = '';
+
+    // NPC 命中
+    if (result.npcHits && result.npcHits.length) {
+        html += '<div class="bb-hit-section-label"><i class="fa-solid fa-user"></i> NPC</div>';
+        html += result.npcHits.map(n => {
+            const color = tierColors[n.npcTier] || '#888';
+            return `<div class="bb-hub-hit-item" title="${escapeHtml(n.name)}" style="cursor:default;">
+                <i class="fa-solid fa-user" style="color:${color};font-size:0.7em;"></i>
+                <span class="bb-hub-hit-title">${escapeHtml(n.name)}</span>
+                <span class="bb-hub-hit-level" style="color:${color}">${n.npcTier || ''}</span>
+            </div>`;
+        }).join('');
+    }
+
+    // 物品命中
+    if (result.itemHits && result.itemHits.length) {
+        html += '<div class="bb-hit-section-label"><i class="fa-solid fa-box"></i> 物品</div>';
+        html += result.itemHits.map(i => {
+            const color = tierColors[i.itemTier] || '#888';
+            return `<div class="bb-hub-hit-item" title="${escapeHtml(i.name)}" style="cursor:default;">
+                <i class="fa-solid fa-box" style="color:${color};font-size:0.7em;"></i>
+                <span class="bb-hub-hit-title">${escapeHtml(i.name)}</span>
+                <span class="bb-hub-hit-level" style="color:${color}">${i.itemTier || ''}</span>
+            </div>`;
+        }).join('');
+    }
+
+    // 时间线命中
+    if (result.timelineHits) {
+        const tlAll = [...(result.timelineHits.ongoing || []), ...(result.timelineHits.ended || [])];
+        if (tlAll.length) {
+            html += '<div class="bb-hit-section-label"><i class="fa-solid fa-timeline"></i> 时间线</div>';
+            html += tlAll.map(t => {
+                const isOngoing = t.status === 'ongoing';
+                const color = isOngoing ? '#4fc3f7' : '#9e9e9e';
+                return `<div class="bb-hub-hit-item" title="${escapeHtml(t.title)}" style="cursor:default;">
+                    <i class="fa-solid ${isOngoing ? 'fa-play' : 'fa-check'}" style="color:${color};font-size:0.7em;"></i>
+                    <span class="bb-hub-hit-title">${escapeHtml((t.title || '').length > 18 ? t.title.slice(0, 18) + '...' : (t.title || ''))}</span>
+                    <span class="bb-hub-hit-level" style="color:${color}">${isOngoing ? '进行中' : '已结束'}</span>
+                </div>`;
+            }).join('');
+        }
+    }
+
+    // 记忆命中
+    if (result.hits && result.hits.length) {
+        html += '<div class="bb-hit-section-label"><i class="fa-solid fa-brain"></i> 记忆</div>';
+        html += result.hits.map(h => {
+            const icon = typeIcons[h.cognitiveType] || 'fa-circle';
+            const color = levelColors[h.level] || '#888';
+            const scorePct = Math.round(h.score * 100);
+            const shortTitle = (h.title || '').length > 18
+                ? escapeHtml(h.title.slice(0, 18)) + '...'
+                : escapeHtml(h.title);
+            return `<div class="bb-hub-hit-item" title="${escapeHtml(h.title)}" style="cursor:default;">
+                <i class="fa-solid ${icon}" style="color:${color};font-size:0.7em;"></i>
+                <span class="bb-hub-hit-title">${shortTitle}</span>
+                <span class="bb-hub-hit-level" style="color:${color}">${h.level}</span>
+                <span class="bb-hub-hit-score">${scorePct}%</span>
+            </div>`;
+        }).join('');
+    }
+
+    listEl.innerHTML = html;
 }
 
 // ═══════════════════════════════════════════════════════════

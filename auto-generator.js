@@ -538,6 +538,7 @@ export async function callEmbeddingApi(text, timeoutMs = 10000) {
 
 // ═══ Embedding 生成 ═══
 
+let _lastEmbeddingErrorTime = 0;
 async function embedMemoryEntry(mem) {
     const text = mem.summary || mem.content?.slice(0, 100) || '';
     if (!text) return null;
@@ -545,6 +546,12 @@ async function embedMemoryEntry(mem) {
         return await callEmbeddingApi(text, 8000);
     } catch (e) {
         console.warn('[BB-Memory] 向量化失败:', e.message);
+        // 30s 内仅弹窗一次，避免批量向量化时刷屏
+        const now = Date.now();
+        if (typeof globalThis.bbShowErrorPopup === 'function' && (now - _lastEmbeddingErrorTime > 30000)) {
+            _lastEmbeddingErrorTime = now;
+            globalThis.bbShowErrorPopup('向量化失败', e.message || '未知错误', '端点: ' + (getSettings().embeddingEndpoint || '未配置'));
+        }
         return null;
     }
 }
@@ -1194,6 +1201,9 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
     } catch (e) {
         console.warn('[BB-Memory] 合并提取失败:', e.message);
         reportProgress('merged', 5, 5, '提取失败: ' + (e.message || '未知错误'));
+        if (typeof globalThis.bbShowErrorPopup === 'function') {
+            globalThis.bbShowErrorPopup('AI 提取失败', e.message || '未知错误', '端点: ' + (getSettings().autoGenMode === 'custom' ? (getSettings().autoGenEndpoint || '未配置') : '主 API'));
+        }
         return 0;
     }
 }
@@ -1352,7 +1362,12 @@ export async function extractFromContext(chatId, contextText, options = {}) {
             await addMemory(chatId, { ...mem, embedding, memoryTier: 'stable', ...(sourceInfo || {}) });
             results.memories++;
         }
-    } catch (e) { console.warn('[BB-Memory] 合并提取失败:', e.message); }
+    } catch (e) {
+        console.warn('[BB-Memory] 合并提取失败:', e.message);
+        if (typeof globalThis.bbShowErrorPopup === 'function') {
+            globalThis.bbShowErrorPopup('AI 提取失败', e.message || '未知错误', '端点: ' + (getSettings().autoGenMode === 'custom' ? (getSettings().autoGenEndpoint || '未配置') : '主 API'));
+        }
+    }
 
     return results;
 }

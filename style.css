@@ -1483,10 +1483,12 @@
         grid-template-columns: repeat(2, 1fr);
     }
 
-    /* 添加/编辑记忆表单 */
-    .bb-mem-form-overlay {
+    /* 添加/编辑记忆表单 & 楼层选择弹窗 */
+    .bb-mem-form-overlay,
+    .bb-floor-select-overlay {
         padding: 0;
         align-items: flex-start;
+        overflow-y: auto;
     }
     .bb-mem-form-popup {
         width: 100%;
@@ -1563,9 +1565,15 @@
         max-height: 35vh;
     }
 
-    /* 侧边栏按钮 */
+    /* 侧边栏按钮 — 两列网格适配平板 */
     .bb-mem-sidebar-buttons {
-        flex-direction: column;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 4px;
+    }
+    .bb-mem-sidebar-buttons .menu_button {
+        font-size: 0.78em;
+        padding: 5px 8px;
     }
 }
 
@@ -2803,6 +2811,16 @@
 }
 .bb-floating-menu-action:active {
     background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.14));
+}
+
+/* 侧边栏命中分组标签 */
+.bb-hit-section-label {
+    font-size: 0.7em;
+    font-weight: bold;
+    opacity: 0.55;
+    padding: 6px 14px 2px 14px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
 }
 
 /* 浮窗命中记忆子列表 */
