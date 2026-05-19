@@ -184,6 +184,12 @@ export async function syncMessageVisibility(windowOverride) {
             msg._bbmem_hideSource = 'plugin';
             hiddenCount++;
             changed = true;
+        } else if (msg._bbmem_meta_marker && !msg.is_hidden) {
+            // 元标记消息超出窗口后自动隐藏（不提取）
+            msg.is_hidden = true;
+            msg._bbmem_hideSource = 'plugin';
+            hiddenCount++;
+            changed = true;
         } else if (!msg.is_hidden && !msg._bbmem_extracted && !msg._bbmem_pendingExtraction && !msg._bbmem_skipped) {
             msg._bbmem_pendingExtraction = true;
             hiddenCount++;
@@ -395,6 +401,21 @@ export function refreshExtractionMarkers() {
             contentEl.appendChild(metaBtn);
         }
 
+        // 元标记按钮点击事件
+        metaBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            msg._bbmem_meta_marker = !msg._bbmem_meta_marker;
+            if (!msg._bbmem_meta_marker) {
+                // 取消元标记：恢复消息为待提取状态
+                msg.is_hidden = false;
+                msg._bbmem_hideSource = undefined;
+                msg._bbmem_pendingExtraction = true;
+                msg._bbmem_extracted = false;
+            }
+            try { saveChat(); } catch {}
+            refreshExtractionMarkers();
+        });
+
         // ── 楼层操作按钮容器 ──
         const floorActions = document.createElement('span');
         floorActions.className = 'bb-floor-actions';
@@ -535,8 +556,8 @@ export function refreshExtractionMarkers() {
             markerTarget.appendChild(floorActions);
         }
 
-        // ── 隐藏已提取/元标记的消息（待提取的不隐藏）──
-        if (msg._bbmem_extracted || msg._bbmem_meta_marker) {
+        // ── 隐藏已提取的消息；元标记消息仅在离开窗口后才隐藏 ──
+        if (msg._bbmem_extracted || (msg._bbmem_meta_marker && msg.is_hidden)) {
             if (!block.classList.contains('bb-extracted-hidden')) {
                 block.classList.add('bb-extracted-hidden');
             }

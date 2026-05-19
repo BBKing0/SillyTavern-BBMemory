@@ -196,10 +196,10 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         }
     }
 
-    // 13. v4.4.3: 上下文隐藏 —— 清空已提取消息的 mes
+    // 13. v8.1.0: 上下文隐藏 —— 清空已提取/已隐藏元消息的 mes
     const hiddenBackups = [];
     for (const msg of chat) {
-        if (msg._bbmem_extracted) {
+        if (msg._bbmem_extracted || (msg._bbmem_meta_marker && msg.is_hidden)) {
             hiddenBackups.push({ msg, mes: msg.mes });
             msg.mes = '';
         }
@@ -706,13 +706,18 @@ function bindSidebarEvents() {
         }
         if (aiIdx === -1) { showToast('未找到 AI 消息', 'warning'); return; }
         chat[aiIdx]._bbmem_meta_marker = !chat[aiIdx]._bbmem_meta_marker;
+        if (!chat[aiIdx]._bbmem_meta_marker) {
+            // 取消元标记：恢复消息为待提取状态
+            chat[aiIdx].is_hidden = false;
+            chat[aiIdx]._bbmem_hideSource = undefined;
+            chat[aiIdx]._bbmem_pendingExtraction = true;
+            chat[aiIdx]._bbmem_extracted = false;
+        }
         try { ctx.saveChatDebounced(); } catch {}
         setTimeout(() => refreshExtractionMarkers(), 100);
         const label = chat[aiIdx]._bbmem_meta_marker ? '已标记为元指令（不提取）' : '已标记为可提取';
         showToast(label, 'info');
     });
-
-    // v5.9.5: 楼层可见（三态切换：隐藏 → 半透明 → 完全可见）
     document.querySelector('#bb_memory_toggle_vis_btn')?.addEventListener('click', () => {
         cycleExtractedVisibility();
     });
@@ -1718,6 +1723,13 @@ async function handleFloatingMenuAction(action) {
             }
             if (aiIdx === -1) { showToast('未找到 AI 消息', 'warning'); return; }
             chat[aiIdx]._bbmem_meta_marker = !chat[aiIdx]._bbmem_meta_marker;
+            if (!chat[aiIdx]._bbmem_meta_marker) {
+                // 取消元标记：恢复消息为待提取状态
+                chat[aiIdx].is_hidden = false;
+                chat[aiIdx]._bbmem_hideSource = undefined;
+                chat[aiIdx]._bbmem_pendingExtraction = true;
+                chat[aiIdx]._bbmem_extracted = false;
+            }
             try { ctx.saveChatDebounced(); } catch {}
             setTimeout(() => refreshExtractionMarkers(), 100);
             const label = chat[aiIdx]._bbmem_meta_marker ? '🤖 已标记为元指令（不提取）' : '🗃️ 已标记为可提取';
