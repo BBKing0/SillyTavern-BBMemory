@@ -83,6 +83,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // 自动备份
     autoBackupEnabled: false,
     lastBackupTimestamp: 0,
+    // v8.2.3 API 预设配置
+    apiProfiles: [],
+    activeApiProfile: '',
     // 存档槽
     currentSlotName: 'default',
     // 系统

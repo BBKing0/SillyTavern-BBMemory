@@ -105,7 +105,7 @@ function buildManagerHTML(npc, items, timeline, memories, chatId) {
                     <i class="fa-solid fa-plus"></i> 添加
                 </button>
                 <button class="menu_button bb-mem-toolbar-btn" id="bb_mgr_ai_extract">
-                    <i class="fa-solid fa-wand-magic-sparkles"></i> AI提取
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> 手动提取
                 </button>
             </div>
 
@@ -446,20 +446,27 @@ function bindManagerEvents(overlay, chatId) {
         showQuickAddForm(overlay, chatId);
     });
 
-    // AI 提取
+    // v8.2.3 手动提取（改为楼层范围提取，与悬浮球/侧边栏一致）
     overlay.querySelector('#bb_mgr_ai_extract')?.addEventListener('click', async () => {
-        const ctx = SillyTavern.getContext();
-        const chat = ctx.chat || [];
-        const recent = chat.filter(m => m.mes?.trim()).slice(-12);
-        if (!recent.length) { showToast('对话不足，无法提取'); return; }
-        const contextText = recent.map(m => `${m.is_user ? '用户' : m.name || '角色'}: ${m.mes}`).join('\n');
+        // 先收起记忆管家遮罩
+        overlay.style.display = 'none';
         try {
-            const results = await extractFromContext(chatId, contextText);
-            showToast(`提取完成！NPC ${results.npc}/物品 ${results.items}/时间线 ${results.timeline}/记忆 ${results.memories}`, 'success');
-            await rerenderManagerList(overlay, chatId);
+            const range = await globalThis.bbPromptFloorRange?.();
+            if (range === undefined || range === '') {
+                overlay.style.display = '';
+                return;
+            }
+            showToast('正在提取记忆...', 'info');
+            const results = await globalThis.bbHandleInitMemory?.(chatId, range);
+            if (results) {
+                showToast(`提取完成！NPC ${results.npc}/物品 ${results.items}/时间线 ${results.timeline}/记忆 ${results.memories}`, 'success');
+            }
         } catch (e) {
             showToast(`提取失败: ${e.message}`, 'error');
         }
+        // 重新渲染列表
+        overlay.style.display = '';
+        await rerenderManagerList(overlay, chatId);
     });
 
     // 导出

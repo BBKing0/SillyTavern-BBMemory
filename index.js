@@ -35,6 +35,7 @@ import {
     setAutoExtractProgressCallback, getPendingAutoCandidates, clearPendingAutoCandidates,
     callEmbeddingApi, embedExistingMemories,
     lastExtractFailedFloor, clearLastExtractFailedFloor,
+    testApiConnection,
 } from './auto-generator.js';
 
 import {
@@ -405,6 +406,10 @@ async function handleInitMemory(chatId, rangeStr = '') {
     showToast(`初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 记忆 ${results.memories}`, 'success');
     return results;
 }
+
+// v8.2.3 暴露给 memory-manager.js 使用
+globalThis.bbPromptFloorRange = promptFloorRange;
+globalThis.bbHandleInitMemory = handleInitMemory;
 
 function createProgressToast(text) {
     try {
@@ -806,6 +811,139 @@ function bindSidebarEvents() {
         });
         showToast(`Reindex 完成：${memories.length} 条`, 'success');
     });
+
+    // ═══ v8.2.3 API 测试连接 ═══
+
+    document.querySelector('#bb_api_test_connection')?.addEventListener('click', async () => {
+        const btn = document.querySelector('#bb_api_test_connection');
+        const origHTML = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 测试中...';
+        try {
+            const ep = document.querySelector('#bb_auto_gen_endpoint')?.value?.trim();
+            const key = document.querySelector('#bb_auto_gen_api_key')?.value?.trim();
+            const model = document.querySelector('#bb_auto_gen_model')?.value?.trim();
+            if (!ep) { showToast('请先填写 API 端点', 'warning'); return; }
+            const result = await testApiConnection(ep, key, model);
+            if (result.ok) {
+                showToast(`连接成功！延迟 ${result.latency}ms`, 'success');
+            } else {
+                showToast(`连接失败: ${result.error} (${result.latency}ms)`, 'error');
+            }
+        } catch (e) {
+            showToast(`测试异常: ${e.message}`, 'error');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = origHTML;
+        }
+    });
+
+    document.querySelector('#bb_embedding_test_btn')?.addEventListener('click', async () => {
+        const btn = document.querySelector('#bb_embedding_test_btn');
+        const origHTML = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 测试中...';
+        try {
+            const ep = document.querySelector('#bb_embedding_endpoint')?.value?.trim();
+            const key = document.querySelector('#bb_embedding_api_key')?.value?.trim();
+            const model = document.querySelector('#bb_embedding_model')?.value?.trim();
+            if (!ep) { showToast('请先填写 Embedding API 端点', 'warning'); return; }
+            // Embedding 端点用 embedding 格式测试
+            const start = Date.now();
+            const resp = await fetch(ep, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+                body: JSON.stringify({ model, input: 'test' }),
+            });
+            const latency = Date.now() - start;
+            if (resp.ok) {
+                showToast(`连接成功！延迟 ${latency}ms`, 'success');
+            } else {
+                const errText = await resp.text().catch(() => '');
+                showToast(`连接失败: HTTP ${resp.status} (${latency}ms)`, 'error');
+            }
+        } catch (e) {
+            showToast(`测试异常: ${e.message}`, 'error');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = origHTML;
+        }
+    });
+
+    // ═══ v8.2.3 API 预设管理 ═══
+
+    const profileSelect = document.querySelector('#bb_api_profile_select');
+    const refreshProfileDropdown = () => {
+        if (!profileSelect) return;
+        const s = getSettings();
+        const profiles = s.apiProfiles || [];
+        profileSelect.innerHTML = '<option value="">-- 未选择 --</option>' +
+            profiles.map((p, i) => `<option value="${i}">${escapeHtml(p.name)}</option>`).join('');
+        if (s.activeApiProfile && profiles.some(p => p.name === s.activeApiProfile)) {
+            const idx = profiles.findIndex(p => p.name === s.activeApiProfile);
+            profileSelect.value = String(idx);
+        }
+    };
+
+    profileSelect?.addEventListener('change', () => {
+        const idx = profileSelect.value;
+        if (idx === '') return;
+        const s = getSettings();
+        const p = s.apiProfiles?.[parseInt(idx)];
+        if (!p) return;
+        const epEl = document.querySelector('#bb_auto_gen_endpoint');
+        const keyEl = document.querySelector('#bb_auto_gen_api_key');
+        const modelEl = document.querySelector('#bb_auto_gen_model');
+        if (epEl) epEl.value = p.endpoint || '';
+        if (keyEl) keyEl.value = p.key || '';
+        if (modelEl) modelEl.value = p.model || '';
+        // 触发设置更新
+        if (epEl) epEl.dispatchEvent(new Event('input', { bubbles: true }));
+        if (keyEl) keyEl.dispatchEvent(new Event('input', { bubbles: true }));
+        if (modelEl) modelEl.dispatchEvent(new Event('input', { bubbles: true }));
+        updateSettings({ activeApiProfile: p.name });
+        showToast(`已切换至预设: ${p.name}`, 'info');
+    });
+
+    document.querySelector('#bb_api_profile_save')?.addEventListener('click', async () => {
+        const name = prompt('请输入预设名称：');
+        if (!name || !name.trim()) return;
+        const ep = document.querySelector('#bb_auto_gen_endpoint')?.value?.trim() || '';
+        const key = document.querySelector('#bb_auto_gen_api_key')?.value?.trim() || '';
+        const model = document.querySelector('#bb_auto_gen_model')?.value?.trim() || '';
+        if (!ep) { showToast('请先填写 API 端点', 'warning'); return; }
+
+        const s = getSettings();
+        const profiles = s.apiProfiles || [];
+        const existing = profiles.findIndex(p => p.name === name.trim());
+        const entry = { name: name.trim(), endpoint: ep, key, model };
+        if (existing >= 0) {
+            profiles[existing] = entry;
+        } else {
+            profiles.push(entry);
+        }
+        updateSettings({ apiProfiles: profiles, activeApiProfile: name.trim() });
+        refreshProfileDropdown();
+        showToast(`预设"${name.trim()}"已保存`, 'success');
+    });
+
+    document.querySelector('#bb_api_profile_del')?.addEventListener('click', () => {
+        const idx = profileSelect?.value;
+        if (idx === '' || idx === null) { showToast('请先选择要删除的预设', 'warning'); return; }
+        const s = getSettings();
+        const profiles = s.apiProfiles || [];
+        const p = profiles[parseInt(idx)];
+        if (!p) return;
+        if (!confirm(`确定删除预设"${p.name}"？`)) return;
+        profiles.splice(parseInt(idx), 1);
+        const newActive = s.activeApiProfile === p.name ? '' : s.activeApiProfile;
+        updateSettings({ apiProfiles: profiles, activeApiProfile: newActive });
+        refreshProfileDropdown();
+        showToast(`预设"${p.name}"已删除`, 'info');
+    });
+
+    // 初始化预设下拉框
+    refreshProfileDropdown();
 
 }
 
@@ -1665,13 +1803,14 @@ function toggleFloatingMenu() {
 async function refreshFloatingHubData() {
     const hitCountEl = document.getElementById('bb_hub_hit_count');
     if (hitCountEl) {
-        const chatId = getChatId();
-        if (chatId) {
-            try {
-                const mems = await getMemories(chatId);
-                const hits = mems.filter(m => (m.hitCount || 0) > 0);
-                hitCountEl.textContent = String(hits.length);
-            } catch { /* ignore */ }
+        // v8.2.3 显示当次检索实时命中数，而非历史累积 hitCount
+        const r = lastRetrievalResult;
+        if (r && r.timestamp) {
+            const tlCount = (r.timelineHits?.ongoing?.length || 0) + (r.timelineHits?.ended?.length || 0);
+            const total = (r.hits?.length || 0) + (r.npcHits?.length || 0) + (r.itemHits?.length || 0) + tlCount;
+            hitCountEl.textContent = String(total);
+        } else {
+            hitCountEl.textContent = '-';
         }
     }
     // v8.2.1 提取失败重试按钮 & 进度文字
@@ -2112,7 +2251,7 @@ function updateSidebarHitList() {
 
     // NPC 命中
     if (result.npcHits && result.npcHits.length) {
-        html += '<div class="bb-hit-section-label"><i class="fa-solid fa-user"></i> NPC</div>';
+        html += `<div class="bb-hit-section-label"><i class="fa-solid fa-user"></i> NPC <span style="font-size:0.75em;opacity:0.6;">${result.npcHits.length}条</span></div>`;
         html += result.npcHits.map(n => {
             const color = tierColors[n.npcTier] || '#888';
             return `<div class="bb-hub-hit-item" title="${escapeHtml(n.name)}" style="cursor:default;">
@@ -2125,7 +2264,7 @@ function updateSidebarHitList() {
 
     // 物品命中
     if (result.itemHits && result.itemHits.length) {
-        html += '<div class="bb-hit-section-label"><i class="fa-solid fa-box"></i> 物品</div>';
+        html += `<div class="bb-hit-section-label"><i class="fa-solid fa-box"></i> 物品 <span style="font-size:0.75em;opacity:0.6;">${result.itemHits.length}条</span></div>`;
         html += result.itemHits.map(i => {
             const color = tierColors[i.itemTier] || '#888';
             return `<div class="bb-hub-hit-item" title="${escapeHtml(i.name)}" style="cursor:default;">
@@ -2140,7 +2279,7 @@ function updateSidebarHitList() {
     if (result.timelineHits) {
         const tlAll = [...(result.timelineHits.ongoing || []), ...(result.timelineHits.ended || [])];
         if (tlAll.length) {
-            html += '<div class="bb-hit-section-label"><i class="fa-solid fa-timeline"></i> 时间线</div>';
+            html += `<div class="bb-hit-section-label"><i class="fa-solid fa-timeline"></i> 时间线 <span style="font-size:0.75em;opacity:0.6;">${tlAll.length}条</span></div>`;
             html += tlAll.map(t => {
                 const isOngoing = t.status === 'ongoing';
                 const color = isOngoing ? '#4fc3f7' : '#9e9e9e';
@@ -2155,7 +2294,7 @@ function updateSidebarHitList() {
 
     // 记忆命中
     if (result.hits && result.hits.length) {
-        html += '<div class="bb-hit-section-label"><i class="fa-solid fa-brain"></i> 记忆</div>';
+        html += `<div class="bb-hit-section-label"><i class="fa-solid fa-brain"></i> 记忆 <span style="font-size:0.75em;opacity:0.6;">${result.hits.length}条</span></div>`;
         html += result.hits.map(h => {
             const icon = typeIcons[h.cognitiveType] || 'fa-circle';
             const color = levelColors[h.level] || '#888';

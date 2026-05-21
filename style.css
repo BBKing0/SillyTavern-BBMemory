@@ -2660,6 +2660,33 @@
         min-width: 28px;
         min-height: 28px;
     }
+
+    /* v8.2.3 移动端标签确认弹窗 */
+    .bb-tag-confirm-overlay {
+        padding: 0;
+        align-items: flex-start;
+        overflow-y: auto;
+    }
+    .bb-tag-confirm-overlay > div {
+        max-height: 100vh;
+        border-radius: 0;
+        margin: 0;
+        width: 100%;
+    }
+
+    /* v8.2.3 移动端错误弹窗 */
+    .bb-error-popup-overlay {
+        padding: 0;
+        align-items: flex-start;
+        overflow-y: auto;
+    }
+    .bb-error-popup-overlay > div {
+        max-height: 100vh;
+        overflow-y: auto;
+        border-radius: 0;
+        margin: 0;
+        width: 100%;
+    }
 }
 
 /* ═══════════════════════════════════════════════════════

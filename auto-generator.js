@@ -536,6 +536,41 @@ export async function callEmbeddingApi(text, timeoutMs = 10000) {
     throw new Error('Embedding API 返回格式异常');
 }
 
+// ═══ v8.2.3 API 连接测试 ═══
+
+export async function testApiConnection(endpoint, apiKey, model) {
+    const start = Date.now();
+    try {
+        const response = await fetchWithTimeout(endpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+                model,
+                messages: [{ role: 'user', content: 'hi' }],
+                max_tokens: 1,
+            }),
+        }, 15000);
+        const latency = Date.now() - start;
+        if (!response.ok) {
+            const errText = await response.text().catch(() => '');
+            let msg = `HTTP ${response.status}`;
+            if (errText) {
+                try {
+                    const j = JSON.parse(errText);
+                    msg = j.error?.message || j.message || msg;
+                } catch { msg = errText.slice(0, 120); }
+            }
+            return { ok: false, error: msg, latency };
+        }
+        return { ok: true, latency };
+    } catch (e) {
+        return { ok: false, error: e.message || '网络错误', latency: Date.now() - start };
+    }
+}
+
 // ═══ Embedding 生成 ═══
 
 let _lastEmbeddingErrorTime = 0;

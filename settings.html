@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v8.1.2</b>
+            <b>BB-Memory v8.2.3</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -277,6 +277,18 @@
                     </div>
                     <div class="bb-mem-hint">同时发送的API请求数，每个exchange独立调用（增大可提速，默认2）。</div>
 
+                    <!-- v8.2.3 API 预设快速切换 -->
+                    <div class="bb-mem-sidebar-section" style="margin-bottom:6px;">
+                        <label>API 预设 <small>保存当前配置并快速切换</small></label>
+                        <div style="display:flex;gap:6px;align-items:center;">
+                            <select id="bb_api_profile_select" class="text_pole" style="flex:1;font-size:0.85em;">
+                                <option value="">-- 未选择 --</option>
+                            </select>
+                            <button id="bb_api_profile_save" class="menu_button" style="font-size:0.78em;white-space:nowrap;" title="保存当前配置为新预设"><i class="fa-solid fa-floppy-disk"></i> 保存</button>
+                            <button id="bb_api_profile_del" class="menu_button" style="font-size:0.78em;white-space:nowrap;color:#f44336;" title="删除选中预设"><i class="fa-solid fa-trash"></i></button>
+                        </div>
+                    </div>
+
                     <div id="bb_memory_custom_api_section">
                         <div class="bb-mem-sidebar-section">
                             <label for="bb_auto_gen_endpoint">自定义 API 端点</label>
@@ -290,6 +302,10 @@
                             <label for="bb_auto_gen_model">模型</label>
                             <input id="bb_auto_gen_model" type="text" class="text_pole" placeholder="gpt-4o-mini" />
                         </div>
+                        <!-- v8.2.3 测试连接 -->
+                        <button id="bb_api_test_connection" class="menu_button" style="font-size:0.8em;margin-top:4px;">
+                            <i class="fa-solid fa-plug"></i> 测试连接
+                        </button>
                     </div>
 
                     <hr style="margin: 12px 0; border-color: var(--SmartThemeBorderColor);" />
@@ -339,6 +355,9 @@
                         <label for="bb_embedding_model">模型</label>
                         <input id="bb_embedding_model" type="text" class="text_pole" placeholder="text-embedding-3-small" />
                     </div>
+                    <button id="bb_embedding_test_btn" class="menu_button" style="margin-top:8px;margin-right:6px;">
+                        <i class="fa-solid fa-plug"></i> 测试连接
+                    </button>
                     <button id="bb_embedding_reindex_btn" class="menu_button" style="margin-top:8px;">
                         <i class="fa-solid fa-rotate"></i> 重建语义索引
                     </button>
