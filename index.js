@@ -34,6 +34,7 @@ import {
     initAutoGenerator, stopAutoGenerator, extractFromContext, saveExtractedMemories,
     setAutoExtractProgressCallback, getPendingAutoCandidates, clearPendingAutoCandidates,
     callEmbeddingApi, embedExistingMemories,
+    lastExtractFailedFloor, clearLastExtractFailedFloor,
 } from './auto-generator.js';
 
 import {
@@ -77,6 +78,13 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     const ctx = SillyTavern.getContext();
     const chatId = ctx.chatId || (ctx.chat?.[0]?.chatId) || null;
     if (!chatId) { clearInjection(); return chat; }
+
+    // v8.2.1 检测重roll：chat 末尾已是 AI 消息 → 正在覆盖已有回复
+    let isReroll = false;
+    for (let i = chat.length - 1; i >= 0; i--) {
+        if (chat[i].is_user) break;
+        if (!chat[i].is_system && chat[i].mes?.trim()) { isReroll = true; break; }
+    }
 
     // 1. 提取最后一条用户消息
     let userMessage = '';
@@ -129,13 +137,29 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         ? getThreadSummaryForInjection(threads, settings.maxActiveThreads || 5)
         : { text: '', threads: [] };
     const residentMems = getResidentMemories(memories);
+    // v8.2.2 重roll 时扩大候选集 + 同分段局部 shuffle，保证质量不下降
     const relevantResults = getRelevantMemories(memories, userMessage, {
-        maxResults: settings.maxResults || 10,
+        maxResults: isReroll ? (settings.maxResults || 10) + 3 : (settings.maxResults || 10),
+        minScore: settings.minScoreThreshold ?? 0.05,
         queryEmbedding,
     });
     const excludeIds = new Set([...npcForInjection.map(n => n.id), ...residentMems.map(m => m.id)]);
     for (const r of relevantResults) excludeIds.add(r.memory.id);
     const merged = mergeExpandedRelevantResults(memories, userMessage, relevantResults, excludeIds, 12, settings.maxResults, queryEmbedding);
+
+    // v8.2.2 重roll 时仅对 L2/L3 同分段做局部 swap（相邻分数互换），不全局洗牌
+    if (isReroll && merged.length > 2) {
+        const l4 = merged.filter(r => r.level === 'L4');
+        const rest = merged.filter(r => r.level !== 'L4');
+        // 相邻分数分段两两 swap（保持整体质量顺序，仅微调同分段内位置）
+        for (let i = 0; i < rest.length - 1; i++) {
+            if (Math.abs(rest[i].score - rest[i + 1].score) < 0.08) {
+                if (Math.random() < 0.5) [rest[i], rest[i + 1]] = [rest[i + 1], rest[i]];
+            }
+        }
+        merged.length = 0;
+        merged.push(...l4, ...rest);
+    }
 
     if (!npcForInjection.length && !itemsForInjection.length &&
         !tlForInjection.ongoing.length && !tlForInjection.ended.length && !merged.length && !threadSummary.text) {
@@ -169,7 +193,8 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     }
 
     if (settings.debugLogging) {
-        console.log(`[BB-Memory] 注入: 线程${stats.threadCount} NPC${stats.npcCount} 物品${stats.itemCount} 时间线${stats.timelineCount} 记忆${stats.memoryCount} | ~${tokenEstimate} tokens`);
+        const prefix = isReroll ? '[BB-Memory] 重roll注入' : '[BB-Memory] 注入';
+        console.log(`${prefix}: 线程${stats.threadCount} NPC${stats.npcCount} 物品${stats.itemCount} 时间线${stats.timelineCount} 记忆${stats.memoryCount} | ~${tokenEstimate} tokens`);
     }
 
     // 11. 存储命中追踪
@@ -1490,6 +1515,10 @@ function injectFloatingHub() {
                 <i class="fa-solid fa-wand-magic-sparkles"></i>
                 <span>手动提取</span>
             </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" id="bb_hub_retry_extract" data-action="retry_extract" style="display:none;">
+                <i class="fa-solid fa-rotate-right" style="color:#ff9800;"></i>
+                <span>重新提取第 <strong id="bb_hub_retry_floor">-</strong> 层</span>
+            </div>
             <div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_maintenance">
                 <i class="fa-solid fa-toolbox"></i>
                 <span>记忆维护</span>
@@ -1645,6 +1674,28 @@ async function refreshFloatingHubData() {
             } catch { /* ignore */ }
         }
     }
+    // v8.2.1 提取失败重试按钮 & 进度文字
+    const retryItem = document.getElementById('bb_hub_retry_extract');
+    const retryFloor = document.getElementById('bb_hub_retry_floor');
+    const extractLabel = document.getElementById('bb_hub_extract_label');
+    // 需要动态 import 获取最新 lastExtractFailedFloor 值
+    try {
+        const { lastExtractFailedFloor: failedFloor } = await import('./auto-generator.js');
+        if (retryItem && retryFloor) {
+            if (failedFloor !== null && failedFloor !== undefined) {
+                retryItem.style.display = 'flex';
+                retryFloor.textContent = String(failedFloor);
+            } else {
+                retryItem.style.display = 'none';
+            }
+        }
+        if (extractLabel) {
+            extractLabel.textContent = (failedFloor !== null && failedFloor !== undefined)
+                ? `提取失败: 第${failedFloor}层`
+                : '空闲';
+        }
+    } catch { /* ignore */ }
+
     // v7.9.0 红点角标由提取失败控制，此处不做更新
 
     // 更新存档信息
@@ -1747,6 +1798,30 @@ async function handleFloatingMenuAction(action) {
                 refreshSidebar();
             } catch (e) {
                 showToast(`提取失败: ${e.message}`, 'error');
+            }
+            break;
+        }
+        // v8.2.1 重新提取失败楼层
+        case 'retry_extract': {
+            if (!chatId) return;
+            try {
+                const { lastExtractFailedFloor: floor, clearLastExtractFailedFloor: clear } = await import('./auto-generator.js');
+                if (floor !== null && floor !== undefined) {
+                    const ctx = SillyTavern.getContext();
+                    const chat = ctx.chat;
+                    if (chat && chat[floor]) {
+                        chat[floor]._bbmem_extracted = false;
+                        chat[floor]._bbmem_skipped = false;
+                        chat[floor]._bbmem_pendingExtraction = true;
+                    }
+                    clear();
+                    showToast(`正在重新提取第 ${floor} 层...`, 'info');
+                    const { onMessageReceived } = await import('./auto-generator.js');
+                    await onMessageReceived(floor);
+                    showToast(`第 ${floor} 层重新提取完成`, 'success');
+                }
+            } catch (e) {
+                showToast(`重新提取失败: ${e.message}`, 'error');
             }
             break;
         }

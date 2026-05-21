@@ -118,20 +118,6 @@ export function detectFloorIssues(chatId, memories, npcs, items, timelines) {
                 severity: 'warning',
                 entry,
             });
-        } else if (entry.sourceMessageHash) {
-            // 第二层：消息内容哈希比对（重roll检测）
-            const floorData = aiFloorData[entry.sourceFloor];
-            if (floorData && floorData.hash !== entry.sourceMessageHash) {
-                issues.push({
-                    id: entry.id,
-                    collection: entry._collection,
-                    title: label,
-                    type: 'floor_rerolled',
-                    detail: `源楼层 #${entry.sourceFloor} 内容已被重roll（哈希不匹配）`,
-                    severity: 'warning',
-                    entry,
-                });
-            }
         }
     }
 
@@ -438,6 +424,53 @@ export function detectThreadOverload(threads, maxActiveThreads = 5) {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  v8.2.1 楼层断层检测
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 检测超出上下文窗口但未被提取、跳过或标记的 AI 消息楼层
+ * — 这些楼层属于"记忆断层"
+ */
+export function detectFloorGaps(chatId) {
+    const ctx = getContext();
+    const chat = ctx?.chat || [];
+    const issues = [];
+
+    // 计算当前"窗口内"的 exchange 数，找出窗口外楼层
+    let exchangeCount = 0;
+    let windowStart = chat.length;  // 窗口外楼层从这里开始
+    for (let i = chat.length - 1; i >= 0; i--) {
+        if (chat[i].is_user || chat[i].is_system) continue;
+        if (chat[i].mes) exchangeCount++;
+        if (exchangeCount >= 3) { windowStart = i; break; }
+    }
+
+    for (let i = 0; i < windowStart; i++) {
+        const msg = chat[i];
+        if (!msg || msg.is_user || msg.is_system) continue;
+        if (!msg.mes?.trim()) continue;
+        // 已提取、已跳过、已标记元指令 → 不算断层
+        if (msg._bbmem_extracted || msg._bbmem_skipped || msg._bbmem_meta_marker) continue;
+        // 已在待提取队列中 → 不算断层
+        if (msg._bbmem_pendingExtraction) continue;
+
+        const preview = (msg.mes || '').replace(/\n/g, ' ').slice(0, 60);
+        issues.push({
+            id: `gap_${i}`,
+            collection: 'mem',
+            title: `第 ${i} 层`,
+            type: 'floor_gap',
+            detail: `该楼层已被移出上下文窗口但未被提取: "${preview}..."`,
+            severity: 'warning',
+            floor: i,
+            entry: null,
+        });
+    }
+
+    return issues;
+}
+
+// ═══════════════════════════════════════════════════════════
 //  主编排器
 // ═══════════════════════════════════════════════════════════
 
@@ -515,7 +548,14 @@ export async function runHealthCheck(chatId) {
         issues: detectSourceIntegrityIssues(chatId, memories, npcs, items, timelines),
     };
 
-    // Category 8: Timeline threads (v6.9.0)
+    // Category 8: Floor gaps (v8.2.1)
+    results.categories.floorGap = {
+        label: '楼层记忆断层',
+        icon: 'fa-solid fa-grip-lines',
+        issues: detectFloorGaps(chatId),
+    };
+
+    // Category 9: Timeline threads (v6.9.0)
     results.categories.threads = {
         label: '时间线线程',
         icon: 'fa-solid fa-threads',
@@ -578,9 +618,12 @@ function getActionButtonsForIssue(issue) {
             btn('忽略', 'ignore');
             break;
         case 'floor_type_changed':
-        case 'floor_rerolled':
             btn('标记旧楼层', 'fix_floor', '#ff9800');
             btn('删除', 'delete', '#f44336');
+            btn('忽略', 'ignore');
+            break;
+        case 'floor_gap':
+            btn('重新提取', 're_extract', '#4caf50');
             btn('忽略', 'ignore');
             break;
         case 'floor_creation_deleted':
@@ -834,7 +877,38 @@ async function handleHealthAction(op, issue, chatId, callbacks, rowEl) {
             itemEl.remove();
             break;
         }
+        case 're_extract': {
+            // v8.2.1 重新提取断层楼层
+            const floor = issue.floor;
+            if (typeof floor === 'number' && floor >= 0) {
+                const ctx = getContext();
+                const chat = ctx?.chat;
+                if (chat && chat[floor]) {
+                    chat[floor]._bbmem_extracted = false;
+                    chat[floor]._bbmem_skipped = false;
+                    chat[floor]._bbmem_pendingExtraction = true;
+                }
+                try {
+                    const { onMessageReceived } = await import('./auto-generator.js');
+                    await onMessageReceived(floor);
+                    notifyCallbacks(callbacks, `已触发第 ${floor} 层重新提取`);
+                } catch (e) {
+                    notifyCallbacks(callbacks, `重新提取失败: ${e.message}`);
+                }
+            }
+            itemEl.remove();
+            break;
+        }
         case 'ignore': {
+            // v8.2.1 楼层断层忽略 → 标记楼层为已跳过
+            if (issue.type === 'floor_gap' && typeof issue.floor === 'number') {
+                const ctx = getContext();
+                const chat = ctx?.chat;
+                if (chat && chat[issue.floor]) {
+                    chat[issue.floor]._bbmem_skipped = true;
+                    chat[issue.floor]._bbmem_pendingExtraction = false;
+                }
+            }
             itemEl.remove();
             break;
         }

@@ -720,6 +720,12 @@ let isProcessing = false;
 let pendingMessages = [];
 let processingTimer = null;
 
+// v8.2.1 提取失败追踪（悬浮球重试按钮用）
+export let lastExtractFailedFloor = null;
+export function clearLastExtractFailedFloor() {
+    lastExtractFailedFloor = null;
+}
+
 // v5 兼容：待审核候选记忆（active 模式用）
 let pendingAutoCandidates = [];
 
@@ -1242,17 +1248,22 @@ async function processLatestExchange(chatId) {
             // Active 模式：逐个处理（每轮需要用户确认，不适合并行）
             for (const ex of batch) {
                 if (await isExchangeProcessed(chatId, ex.hash)) continue;
-                const prompt = buildStagePrompt(MEMORY_EXTRACTION_PROMPT, ex.userMessage, ex.aiMessage);
-                const responseText = await callApi(prompt);
-                if (checkMetaDialogue(responseText)) {
-                    console.log('[BB-Memory] Active模式检测到纯元对话，跳过');
-                    continue;
+                try {
+                    const prompt = buildStagePrompt(MEMORY_EXTRACTION_PROMPT, ex.userMessage, ex.aiMessage);
+                    const responseText = await callApi(prompt);
+                    if (checkMetaDialogue(responseText)) {
+                        console.log('[BB-Memory] Active模式检测到纯元对话，跳过');
+                        continue;
+                    }
+                    const candidates = parseMemoryResponse(responseText);
+                    if (candidates.length > 0) {
+                        pendingAutoCandidates.push(...candidates.map(c => ({ ...c, _chatId: chatId })));
+                    }
+                    succeeded.push(ex);
+                } catch (e) {
+                    console.warn('[BB-Memory] Active模式单个 exchange 提取失败:', e.message);
+                    lastExtractFailedFloor = ex.aiIndex;  // v8.2.1 记录失败楼层
                 }
-                const candidates = parseMemoryResponse(responseText);
-                if (candidates.length > 0) {
-                    pendingAutoCandidates.push(...candidates.map(c => ({ ...c, _chatId: chatId })));
-                }
-                succeeded.push(ex);
             }
         } else {
             // v8.0.0 并行请求：每个 exchange 独立调用 API，同时发出
@@ -1262,7 +1273,7 @@ async function processLatestExchange(chatId) {
                     sourceExchange: ex.hash,
                     sourceFloor: ex.aiIndex,
                     sourceChatId: chatId,
-                    sourceMessageHash: cyrb53Hash(ex.aiMessage?.mes || ''),
+                    sourceMessageHash: cyrb53Hash(ex.aiMessage || ''),
                 };
                 try {
                     const result = await extractMergedStage(chatId, ex.userMessage, ex.aiMessage, sourceInfo);
@@ -1273,6 +1284,7 @@ async function processLatestExchange(chatId) {
                     return ex;
                 } catch (e) {
                     console.warn('[BB-Memory] 并行提取单个 exchange 失败:', e.message);
+                    lastExtractFailedFloor = ex.aiIndex;  // v8.2.1 记录失败楼层供悬浮球重试
                     return null;
                 }
             });
@@ -1286,6 +1298,8 @@ async function processLatestExchange(chatId) {
         }
     } catch (e) {
         console.warn('[BB-Memory] 提取处理异常:', e.message);
+        // v8.2.1 外層异常通常说明批量某一步骤整体挂了
+        if (batch.length > 0) lastExtractFailedFloor = batch[0].aiIndex;
     }
 
     // v8.0.0 批量标记所有成功处理的 exchange
