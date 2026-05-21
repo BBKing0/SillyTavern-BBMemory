@@ -1019,7 +1019,38 @@ export async function importMemoriesFromChatMetadata(chatId) {
         }
     }
 
+    // v8.2.7 恢复后清除 chatMetadata 中的备份数据，避免聊天文件持续膨胀
+    if (ctx.chatMetadata?.[BACKUP_METADATA_KEY]) {
+        delete ctx.chatMetadata[BACKUP_METADATA_KEY];
+        if (typeof ctx.saveChatDebounced === 'function') {
+            ctx.saveChatDebounced();
+        } else if (typeof ctx.saveChat === 'function') {
+            ctx.saveChat();
+        }
+    }
+
     return { restored, skipped };
+}
+
+/**
+ * v8.2.7 清理聊天文件中的 BB-Memory 冗余元数据
+ */
+export function cleanupChatMetadata() {
+    const ctx = getContext();
+    if (!ctx.chatMetadata) return false;
+    let cleaned = false;
+    if (ctx.chatMetadata[BACKUP_METADATA_KEY]) {
+        delete ctx.chatMetadata[BACKUP_METADATA_KEY];
+        cleaned = true;
+    }
+    if (cleaned) {
+        if (typeof ctx.saveChatDebounced === 'function') {
+            ctx.saveChatDebounced();
+        } else if (typeof ctx.saveChat === 'function') {
+            ctx.saveChat();
+        }
+    }
+    return cleaned;
 }
 
 // ═══════════════════════════════════════════════════════════

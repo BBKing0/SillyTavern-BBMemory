@@ -425,12 +425,15 @@ function createProgressToast(text) {
 }
 
 function showToast(msg, type = 'info') {
+    // v8.2.7 fallback: toastr 不可用时用 showTopNotification
     try {
         const ctx = SillyTavern.getContext();
         if (typeof ctx.toastr?.[type] === 'function') {
             ctx.toastr[type](msg, '', { timeOut: 3000 });
+            return;
         }
     } catch { /* ignore */ }
+    showTopNotification(msg, type);
 }
 
 // v8.0.0 顶部浮动通知（比 toastr 更显眼，用于重要操作反馈）
@@ -901,16 +904,49 @@ function bindSidebarEvents() {
         if (epEl) epEl.dispatchEvent(new Event('change', { bubbles: true }));
         if (keyEl) keyEl.dispatchEvent(new Event('change', { bubbles: true }));
         if (modelEl) modelEl.dispatchEvent(new Event('change', { bubbles: true }));
-        // v8.2.5 Embedding API 预设同步
-        if (p.embeddingEndpoint !== undefined) {
-            const embEpEl = document.querySelector('#bb_embedding_endpoint');
-            const embKeyEl = document.querySelector('#bb_embedding_api_key');
-            const embModelEl = document.querySelector('#bb_embedding_model');
-            if (embEpEl) { embEpEl.value = p.embeddingEndpoint || ''; embEpEl.dispatchEvent(new Event('change', { bubbles: true })); }
-            if (embKeyEl) { embKeyEl.value = p.embeddingKey || ''; embKeyEl.dispatchEvent(new Event('change', { bubbles: true })); }
-            if (embModelEl) { embModelEl.value = p.embeddingModel || ''; embModelEl.dispatchEvent(new Event('change', { bubbles: true })); }
-        }
+        // v8.2.7 Embedding API 预设同步 —— 旧预设无字段时清空输入框
+        const embEpEl = document.querySelector('#bb_embedding_endpoint');
+        const embKeyEl = document.querySelector('#bb_embedding_api_key');
+        const embModelEl = document.querySelector('#bb_embedding_model');
+        if (embEpEl) { embEpEl.value = p.embeddingEndpoint || ''; embEpEl.dispatchEvent(new Event('change', { bubbles: true })); }
+        if (embKeyEl) { embKeyEl.value = p.embeddingKey || ''; embKeyEl.dispatchEvent(new Event('change', { bubbles: true })); }
+        if (embModelEl) { embModelEl.value = p.embeddingModel || ''; embModelEl.dispatchEvent(new Event('change', { bubbles: true })); }
         updateSettings({ activeApiProfile: p.name });
+        showToast(`已切换至预设: ${p.name}`, 'info');
+        // v8.2.7 同步 Embedding 预设下拉框
+        refreshEmbeddingProfileDropdown();
+    });
+
+    // v8.2.7 Embedding 预设下拉框 —— 与 AI 预设共享数据源
+    const embProfileSelect = document.querySelector('#bb_embedding_profile_select');
+    function refreshEmbeddingProfileDropdown() {
+        if (!embProfileSelect) return;
+        const s = getSettings();
+        const profiles = s.apiProfiles || [];
+        embProfileSelect.innerHTML = '<option value="">-- 未选择 --</option>' +
+            profiles.map((p, i) => `<option value="${i}">${escapeHtml(p.name)}</option>`).join('');
+    };
+
+    embProfileSelect?.addEventListener('change', () => {
+        const idx = embProfileSelect.value;
+        if (idx === '') return;
+        const s = getSettings();
+        const p = s.apiProfiles?.[parseInt(idx)];
+        if (!p) return;
+        const epEl = document.querySelector('#bb_auto_gen_endpoint');
+        const keyEl = document.querySelector('#bb_auto_gen_api_key');
+        const modelEl = document.querySelector('#bb_auto_gen_model');
+        if (epEl) { epEl.value = p.endpoint || ''; epEl.dispatchEvent(new Event('change', { bubbles: true })); }
+        if (keyEl) { keyEl.value = p.key || ''; keyEl.dispatchEvent(new Event('change', { bubbles: true })); }
+        if (modelEl) { modelEl.value = p.model || ''; modelEl.dispatchEvent(new Event('change', { bubbles: true })); }
+        const embEpEl = document.querySelector('#bb_embedding_endpoint');
+        const embKeyEl = document.querySelector('#bb_embedding_api_key');
+        const embModelEl = document.querySelector('#bb_embedding_model');
+        if (embEpEl) { embEpEl.value = p.embeddingEndpoint || ''; embEpEl.dispatchEvent(new Event('change', { bubbles: true })); }
+        if (embKeyEl) { embKeyEl.value = p.embeddingKey || ''; embKeyEl.dispatchEvent(new Event('change', { bubbles: true })); }
+        if (embModelEl) { embModelEl.value = p.embeddingModel || ''; embModelEl.dispatchEvent(new Event('change', { bubbles: true })); }
+        updateSettings({ activeApiProfile: p.name });
+        refreshProfileDropdown();
         showToast(`已切换至预设: ${p.name}`, 'info');
     });
 
@@ -937,6 +973,7 @@ function bindSidebarEvents() {
         }
         updateSettings({ apiProfiles: profiles, activeApiProfile: name.trim() });
         refreshProfileDropdown();
+        refreshEmbeddingProfileDropdown();
         showToast(`预设"${name.trim()}"已保存`, 'success');
     });
 
@@ -952,11 +989,13 @@ function bindSidebarEvents() {
         const newActive = s.activeApiProfile === p.name ? '' : s.activeApiProfile;
         updateSettings({ apiProfiles: profiles, activeApiProfile: newActive });
         refreshProfileDropdown();
+        refreshEmbeddingProfileDropdown();
         showToast(`预设"${p.name}"已删除`, 'info');
     });
 
-    // 初始化预设下拉框
+    // v8.2.7 初始化两个预设下拉框
     refreshProfileDropdown();
+    refreshEmbeddingProfileDropdown();
 
 }
 

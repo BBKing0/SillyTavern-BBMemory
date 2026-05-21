@@ -541,7 +541,8 @@ export async function callEmbeddingApi(text, timeoutMs = 10000) {
 export async function testApiConnection(endpoint, apiKey, model) {
     const start = Date.now();
     try {
-        const response = await fetchWithTimeout(endpoint, {
+        const url = normalizeEndpoint(endpoint);  // v8.2.7 规范化端点URL
+        const response = await fetchWithTimeout(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',

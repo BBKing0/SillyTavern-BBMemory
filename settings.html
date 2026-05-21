@@ -338,6 +338,16 @@
                 </div>
                 <div class="bb-settings-section-body">
 
+                    <!-- v8.2.7 Embedding 预设快速切换 -->
+                    <div class="bb-mem-sidebar-section" style="margin-bottom:6px;">
+                        <label>Embedding 预设 <small>与 AI 提取预设共享，可快速切换</small></label>
+                        <div style="display:flex;gap:6px;align-items:center;">
+                            <select id="bb_embedding_profile_select" class="bb-input" style="flex:1;font-size:0.85em;">
+                                <option value="">-- 未选择 --</option>
+                            </select>
+                        </div>
+                    </div>
+
                     <label class="checkbox_label" style="margin: 8px 0;">
                         <input id="bb_embedding_enabled" type="checkbox" />
                         <span>启用语义向量检索</span>

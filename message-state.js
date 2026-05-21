@@ -301,10 +301,10 @@ export async function markExchangeExtracted(userIndex, aiIndex, hash) {
     const chat = ctx.chat;
 
     if (chat) {
-        // v6.3.0: 同时标记 AI 消息和用户消息
+        // v8.2.7 清理冗余标记，减少聊天文件体积
         if (chat[aiIndex]) {
             chat[aiIndex]._bbmem_extracted = true;
-            chat[aiIndex]._bbmem_pendingExtraction = false;
+            delete chat[aiIndex]._bbmem_pendingExtraction;
             chat[aiIndex]._bbmem_exchangeHash = hash;
             if (!chat[aiIndex].is_hidden) {
                 chat[aiIndex].is_hidden = true;
