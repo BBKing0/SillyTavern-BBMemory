@@ -92,8 +92,8 @@ function buildManagerHTML(npc, items, timeline, memories, chatId) {
             </div>
 
             <div class="bb-mem-toolbar">
-                <input type="text" class="bb-mem-search text_pole" placeholder="搜索..." id="bb_mgr_search" />
-                <select id="bb_mgr_sort" class="text_pole" style="width:auto;min-width:120px;">
+                <input type="text" class="bb-mem-search bb-input" placeholder="搜索..." id="bb_mgr_search" />
+                <select id="bb_mgr_sort" class="bb-input" style="width:auto;min-width:120px;">
                     <option value="created_desc" selected>创建时间 ↓</option>
                     <option value="created_asc">创建时间 ↑</option>
                     <option value="updated_desc">修改时间 ↓</option>
@@ -373,7 +373,7 @@ function addSubEntryRow(container, description, id) {
     row.dataset.subId = id || '';
     row.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:4px;';
     row.innerHTML = `
-        <input class="text_pole bb-subentry-desc" placeholder="子条目描述..." value="${escapeHtml(description || '')}" style="flex:1;" />
+        <input class="bb-input bb-subentry-desc" placeholder="子条目描述..." value="${escapeHtml(description || '')}" style="flex:1;" />
         <button type="button" class="menu_button bb-subentry-remove" title="删除子条目" style="font-size:0.75em;padding:4px 6px;opacity:0.5;flex-shrink:0;"><i class="fa-solid fa-times"></i></button>
     `;
     row.querySelector('.bb-subentry-remove').addEventListener('click', () => row.remove());
@@ -790,59 +790,59 @@ function showQuickAddForm(overlay, chatId) {
         switch (p) {
             case 'npc': return `
                 <label style="font-size:0.85em;">姓名 <span style="color:#f44336;">*</span></label>
-                <input class="text_pole bb-f-name" placeholder="角色姓名" style="width:100%;margin-bottom:8px;" />
+                <input class="bb-input bb-f-name" placeholder="角色姓名" style="width:100%;margin-bottom:8px;" />
                 <div style="display:flex;gap:8px;">
-                    <div style="flex:1;"><label style="font-size:0.85em;">身份</label><input class="text_pole bb-f-role" placeholder="如：王国骑士" style="width:100%;margin-bottom:8px;" /></div>
-                    <div style="flex:1;"><label style="font-size:0.85em;">位置</label><input class="text_pole bb-f-location" placeholder="所在地点" style="width:100%;margin-bottom:8px;" /></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">身份</label><input class="bb-input bb-f-role" placeholder="如：王国骑士" style="width:100%;margin-bottom:8px;" /></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">位置</label><input class="bb-input bb-f-location" placeholder="所在地点" style="width:100%;margin-bottom:8px;" /></div>
                 </div>
                 <label style="font-size:0.85em;">性格</label>
-                <textarea class="text_pole bb-f-personality" placeholder="性格特点..." rows="2" style="width:100%;margin-bottom:8px;"></textarea>
+                <textarea class="bb-input bb-f-personality" placeholder="性格特点..." rows="2" style="width:100%;margin-bottom:8px;"></textarea>
                 <label style="font-size:0.85em;">外貌</label>
-                <textarea class="text_pole bb-f-appearance" placeholder="外貌描述..." rows="2" style="width:100%;margin-bottom:8px;"></textarea>
+                <textarea class="bb-input bb-f-appearance" placeholder="外貌描述..." rows="2" style="width:100%;margin-bottom:8px;"></textarea>
                 <label style="font-size:0.85em;">关系</label>
-                <input class="text_pole bb-f-relationships" placeholder="与其他人物的关系，逗号分隔" style="width:100%;margin-bottom:8px;" />
+                <input class="bb-input bb-f-relationships" placeholder="与其他人物的关系，逗号分隔" style="width:100%;margin-bottom:8px;" />
                 <div style="display:flex;gap:8px;">
-                    <div style="flex:1;"><label style="font-size:0.85em;">NPC等级</label><select class="text_pole bb-f-npcTier" style="width:100%;margin-bottom:8px;">${Object.values(NPC_TIERS).map(t => `<option value="${t.id}" ${t.id === 'minor' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div>
-                    <div style="flex:1;"><label style="font-size:0.85em;">标签</label><input class="text_pole bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" /></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">NPC等级</label><select class="bb-input bb-f-npcTier" style="width:100%;margin-bottom:8px;">${Object.values(NPC_TIERS).map(t => `<option value="${t.id}" ${t.id === 'minor' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">标签</label><input class="bb-input bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" /></div>
                 </div>`;
             case 'item': return `
                 <label style="font-size:0.85em;">名称 <span style="color:#f44336;">*</span></label>
-                <input class="text_pole bb-f-name" placeholder="物品名称" style="width:100%;margin-bottom:8px;" />
+                <input class="bb-input bb-f-name" placeholder="物品名称" style="width:100%;margin-bottom:8px;" />
                 <div style="display:flex;gap:8px;">
-                    <div style="flex:1;"><label style="font-size:0.85em;">持有者</label><input class="text_pole bb-f-owner" placeholder="当前持有者" style="width:100%;margin-bottom:8px;" /></div>
-                    <div style="flex:1;"><label style="font-size:0.85em;">状态</label><select class="text_pole bb-f-status" style="width:100%;margin-bottom:8px;"><option value="held">持有中</option><option value="used">已使用</option><option value="lost">已丢失</option><option value="destroyed">已销毁</option></select></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">持有者</label><input class="bb-input bb-f-owner" placeholder="当前持有者" style="width:100%;margin-bottom:8px;" /></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">状态</label><select class="bb-input bb-f-status" style="width:100%;margin-bottom:8px;"><option value="held">持有中</option><option value="used">已使用</option><option value="lost">已丢失</option><option value="destroyed">已销毁</option></select></div>
                 </div>
                 <label style="font-size:0.85em;">重要性</label>
-                <input class="text_pole bb-f-significance" placeholder="对剧情的重要性" style="width:100%;margin-bottom:8px;" />
+                <input class="bb-input bb-f-significance" placeholder="对剧情的重要性" style="width:100%;margin-bottom:8px;" />
                 <div style="display:flex;gap:8px;">
-                    <div style="flex:1;"><label style="font-size:0.85em;">物品等级</label><select class="text_pole bb-f-itemTier" style="width:100%;margin-bottom:8px;">${Object.values(ITEM_TIERS).map(t => `<option value="${t.id}" ${t.id === 'consumable' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">物品等级</label><select class="bb-input bb-f-itemTier" style="width:100%;margin-bottom:8px;">${Object.values(ITEM_TIERS).map(t => `<option value="${t.id}" ${t.id === 'consumable' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div>
                     <div style="flex:1;display:flex;align-items:flex-end;padding-bottom:8px;"><label style="font-size:0.85em;display:flex;align-items:center;gap:4px;"><input type="checkbox" class="bb-f-keepPermanent" /> 永久保留</label></div>
                 </div>
                 <label style="font-size:0.85em;">标签</label>
-                <input class="text_pole bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
+                <input class="bb-input bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
             case 'timeline': return `
                 <label style="font-size:0.85em;">标题 <span style="color:#f44336;">*</span></label>
-                <input class="text_pole bb-f-title" placeholder="事件标题" style="width:100%;margin-bottom:8px;" />
+                <input class="bb-input bb-f-title" placeholder="事件标题" style="width:100%;margin-bottom:8px;" />
                 <div style="display:flex;gap:8px;">
-                    <div style="flex:1;"><label style="font-size:0.85em;">故事时间</label><input class="text_pole bb-f-storyTime" placeholder="如：第三天清晨" style="width:100%;margin-bottom:8px;" /></div>
-                    <div style="flex:1;"><label style="font-size:0.85em;">状态</label><select class="text_pole bb-f-status" style="width:100%;margin-bottom:8px;"><option value="ongoing" selected>进行中</option><option value="ended">已结束</option><option value="foreshadow">伏笔</option></select></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">故事时间</label><input class="bb-input bb-f-storyTime" placeholder="如：第三天清晨" style="width:100%;margin-bottom:8px;" /></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">状态</label><select class="bb-input bb-f-status" style="width:100%;margin-bottom:8px;"><option value="ongoing" selected>进行中</option><option value="ended">已结束</option><option value="foreshadow">伏笔</option></select></div>
                 </div>
                 <label style="font-size:0.85em;">事件描述</label>
-                <textarea class="text_pole bb-f-event" placeholder="事件内容..." rows="3" style="width:100%;margin-bottom:8px;"></textarea>
+                <textarea class="bb-input bb-f-event" placeholder="事件内容..." rows="3" style="width:100%;margin-bottom:8px;"></textarea>
                 <div style="display:flex;gap:8px;">
-                    <div style="flex:1;"><label style="font-size:0.85em;">参与者</label><input class="text_pole bb-f-participants" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" /></div>
-                    <div style="flex:1;"><label style="font-size:0.85em;">地点</label><input class="text_pole bb-f-location" placeholder="事件地点" style="width:100%;margin-bottom:8px;" /></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">参与者</label><input class="bb-input bb-f-participants" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" /></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">地点</label><input class="bb-input bb-f-location" placeholder="事件地点" style="width:100%;margin-bottom:8px;" /></div>
                 </div>
                 <label style="font-size:0.85em;">影响</label>
-                <input class="text_pole bb-f-impact" placeholder="对剧情的影响" style="width:100%;margin-bottom:8px;" />
+                <input class="bb-input bb-f-impact" placeholder="对剧情的影响" style="width:100%;margin-bottom:8px;" />
                 <label style="font-size:0.85em;">标签</label>
-                <input class="text_pole bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
+                <input class="bb-input bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
             case 'mem': default: return `
                 <label style="font-size:0.85em;">标题 <span style="color:#f44336;">*</span></label>
-                <input class="text_pole bb-f-title" placeholder="记忆标题（3-8字）" style="width:100%;margin-bottom:8px;" />
+                <input class="bb-input bb-f-title" placeholder="记忆标题（3-8字）" style="width:100%;margin-bottom:8px;" />
                 <div style="display:flex;gap:8px;">
-                    <div style="flex:1;"><label style="font-size:0.85em;">类型</label><select class="text_pole bb-f-type" style="width:100%;margin-bottom:8px;">${Object.values(MEMORY_TYPES).map(t => `<option value="${t.id}" ${t.id === 'event' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div>
-                    <div style="flex:1;"><label style="font-size:0.85em;">等级</label><select class="text_pole bb-f-memoryTier" style="width:100%;margin-bottom:8px;"><option value="transient">模糊</option><option value="stable" selected>稳固</option><option value="core">核心</option><option value="eternal">永恒</option></select></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">类型</label><select class="bb-input bb-f-type" style="width:100%;margin-bottom:8px;">${Object.values(MEMORY_TYPES).map(t => `<option value="${t.id}" ${t.id === 'event' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">等级</label><select class="bb-input bb-f-memoryTier" style="width:100%;margin-bottom:8px;"><option value="transient">模糊</option><option value="stable" selected>稳固</option><option value="core">核心</option><option value="eternal">永恒</option></select></div>
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
                     <label style="font-size:0.85em;display:flex;align-items:center;gap:4px;cursor:pointer;">
@@ -851,25 +851,25 @@ function showQuickAddForm(overlay, chatId) {
                     </label>
                 </div>
                 <div style="display:flex;gap:8px;">
-                    <div style="flex:1;"><label style="font-size:0.85em;">真值状态</label><select class="text_pole bb-f-truthStatus" style="width:100%;margin-bottom:8px;">${Object.entries(TRUTH_STATUS).map(([k,v]) => `<option value="${k}" ${k === 'true' ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">真值状态</label><select class="bb-input bb-f-truthStatus" style="width:100%;margin-bottom:8px;">${Object.entries(TRUTH_STATUS).map(([k,v]) => `<option value="${k}" ${k === 'true' ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
                     <div style="flex:1;"></div>
                 </div>
                 <label style="font-size:0.85em;">内容</label>
-                <textarea class="text_pole bb-f-content" placeholder="记忆内容..." rows="3" style="width:100%;margin-bottom:8px;"></textarea>
+                <textarea class="bb-input bb-f-content" placeholder="记忆内容..." rows="3" style="width:100%;margin-bottom:8px;"></textarea>
                 <div style="display:flex;gap:8px;">
-                    <div style="flex:1;"><label style="font-size:0.85em;">主体</label><input class="text_pole bb-f-subject" placeholder="记忆主体" style="width:100%;margin-bottom:8px;" /></div>
-                    <div style="flex:1;"><label style="font-size:0.85em;">对象</label><input class="text_pole bb-f-target" placeholder="记忆对象" style="width:100%;margin-bottom:8px;" /></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">主体</label><input class="bb-input bb-f-subject" placeholder="记忆主体" style="width:100%;margin-bottom:8px;" /></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">对象</label><input class="bb-input bb-f-target" placeholder="记忆对象" style="width:100%;margin-bottom:8px;" /></div>
                 </div>
                 <label style="font-size:0.85em;">摘要</label>
-                <textarea class="text_pole bb-f-summary" placeholder="一句话摘要" rows="1" style="width:100%;margin-bottom:8px;"></textarea>
+                <textarea class="bb-input bb-f-summary" placeholder="一句话摘要" rows="1" style="width:100%;margin-bottom:8px;"></textarea>
                 <label style="font-size:0.85em;">原话</label>
-                <textarea class="text_pole bb-f-verbatim" placeholder="角色原话（可选）" rows="1" style="width:100%;margin-bottom:8px;"></textarea>
+                <textarea class="bb-input bb-f-verbatim" placeholder="角色原话（可选）" rows="1" style="width:100%;margin-bottom:8px;"></textarea>
                 <div style="display:flex;gap:8px;">
                     <div style="flex:1;"><label style="font-size:0.85em;">重要性: <span class="bb-f-importance-val">50</span>%</label><input type="range" class="bb-f-importance" min="0" max="100" value="50" style="width:100%;" /></div>
                     <div style="flex:1;"><label style="font-size:0.85em;">情感权重: <span class="bb-f-emotional-val">0</span>%</label><input type="range" class="bb-f-emotional" min="0" max="100" value="0" style="width:100%;" /></div>
                 </div>
                 <label style="font-size:0.85em;">标签</label>
-                <input class="text_pole bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
+                <input class="bb-input bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
         }
     }
 
@@ -953,37 +953,37 @@ function buildFormHTML_inner(pillar) {
 function buildPillarFormFields_inner(p) {
     switch (p) {
         case 'npc': return `
-            <label style="font-size:0.85em;">姓名 <span style="color:#f44336;">*</span></label><input class="text_pole bb-f-name" placeholder="角色姓名" style="width:100%;margin-bottom:8px;" />
-            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">身份</label><input class="text_pole bb-f-role" placeholder="如：王国骑士" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">位置</label><input class="text_pole bb-f-location" placeholder="所在地点" style="width:100%;margin-bottom:8px;" /></div></div>
-            <label style="font-size:0.85em;">性格</label><textarea class="text_pole bb-f-personality" placeholder="性格特点..." rows="2" style="width:100%;margin-bottom:8px;"></textarea>
-            <label style="font-size:0.85em;">外貌</label><textarea class="text_pole bb-f-appearance" placeholder="外貌描述..." rows="2" style="width:100%;margin-bottom:8px;"></textarea>
-            <label style="font-size:0.85em;">关系</label><input class="text_pole bb-f-relationships" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />
-            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">NPC等级</label><select class="text_pole bb-f-npcTier" style="width:100%;margin-bottom:8px;">${Object.values(NPC_TIERS).map(t => `<option value="${t.id}" ${t.id === 'minor' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div><div style="flex:1;"><label style="font-size:0.85em;">标签</label><input class="text_pole bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" /></div></div>`;
+            <label style="font-size:0.85em;">姓名 <span style="color:#f44336;">*</span></label><input class="bb-input bb-f-name" placeholder="角色姓名" style="width:100%;margin-bottom:8px;" />
+            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">身份</label><input class="bb-input bb-f-role" placeholder="如：王国骑士" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">位置</label><input class="bb-input bb-f-location" placeholder="所在地点" style="width:100%;margin-bottom:8px;" /></div></div>
+            <label style="font-size:0.85em;">性格</label><textarea class="bb-input bb-f-personality" placeholder="性格特点..." rows="2" style="width:100%;margin-bottom:8px;"></textarea>
+            <label style="font-size:0.85em;">外貌</label><textarea class="bb-input bb-f-appearance" placeholder="外貌描述..." rows="2" style="width:100%;margin-bottom:8px;"></textarea>
+            <label style="font-size:0.85em;">关系</label><input class="bb-input bb-f-relationships" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />
+            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">NPC等级</label><select class="bb-input bb-f-npcTier" style="width:100%;margin-bottom:8px;">${Object.values(NPC_TIERS).map(t => `<option value="${t.id}" ${t.id === 'minor' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div><div style="flex:1;"><label style="font-size:0.85em;">标签</label><input class="bb-input bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" /></div></div>`;
         case 'item': return `
-            <label style="font-size:0.85em;">名称 <span style="color:#f44336;">*</span></label><input class="text_pole bb-f-name" placeholder="物品名称" style="width:100%;margin-bottom:8px;" />
-            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">持有者</label><input class="text_pole bb-f-owner" placeholder="当前持有者" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">状态</label><select class="text_pole bb-f-status" style="width:100%;margin-bottom:8px;"><option value="held">持有中</option><option value="used">已使用</option><option value="lost">已丢失</option><option value="destroyed">已销毁</option></select></div></div>
-            <label style="font-size:0.85em;">重要性</label><input class="text_pole bb-f-significance" placeholder="对剧情的重要性" style="width:100%;margin-bottom:8px;" />
-            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">物品等级</label><select class="text_pole bb-f-itemTier" style="width:100%;margin-bottom:8px;">${Object.values(ITEM_TIERS).map(t => `<option value="${t.id}" ${t.id === 'consumable' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div><div style="flex:1;display:flex;align-items:flex-end;padding-bottom:8px;"><label style="font-size:0.85em;display:flex;align-items:center;gap:4px;"><input type="checkbox" class="bb-f-keepPermanent" /> 永久保留</label></div></div>
-            <label style="font-size:0.85em;">标签</label><input class="text_pole bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
+            <label style="font-size:0.85em;">名称 <span style="color:#f44336;">*</span></label><input class="bb-input bb-f-name" placeholder="物品名称" style="width:100%;margin-bottom:8px;" />
+            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">持有者</label><input class="bb-input bb-f-owner" placeholder="当前持有者" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">状态</label><select class="bb-input bb-f-status" style="width:100%;margin-bottom:8px;"><option value="held">持有中</option><option value="used">已使用</option><option value="lost">已丢失</option><option value="destroyed">已销毁</option></select></div></div>
+            <label style="font-size:0.85em;">重要性</label><input class="bb-input bb-f-significance" placeholder="对剧情的重要性" style="width:100%;margin-bottom:8px;" />
+            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">物品等级</label><select class="bb-input bb-f-itemTier" style="width:100%;margin-bottom:8px;">${Object.values(ITEM_TIERS).map(t => `<option value="${t.id}" ${t.id === 'consumable' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div><div style="flex:1;display:flex;align-items:flex-end;padding-bottom:8px;"><label style="font-size:0.85em;display:flex;align-items:center;gap:4px;"><input type="checkbox" class="bb-f-keepPermanent" /> 永久保留</label></div></div>
+            <label style="font-size:0.85em;">标签</label><input class="bb-input bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
         case 'timeline': return `
-            <label style="font-size:0.85em;">标题 <span style="color:#f44336;">*</span></label><input class="text_pole bb-f-title" placeholder="事件标题" style="width:100%;margin-bottom:8px;" />
-            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">故事时间</label><input class="text_pole bb-f-storyTime" placeholder="如：第三天清晨" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">状态</label><select class="text_pole bb-f-status" style="width:100%;margin-bottom:8px;"><option value="ongoing" selected>进行中</option><option value="ended">已结束</option><option value="foreshadow">伏笔</option></select></div></div>
-            <label style="font-size:0.85em;">事件描述</label><textarea class="text_pole bb-f-event" placeholder="事件内容..." rows="3" style="width:100%;margin-bottom:8px;"></textarea>
-            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">参与者</label><input class="text_pole bb-f-participants" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">地点</label><input class="text_pole bb-f-location" placeholder="事件地点" style="width:100%;margin-bottom:8px;" /></div></div>
-            <label style="font-size:0.85em;">影响</label><input class="text_pole bb-f-impact" placeholder="对剧情的影响" style="width:100%;margin-bottom:8px;" />
+            <label style="font-size:0.85em;">标题 <span style="color:#f44336;">*</span></label><input class="bb-input bb-f-title" placeholder="事件标题" style="width:100%;margin-bottom:8px;" />
+            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">故事时间</label><input class="bb-input bb-f-storyTime" placeholder="如：第三天清晨" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">状态</label><select class="bb-input bb-f-status" style="width:100%;margin-bottom:8px;"><option value="ongoing" selected>进行中</option><option value="ended">已结束</option><option value="foreshadow">伏笔</option></select></div></div>
+            <label style="font-size:0.85em;">事件描述</label><textarea class="bb-input bb-f-event" placeholder="事件内容..." rows="3" style="width:100%;margin-bottom:8px;"></textarea>
+            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">参与者</label><input class="bb-input bb-f-participants" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">地点</label><input class="bb-input bb-f-location" placeholder="事件地点" style="width:100%;margin-bottom:8px;" /></div></div>
+            <label style="font-size:0.85em;">影响</label><input class="bb-input bb-f-impact" placeholder="对剧情的影响" style="width:100%;margin-bottom:8px;" />
             <label style="font-size:0.85em;">子条目</label>
             <div class="bb-subentries-container" style="margin-bottom:8px;"></div>
             <button type="button" class="menu_button bb-subentry-add" style="font-size:0.8em;width:100%;margin-bottom:8px;"><i class="fa-solid fa-plus"></i> 添加子条目</button>
-            <label style="font-size:0.85em;">标签</label><input class="text_pole bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
+            <label style="font-size:0.85em;">标签</label><input class="bb-input bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
         case 'mem': default: return `
-            <label style="font-size:0.85em;">标题 <span style="color:#f44336;">*</span></label><input class="text_pole bb-f-title" placeholder="记忆标题（3-8字）" style="width:100%;margin-bottom:8px;" />
-            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">类型</label><select class="text_pole bb-f-type" style="width:100%;margin-bottom:8px;">${Object.values(MEMORY_TYPES).map(t => `<option value="${t.id}" ${t.id === 'event' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div><div style="flex:1;"><label style="font-size:0.85em;">真值状态</label><select class="text_pole bb-f-truthStatus" style="width:100%;margin-bottom:8px;">${Object.entries(TRUTH_STATUS).map(([k,v]) => `<option value="${k}" ${k === 'true' ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div></div>
-            <label style="font-size:0.85em;">内容</label><textarea class="text_pole bb-f-content" placeholder="记忆内容..." rows="3" style="width:100%;margin-bottom:8px;"></textarea>
-            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">主体</label><input class="text_pole bb-f-subject" placeholder="记忆主体" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">对象</label><input class="text_pole bb-f-target" placeholder="记忆对象" style="width:100%;margin-bottom:8px;" /></div></div>
-            <label style="font-size:0.85em;">摘要</label><textarea class="text_pole bb-f-summary" placeholder="一句话摘要" rows="1" style="width:100%;margin-bottom:8px;"></textarea>
-            <label style="font-size:0.85em;">原话</label><textarea class="text_pole bb-f-verbatim" placeholder="角色原话（可选）" rows="1" style="width:100%;margin-bottom:8px;"></textarea>
+            <label style="font-size:0.85em;">标题 <span style="color:#f44336;">*</span></label><input class="bb-input bb-f-title" placeholder="记忆标题（3-8字）" style="width:100%;margin-bottom:8px;" />
+            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">类型</label><select class="bb-input bb-f-type" style="width:100%;margin-bottom:8px;">${Object.values(MEMORY_TYPES).map(t => `<option value="${t.id}" ${t.id === 'event' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div><div style="flex:1;"><label style="font-size:0.85em;">真值状态</label><select class="bb-input bb-f-truthStatus" style="width:100%;margin-bottom:8px;">${Object.entries(TRUTH_STATUS).map(([k,v]) => `<option value="${k}" ${k === 'true' ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div></div>
+            <label style="font-size:0.85em;">内容</label><textarea class="bb-input bb-f-content" placeholder="记忆内容..." rows="3" style="width:100%;margin-bottom:8px;"></textarea>
+            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">主体</label><input class="bb-input bb-f-subject" placeholder="记忆主体" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">对象</label><input class="bb-input bb-f-target" placeholder="记忆对象" style="width:100%;margin-bottom:8px;" /></div></div>
+            <label style="font-size:0.85em;">摘要</label><textarea class="bb-input bb-f-summary" placeholder="一句话摘要" rows="1" style="width:100%;margin-bottom:8px;"></textarea>
+            <label style="font-size:0.85em;">原话</label><textarea class="bb-input bb-f-verbatim" placeholder="角色原话（可选）" rows="1" style="width:100%;margin-bottom:8px;"></textarea>
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">重要性: <span class="bb-f-importance-val">50</span>%</label><input type="range" class="bb-f-importance" min="0" max="100" value="50" style="width:100%;" /></div><div style="flex:1;"><label style="font-size:0.85em;">情感权重: <span class="bb-f-emotional-val">0</span>%</label><input type="range" class="bb-f-emotional" min="0" max="100" value="0" style="width:100%;" /></div></div>
-            <label style="font-size:0.85em;">标签</label><input class="text_pole bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
+            <label style="font-size:0.85em;">标签</label><input class="bb-input bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
     }
 }
 
@@ -1276,7 +1276,7 @@ async function renderSlotsPanel(overlay, chatId, cachedData = null) {
             </div>
 
             <div class="bb-slots-create" style="margin-bottom:10px;">
-                <input type="text" class="text_pole" id="bb_slot_new_name" placeholder="新存档名称（如：if线A、主线）" />
+                <input type="text" class="bb-input" id="bb_slot_new_name" placeholder="新存档名称（如：if线A、主线）" />
                 <button class="menu_button" id="bb_slot_create_btn">
                     <i class="fa-solid fa-plus"></i> 新建存档
                 </button>
@@ -1284,7 +1284,7 @@ async function renderSlotsPanel(overlay, chatId, cachedData = null) {
 
             <div style="display:flex;align-items:center;gap:4px;margin-bottom:6px;">
                 <span style="font-size:0.8em;opacity:0.6;">排序:</span>
-                <select id="bb_slot_sort" class="text_pole" style="font-size:0.8em;width:auto;">
+                <select id="bb_slot_sort" class="bb-input" style="font-size:0.8em;width:auto;">
                     <option value="name_asc" ${sortMode === 'name_asc' ? 'selected' : ''}>名称 A-Z</option>
                     <option value="name_desc" ${sortMode === 'name_desc' ? 'selected' : ''}>名称 Z-A</option>
                     <option value="count_desc" ${sortMode === 'count_desc' ? 'selected' : ''}>条数 ↓</option>
@@ -1930,11 +1930,11 @@ function showThreadEditForm(overlay, chatId, thread) {
         <div class="bb-mem-form-body">
             <div class="bb-mem-form-row">
                 <label>线程名称</label>
-                <input type="text" class="text_pole bb-thread-form-name" value="${escapeHtml(thread.name || '')}" />
+                <input type="text" class="bb-input bb-thread-form-name" value="${escapeHtml(thread.name || '')}" />
             </div>
             <div class="bb-mem-form-row">
                 <label>类型</label>
-                <select class="text_pole bb-thread-form-type">
+                <select class="bb-input bb-thread-form-type">
                     <option value="plot" ${thread.type === 'plot' ? 'selected' : ''}>主线剧情</option>
                     <option value="emotional" ${thread.type === 'emotional' ? 'selected' : ''}>感情线</option>
                     <option value="side" ${thread.type === 'side' ? 'selected' : ''}>支线</option>
@@ -1943,7 +1943,7 @@ function showThreadEditForm(overlay, chatId, thread) {
             </div>
             <div class="bb-mem-form-row">
                 <label>优先级</label>
-                <select class="text_pole bb-thread-form-priority">
+                <select class="bb-input bb-thread-form-priority">
                     <option value="high" ${thread.priority === 'high' ? 'selected' : ''}>高</option>
                     <option value="medium" ${thread.priority === 'medium' ? 'selected' : ''}>中</option>
                     <option value="low" ${thread.priority === 'low' ? 'selected' : ''}>低</option>
@@ -1951,7 +1951,7 @@ function showThreadEditForm(overlay, chatId, thread) {
             </div>
             <div class="bb-mem-form-row">
                 <label>一句话总结 <small>注入时显示在AI上下文中</small></label>
-                <textarea class="text_pole bb-thread-form-summary" rows="2" placeholder="如：从北境初遇到战后表白，经历三年分离与重逢">${escapeHtml(thread.summary || '')}</textarea>
+                <textarea class="bb-input bb-thread-form-summary" rows="2" placeholder="如：从北境初遇到战后表白，经历三年分离与重逢">${escapeHtml(thread.summary || '')}</textarea>
             </div>
         </div>
         <div class="bb-mem-form-footer">
@@ -1998,11 +1998,11 @@ function showThreadCreateForm(overlay, chatId) {
         <div class="bb-mem-form-body">
             <div class="bb-mem-form-row">
                 <label>线程名称 *</label>
-                <input type="text" class="text_pole bb-thread-form-name" placeholder="如：主线·战前动员" />
+                <input type="text" class="bb-input bb-thread-form-name" placeholder="如：主线·战前动员" />
             </div>
             <div class="bb-mem-form-row">
                 <label>类型</label>
-                <select class="text_pole bb-thread-form-type">
+                <select class="bb-input bb-thread-form-type">
                     <option value="plot" selected>主线剧情</option>
                     <option value="emotional">感情线</option>
                     <option value="side">支线</option>
@@ -2011,7 +2011,7 @@ function showThreadCreateForm(overlay, chatId) {
             </div>
             <div class="bb-mem-form-row">
                 <label>优先级</label>
-                <select class="text_pole bb-thread-form-priority">
+                <select class="bb-input bb-thread-form-priority">
                     <option value="high">高</option>
                     <option value="medium" selected>中</option>
                     <option value="low">低</option>
@@ -2019,7 +2019,7 @@ function showThreadCreateForm(overlay, chatId) {
             </div>
             <div class="bb-mem-form-row">
                 <label>一句话总结 <small>注入时显示在AI上下文中</small></label>
-                <textarea class="text_pole bb-thread-form-summary" rows="2" placeholder="如：从北境初遇到战后表白，经历三年分离与重逢"></textarea>
+                <textarea class="bb-input bb-thread-form-summary" rows="2" placeholder="如：从北境初遇到战后表白，经历三年分离与重逢"></textarea>
             </div>
         </div>
         <div class="bb-mem-form-footer">
@@ -2066,15 +2066,15 @@ function showThreadEntryEditForm(overlay, chatId, thread, entryIdx) {
         <div class="bb-mem-form-body">
             <div class="bb-mem-form-row">
                 <label>时间区间</label>
-                <input type="text" class="text_pole bb-thread-form-period" value="${escapeHtml(entry.period || '')}" placeholder="如：123年1月-2月" />
+                <input type="text" class="bb-input bb-thread-form-period" value="${escapeHtml(entry.period || '')}" placeholder="如：123年1月-2月" />
             </div>
             <div class="bb-mem-form-row">
                 <label>事件描述</label>
-                <input type="text" class="text_pole bb-thread-form-event" value="${escapeHtml(entry.event || '')}" />
+                <input type="text" class="bb-input bb-thread-form-event" value="${escapeHtml(entry.event || '')}" />
             </div>
             <div class="bb-mem-form-row">
                 <label>状态</label>
-                <select class="text_pole bb-thread-form-entry-status">
+                <select class="bb-input bb-thread-form-entry-status">
                     <option value="ongoing" ${entry.status === 'ongoing' ? 'selected' : ''}>进行中</option>
                     <option value="ended" ${entry.status === 'ended' ? 'selected' : ''}>已结束</option>
                     <option value="milestone" ${entry.status === 'milestone' ? 'selected' : ''}>里程碑</option>

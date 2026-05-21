@@ -1,5 +1,22 @@
 /* ═══ BB-Memory v2.0 样式 ═══ */
 
+/* v8.2.4 BB-Memory 自定义输入框 —— 外观与 text_pole 一致，但避开 ST AutoComplete 自动绑定 */
+.bb-input {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--SmartThemeBorderColor, #555);
+    background: var(--SmartThemeInputColor, #1a1a2e);
+    color: var(--SmartThemeTextColor, #ddd);
+    font-size: 0.95em;
+    box-sizing: border-box;
+    font-family: inherit;
+}
+.bb-input::placeholder {
+    color: var(--SmartThemeTextColor, #ddd);
+    opacity: 0.4;
+}
+
 /* ═══════════════════════════════════════
    侧边栏设置面板
    ═══════════════════════════════════════ */

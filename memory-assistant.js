@@ -390,18 +390,18 @@ function bindBrowseEvents(win, chatId) {
         formEl.innerHTML = `
             <div style="display:flex;flex-direction:column;gap:6px;">
                 <label style="font-size:0.85em;font-weight:bold;"><i class="fa-solid fa-plus"></i> 新建时间线</label>
-                <input class="text_pole" id="bb_new_tl_event" placeholder="事件描述 *" style="font-size:0.85em;">
+                <input class="bb-input" id="bb_new_tl_event" placeholder="事件描述 *" style="font-size:0.85em;">
                 <div style="display:flex;gap:6px;">
-                    <input class="text_pole" id="bb_new_tl_storyTime" placeholder="故事时间（如：第三天清晨）" style="font-size:0.85em;flex:1;">
-                    <select class="text_pole" id="bb_new_tl_status" style="font-size:0.85em;width:auto;">
+                    <input class="bb-input" id="bb_new_tl_storyTime" placeholder="故事时间（如：第三天清晨）" style="font-size:0.85em;flex:1;">
+                    <select class="bb-input" id="bb_new_tl_status" style="font-size:0.85em;width:auto;">
                         <option value="ongoing">进行中</option>
                         <option value="ended">已结束</option>
                         <option value="foreshadow">伏笔</option>
                     </select>
                 </div>
-                <input class="text_pole" id="bb_new_tl_participants" placeholder="参与者（逗号分隔）" style="font-size:0.85em;">
-                <input class="text_pole" id="bb_new_tl_location" placeholder="地点" style="font-size:0.85em;">
-                <input class="text_pole" id="bb_new_tl_impact" placeholder="影响" style="font-size:0.85em;">
+                <input class="bb-input" id="bb_new_tl_participants" placeholder="参与者（逗号分隔）" style="font-size:0.85em;">
+                <input class="bb-input" id="bb_new_tl_location" placeholder="地点" style="font-size:0.85em;">
+                <input class="bb-input" id="bb_new_tl_impact" placeholder="影响" style="font-size:0.85em;">
                 <div style="display:flex;gap:6px;">
                     <button class="bb-item-btn" id="bb_new_tl_save" style="background:#4caf50;color:#fff;font-size:0.85em;">保存</button>
                     <button class="bb-item-btn" id="bb_new_tl_cancel" style="font-size:0.85em;">取消</button>
