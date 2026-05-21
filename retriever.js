@@ -407,7 +407,7 @@ function formatMemoryLine(m, chatLength = 0) {
  * @param {object} params.settings
  * @returns {{ text: string, tokenEstimate: number, stats: object }}
  */
-export function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, threadSummary, relevantResults, settings, chatLength = 0 }) {
+export function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, threadSummary, relevantResults, settings, chatLength = 0, clueBoard = null }) {
     const tokenBudget = settings.tokenBudget || 800;
     let tokenUsed = 0;
     const stats = { npcCount: 0, itemCount: 0, timelineCount: 0, memoryCount: 0, threadCount: 0 };
@@ -509,6 +509,22 @@ export function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, threa
         if (lines.length > 1) sections.push(lines.join('\n'));
         if (stats.memoryCount < relevantResults.length) {
             truncated.push(`记忆(${stats.memoryCount}/${relevantResults.length})`);
+        }
+    }
+
+    // ── 区块 5：线索板（v8.4.0）──
+    if (clueBoard && typeof clueBoard === 'object') {
+        const { hasActiveClues, buildClueBoardInjection } = await import('./clue-board.js');
+        if (hasActiveClues(clueBoard)) {
+            const clueText = buildClueBoardInjection(clueBoard);
+            const clueTokens = estimateTokens(clueText);
+            if (clueTokens <= tokenBudget * 0.15) {
+                sections.push(clueText);
+                tokenUsed += clueTokens;
+                stats.clueBoard = true;
+            } else {
+                truncated.push('线索板(超出token预算)');
+            }
         }
     }
 

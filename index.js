@@ -43,6 +43,8 @@ import {
     markExchangeExtracted, hideExchange, unmarkExchangeProcessed,
 } from './message-state.js';
 
+import { getClueBoard } from './clue-board.js';
+
 import {
     checkMaintenanceNeeded, dismissMaintenanceRemind,
     performMaintenance, autoMaintainSilent,
@@ -111,9 +113,10 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     }
 
     // 4. 加载数据
-    const [npc, items, timeline, memories, threads] = await Promise.all([
+    const [npc, items, timeline, memories, threads, clueBoard] = await Promise.all([
         getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
         getTimelineThreads(chatId),
+        getClueBoard(chatId),
     ]);
 
     const hasData = npc.length + items.length + timeline.length + memories.length + threads.length > 0;
@@ -184,6 +187,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         relevantResults: merged,
         settings,
         chatLength: chat.length,
+        clueBoard,
     });
 
     // 10. 注入
@@ -796,6 +800,11 @@ function bindSidebarEvents() {
         } else {
             showToast(`已标记 ${total} 条记忆为旧聊天来源（NPC:${stats.npc} 物品:${stats.items} 时间线:${stats.timeline} 记忆:${stats.memories}）`, 'success');
         }
+    });
+    document.querySelector('#bb_clue_board_btn')?.addEventListener('click', () => {
+        const chatId = getChatId();
+        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        import('./clue-board.js').then(m => m.openClueBoard(chatId));
     });
     document.querySelector('#bb_embedding_reindex_btn')?.addEventListener('click', async () => {
         const chatId = getChatId();
@@ -1534,6 +1543,13 @@ function registerSlashCommands() {
         }
     }, '换楼刷新 — 将所有记忆的楼层标记为旧聊天来源（开新聊天后使用）');
 
+    addCmd('bb-clue', async () => {
+        const chatId = getChatId();
+        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        const { openClueBoard } = await import('./clue-board.js');
+        openClueBoard(chatId);
+    }, '打开线索板 — 追踪线索、创建连线推理');
+
     if (getSettings().debugLogging) {
         console.log('[BB-Memory] 斜杠命令已注册');
     }
@@ -1690,6 +1706,10 @@ function injectFloatingHub() {
             <div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_maintenance">
                 <i class="fa-solid fa-toolbox"></i>
                 <span>记忆维护</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_clue_board">
+                <i class="fa-solid fa-magnifying-glass"></i>
+                <span>线索板</span>
             </div>
             <div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_manager">
                 <i class="fa-solid fa-gear"></i>
@@ -1989,6 +2009,12 @@ async function handleFloatingMenuAction(action) {
                 }
             } catch (e) {
                 showToast(`重新提取失败: ${e.message}`, 'error');
+            }
+            break;
+        }
+        case 'open_clue_board': {
+            if (chatId) {
+                import('./clue-board.js').then(m => m.openClueBoard(chatId));
             }
             break;
         }

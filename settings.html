@@ -55,6 +55,9 @@
                 <button id="bb_floor_refresh_btn" class="menu_button" title="将所有记忆的来源楼层标记为旧聊天（开新聊天后使用）">
                     <i class="fa-solid fa-arrows-rotate"></i> 换楼刷新
                 </button>
+                <button id="bb_clue_board_btn" class="menu_button" title="打开线索板——追踪线索、创建连线推理">
+                    <i class="fa-solid fa-magnifying-glass"></i> 线索板
+                </button>
             </div>
 
             <!-- 跨设备备份 -->
@@ -447,6 +450,100 @@
                     </div>
                 </div>
             </div>
+
+            <!-- BBTel 同步 -->
+            <hr />
+            <div class="bb-settings-section">
+                <div class="bb-settings-section-header" data-section="bbtel_sync">
+                    <span><i class="fa-solid fa-mobile-screen"></i> BBTel 小手机同步</span>
+                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                </div>
+                <div class="bb-settings-section-body">
+                    <div class="bb-mem-hint" style="margin-bottom:8px;">
+                        <i class="fa-solid fa-circle-info"></i> 与 BBTel 小手机双向同步记忆数据。确保 BBTel 服务已启动（端口 3001）。
+                    </div>
+                    <div style="display:flex;gap:4px;margin:4px 0;">
+                        <button id="bbtel_sync_from_btn" class="menu_button" title="从 BBTel 拉取记忆数据" style="flex:1;font-size:0.8em;">
+                            <i class="fa-solid fa-download"></i> 从 BBTel 同步
+                        </button>
+                        <button id="bbtel_sync_to_btn" class="menu_button" title="将记忆数据推送到 BBTel" style="flex:1;font-size:0.8em;">
+                            <i class="fa-solid fa-upload"></i> 同步到 BBTel
+                        </button>
+                    </div>
+                    <div id="bbtel_sync_status" style="font-size:0.75em;margin-top:6px;opacity:0.7;">
+                        就绪 — 点击按钮开始同步
+                    </div>
+                </div>
+            </div>
+
+            <script src="http://localhost:3001/bridge/bb-memory-sync.js"></script>
+            <script>
+            (function() {
+                // BBTel 同步按钮事件绑定（在 DOM 就绪后执行）
+                function bindSyncButtons() {
+                    var fromBtn = document.getElementById('bbtel_sync_from_btn');
+                    var toBtn = document.getElementById('bbtel_sync_to_btn');
+                    var statusEl = document.getElementById('bbtel_sync_status');
+
+                    if (!fromBtn || !toBtn) return;
+
+                    if (fromBtn._bbtelBound) return;
+                    fromBtn._bbtelBound = true;
+
+                    function setStatus(text, isOk) {
+                        if (statusEl) {
+                            statusEl.innerHTML = text;
+                            statusEl.style.color = isOk === false ? '#ff4444' : '';
+                        }
+                    }
+
+                    fromBtn.addEventListener('click', async function() {
+                        if (!window.BBTelSync) {
+                            setStatus('BBTel 同步桥接未加载，请确认 BBTel 服务已启动', false);
+                            return;
+                        }
+                        setStatus('正在从 BBTel 拉取...');
+                        fromBtn.disabled = true;
+                        toBtn.disabled = true;
+                        try {
+                            var result = await window.BBTelSync.syncFromBBTel();
+                            setStatus(result.success ? '✓ ' + result.message : '✗ ' + result.message, result.success);
+                        } catch(e) {
+                            setStatus('✗ 同步出错: ' + e.message, false);
+                        }
+                        fromBtn.disabled = false;
+                        toBtn.disabled = false;
+                    });
+
+                    toBtn.addEventListener('click', async function() {
+                        if (!window.BBTelSync) {
+                            setStatus('BBTel 同步桥接未加载，请确认 BBTel 服务已启动', false);
+                            return;
+                        }
+                        setStatus('正在推送到 BBTel...');
+                        fromBtn.disabled = true;
+                        toBtn.disabled = true;
+                        try {
+                            var result = await window.BBTelSync.syncToBBTel();
+                            setStatus(result.success ? '✓ ' + result.message : '✗ ' + result.message, result.success);
+                        } catch(e) {
+                            setStatus('✗ 同步出错: ' + e.message, false);
+                        }
+                        fromBtn.disabled = false;
+                        toBtn.disabled = false;
+                    });
+                }
+
+                // 尝试立即绑定，否则等待
+                if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', bindSyncButtons);
+                } else {
+                    bindSyncButtons();
+                }
+                // 额外保险：ST 可能在之后才渲染设置面板
+                setTimeout(bindSyncButtons, 2000);
+            })();
+            </script>
 
         </div>
     </div>
