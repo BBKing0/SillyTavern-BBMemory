@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v8.2.5</b>
+            <b>BB-Memory v8.2.6</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -98,32 +98,32 @@
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_max_results">最大检索数（仅记忆条目）</label>
-                        <input id="bb_max_results" type="number" class="text_pole" min="1" max="30" value="10" />
+                        <input id="bb_max_results" type="number" class="bb-input" min="1" max="30" value="10" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_npc_injection_max">NPC 注入上限</label>
-                        <input id="bb_npc_injection_max" type="number" class="text_pole" min="1" max="30" value="8" />
+                        <input id="bb_npc_injection_max" type="number" class="bb-input" min="1" max="30" value="8" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_item_injection_max">物品注入上限</label>
-                        <input id="bb_item_injection_max" type="number" class="text_pole" min="1" max="20" value="5" />
+                        <input id="bb_item_injection_max" type="number" class="bb-input" min="1" max="20" value="5" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_timeline_ended_max">时间线已结束事件上限</label>
-                        <input id="bb_timeline_ended_max" type="number" class="text_pole" min="1" max="15" value="3" />
+                        <input id="bb_timeline_ended_max" type="number" class="bb-input" min="1" max="15" value="3" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_token_budget">Token 预算</label>
-                        <input id="bb_token_budget" type="number" class="text_pole" min="100" max="4000" step="50" value="800" />
+                        <input id="bb_token_budget" type="number" class="bb-input" min="100" max="4000" step="50" value="800" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_injection_template">注入模板 <small>用 {{memories}} 代表记忆内容</small></label>
-                        <textarea id="bb_injection_template" class="text_pole bb-mem-textarea" rows="2">[BB-Memory 长期记忆]
+                        <textarea id="bb_injection_template" class="bb-input bb-mem-textarea" rows="2">[BB-Memory 长期记忆]
 {{memories}}</textarea>
                     </div>
 
@@ -143,25 +143,25 @@
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_maintenance_mem_threshold">记忆维护阈值</label>
                         <small class="bb-mem-hint">记忆数超过此值时提示维护（默认20）</small>
-                        <input id="bb_maintenance_mem_threshold" type="number" class="text_pole" min="5" max="200" value="20" />
+                        <input id="bb_maintenance_mem_threshold" type="number" class="bb-input" min="5" max="200" value="20" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_maintenance_npc_threshold">NPC 维护阈值</label>
                         <small class="bb-mem-hint">NPC数超过此值时提示维护（默认5）</small>
-                        <input id="bb_maintenance_npc_threshold" type="number" class="text_pole" min="2" max="50" value="5" />
+                        <input id="bb_maintenance_npc_threshold" type="number" class="bb-input" min="2" max="50" value="5" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_maintenance_item_threshold">物品维护阈值</label>
                         <small class="bb-mem-hint">物品数超过此值时提示维护（默认20）</small>
-                        <input id="bb_maintenance_item_threshold" type="number" class="text_pole" min="5" max="200" value="20" />
+                        <input id="bb_maintenance_item_threshold" type="number" class="bb-input" min="5" max="200" value="20" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_diversity_limit">多样性限制</label>
                         <small class="bb-mem-hint">同一标签最多允许多少条核心记忆（默认5）</small>
-                        <input id="bb_diversity_limit" type="number" class="text_pole" min="2" max="20" value="5" />
+                        <input id="bb_diversity_limit" type="number" class="bb-input" min="2" max="20" value="5" />
                     </div>
 
                     <label class="checkbox_label" style="margin: 8px 0;">
@@ -172,7 +172,7 @@
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_max_active_threads">最大活跃线程数</label>
                         <small class="bb-mem-hint">活跃线程超过此数时自动限制注入（默认5）</small>
-                        <input id="bb_max_active_threads" type="number" class="text_pole" min="2" max="15" value="5" />
+                        <input id="bb_max_active_threads" type="number" class="bb-input" min="2" max="15" value="5" />
                     </div>
 
                     <label class="checkbox_label" style="margin: 8px 0;">
@@ -196,25 +196,25 @@
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_health_check_duplicate_threshold">近似重复阈值</label>
                         <small class="bb-mem-hint">余弦相似度超过此值视为近似重复（默认0.95）</small>
-                        <input id="bb_health_check_duplicate_threshold" type="number" class="text_pole" min="0.80" max="1.00" step="0.01" value="0.95" />
+                        <input id="bb_health_check_duplicate_threshold" type="number" class="bb-input" min="0.80" max="1.00" step="0.01" value="0.95" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_health_check_isolation_threshold">语义孤立阈值</label>
                         <small class="bb-mem-hint">孤立度超过此值标记为孤立条目（默认0.30）</small>
-                        <input id="bb_health_check_isolation_threshold" type="number" class="text_pole" min="0.10" max="0.90" step="0.05" value="0.30" />
+                        <input id="bb_health_check_isolation_threshold" type="number" class="bb-input" min="0.10" max="0.90" step="0.05" value="0.30" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_health_check_stale_days">休眠判定（天）</label>
                         <small class="bb-mem-hint">超过此天数未命中且命中次数少视为休眠（默认7）</small>
-                        <input id="bb_health_check_stale_days" type="number" class="text_pole" min="1" max="90" value="7" />
+                        <input id="bb_health_check_stale_days" type="number" class="bb-input" min="1" max="90" value="7" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_health_check_stale_hit_threshold">休眠命中次数阈值</label>
                         <small class="bb-mem-hint">命中次数低于此值且长期未命中视为休眠（默认3）</small>
-                        <input id="bb_health_check_stale_hit_threshold" type="number" class="text_pole" min="0" max="20" value="3" />
+                        <input id="bb_health_check_stale_hit_threshold" type="number" class="bb-input" min="0" max="20" value="3" />
                     </div>
 
                 </div>
@@ -242,7 +242,7 @@
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_auto_gen_mode">API 模式</label>
-                        <select id="bb_auto_gen_mode" class="text_pole">
+                        <select id="bb_auto_gen_mode" class="bb-input">
                             <option value="main">主 API</option>
                             <option value="custom">自定义 API</option>
                         </select>
@@ -250,7 +250,7 @@
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_extraction_confirm_mode">提取确认模式</label>
-                        <select id="bb_extraction_confirm_mode" class="text_pole">
+                        <select id="bb_extraction_confirm_mode" class="bb-input">
                             <option value="active">主动确认</option>
                             <option value="semi" selected>半自动</option>
                             <option value="auto">全自动</option>
@@ -259,7 +259,7 @@
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_active_confirm_style">确认通知方式</label>
-                        <select id="bb_active_confirm_style" class="text_pole">
+                        <select id="bb_active_confirm_style" class="bb-input">
                             <option value="popup" selected>浮动弹窗</option>
                             <option value="toast">通知提示</option>
                         </select>
@@ -267,13 +267,13 @@
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_context_window">上下文保留窗口（Exchange数）</label>
-                        <input id="bb_context_window" type="number" class="text_pole" min="1" max="20" value="3" />
+                        <input id="bb_context_window" type="number" class="bb-input" min="1" max="20" value="3" />
                     </div>
                     <div class="bb-mem-hint">保留最近N个AI回复在上下文中，超出窗口的将被提取并隐藏。</div>
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_batch_extraction">并行提取数</label>
-                        <input id="bb_batch_extraction" type="number" class="text_pole" min="1" max="5" value="2" />
+                        <input id="bb_batch_extraction" type="number" class="bb-input" min="1" max="5" value="2" />
                     </div>
                     <div class="bb-mem-hint">同时发送的API请求数，每个exchange独立调用（增大可提速，默认2）。</div>
 
@@ -281,7 +281,7 @@
                     <div class="bb-mem-sidebar-section" style="margin-bottom:6px;">
                         <label>API 预设 <small>保存当前配置并快速切换</small></label>
                         <div style="display:flex;gap:6px;align-items:center;">
-                            <select id="bb_api_profile_select" class="text_pole" style="flex:1;font-size:0.85em;">
+                            <select id="bb_api_profile_select" class="bb-input" style="flex:1;font-size:0.85em;">
                                 <option value="">-- 未选择 --</option>
                             </select>
                             <button id="bb_api_profile_save" class="menu_button" style="font-size:0.78em;white-space:nowrap;" title="保存当前配置为新预设"><i class="fa-solid fa-floppy-disk"></i> 保存</button>
@@ -292,15 +292,15 @@
                     <div id="bb_memory_custom_api_section">
                         <div class="bb-mem-sidebar-section">
                             <label for="bb_auto_gen_endpoint">自定义 API 端点</label>
-                            <input id="bb_auto_gen_endpoint" type="text" class="text_pole" placeholder="https://api.example.com" />
+                            <input id="bb_auto_gen_endpoint" type="text" class="bb-input" placeholder="https://api.example.com" />
                         </div>
                         <div class="bb-mem-sidebar-section">
                             <label for="bb_auto_gen_api_key">API Key</label>
-                            <input id="bb_auto_gen_api_key" type="password" class="text_pole" placeholder="sk-..." />
+                            <input id="bb_auto_gen_api_key" type="password" class="bb-input" placeholder="sk-..." />
                         </div>
                         <div class="bb-mem-sidebar-section">
                             <label for="bb_auto_gen_model">模型</label>
-                            <input id="bb_auto_gen_model" type="text" class="text_pole" placeholder="gpt-4o-mini" />
+                            <input id="bb_auto_gen_model" type="text" class="bb-input" placeholder="gpt-4o-mini" />
                         </div>
                         <!-- v8.2.3 测试连接 -->
                         <button id="bb_api_test_connection" class="menu_button" style="font-size:0.8em;margin-top:4px;">
@@ -312,7 +312,7 @@
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_extraction_style">提取风格 <small>根据角色扮演类型调整提取侧重</small></label>
-                        <select id="bb_extraction_style" class="text_pole">
+                        <select id="bb_extraction_style" class="bb-input">
                             <option value="auto" selected>自动识别</option>
                             <option value="daily">日常陪伴 — 关注情感细节、习惯、偏好</option>
                             <option value="drama">正剧叙事 — 关注伏笔、剧情节点、角色弧线</option>
@@ -322,7 +322,7 @@
 
                     <div class="bb-mem-sidebar-section" id="bb_custom_bias_section" style="display:none;">
                         <label for="bb_custom_extraction_bias">自定义风格偏置 <small>描述你希望优先提取什么类型的记忆</small></label>
-                        <textarea id="bb_custom_extraction_bias" class="text_pole" rows="4" placeholder="例如：优先提取角色之间的情感互动、微妙的表情变化、未说出口的潜台词..."></textarea>
+                        <textarea id="bb_custom_extraction_bias" class="bb-input" rows="4" placeholder="例如：优先提取角色之间的情感互动、微妙的表情变化、未说出口的潜台词..."></textarea>
                     </div>
 
                 </div>
@@ -345,15 +345,15 @@
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_embedding_endpoint">Embedding API 端点</label>
-                        <input id="bb_embedding_endpoint" type="text" class="text_pole" placeholder="https://api.example.com" />
+                        <input id="bb_embedding_endpoint" type="text" class="bb-input" placeholder="https://api.example.com" />
                     </div>
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_embedding_api_key">API Key</label>
-                        <input id="bb_embedding_api_key" type="password" class="text_pole" />
+                        <input id="bb_embedding_api_key" type="password" class="bb-input" />
                     </div>
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_embedding_model">模型</label>
-                        <input id="bb_embedding_model" type="text" class="text_pole" placeholder="text-embedding-3-small" />
+                        <input id="bb_embedding_model" type="text" class="bb-input" placeholder="text-embedding-3-small" />
                     </div>
                     <button id="bb_embedding_test_btn" class="menu_button" style="margin-top:8px;margin-right:6px;">
                         <i class="fa-solid fa-plug"></i> 测试连接
@@ -376,7 +376,7 @@
                 <div class="bb-settings-section-body">
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_calendar_description">日历描述 <small>描述你的奇幻世界日历规则</small></label>
-                        <textarea id="bb_calendar_description" class="text_pole" rows="2" placeholder="留空使用默认时间推断..."></textarea>
+                        <textarea id="bb_calendar_description" class="bb-input" rows="2" placeholder="留空使用默认时间推断..."></textarea>
                     </div>
 
                     <label class="checkbox_label" style="margin: 8px 0;">
@@ -420,14 +420,14 @@
                             自定义核心原则
                             <button class="menu_button" id="bb_reset_core_principles" style="font-size:0.7em;padding:2px 6px;margin-left:8px;">恢复默认</button>
                         </label>
-                        <textarea id="bb_custom_core_principles" class="text_pole" rows="4" placeholder="留空使用默认核心原则..."></textarea>
+                        <textarea id="bb_custom_core_principles" class="bb-input" rows="4" placeholder="留空使用默认核心原则..."></textarea>
                     </div>
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_custom_extraction_dimensions">
                             自定义提取维度
                             <button class="menu_button" id="bb_reset_extraction_dimensions" style="font-size:0.7em;padding:2px 6px;margin-left:8px;">恢复默认</button>
                         </label>
-                        <textarea id="bb_custom_extraction_dimensions" class="text_pole" rows="8" placeholder="留空使用默认提取维度..."></textarea>
+                        <textarea id="bb_custom_extraction_dimensions" class="bb-input" rows="8" placeholder="留空使用默认提取维度..."></textarea>
                     </div>
                 </div>
             </div>
