@@ -300,19 +300,22 @@ export async function markExchangeExtracted(userIndex, aiIndex, hash) {
     const ctx = getContext();
     const chat = ctx.chat;
 
+    const settings = getSettings();
+    const displayMode = settings.extractedMsgDisplay || 'hidden';
+
     if (chat) {
-        // v8.2.7 清理冗余标记，减少聊天文件体积
         if (chat[aiIndex]) {
             chat[aiIndex]._bbmem_extracted = true;
             delete chat[aiIndex]._bbmem_pendingExtraction;
             chat[aiIndex]._bbmem_exchangeHash = hash;
-            if (!chat[aiIndex].is_hidden) {
+            if (displayMode === 'hidden' && !chat[aiIndex].is_hidden) {
                 chat[aiIndex].is_hidden = true;
                 chat[aiIndex]._bbmem_hideSource = 'plugin';
+            } else if (displayMode !== 'hidden') {
+                chat[aiIndex].is_hidden = false;
             }
         }
-        // 用户消息也标记为隐藏，防止"跨楼层"问题
-        if (chat[userIndex] && !chat[userIndex].is_hidden) {
+        if (chat[userIndex] && displayMode === 'hidden' && !chat[userIndex].is_hidden) {
             chat[userIndex].is_hidden = true;
             chat[userIndex]._bbmem_hideSource = 'plugin';
         }
@@ -556,18 +559,35 @@ export function refreshExtractionMarkers() {
             markerTarget.appendChild(floorActions);
         }
 
-        // ── 隐藏已提取的消息；元标记消息仅在离开窗口后才隐藏 ──
+        // ── 根据 extractedMsgDisplay 设置显示状态 ──
+        const displayMode = getSettings().extractedMsgDisplay || 'hidden';
         if (msg._bbmem_extracted || (msg._bbmem_meta_marker && msg.is_hidden)) {
-            if (!block.classList.contains('bb-extracted-hidden')) {
-                block.classList.add('bb-extracted-hidden');
-            }
-            if (!msg.is_hidden) {
-                msg.is_hidden = true;
-                msg._bbmem_hideSource = 'plugin';
-                changed = true;
+            block.classList.remove('bb-extracted-transparent');
+            if (displayMode === 'hidden') {
+                if (!block.classList.contains('bb-extracted-hidden')) {
+                    block.classList.add('bb-extracted-hidden');
+                }
+                if (!msg.is_hidden) {
+                    msg.is_hidden = true;
+                    msg._bbmem_hideSource = 'plugin';
+                    changed = true;
+                }
+            } else if (displayMode === 'transparent') {
+                block.classList.remove('bb-extracted-hidden');
+                if (!block.classList.contains('bb-extracted-transparent')) {
+                    block.classList.add('bb-extracted-transparent');
+                }
+                if (msg.is_hidden && msg._bbmem_hideSource === 'plugin') {
+                    msg.is_hidden = false;
+                }
+            } else {
+                block.classList.remove('bb-extracted-hidden', 'bb-extracted-transparent');
+                if (msg.is_hidden && msg._bbmem_hideSource === 'plugin') {
+                    msg.is_hidden = false;
+                }
             }
         } else {
-            block.classList.remove('bb-extracted-hidden');
+            block.classList.remove('bb-extracted-hidden', 'bb-extracted-transparent');
         }
 
         // v6.1: 存储 exchange hash 到 DOM 用于删除检测

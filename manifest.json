@@ -4,9 +4,9 @@
     "js": "index.js",
     "css": "style.css",
     "author": "BB-Memory Dev",
-    "version": "8.2.8",
+    "version": "8.3.0",
     "homePage": "https://github.com/BBKing0/SillyTavern-BBMemory",
     "auto_update": true,
     "generate_interceptor": "bbMemoryInterceptor",
-    "description": "智能长期记忆扩展 v8.2.8 - 修复注入token预算截断Bug"
+    "description": "智能长期记忆扩展 v8.3.0 - 代码清理/Active合并提取/维护自动化/楼层摘要/显示三态"
 }

@@ -1697,24 +1697,34 @@ async function renderThreadPanel(overlay, chatId) {
         html += '</div></div>';
     }
 
-    // v7.5.0 详细时间线条目（折叠区，仅显示进行中条目）
+    // v8.3.0 时间条目列表（默认展开，含线程归属标记）
     const tlId = 'bb_thread_detail_timeline';
-    const activeTimelineEntries = timeline.filter(t => t.isActive);
-    if (activeTimelineEntries.length) {
+    // 构建条目→线程的映射
+    const entryThreadMap = new Map(); // entryId → thread name
+    for (const thread of activeThreads) {
+        for (const entry of (thread.entries || [])) {
+            if (entry.refId) entryThreadMap.set(entry.refId, thread.name);
+        }
+    }
+    const allTimelineEntries = [...timeline].sort((a, b) => (a.storyTimeSort ?? 0) - (b.storyTimeSort ?? 0));
+    if (allTimelineEntries.length) {
         html += `
         <div class="bb-thread-detail-section">
-            <button class="bb-thread-detail-toggle" id="${tlId}_toggle" data-collapsed="true">
-                <i class="fa-solid fa-chevron-right"></i>
-                详细时间线条目 (${activeTimelineEntries.length}条) — 点击展开
+            <button class="bb-thread-detail-toggle" id="${tlId}_toggle" data-collapsed="false">
+                <i class="fa-solid fa-chevron-down"></i>
+                时间条目列表 (${allTimelineEntries.length}条)
             </button>
-            <div class="bb-thread-detail-list" id="${tlId}_list" style="display:none;">
-                ${activeTimelineEntries.sort((a, b) => (a.storyTimeSort ?? 0) - (b.storyTimeSort ?? 0)).map(t => {
+            <div class="bb-thread-detail-list" id="${tlId}_list">
+                ${allTimelineEntries.map(t => {
                     const tStatus = t.status === 'ongoing' ? '进行中' : t.status === 'ended' ? '已结束' : t.status === 'foreshadow' ? '伏笔' : t.status || '';
+                    const inThread = entryThreadMap.get(t.id);
+                    const threadTag = inThread ? `<span class="bb-thread-detail-thread" title="属于线程: ${escapeHtml(inThread)}">▪ ${escapeHtml(inThread)}</span>` : '<span class="bb-thread-detail-thread" style="opacity:0.35;">未归入线程</span>';
                     return `
                     <div class="bb-thread-detail-item">
                         <span class="bb-thread-detail-time">${escapeHtml(t.storyTime || '?')}</span>
                         <span class="bb-thread-detail-event">${escapeHtml(t.event || t.summary || '')}</span>
                         ${tStatus ? `<span class="bb-thread-detail-status">${tStatus}</span>` : ''}
+                        ${threadTag}
                         <span style="flex:1;"></span>
                         <button class="bb-thread-detail-edit menu_button" data-id="${t.id}" title="编辑"><i class="fa-solid fa-pen"></i></button>
                     </div>`;

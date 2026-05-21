@@ -75,48 +75,10 @@ export const HIDDEN_NOTE_TYPES = Object.freeze({
     plot:          { id: 'plot',          label: '剧情备注' },
 });
 
-// ═══════════════════════════════════════════════════════════
-//  记忆维护状态
-// ═══════════════════════════════════════════════════════════
-
-export const MAINTENANCE_STATUS = Object.freeze({
-    pending:  { id: 'pending',  label: '待维护' },
-    resolved: { id: 'resolved', label: '已维护' },
-});
 
 // ═══════════════════════════════════════════════════════════
-//  工具函数
+//  隐藏备注工具
 // ═══════════════════════════════════════════════════════════
-
-export function getTypeDefinition(typeId) {
-    return MEMORY_TYPES[typeId] || MEMORY_TYPES.fact;
-}
-
-export function getTierDefinition(tierId) {
-    return MEMORY_TIERS[tierId] || MEMORY_TIERS.transient;
-}
-
-/**
- * 格式化单条记忆为注入文本行
- */
-export function formatMemoryLine(m) {
-    const parts = [];
-    if (m.title) parts.push(`[${m.title}]`);
-    const typeLabel = MEMORY_TYPES[m.type]?.label || '';
-    if (typeLabel) parts.push(`(${typeLabel})`);
-    if (m.truthStatus && m.truthStatus !== 'true') {
-        const ts = TRUTH_STATUS[m.truthStatus];
-        if (ts) parts.push(`{${ts.label}}`);
-    }
-    parts.push(m.summary || m.content);
-    if (m.verbatim) parts.push(`「${m.verbatim}」`);
-    if (m.subject && m.target) {
-        parts.push(`(${m.subject} → ${m.target})`);
-    } else if (m.subject) {
-        parts.push(`(${m.subject})`);
-    }
-    return parts.join(' ');
-}
 
 /**
  * 获取可注入的隐藏备注行
@@ -124,16 +86,4 @@ export function formatMemoryLine(m) {
 export function getInjectableNotes(memory) {
     if (!Array.isArray(memory.hiddenNotes)) return [];
     return memory.hiddenNotes.filter(n => n.allowInjection !== false);
-}
-
-/**
- * 格式化隐藏备注为注入文本
- */
-export function formatHiddenNotes(memory) {
-    const notes = getInjectableNotes(memory);
-    if (!notes.length) return '';
-    return notes.map(n => {
-        const typeLabel = HIDDEN_NOTE_TYPES[n.type]?.label || '备注';
-        return `   [隐·${typeLabel}] ${n.content}`;
-    }).join('\n');
 }

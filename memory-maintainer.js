@@ -10,7 +10,7 @@ import {
     getNpcProfiles, getItems, getTimeline, getMemories,
     updateNpcProfile, updateItem, updateTimelineEntry, updateMemory,
     removeNpcProfile, removeItem, removeTimelineEntry, removeMemory,
-    addMemory, getTimelineThreads, saveTimelineThreads,
+    getTimelineThreads, saveTimelineThreads,
     getCalendarDescription,
 } from './memory-store.js';
 import { callCustomApi, callMainApi } from './auto-generator.js';
@@ -41,6 +41,65 @@ function cleanResolved(cache) {
     const now = Date.now();
     const sevenDays = 7 * 24 * 60 * 60 * 1000;
     cache.resolved = cache.resolved.filter(r => (now - r.resolvedAt) < sevenDays);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  静默自动维护（auto/semi 模式用）
+// ═══════════════════════════════════════════════════════════
+
+export async function autoMaintainSilent(chatId) {
+    const settings = getSettings();
+    if (settings.maintenanceMode === 'manual') return { actions: 0, details: [] };
+
+    const now = Date.now();
+    const roundMs = 60 * 1000;
+    const results = { actions: 0, details: [] };
+    const log = (msg) => { results.details.push(msg); results.actions++; };
+
+    // 1. 自动归档瞬时记忆（30轮未命中）
+    const memories = await getMemories(chatId);
+    for (const m of memories) {
+        if (m.memoryTier !== 'transient' || m.memoryTier === 'eternal') continue;
+        const roundsSinceHit = Math.floor((now - (m.lastHitAt || m.createdAt)) / roundMs);
+        if (roundsSinceHit >= 30) {
+            await updateMemory(chatId, m.id, { archived: true });
+            if (settings.debugLogging) log(`归档瞬时记忆: ${(m.title || m.id).slice(0, 30)}`);
+        }
+    }
+
+    // 2. 自动降级状态变更物品
+    const items = await getItems(chatId);
+    for (const item of items) {
+        if (item.keepPermanent || item.itemTier === 'background') continue;
+        if (item.status === 'used' || item.status === 'lost' || item.status === 'destroyed') {
+            await updateItem(chatId, item.id, { itemTier: 'background' });
+            if (settings.debugLogging) log(`降级物品: ${(item.name || item.id).slice(0, 30)}`);
+        }
+    }
+
+    // 3. 自动压缩已结束的时间线
+    const timeline = await getTimeline(chatId);
+    for (const t of timeline) {
+        if (t.memoryTier === 'eternal' || t.isActive || t.status === 'ongoing') continue;
+        const roundsSinceEnd = Math.floor((now - t.updatedAt) / roundMs);
+        if (roundsSinceEnd >= 60) {
+            await updateTimelineEntry(chatId, t.id, { isActive: false, status: 'ended' });
+            if (settings.debugLogging) log(`压缩时间线: ${(t.event || t.id).slice(0, 30)}`);
+        }
+    }
+
+    // 4. 自动清理 background NPC（长期未命中）
+    const npcs = await getNpcProfiles(chatId);
+    for (const n of npcs) {
+        if (n.memoryTier === 'eternal' || n.npcTier !== 'background') continue;
+        const roundsSinceHit = Math.floor((now - (n.lastHitAt || n.createdAt)) / roundMs);
+        if (roundsSinceHit >= 90) {
+            await updateNpcProfile(chatId, n.id, { archived: true });
+            if (settings.debugLogging) log(`归档路人NPC: ${(n.name || n.id).slice(0, 30)}`);
+        }
+    }
+
+    return results;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -208,76 +267,8 @@ export async function performMaintenance(chatId, actions) {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  维护面板 HTML
+//  工具函数
 // ═══════════════════════════════════════════════════════════
-
-export function buildMaintenanceHTML(result) {
-    if (!result || !result.issues?.length) {
-        return `<div class="bb-maintenance">
-            <div class="bb-maintenance-header">记忆维护</div>
-            <div class="bb-maintenance-empty">暂无需要维护的项目</div>
-        </div>`;
-    }
-
-    const grouped = {};
-    for (const issue of result.issues) {
-        if (!grouped[issue.type]) grouped[issue.type] = [];
-        grouped[issue.type].push(issue);
-    }
-
-    const typeLabels = {
-        idle_transient_memory:  { icon: '', label: '瞬时记忆（长期未命中）', desc: '这些记忆很久没有被触发' },
-        status_changed_item:    { icon: '', label: '状态变更的物品',     desc: '以下物品已使用/失去/销毁' },
-        compressible_timeline:  { icon: '', label: '可压缩的时间线',     desc: '这些事件已结束，可以压缩归档' },
-        low_tier_npc:           { icon: '', label: '低优先级NPC',        desc: '这些角色可能需要升级或清理' },
-        foreshadow:             { icon: '', label: '待确认伏笔',         desc: '这些伏笔可能需要关联到主事件' },
-    };
-
-    let sections = '';
-    for (const [type, issues] of Object.entries(grouped)) {
-        const meta = typeLabels[type] || { icon: '', label: type, desc: '' };
-        let items = '';
-        const display = issues.slice(0, 10);
-        for (const issue of display) {
-            const item = issue.item;
-            const label = item.name || item.title || item.event || item.id;
-            items += `<div class="bb-maint-item" data-id="${escapeHtml(item.id)}" data-collection="${issue.collection}">
-                <span class="bb-maint-item-text">${escapeHtml(label)}</span>
-                <span class="bb-maint-item-reason">${escapeHtml(issue.reason)}</span>
-                <div class="bb-maint-item-actions">
-                    <button class="bb-maint-btn keep" data-op="keep">保留</button>
-                    ${issue.type === 'compressible_timeline' ? '<button class="bb-maint-btn compress" data-op="compress_timeline">压缩</button>' : ''}
-                    <button class="bb-maint-btn promote" data-op="promote">升级</button>
-                    <button class="bb-maint-btn demote" data-op="demote">降级</button>
-                    <button class="bb-maint-btn delete" data-op="delete">删除</button>
-                </div>
-            </div>`;
-        }
-        if (issues.length > 10) {
-            items += `<div class="bb-maint-more">...还有 ${issues.length - 10} 条</div>`;
-        }
-        sections += `<div class="bb-maint-section">
-            <div class="bb-maint-section-header">${meta.icon} ${meta.label} <span class="bb-maint-count">${issues.length}条</span></div>
-            <div class="bb-maint-section-desc">${meta.desc}</div>
-            <div class="bb-maint-items">${items}</div>
-        </div>`;
-    }
-
-    return `<div class="bb-maintenance">
-        <div class="bb-maintenance-header">
-            记忆维护
-            <span class="bb-maint-total">共 ${result.issueCount} 条待处理</span>
-        </div>
-        <div class="bb-maintenance-stats">
-            记忆: ${result.stats?.memories || 0} 条 | NPC: ${result.stats?.npc || 0} | 物品: ${result.stats?.items || 0} | 时间线: ${result.stats?.timeline || 0}
-        </div>
-        ${sections}
-        <div class="bb-maintenance-actions">
-            <button class="bb-maint-btn-all keep-all">全部保留</button>
-            <button class="bb-maint-btn-all dismiss">稍后处理</button>
-        </div>
-    </div>`;
-}
 
 function escapeHtml(text) {
     const div = document.createElement('div');
@@ -285,29 +276,8 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// ═══════════════════════════════════════════════════════════
-//  兼容旧接口
-// ═══════════════════════════════════════════════════════════
-
 export function dismissMaintenanceRemind() {
     updateSettings({ _lastMaintenanceRemind: Date.now() });
-}
-
-export async function diagnoseMemories(memories) {
-    return memories
-        .filter(m => m.memoryTier === 'transient')
-        .map(m => ({ memory: m, reason: `${m.title || '无标题'}`, category: 'weak', severity: 'info' }));
-}
-
-export async function autoMaintain(chatId, issues) {
-    let count = 0;
-    for (const issue of issues) {
-        if (issue.memory?.id) {
-            await updateMemory(chatId, issue.memory.id, { memoryTier: 'transient' });
-            count++;
-        }
-    }
-    return count;
 }
 
 export async function fuzzyMemory(chatId, memoryId) {
@@ -328,99 +298,6 @@ export async function archiveMemory(chatId, memoryId) {
 
 export async function restoreMemory(chatId, memoryId) {
     return updateMemory(chatId, memoryId, { archived: false, status: 'active' });
-}
-
-// ═══════════════════════════════════════════════════════════
-//  时间线总结（保留 v4.4.0 功能）
-// ═══════════════════════════════════════════════════════════
-
-export async function generateTimelineSummary(chatId, options = {}) {
-    const timeline = await getTimeline(chatId);
-    const endedEvents = timeline.filter(t => !t.isActive || t.status === 'ended');
-    if (endedEvents.length < 2) return { summaryCount: 0, mergedCount: 0, errors: [] };
-
-    const sorted = [...endedEvents].sort((a, b) => (a.storyTimeSort ?? 0) - (b.storyTimeSort ?? 0));
-    const groups = [];
-    let currentGroup = [sorted[0]];
-    const gapThreshold = options.gapThreshold ?? 500;
-
-    for (let i = 1; i < sorted.length; i++) {
-        const gap = (sorted[i].storyTimeSort ?? 0) - (sorted[i - 1].storyTimeSort ?? 0);
-        if (gap < gapThreshold) { currentGroup.push(sorted[i]); }
-        else { groups.push(currentGroup); currentGroup = [sorted[i]]; }
-    }
-    groups.push(currentGroup);
-
-    const errors = [];
-    let summaryCount = 0, mergedCount = 0;
-
-    for (const group of groups) {
-        if (group.length < 2) continue;
-        try {
-            const result = await generateGroupSummary(chatId, group, options);
-            if (result) {
-                if (result.merged) mergedCount++;
-                else summaryCount++;
-            }
-        } catch (e) { errors.push(e.message); }
-    }
-
-    return { summaryCount, mergedCount, errors };
-}
-
-async function generateGroupSummary(chatId, group, _options = {}) {
-    const lines = group.map((t, i) =>
-        `${i + 1}. [${t.storyTime || '?'}] ${t.event}: ${t.summary}`
-    ).join('\n');
-
-    const calDesc = (await getCalendarDescription(chatId))?.trim();
-    const calRef = calDesc ? `\n**世界历法参考**：${calDesc}\n（仅用于推断和整理故事时间）\n` : '';
-
-    const prompt = `将以下时间线条目合并为一条总结（JSON）：${calRef}
-${lines}
-返回格式：{"n":"标题","c":"内容(100字)","m":"摘要(20字)","i":0.7}
-只输出JSON。`;
-
-    let responseText;
-    try {
-        const settings = getSettings();
-        if (settings.autoGenMode === 'custom' && settings.autoGenEndpoint) {
-            responseText = await callCustomApi(prompt);
-        } else {
-            responseText = await callMainApi(prompt);
-        }
-    } catch { return null; }
-
-    try {
-        let text = responseText.trim();
-        text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-        const match = text.match(/\{[\s\S]*\}/);
-        if (!match) return null;
-        const parsed = JSON.parse(match[0]);
-
-        const existingKey = `tl_summary_${group[0].storyTimeSort || group[0].createdAt}`;
-        const existing = (await getMemories(chatId)).find(m => m.timelineGroupKey === existingKey);
-
-        if (existing) {
-            await updateMemory(chatId, existing.id, {
-                content: parsed.c || parsed.content || existing.content,
-                summary: parsed.m || parsed.summary || existing.summary,
-            });
-            return { merged: true };
-        }
-
-        await addMemory(chatId, {
-            title: parsed.n || parsed.title || '事件总结',
-            type: 'event',
-            content: parsed.c || parsed.content || '',
-            summary: parsed.m || parsed.summary || '',
-            importance: typeof parsed.i === 'number' ? parsed.i : 0.7,
-            isTimelineSummary: true,
-            timelineGroupKey: existingKey,
-            source: 'timeline_summary',
-        });
-        return { merged: false };
-    } catch { return null; }
 }
 
 // ═══════════════════════════════════════════════════════════

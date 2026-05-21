@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v6.2.0 主入口
+ * index.js —— BB-Memory v8.3.0 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 时间线 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -17,17 +17,17 @@ import {
     exportMemoriesToChatMetadata, importMemoriesFromChatMetadata,
     migrateV4ToV5, recordHits, checkDemotions,
     exportMemories, importMemories, updateFactContent, addHiddenNote, removeHiddenNote,
-    scheduleAutoBackup, extractKeywords,
+    scheduleAutoBackup,
     getCalendarDescription, setCalendarDescription,
 } from './memory-store.js';
 
 import {
     getRelevantMemories, getResidentMemories, buildMemoryInjectionPrompt,
-    mergeExpandedRelevantResults, simpleSearch, searchMemories,
+    mergeExpandedRelevantResults, simpleSearch,
     getNpcForInjection, getItemsForInjection, getTimelineForInjection, getThreadSummaryForInjection,
 } from './retriever.js';
 
-import { MEMORY_TYPES, TRUTH_STATUS, HIDDEN_NOTE_TYPES } from './memory-types.js';
+import { MEMORY_TYPES, TRUTH_STATUS } from './memory-types.js';
 import { NPC_TIERS, ITEM_TIERS, expandMemoriesForEntityKeyword } from './entity-tiers.js';
 
 import {
@@ -44,10 +44,10 @@ import {
 } from './message-state.js';
 
 import {
-    MEMORY_STATUS, checkMaintenanceNeeded, dismissMaintenanceRemind,
-    performMaintenance,
-    fuzzyMemory, archiveMemory, restoreMemory, autoMaintain,
-    generateTimelineSummary, regenerateThreadSummary,
+    checkMaintenanceNeeded, dismissMaintenanceRemind,
+    performMaintenance, autoMaintainSilent,
+    fuzzyMemory, archiveMemory, restoreMemory,
+    regenerateThreadSummary,
     getMaintenanceResolved, clearMaintenanceResolved,
 } from './memory-maintainer.js';
 
@@ -121,6 +121,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
 
     // 5. 降格检查
     try { await checkDemotions(chatId); } catch (e) { /* ignore */ }
+    try { await autoMaintainSilent(chatId); } catch (e) { /* ignore */ }
 
     // 6. Embedding（如有）
     let queryEmbedding = null;
@@ -182,6 +183,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         threadSummary,
         relevantResults: merged,
         settings,
+        chatLength: chat.length,
     });
 
     // 10. 注入
@@ -222,19 +224,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         }
     }
 
-    // 13. v8.1.0: 上下文隐藏 —— 清空已提取/已隐藏元消息的 mes
-    const hiddenBackups = [];
-    for (const msg of chat) {
-        if (msg._bbmem_extracted || (msg._bbmem_meta_marker && msg.is_hidden)) {
-            hiddenBackups.push({ msg, mes: msg.mes });
-            msg.mes = '';
-        }
-    }
-    if (hiddenBackups.length) {
-        setTimeout(() => {
-            for (const { msg, mes } of hiddenBackups) msg.mes = mes;
-        }, 100);
-    }
+    // ST 原生跳过 is_hidden 消息，已由 syncMessageVisibility 处理
 
     return chat;
 };
@@ -551,10 +541,11 @@ function bindSidebarEvents() {
 
     // 基础开关
     bindCheckbox('#bb_memory_enabled', 'enabled');
-    bindCheckbox('#bb_auto_gen_enabled', 'autoGenEnabled');
+    bindCheckbox('#bb_auto_gen_enabled', 'autoGenEnabled', (checked) => {
+        if (checked) initAutoGenerator(); else stopAutoGenerator();
+    });
     bindCheckbox('#bb_embedding_enabled', 'embeddingEnabled');
     bindCheckbox('#bb_dedup_enabled', 'dedupEnabled');
-    bindCheckbox('#bb_cluster_enabled', 'clusterEnabled');
     bindCheckbox('#bb_debug_logging', 'debugLogging');
     bindCheckbox('#bb_timeline_summary_enabled', 'timelineSummaryEnabled');
     bindCheckbox('#bb_auto_backup_enabled', 'autoBackupEnabled');
@@ -632,6 +623,7 @@ function bindSidebarEvents() {
     bindInput('#bb_maintenance_mem_threshold', 'maintenanceMemThreshold', 'number');
     bindInput('#bb_maintenance_npc_threshold', 'maintenanceNpcThreshold', 'number');
     bindInput('#bb_maintenance_item_threshold', 'maintenanceItemThreshold', 'number');
+    bindSelect('#bb_maintenance_mode', 'maintenanceMode');
     bindInput('#bb_diversity_limit', 'diversityLimitPerTag', 'number');
     bindInput('#bb_max_active_threads', 'maxActiveThreads', 'number');
     bindInput('#bb_health_check_duplicate_threshold', 'healthCheckDuplicateThreshold', 'number');
@@ -1044,11 +1036,14 @@ function initCollapsibleSettings() {
     });
 }
 
-function bindCheckbox(selector, settingKey) {
+function bindCheckbox(selector, settingKey, onChange) {
     const el = document.querySelector(selector);
     if (!el) return;
     el.checked = getSettings()[settingKey];
-    el.addEventListener('change', () => updateSettings({ [settingKey]: el.checked }));
+    el.addEventListener('change', () => {
+        updateSettings({ [settingKey]: el.checked });
+        if (onChange) onChange(el.checked);
+    });
 }
 
 function bindSelect(selector, settingKey) {
@@ -1067,23 +1062,6 @@ function bindInput(selector, settingKey, type) {
         const v = type === 'number' ? Number(el.value) : el.value;
         updateSettings({ [settingKey]: v });
     });
-}
-
-function pickFile(accept, callback) {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = accept;
-    input.style.display = 'none';
-    input.addEventListener('change', () => {
-        const file = input.files?.[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = () => callback(reader.result);
-        reader.readAsText(file);
-        input.remove();
-    });
-    document.body.appendChild(input);
-    input.click();
 }
 
 function getChatId() {
@@ -1928,10 +1906,8 @@ function cycleExtractedVisibility() {
     // 更新设置
     updateSettings({ extractedMsgDisplay: next });
 
-    // 更新 body class
-    document.body.classList.remove('bb-show-extracted', 'bb-show-extracted-clear');
-    if (next === 'transparent') document.body.classList.add('bb-show-extracted');
-    else if (next === 'visible') document.body.classList.add('bb-show-extracted-clear');
+    // 刷新 DOM 标记以应用新模式
+    refreshExtractionMarkers();
 
     // 更新悬浮球图标
     const toggleItem = document.querySelector('.bb-floating-menu-action[data-action="toggle_visibility"] i');
@@ -2075,7 +2051,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v6.2.0 初始化开始...');
+    console.log('[BB-Memory] v8.3.0 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -2208,7 +2184,7 @@ async function init() {
     // v6.1: 监听消息删除，自动清理关联记忆
     initMessageDeletionWatch();
 
-    console.log('[BB-Memory] v6.2.0 初始化完成');
+    console.log('[BB-Memory] v8.3.0 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆

@@ -141,6 +141,16 @@
                 <div class="bb-settings-section-body">
 
                     <div class="bb-mem-sidebar-section">
+                        <label for="bb_maintenance_mode">维护模式</label>
+                        <small class="bb-mem-hint">auto=静默自动 | semi=建议+批准(默认) | manual=手动裁决</small>
+                        <select id="bb_maintenance_mode" class="bb-input" style="width:100%;">
+                            <option value="auto">auto — 静默自动维护</option>
+                            <option value="semi" selected>semi — 建议 + 用户批准</option>
+                            <option value="manual">manual — 完全手动裁决</option>
+                        </select>
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
                         <label for="bb_maintenance_mem_threshold">记忆维护阈值</label>
                         <small class="bb-mem-hint">记忆数超过此值时提示维护（默认20）</small>
                         <input id="bb_maintenance_mem_threshold" type="number" class="bb-input" min="5" max="200" value="20" />
@@ -392,10 +402,6 @@
                     <label class="checkbox_label" style="margin: 8px 0;">
                         <input id="bb_dedup_enabled" type="checkbox" checked />
                         <span>启用语义去重</span>
-                    </label>
-                    <label class="checkbox_label" style="margin: 8px 0;">
-                        <input id="bb_cluster_enabled" type="checkbox" checked />
-                        <span>启用标签聚类</span>
                     </label>
                 </div>
             </div>

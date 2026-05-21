@@ -32,13 +32,13 @@ export const DEFAULT_SETTINGS = Object.freeze({
     itemInjectionMax: 5,
     timelineEndedMax: 3,
     shortTermWindow: 5,
+    floorRecentWindow: 6,            // 近 N 轮内的记忆用完整内容
     // AI 自动生成
     autoGenEnabled: false,
     autoGenMode: 'main',           // 'main' | 'custom'
     autoGenEndpoint: '',
     autoGenApiKey: '',
     autoGenModel: '',
-    autoGenPrompt: '',             // 自定义提取提示词（覆盖默认）
     autoGenMaxExchanges: 3,
     maxMemoriesPerExchange: 3,
     extractionConfirmMode: 'semi', // 'active' | 'semi' | 'auto'
@@ -60,14 +60,12 @@ export const DEFAULT_SETTINGS = Object.freeze({
     dedupEnabled: true,
     mergeSimilarityThreshold: 0.85,
     reduceSimilarityThreshold: 0.60,
-    // 聚类
-    clusterEnabled: true,
-    clusterTagThreshold: 8,
     // 故事时间
     calendarDescription: '',
     // 升降格与维护
     diversityLimitPerTag: 5,       // 同一标签最多 N 条 core
     promotionCooldownRounds: 15,   // 升格冷却轮数
+    maintenanceMode: 'semi',       // 'auto' | 'semi' | 'manual'
     maintenanceMemThreshold: 20,   // 记忆维护阈值
     maintenanceNpcThreshold: 5,    // NPC 维护阈值
     maintenanceItemThreshold: 20,  // 物品维护阈值
@@ -131,16 +129,6 @@ export function updateSettings(patch) {
 }
 
 // ═══ 工具函数 ═══
-
-export function extractKeywords(text) {
-    if (!text) return [];
-    const tokens = text
-        .toLowerCase()
-        .split(/[\s,，。！？!?、；;：:""''「」（）()\[\]{}·\n\r\t]+/)
-        .map(t => t.trim())
-        .filter(t => t.length >= 2);
-    return [...new Set(tokens)].slice(0, 20);
-}
 
 function generateId() {
     return 'bb_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
@@ -857,13 +845,6 @@ export async function refreshAllSourceFloors(chatId) {
     return stats;
 }
 
-/**
- * v5 兼容旧接口名称
- */
-export async function clearMemories(chatId) {
-    return clearAllData(chatId);
-}
-
 // ═══════════════════════════════════════════════════════════
 //  统计
 // ═══════════════════════════════════════════════════════════
@@ -1030,27 +1011,6 @@ export async function importMemoriesFromChatMetadata(chatId) {
     }
 
     return { restored, skipped };
-}
-
-/**
- * v8.2.7 清理聊天文件中的 BB-Memory 冗余元数据
- */
-export function cleanupChatMetadata() {
-    const ctx = getContext();
-    if (!ctx.chatMetadata) return false;
-    let cleaned = false;
-    if (ctx.chatMetadata[BACKUP_METADATA_KEY]) {
-        delete ctx.chatMetadata[BACKUP_METADATA_KEY];
-        cleaned = true;
-    }
-    if (cleaned) {
-        if (typeof ctx.saveChatDebounced === 'function') {
-            ctx.saveChatDebounced();
-        } else if (typeof ctx.saveChat === 'function') {
-            ctx.saveChat();
-        }
-    }
-    return cleaned;
 }
 
 // ═══════════════════════════════════════════════════════════

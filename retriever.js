@@ -363,7 +363,7 @@ function formatTimelineLine(t) {
     return `▸ ${timeStr} ${t.event} ${activeMark}\n  ${t.summary}${t.impact ? ' — ' + t.impact : ''}`;
 }
 
-function formatMemoryLine(m) {
+function formatMemoryLine(m, chatLength = 0) {
     const parts = [];
     if (m.title) parts.push(`[${m.title}]`);
     const typeLabel = MEMORY_TYPES[m.type]?.label || '';
@@ -372,8 +372,17 @@ function formatMemoryLine(m) {
         const ts = TRUTH_STATUS[m.truthStatus];
         if (ts) parts.push(`{${ts.label}}`);
     }
-    // 模糊记忆（transient）优先用 summary，其他记忆用完整 content
-    if (m.memoryTier === 'transient' && m.summary) {
+    // 基于楼层距离决定使用摘要还是完整内容
+    const floorWindow = getSettings().floorRecentWindow ?? 6;
+    const floorDist = chatLength > 0 && typeof m.sourceFloor === 'number' && m.sourceFloor >= 0
+        ? chatLength - m.sourceFloor
+        : Infinity;
+    const isRecent = floorDist <= floorWindow;
+    const isStable = (m.memoryTier === 'stable' || m.memoryTier === 'core' || m.memoryTier === 'eternal');
+
+    if ((isRecent || isStable) && m.content) {
+        parts.push(m.content);
+    } else if (m.summary) {
         parts.push(m.summary);
     } else {
         parts.push(m.content || m.summary);
@@ -398,7 +407,7 @@ function formatMemoryLine(m) {
  * @param {object} params.settings
  * @returns {{ text: string, tokenEstimate: number, stats: object }}
  */
-export function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, threadSummary, relevantResults, settings }) {
+export function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, threadSummary, relevantResults, settings, chatLength = 0 }) {
     const tokenBudget = settings.tokenBudget || 800;
     let tokenUsed = 0;
     const stats = { npcCount: 0, itemCount: 0, timelineCount: 0, memoryCount: 0, threadCount: 0 };
@@ -488,7 +497,7 @@ export function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, threa
         let sectionTokens = 0;
         for (const { memory, level } of relevantResults) {
             if (count >= MAX_MEM) break;
-            const line = (count + 1) + '. ' + formatMemoryLine(memory);
+            const line = (count + 1) + '. ' + formatMemoryLine(memory, chatLength);
             const lt = estimateTokens(line);
             if (sectionTokens + lt > tokenBudget * 0.7) break;
             lines.push(line);
@@ -510,17 +519,8 @@ export function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, threa
 }
 
 // ═══════════════════════════════════════════════════════════
-//  兼容旧接口
+//  简单搜索
 // ═══════════════════════════════════════════════════════════
-
-/**
- * searchMemories — 兼容旧签名
- */
-export function searchMemories(memories, queryText, options = {}) {
-    const maxResults = typeof options === 'number' ? options : (options.maxResults || 10);
-    const results = getRelevantMemories(memories, queryText, { maxResults });
-    return results.map(r => r.memory);
-}
 
 /**
  * simpleSearch — 简单字符串匹配搜索

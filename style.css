@@ -2125,6 +2125,14 @@
     white-space: nowrap;
 }
 
+.bb-thread-detail-thread {
+    font-size: 0.72em;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: rgba(128,128,128,0.1);
+    white-space: nowrap;
+}
+
 .bb-thread-detail-edit {
     visibility: hidden;
     padding: 2px 6px !important;
@@ -2519,6 +2527,11 @@
 
 .mes.bb-extracted-hidden {
     display: none !important;
+}
+
+.bb-extracted-transparent {
+    opacity: 0.4;
+    filter: grayscale(0.6);
 }
 
 .bb-show-extracted .mes.bb-extracted-hidden {
