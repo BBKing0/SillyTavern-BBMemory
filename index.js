@@ -2390,18 +2390,35 @@ globalThis.bbMemoryDebug = {
 };
 
 // ═══ 启动 ═══
+let _bbInitCalled = false;
+async function initOnce() {
+    if (_bbInitCalled) return;
+    _bbInitCalled = true;
+    await init();
+}
+
+// v8.4.1: 兜底定时器，确保即使 APP_READY 未触发也能初始化
+const FALLBACK_DELAY_MS = 10000;
+
 try {
     const ctx = SillyTavern.getContext();
     const evType = ctx.eventTypes?.APP_READY || ctx.event_types?.APP_READY;
     if (evType && ctx.eventSource) {
-        ctx.eventSource.once(evType, init);
+        ctx.eventSource.once(evType, initOnce);
+        // 兜底：如果 APP_READY 10 秒后仍未触发，直接初始化
+        setTimeout(() => {
+            if (!_bbInitCalled) {
+                console.warn('[BB-Memory] APP_READY 超时(' + FALLBACK_DELAY_MS/1000 + 's)，使用兜底初始化');
+                initOnce();
+            }
+        }, FALLBACK_DELAY_MS);
     } else {
         // 降级：DOM ready 后初始化
-        if (document.readyState === 'complete') init();
-        else window.addEventListener('load', init);
+        if (document.readyState === 'complete') initOnce();
+        else window.addEventListener('load', initOnce);
     }
 } catch (e) {
     console.error('[BB-Memory] 启动失败:', e);
-    if (document.readyState === 'complete') init();
-    else window.addEventListener('load', init);
+    if (document.readyState === 'complete') initOnce();
+    else window.addEventListener('load', initOnce);
 }
