@@ -422,13 +422,16 @@ export function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, threa
     // ── 区块 1：角色档案 ──
     if (npcProfiles?.length) {
         const lines = ['【角色档案】'];
+        let sectionTokens = 0;
         for (const npc of npcProfiles) {
             const line = formatNpcLine(npc);
-            if (tokenUsed + estimateTokens(line) > tokenBudget * 0.3) break;
+            const lt = estimateTokens(line);
+            if (sectionTokens + lt > tokenBudget * 0.3) break;
             lines.push(line);
-            tokenUsed += estimateTokens(line);
+            sectionTokens += lt;
             stats.npcCount++;
         }
+        tokenUsed += sectionTokens;
         if (lines.length > 1) sections.push(lines.join('\n'));
         if (stats.npcCount < npcProfiles.length) {
             truncated.push(`角色(${stats.npcCount}/${npcProfiles.length})`);
@@ -438,13 +441,16 @@ export function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, threa
     // ── 区块 2：重要物品 ──
     if (items?.length) {
         const lines = ['【重要物品】'];
+        let sectionTokens = 0;
         for (const item of items) {
             const line = formatItemLine(item);
-            if (tokenUsed + estimateTokens(line) > tokenBudget * 0.2) break;
+            const lt = estimateTokens(line);
+            if (sectionTokens + lt > tokenBudget * 0.2) break;
             lines.push(line);
-            tokenUsed += estimateTokens(line);
+            sectionTokens += lt;
             stats.itemCount++;
         }
+        tokenUsed += sectionTokens;
         if (lines.length > 1) sections.push(lines.join('\n'));
         if (stats.itemCount < items.length) {
             truncated.push(`物品(${stats.itemCount}/${items.length})`);
@@ -457,13 +463,16 @@ export function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, threa
         const all = [...foreshadow, ...ongoing, ...ended];
         if (all.length) {
             const lines = ['【故事时间线】'];
+            let sectionTokens = 0;
             for (const t of all) {
                 const line = formatTimelineLine(t);
-                if (tokenUsed + estimateTokens(line) > tokenBudget * 0.25) break;
+                const lt = estimateTokens(line);
+                if (sectionTokens + lt > tokenBudget * 0.25) break;
                 lines.push(line);
-                tokenUsed += estimateTokens(line);
+                sectionTokens += lt;
                 stats.timelineCount++;
             }
+            tokenUsed += sectionTokens;
             if (lines.length > 1) sections.push(lines.join('\n'));
             if (stats.timelineCount < all.length) {
                 truncated.push(`时间线(${stats.timelineCount}/${all.length})`);
@@ -476,15 +485,18 @@ export function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, threa
         const lines = ['【相关记忆】'];
         const MAX_MEM = (settings.maxResults || 10) + 4;
         let count = 0;
+        let sectionTokens = 0;
         for (const { memory, level } of relevantResults) {
             if (count >= MAX_MEM) break;
             const line = (count + 1) + '. ' + formatMemoryLine(memory);
-            if (tokenUsed + estimateTokens(line) > tokenBudget * 0.7) break;
+            const lt = estimateTokens(line);
+            if (sectionTokens + lt > tokenBudget * 0.7) break;
             lines.push(line);
-            tokenUsed += estimateTokens(line);
+            sectionTokens += lt;
             count++;
             stats.memoryCount++;
         }
+        tokenUsed += sectionTokens;
         if (lines.length > 1) sections.push(lines.join('\n'));
         if (stats.memoryCount < relevantResults.length) {
             truncated.push(`记忆(${stats.memoryCount}/${relevantResults.length})`);
