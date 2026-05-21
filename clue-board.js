@@ -1,5 +1,5 @@
 /**
- * clue-board.js —— BB-Memory v8.4.0 线索板系统
+ * clue-board.js —— BB-Memory v8.4.1 线索板系统
  *
  * 让用户将四柱条目摆上线索板，手动创建连线（因果/暗示/矛盾/关联/推测）。
  * AI 在生成回复时看到用户的推理，自主决定顺着线索推进或提供反例。
@@ -8,7 +8,6 @@
 import {
     getNpcProfiles, getItems, getTimeline, getMemories,
 } from './memory-store.js';
-import { simpleSearch } from './retriever.js';
 
 // ═══════════════════════════════════════════════════════════
 //  数据层
