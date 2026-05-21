@@ -897,10 +897,19 @@ function bindSidebarEvents() {
         if (epEl) epEl.value = p.endpoint || '';
         if (keyEl) keyEl.value = p.key || '';
         if (modelEl) modelEl.value = p.model || '';
-        // 触发设置更新
-        if (epEl) epEl.dispatchEvent(new Event('input', { bubbles: true }));
-        if (keyEl) keyEl.dispatchEvent(new Event('input', { bubbles: true }));
-        if (modelEl) modelEl.dispatchEvent(new Event('input', { bubbles: true }));
+        // v8.2.5 修复：bindInput 监听的是 change 事件，必须用 change 而非 input
+        if (epEl) epEl.dispatchEvent(new Event('change', { bubbles: true }));
+        if (keyEl) keyEl.dispatchEvent(new Event('change', { bubbles: true }));
+        if (modelEl) modelEl.dispatchEvent(new Event('change', { bubbles: true }));
+        // v8.2.5 Embedding API 预设同步
+        if (p.embeddingEndpoint !== undefined) {
+            const embEpEl = document.querySelector('#bb_embedding_endpoint');
+            const embKeyEl = document.querySelector('#bb_embedding_api_key');
+            const embModelEl = document.querySelector('#bb_embedding_model');
+            if (embEpEl) { embEpEl.value = p.embeddingEndpoint || ''; embEpEl.dispatchEvent(new Event('change', { bubbles: true })); }
+            if (embKeyEl) { embKeyEl.value = p.embeddingKey || ''; embKeyEl.dispatchEvent(new Event('change', { bubbles: true })); }
+            if (embModelEl) { embModelEl.value = p.embeddingModel || ''; embModelEl.dispatchEvent(new Event('change', { bubbles: true })); }
+        }
         updateSettings({ activeApiProfile: p.name });
         showToast(`已切换至预设: ${p.name}`, 'info');
     });
@@ -911,12 +920,16 @@ function bindSidebarEvents() {
         const ep = document.querySelector('#bb_auto_gen_endpoint')?.value?.trim() || '';
         const key = document.querySelector('#bb_auto_gen_api_key')?.value?.trim() || '';
         const model = document.querySelector('#bb_auto_gen_model')?.value?.trim() || '';
+        // v8.2.5 Embedding API 也纳入预设
+        const embEp = document.querySelector('#bb_embedding_endpoint')?.value?.trim() || '';
+        const embKey = document.querySelector('#bb_embedding_api_key')?.value?.trim() || '';
+        const embModel = document.querySelector('#bb_embedding_model')?.value?.trim() || '';
         if (!ep) { showToast('请先填写 API 端点', 'warning'); return; }
 
         const s = getSettings();
         const profiles = s.apiProfiles || [];
         const existing = profiles.findIndex(p => p.name === name.trim());
-        const entry = { name: name.trim(), endpoint: ep, key, model };
+        const entry = { name: name.trim(), endpoint: ep, key, model, embeddingEndpoint: embEp, embeddingKey: embKey, embeddingModel: embModel };
         if (existing >= 0) {
             profiles[existing] = entry;
         } else {

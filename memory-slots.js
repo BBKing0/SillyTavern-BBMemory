@@ -213,6 +213,10 @@ export async function createEmptySlot(charId, slotName) {
 
     await lf.setItem(slotKey(charId, name), []);
     const slots = await listSlots(charId);
+    // v8.2.5 修复：listSlots 优先走索引读取，新槽尚未入索引，需手动补入
+    if (!slots.find(s => s.name === name)) {
+        slots.push({ name, count: 0, key: slotKey(charId, name) });
+    }
     await updateSlotIndex(charId, slots);
 
     return name;
