@@ -1397,15 +1397,6 @@ async function onChatChanged() {
                 if (result.restored > 0 && settings.debugLogging) {
                     console.log(`[BB-Memory] 自动恢复: ${result.restored} 条`);
                 }
-                // v8.0.0 同步远端槽数据到本地
-                const charId = getCharacterId();
-                if (charId) {
-                    const { syncSlotsFromRemote } = await import('./memory-slots.js');
-                    const synced = await syncSlotsFromRemote(charId);
-                    if (synced > 0 && settings.debugLogging) {
-                        console.log(`[BB-Memory] 从云端同步了 ${synced} 个存档槽`);
-                    }
-                }
             } catch { /* ignore */ }
         }, 5000);
     }

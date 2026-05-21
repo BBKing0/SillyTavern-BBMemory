@@ -4,9 +4,9 @@
     "js": "index.js",
     "css": "style.css",
     "author": "BB-Memory Dev",
-    "version": "8.1.2",
+    "version": "8.2.0",
     "homePage": "https://github.com/BBKing0/SillyTavern-BBMemory",
     "auto_update": true,
     "generate_interceptor": "bbMemoryInterceptor",
-    "description": "智能长期记忆扩展 v8.1.0 - 四柱命中展示 + 错误弹窗 + 移动端适配优化"
+    "description": "智能长期记忆扩展 v8.2.0 - 聊天文件瘦身 + 存档性能优化"
 }

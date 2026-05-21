@@ -5,6 +5,11 @@
  * - 槽数据按角色ID组织，不同聊天但同角色可共用
  * - 默认槽为 "default"，始终存在
  * - 操作：保存 / 加载 / 新建 / 删除 / 列表
+ *
+ * v8.2.0 移除 chatMetadata 远程槽同步：
+ * - 槽位数据仅存储在 localforage（本机），不再写入 chatMetadata
+ * - 跨设备数据同步通过手动备份 (bb_memory_v5_backup) 完成
+ * - 此举大幅减小聊天文件体积，并消除存档操作中的 saveChat 阻塞
  */
 
 // ═══ localforage 访问 ═══
@@ -78,131 +83,47 @@ export function getCharacterId() {
     return null;
 }
 
-// ═══ v7.8.0 跨设备角色指纹 ═══
-
-function simpleHash(str) {
-    let h = 0;
-    for (let i = 0; i < str.length; i++) {
-        h = ((h << 5) - h) + str.charCodeAt(i);
-        h |= 0;
-    }
-    return Math.abs(h).toString(36);
-}
-
-/**
- * 获取角色指纹（name + description_hash），跨设备稳定标识
- */
-function getCharFingerprint() {
-    try {
-        const ctx = SillyTavern.getContext();
-        const char = ctx.characters && ctx.characters[ctx.characterId];
-        if (char && char.name) {
-            return char.name + '_' + simpleHash((char.description || '').slice(0, 500));
-        }
-    } catch { /* ignore */ }
-    return null;
-}
-
-// ═══ v7.8.0 chatMetadata 远端槽同步 ═══
-
-function getRemoteSlotsData() {
-    try {
-        const ctx = SillyTavern.getContext();
-        return ctx.chatMetadata?.bb_memory_slots || {};
-    } catch { return {}; }
-}
-
-async function saveRemoteSlotsData(slots) {
-    try {
-        const ctx = SillyTavern.getContext();
-        ctx.chatMetadata = ctx.chatMetadata || {};
-        ctx.chatMetadata.bb_memory_slots = slots;
-        if (typeof ctx.saveChat === 'function') await ctx.saveChat();
-    } catch { /* ignore */ }
-}
-
-/**
- * 从 chatMetadata 读取远端槽列表，合并到本地槽
- */
-async function mergeRemoteSlots(charId, localSlots) {
-    const fp = getCharFingerprint();
-    if (!fp) return localSlots;
-    const remote = getRemoteSlotsData();
-    const rSlots = remote[fp] || {};
-    const result = [...localSlots];
-    for (const [name, data] of Object.entries(rSlots)) {
-        if (!result.find(s => s.name === name)) {
-            result.push({ name, count: totalCount(data), key: null, _remote: true });
-        }
-    }
-    return result;
-}
-
-/**
- * v8.0.0 从 chatMetadata 主动同步远端槽数据到本地 localforage
- * 解决跨设备登录后槽数据不互通的问题
- */
-export async function syncSlotsFromRemote(charId) {
-    if (!charId) return 0;
-    const fp = getCharFingerprint();
-    if (!fp) return 0;
-    const remote = getRemoteSlotsData();
-    const rSlots = remote[fp] || {};
-    let synced = 0;
-    const lf = getLocalForage();
-    for (const [name, data] of Object.entries(rSlots)) {
-        if (!data || typeof data !== 'object') continue;
-        const key = slotKey(charId, name);
-        try {
-            const existing = await lf.getItem(key);
-            if (existing === null || existing === undefined) {
-                await lf.setItem(key, data);
-                synced++;
-            }
-        } catch { /* ignore */ }
-    }
-    return synced;
-}
-
 // ═══ 槽列表 ═══
 
 /**
  * 列出该角色的所有存档槽
+ * v8.2.0 优先使用槽索引键，避免全 IndexedDB 扫描
  */
 export async function listSlots(charId) {
     if (!charId) return [];
     const lf = getLocalForage();
-    const prefix = `${SLOT_PREFIX}${charId}_`;
     const slots = [];
 
-    try {
-        await lf.iterate((value, key) => {
-            if (key.startsWith(prefix)) {
-                const slotName = key.slice(prefix.length);
-                const count = totalCount(value);
-                slots.push({ name: slotName, count, key });
-            }
-        });
-    } catch {
-        const known = await lf.getItem('bb_memory_slot_list_' + charId);
-        if (Array.isArray(known)) {
-            for (const name of known) {
-                const data = await lf.getItem(slotKey(charId, name));
-                slots.push({ name, count: totalCount(data), key: slotKey(charId, name) });
-            }
+    // 优先从索引读取（O(1) 查询），避免 lf.iterate 全库扫描
+    const known = await lf.getItem('bb_memory_slot_list_' + charId);
+    if (Array.isArray(known) && known.length > 0) {
+        for (const name of known) {
+            const data = await lf.getItem(slotKey(charId, name));
+            slots.push({ name, count: totalCount(data), key: slotKey(charId, name) });
         }
+    } else {
+        // 索引缺失时回退到全库扫描
+        try {
+            await lf.iterate((value, key) => {
+                const prefix = `${SLOT_PREFIX}${charId}_`;
+                if (key.startsWith(prefix)) {
+                    const slotName = key.slice(prefix.length);
+                    const count = totalCount(value);
+                    slots.push({ name: slotName, count, key });
+                }
+            });
+        } catch { /* ignore */ }
     }
 
     if (!slots.find(s => s.name === 'default')) {
         slots.unshift({ name: 'default', count: 0, key: slotKey(charId, 'default') });
     }
 
-    // v7.8.0 合并 chatMetadata 远端槽
-    return mergeRemoteSlots(charId, slots);
+    return slots;
 }
 
 /**
- * 更新槽列表索引（回退用途）
+ * 更新槽列表索引
  */
 async function updateSlotIndex(charId, slots) {
     try {
@@ -215,6 +136,7 @@ async function updateSlotIndex(charId, slots) {
 
 /**
  * 将当前聊天记忆保存到指定槽（覆盖式）
+ * v8.2.0 不再写入 chatMetadata，仅存储到 localforage
  */
 export async function saveToSlot(charId, chatId, slotName) {
     if (!charId || !chatId) throw new Error('无法获取角色或聊天ID');
@@ -222,15 +144,6 @@ export async function saveToSlot(charId, chatId, slotName) {
     const data = await readAllPillarData(chatId);
     const lf = getLocalForage();
     await lf.setItem(slotKey(charId, slotName), data);
-
-    // v7.8.0 同步到 chatMetadata（跨设备）
-    const fp = getCharFingerprint();
-    if (fp) {
-        const remote = getRemoteSlotsData();
-        if (!remote[fp]) remote[fp] = {};
-        remote[fp][slotName] = data;
-        await saveRemoteSlotsData(remote);
-    }
 
     const slots = await listSlots(charId);
     await updateSlotIndex(charId, slots);
@@ -240,26 +153,13 @@ export async function saveToSlot(charId, chatId, slotName) {
 
 /**
  * 从指定槽加载数据到当前聊天（覆盖当前聊天数据）
+ * v8.2.0 仅在当前聊天已有数据时重新生成 ID 以避免冲突
  */
 export async function loadFromSlot(charId, chatId, slotName) {
     if (!charId || !chatId) throw new Error('无法获取角色或聊天ID');
 
     const lf = getLocalForage();
     let raw = await lf.getItem(slotKey(charId, slotName));
-
-    // v7.8.0 本地无数据时从 chatMetadata 远端加载
-    if (raw === null || raw === undefined) {
-        const fp = getCharFingerprint();
-        if (fp) {
-            const remote = getRemoteSlotsData();
-            const rSlot = remote[fp]?.[slotName];
-            if (rSlot && typeof rSlot === 'object') {
-                raw = rSlot;
-                // 同步到本地
-                await lf.setItem(slotKey(charId, slotName), raw);
-            }
-        }
-    }
 
     // 兼容旧格式（扁平记忆数组）和新格式（五柱对象，v7.5.0 含 threads）
     let data;
@@ -277,14 +177,20 @@ export async function loadFromSlot(charId, chatId, slotName) {
         data = { npc: [], items: [], timeline: [], memories: [], threads: [] };
     }
 
-    // 重新生成ID避免冲突
-    const now = Date.now();
-    const newId = (i) => `bb_${now + i}_${Math.random().toString(36).slice(2, 7)}`;
-    data.npc = data.npc.map((e, i) => ({ ...e, id: newId(i) }));
-    data.items = data.items.map((e, i) => ({ ...e, id: newId(i + data.npc.length) }));
-    data.timeline = data.timeline.map((e, i) => ({ ...e, id: newId(i + data.npc.length + data.items.length) }));
-    data.memories = data.memories.map((e, i) => ({ ...e, id: newId(i + data.npc.length + data.items.length + data.timeline.length) }));
-    data.threads = data.threads.map((e, i) => ({ ...e, id: newId(i + data.npc.length + data.items.length + data.timeline.length + data.memories.length) }));
+    // 检查当前聊天是否已有数据，仅在有冲突风险时重新生成 ID
+    const currentData = await readAllPillarData(chatId);
+    const hasExistingData = currentData.npc.length > 0 || currentData.items.length > 0 ||
+        currentData.timeline.length > 0 || currentData.memories.length > 0;
+
+    if (hasExistingData) {
+        const now = Date.now();
+        const newId = (i) => `bb_${now + i}_${Math.random().toString(36).slice(2, 7)}`;
+        data.npc = data.npc.map((e, i) => ({ ...e, id: newId(i) }));
+        data.items = data.items.map((e, i) => ({ ...e, id: newId(i + data.npc.length) }));
+        data.timeline = data.timeline.map((e, i) => ({ ...e, id: newId(i + data.npc.length + data.items.length) }));
+        data.memories = data.memories.map((e, i) => ({ ...e, id: newId(i + data.npc.length + data.items.length + data.timeline.length) }));
+        data.threads = data.threads.map((e, i) => ({ ...e, id: newId(i + data.npc.length + data.items.length + data.timeline.length + data.memories.length) }));
+    }
 
     await writeAllPillarData(chatId, data);
 
@@ -314,6 +220,7 @@ export async function createEmptySlot(charId, slotName) {
 
 /**
  * 删除指定存档槽
+ * v8.2.0 仅从 localforage 删除，不涉及 chatMetadata
  */
 export async function deleteSlot(charId, slotName) {
     if (!charId) throw new Error('无法获取角色ID');
@@ -321,17 +228,6 @@ export async function deleteSlot(charId, slotName) {
 
     const lf = getLocalForage();
     await lf.removeItem(slotKey(charId, slotName));
-
-    // v7.8.0 同步删除远端
-    const fp = getCharFingerprint();
-    if (fp) {
-        const remote = getRemoteSlotsData();
-        if (remote[fp]) {
-            delete remote[fp][slotName];
-            if (Object.keys(remote[fp]).length === 0) delete remote[fp];
-            await saveRemoteSlotsData(remote);
-        }
-    }
 
     const slots = await listSlots(charId);
     await updateSlotIndex(charId, slots.filter(s => s.name !== slotName));

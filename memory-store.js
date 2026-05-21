@@ -919,10 +919,11 @@ export async function exportMemoriesToChatMetadata(chatId) {
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = json;
 
-    if (typeof ctx.saveChat === 'function') {
-        ctx.saveChat();
-    } else if (typeof ctx.saveChatDebounced === 'function') {
+    // v8.2.0 优先使用防抖保存，减少聊天文件写入频率
+    if (typeof ctx.saveChatDebounced === 'function') {
         ctx.saveChatDebounced();
+    } else if (typeof ctx.saveChat === 'function') {
+        ctx.saveChat();
     }
 
     const settings = getSettings();
@@ -1015,40 +1016,7 @@ export async function importMemoriesFromChatMetadata(chatId) {
         }
     }
 
-    // v7.8.0 恢复槽位数据到 localforage
-    const slotData = ctx.chatMetadata?.bb_memory_slots;
-    if (slotData && typeof slotData === 'object') {
-        const lf = SillyTavern.libs.localforage;
-        for (const [fp, slots] of Object.entries(slotData)) {
-            if (slots && typeof slots === 'object') {
-                for (const [slotName, data] of Object.entries(slots)) {
-                    if (data && typeof data === 'object') {
-                        const charId = getCharIdFromChat(chatId);
-                        if (charId) {
-                            const key = `bb_memory_slot_${charId}_${slotName}`;
-                            const existing = await lf.getItem(key);
-                            if (existing === null || existing === undefined) {
-                                await lf.setItem(key, data);
-                                restored++;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     return { restored, skipped };
-}
-
-function getCharIdFromChat(chatId) {
-    try {
-        const ctx = getContext();
-        if (ctx.chatId === chatId) {
-            return ctx.characterId !== undefined && ctx.characterId !== null ? String(ctx.characterId) : null;
-        }
-    } catch { return null; }
-    return null;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1056,6 +1024,7 @@ function getCharIdFromChat(chatId) {
 // ═══════════════════════════════════════════════════════════
 
 let backupTimers = new Map();
+let lastAutoBackupTime = 0;
 
 export function scheduleAutoBackup(chatId) {
     const settings = getSettings();
@@ -1065,10 +1034,17 @@ export function scheduleAutoBackup(chatId) {
     const existing = backupTimers.get(chatId);
     if (existing) clearTimeout(existing);
 
+    // v8.2.0 防抖延长到 30s，添加最小间隔 5min，减少频繁写入
     const timer = setTimeout(() => {
+        const now = Date.now();
+        if (now - lastAutoBackupTime < 300000) {
+            backupTimers.delete(chatId);
+            return;
+        }
+        lastAutoBackupTime = now;
         exportMemoriesToChatMetadata(chatId).catch(() => {});
         backupTimers.delete(chatId);
-    }, 5000);
+    }, 30000);
 
     backupTimers.set(chatId, timer);
 }
