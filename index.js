@@ -179,7 +179,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     recordHits(chatId, hitRecords).catch(() => {});
 
     // 9. 构建注入文本
-    const { text, tokenEstimate, stats, truncated, tokenBudget } = buildMemoryInjectionPrompt({
+    const { text, tokenEstimate, stats, truncated, tokenBudget } = await buildMemoryInjectionPrompt({
         npcProfiles: npcForInjection,
         items: itemsForInjection,
         timeline: tlForInjection,
