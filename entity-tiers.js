@@ -50,10 +50,10 @@ export function normalizeItemTier(v) {
 // ═══════════════════════════════════════════════════════════
 
 const TIER_SCORE_BOOST = {
-    eternal: 1.25,
-    core:    1.12,
+    eternal: 1.15,
+    core:    1.05,
     stable:  1.0,
-    transient: 0.85,
+    transient: 0.90,
 };
 
 export function tierScoreMultiplier(memory, queryMatched) {
@@ -61,13 +61,12 @@ export function tierScoreMultiplier(memory, queryMatched) {
     let mult = TIER_SCORE_BOOST[mt] || 1.0;
 
     if (!queryMatched) {
-        // 未命中实体时惩罚
-        if (mt === 'core' || mt === 'eternal') mult *= 0.85;
-        else if (mt === 'transient') mult *= 0.55;
-        else mult *= 0.65;
+        if (mt === 'core' || mt === 'eternal') mult *= 0.90;
+        else if (mt === 'transient') mult *= 0.70;
+        else mult *= 0.80;
     }
 
-    return Math.min(1.55, mult);
+    return Math.min(1.20, mult);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -75,11 +74,22 @@ export function tierScoreMultiplier(memory, queryMatched) {
 // ═══════════════════════════════════════════════════════════
 
 function tokenizeForHints(text) {
-    return text
+    const tokens = text
         .toLowerCase()
         .split(/[\s,，。！？!?、；;：:""''「」（）()\[\]{}·\n\r\t]+/)
         .map(t => t.trim())
         .filter(t => t.length >= 2 && t.length <= 24);
+
+    // CJK bigram 补充
+    const cjkOnly = text.replace(/[\s,，。！？!?、；;：:""''「」（）()\[\]{}·\n\r\t0-9a-zA-Z]+/g, '');
+    if (cjkOnly.length >= 2) {
+        for (let i = 0; i < cjkOnly.length - 1; i++) {
+            const bigram = cjkOnly.substring(i, i + 2);
+            if (!tokens.includes(bigram)) tokens.push(bigram);
+        }
+    }
+
+    return tokens;
 }
 
 export function extractEntityHints(queryText) {

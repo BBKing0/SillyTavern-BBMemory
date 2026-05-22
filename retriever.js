@@ -13,6 +13,7 @@ import {
     buildDefaultIndexCard,
     memoryMatchesQueryEntities,
     expandEntityMemories,
+    extractEntityHints,
     NPC_TIERS,
     ITEM_TIERS,
 } from './entity-tiers.js';
@@ -22,15 +23,14 @@ import {
 } from './memory-store.js';
 
 // ═══════════════════════════════════════════════════════════
-//  评分权重（简化为 5 维）
+//  评分权重（4 维）
 // ═══════════════════════════════════════════════════════════
 
 const SCORE_WEIGHTS = {
-    keyword:    0.25,
+    keyword:    0.35,
     embedding:  0.25,
-    importance: 0.20,
-    recency:    0.18,
-    tier:       0.12,
+    recency:    0.10,
+    tier:       0.30,
 };
 
 const RECENCY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -86,29 +86,33 @@ function cosineSimilarity(a, b) {
 const TIER_SCORE = { eternal: 1.0, core: 0.8, stable: 0.5, transient: 0.3 };
 
 export function calculateMemoryScore(memory, query, context = {}, queryEmbedding = null) {
-    const queryTokens = extractTokens(query);
     const now = Date.now();
 
-    // 关键词
+    // 标签命中
     let keywordScore = 0;
-    if (queryTokens.length) {
+    const hints = extractEntityHints(query);
+    if (hints.length && memory.tags && memory.tags.length) {
+        const tagNames = memory.tags.map(t => (typeof t === 'string' ? t : t.name).toLowerCase().trim()).filter(Boolean);
+        let matchCount = 0;
+        for (const hint of hints) {
+            if (tagNames.some(tag => tag.includes(hint) || hint.includes(tag))) matchCount++;
+        }
+        keywordScore = matchCount / hints.length;
+    } else if (hints.length) {
+        // Fallback: 记忆无标签时用 title+subject+target
         const searchTarget = [
-            memory.content, memory.title || '', memory.summary || '',
-            memory.subject || '', memory.target || '',
+            memory.title || '', memory.subject || '', memory.target || '',
         ].join(' ').toLowerCase();
         let matchCount = 0;
-        for (const t of queryTokens) {
-            if (searchTarget.includes(t)) matchCount++;
+        for (const hint of hints) {
+            if (searchTarget.includes(hint)) matchCount++;
         }
-        keywordScore = matchCount / queryTokens.length;
+        keywordScore = matchCount / hints.length;
     }
 
     // 语义
     const embeddingScore = (queryEmbedding && memory.embedding)
         ? cosineSimilarity(queryEmbedding, memory.embedding) : 0;
-
-    // 重要性
-    const importanceScore = memory.importance ?? 0.5;
 
     // 时效性
     const age = now - (memory.lastHitAt || memory.createdAt || now);
@@ -121,7 +125,7 @@ export function calculateMemoryScore(memory, query, context = {}, queryEmbedding
     const tierScore = TIER_SCORE[memory.memoryTier] || 0.3;
 
     let weightedSum = 0, weightTotal = 0;
-    const dims = { keyword: keywordScore, embedding: embeddingScore, importance: importanceScore, recency: recencyScore, tier: tierScore };
+    const dims = { keyword: keywordScore, embedding: embeddingScore, recency: recencyScore, tier: tierScore };
     for (const [dim, weight] of Object.entries(SCORE_WEIGHTS)) {
         weightedSum += (dims[dim] || 0) * weight;
         weightTotal += weight;
@@ -550,6 +554,7 @@ export function simpleSearch(items, queryText, maxResults = 100) {
             item.content, item.title || '', item.summary || '',
             item.subject || '', item.target || '',
             item.name || '', item.event || '', item.significance || '',
+            ...(item.tags || []).map(t => typeof t === 'string' ? t : t.name),
         ].join(' ').toLowerCase();
         return pool.includes(q) || extractTokens(q).some(t => pool.includes(t));
     }).slice(0, maxResults);
