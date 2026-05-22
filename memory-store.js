@@ -796,6 +796,7 @@ export async function clearAllData(chatId) {
         lf.removeItem(storageKey('item', chatId)),
         lf.removeItem(storageKey('timeline', chatId)),
         lf.removeItem(storageKey('mem', chatId)),
+        lf.removeItem(storageKey('threads', chatId)),
     ]);
 }
 
@@ -881,20 +882,22 @@ export async function getMemoryStats(chatId) {
 const BACKUP_METADATA_KEY = 'bb_memory_v5_backup';
 
 export async function exportMemoriesToChatMetadata(chatId) {
-    const [npc, items, timeline, memories] = await Promise.all([
+    const [npc, items, timeline, memories, threads] = await Promise.all([
         getNpcProfiles(chatId),
         getItems(chatId),
         getTimeline(chatId),
         getMemories(chatId),
+        getTimelineThreads(chatId),
     ]);
 
     const backup = {
-        version: '5.0',
+        version: '5.1',
         timestamp: Date.now(),
         npc,
         items,
         timeline,
         memories,
+        threads,
     };
 
     const json = JSON.stringify(backup);
@@ -914,7 +917,7 @@ export async function exportMemoriesToChatMetadata(chatId) {
     settings.lastBackupTimestamp = Date.now();
     updateSettings({ lastBackupTimestamp: settings.lastBackupTimestamp });
 
-    return { count: npc.length + items.length + timeline.length + memories.length, size: json.length };
+    return { count: npc.length + items.length + timeline.length + memories.length + threads.length, size: json.length };
 }
 
 export async function importMemoriesFromChatMetadata(chatId) {
@@ -996,6 +999,21 @@ export async function importMemoriesFromChatMetadata(chatId) {
             existingKeys.add(`${et}|${ec}`);
             const { id: _id, ...data } = entry;
             await addMemory(chatId, { ...data, id: undefined });
+            restored++;
+        }
+    }
+
+    // v8.5.1 恢复时间线线程（id + name 去重）
+    if (Array.isArray(backup.threads)) {
+        const existingThreads = await getTimelineThreads(chatId);
+        const existingIds = new Set(existingThreads.map(t => t.id));
+        const existingNames = new Set(existingThreads.map(t => (t.name || '').toLowerCase().trim()));
+        for (const thread of backup.threads) {
+            if (existingIds.has(thread.id)) { skipped++; continue; }
+            if (existingNames.has((thread.name || '').toLowerCase().trim())) { skipped++; continue; }
+            existingNames.add((thread.name || '').toLowerCase().trim());
+            const { id: _id, ...data } = thread;
+            await upsertTimelineThread(chatId, { ...data, id: undefined });
             restored++;
         }
     }

@@ -4,9 +4,9 @@
     "js": "index.js",
     "css": "style.css",
     "author": "BB-Memory Dev",
-    "version": "8.5.0",
+    "version": "8.5.1",
     "homePage": "https://github.com/BBKing0/SillyTavern-BBMemory",
     "auto_update": true,
     "generate_interceptor": "bbMemoryInterceptor",
-    "description": "智能长期记忆扩展 v8.5.0 - 评分系统优化/标签命中检索"
+    "description": "智能长期记忆扩展 v8.5.1 - 时间线程存档修复/跨设备槽共享"
 }

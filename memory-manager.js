@@ -1319,7 +1319,7 @@ async function renderSlotsPanel(overlay, chatId, cachedData = null) {
                         <div class="bb-slot-info">
                             <span class="bb-slot-name">
                                 <i class="fa-solid fa-floppy-disk"></i> ${escapeHtml(s.name)}
-                                ${s.name === currentSlot ? '<span class="bb-slot-default-badge">当前</span>' : ''}${s._remote ? '<span class="bb-slot-default-badge" style="background:#2196f3;">云端</span>' : ''}
+                                ${s.name === currentSlot ? '<span class="bb-slot-default-badge">当前</span>' : ''}${s.remote ? '<span class="bb-slot-default-badge" style="background:#2196f3;"><i class="fa-solid fa-cloud"></i> 云端</span>' : ''}
                             </span>
                             <span class="bb-slot-count">${s.count} 条记忆</span>
                         </div>
@@ -1327,7 +1327,7 @@ async function renderSlotsPanel(overlay, chatId, cachedData = null) {
                             <button class="menu_button bb-slot-btn-save" data-slot="${escapeHtml(s.name)}" title="将当前数据保存到此槽">
                                 <i class="fa-solid fa-arrow-up"></i> 保存
                             </button>
-                            <button class="menu_button bb-slot-btn-load" data-slot="${escapeHtml(s.name)}" title="从此槽加载数据（覆盖当前）">
+                            <button class="menu_button bb-slot-btn-load" data-slot="${escapeHtml(s.name)}" data-remote="${s.remote ? 'true' : 'false'}" title="${s.remote ? '从云端拉取后加载（覆盖当前）' : '从此槽加载数据（覆盖当前）'}">
                                 <i class="fa-solid fa-arrow-down"></i> 加载
                             </button>
                             <button class="menu_button bb-slot-btn-export" data-slot="${escapeHtml(s.name)}" title="导出此存档为JSON文件">
@@ -1372,9 +1372,27 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
     slotsEl.querySelectorAll('.bb-slot-btn-load').forEach(btn => {
         btn.addEventListener('click', async () => {
             const slotName = btn.dataset.slot;
+            const isRemote = btn.dataset.remote === 'true';
             const ok = confirm(`确定从「${slotName}」加载吗？当前数据将被覆盖！`);
             if (!ok) return;
             try {
+                // v8.5.1 远程槽先从 chatMetadata 拉取数据到本地
+                if (isRemote) {
+                    btn.disabled = true;
+                    const origHTML = btn.innerHTML;
+                    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 拉取中...';
+                    const { pullSlotFromChatMetadata } = await import('./memory-slots.js');
+                    const pulled = await pullSlotFromChatMetadata(charId, slotName);
+                    if (pulled === null) {
+                        btn.disabled = false;
+                        btn.innerHTML = origHTML;
+                        showToast(`远程槽「${slotName}」数据不可用，请先在源设备上保存此槽`, 'error');
+                        return;
+                    }
+                    showToast(`已从云端拉取 ${pulled} 条`, 'info');
+                    btn.disabled = false;
+                    btn.innerHTML = origHTML;
+                }
                 const result = await loadFromSlot(charId, chatId, slotName);
                 showToast(`已从「${slotName}」加载 ${result.count} 条`, 'success');
                 updateSettings({ currentSlotName: slotName });
