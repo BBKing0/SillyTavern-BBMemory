@@ -1,5 +1,5 @@
 /**
- * clue-board.js —— BB-Memory v8.4.1 线索板系统
+ * clue-board.js —— BB-Memory v8.4.5 线索板系统
  *
  * 让用户将四柱条目摆上线索板，手动创建连线（因果/暗示/矛盾/关联/推测）。
  * AI 在生成回复时看到用户的推理，自主决定顺着线索推进或提供反例。
@@ -7,6 +7,7 @@
 
 import {
     getNpcProfiles, getItems, getTimeline, getMemories,
+    getSettings, updateSettings,
 } from './memory-store.js';
 
 // ═══════════════════════════════════════════════════════════
@@ -132,7 +133,7 @@ export async function updateClueConnection(chatId, connId, patch) {
 // ═══════════════════════════════════════════════════════════
 
 export function hasActiveClues(board) {
-    return !!(board && board.nodes && board.nodes.length > 0 && board.connections && board.connections.length > 0);
+    return !!(board && board.nodes && board.nodes.length > 0);
 }
 
 const CONN_TYPE_LABEL = {
@@ -162,10 +163,15 @@ export function buildClueBoardInjection(board) {
         '',
     ];
 
+    // 有连线的节点：按连线格式化
+    const connectedNodes = new Set();
     for (const conn of board.connections) {
         const fromNode = nodeMap.get(conn.fromNodeId);
         const toNode = nodeMap.get(conn.toNodeId);
         if (!fromNode || !toNode) continue;
+
+        connectedNodes.add(conn.fromNodeId);
+        connectedNodes.add(conn.toNodeId);
 
         const typeStr = CONN_TYPE_LABEL[conn.type] || '→关联→';
         const confStr = CONFIDENCE_LABEL[conn.confidence] || '信心：中';
@@ -179,6 +185,14 @@ export function buildClueBoardInjection(board) {
         }
         if (conn.label) {
             lines.push(`  备注：${conn.label}`);
+        }
+    }
+
+    // 孤立节点：单独列出
+    for (const n of board.nodes) {
+        if (!connectedNodes.has(n.id)) {
+            lines.push(`● [${n.label || n.id}]（待连线）`);
+            if (n.note) lines.push(`  玩家备注：${n.note}`);
         }
     }
 
@@ -232,15 +246,37 @@ export async function openClueBoard(chatId) {
     // ── 头部 ──
     const header = document.createElement('div');
     header.style.cssText = 'display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--SmartThemeBorderColor,#45475a);flex-shrink:0;';
+    // 视图模式：从设置读取，默认 list
+    const settings = getSettings();
+    let viewMode = (typeof window !== 'undefined' && window.innerWidth <= 480) ? 'list' : (settings.clueBoardViewMode || 'list');
+
     header.innerHTML = `
         <i class="fa-solid fa-magnifying-glass" style="color:#ff9800;"></i>
         <div style="flex:1;">
             <strong>线索板</strong>
-            <span style="font-size:0.78em;opacity:0.5;margin-left:6px;">${board.nodes.length} 节点 · ${board.connections.length} 连线</span>
+            <span class="bb-clue-count" style="font-size:0.78em;opacity:0.5;margin-left:6px;">${board.nodes.length} 节点 · ${board.connections.length} 连线</span>
         </div>
+        <button class="bb-clue-view-btn menu_button" title="切换视图 (列表/图形)" style="font-size:0.75em;padding:3px 8px;opacity:0.7;">
+            <i class="fa-solid ${viewMode === 'list' ? 'fa-diagram-project' : 'fa-list'}"></i>
+        </button>
         <button class="bb-clue-close-btn" style="background:none;border:none;color:inherit;font-size:22px;cursor:pointer;opacity:0.6;line-height:1;padding:0 4px;">&times;</button>
     `;
     header.querySelector('.bb-clue-close-btn').addEventListener('click', () => overlay.remove());
+    // 视图切换
+    header.querySelector('.bb-clue-view-btn').addEventListener('click', () => {
+        // 移动端强制 list 模式
+        if (typeof window !== 'undefined' && window.innerWidth <= 480) {
+            showToast('移动端仅支持列表视图', 'info');
+            return;
+        }
+        viewMode = viewMode === 'list' ? 'graph' : 'list';
+        updateSettings({ clueBoardViewMode: viewMode });
+        const icon = header.querySelector('.bb-clue-view-btn i');
+        if (icon) {
+            icon.className = 'fa-solid ' + (viewMode === 'list' ? 'fa-diagram-project' : 'fa-list');
+        }
+        refreshClueBoard(body, board, chatId, overlay, panel, viewMode);
+    });
     panel.appendChild(header);
 
     // ── 主体 ──
@@ -273,7 +309,7 @@ export async function openClueBoard(chatId) {
     footer.querySelector('#bb_clue_add_node').addEventListener('click', () => {
         showAddNodeDialog(chatId, async () => {
             const newBoard = await getClueBoard(chatId);
-            refreshClueBoard(body, newBoard, chatId, overlay);
+            refreshClueBoard(body, newBoard, chatId, overlay, panel);
         });
     });
     footer.querySelector('#bb_clue_add_conn').addEventListener('click', () => {
@@ -282,7 +318,7 @@ export async function openClueBoard(chatId) {
         showAddConnectionDialog(nodes, async (connData) => {
             await addClueConnection(chatId, connData);
             const newBoard = await getClueBoard(chatId);
-            refreshClueBoard(body, newBoard, chatId, overlay);
+            refreshClueBoard(body, newBoard, chatId, overlay, panel);
         });
     });
     footer.querySelector('#bb_clue_help').addEventListener('click', () => {
@@ -308,9 +344,136 @@ export async function openClueBoard(chatId) {
     document.addEventListener('keydown', onKeyDown);
 }
 
-function refreshClueBoard(body, board, chatId, overlay) {
+function refreshClueBoard(body, board, chatId, overlay, panel, viewMode = 'list') {
     body.innerHTML = '';
-    renderClueBoardBody(body, board, chatId, overlay);
+    if (viewMode === 'graph') {
+        renderGraphView(body, board);
+    } else {
+        renderClueBoardBody(body, board, chatId, overlay);
+    }
+    if (panel) {
+        const connBtn = panel.querySelector('#bb_clue_add_conn');
+        if (connBtn) connBtn.disabled = board.nodes.length < 2;
+        const countEl = panel.querySelector('.bb-clue-count');
+        if (countEl) countEl.textContent = board.nodes.length + ' 节点 · ' + board.connections.length + ' 连线';
+    }
+}
+
+function showToast(msg, type = 'info') {
+    try {
+        const ctx = SillyTavern.getContext();
+        if (typeof ctx.toastr?.[type] === 'function') {
+            ctx.toastr[type](msg, '', { timeOut: 2000 });
+        }
+    } catch { /* ignore */ }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  SVG 图形视图
+// ═══════════════════════════════════════════════════════════
+
+function renderGraphView(body, board) {
+    if (!board.nodes.length) {
+        body.innerHTML = `<div style="text-align:center;padding:40px;opacity:0.6;">
+            <i class="fa-solid fa-magnifying-glass" style="font-size:2em;display:block;margin-bottom:12px;opacity:0.3;"></i>
+            还没有线索节点</div>`;
+        return;
+    }
+
+    const nodeMap = new Map();
+    for (const n of board.nodes) nodeMap.set(n.id, n);
+
+    const typeColors = { causal: '#ff9800', hint: '#2196f3', contradicts: '#f44336', related: '#9e9e9e', speculation: '#ce93d8' };
+    const refColor = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784' };
+
+    // 计算节点位置：按列排列（from 节点在左，to 节点在右）
+    const NODE_W = 140, NODE_H = 48, GAP_X = 140, GAP_Y = 20, PAD = 16;
+    const pos = new Map();
+    const levels = new Map(); // nodeId → column level
+
+    // BFS 分配层级
+    function assignLevel(nodeId, lvl) {
+        if (levels.has(nodeId) && levels.get(nodeId) >= lvl) return;
+        levels.set(nodeId, Math.max(levels.get(nodeId) || 0, lvl));
+        const outConns = board.connections.filter(c => c.fromNodeId === nodeId);
+        for (const c of outConns) assignLevel(c.toNodeId, lvl + 1);
+    }
+    // 起始节点：没有入边的节点为 level 0
+    const hasIncoming = new Set(board.connections.map(c => c.toNodeId));
+    for (const n of board.nodes) {
+        if (!hasIncoming.has(n.id)) assignLevel(n.id, 0);
+    }
+    // 剩余未分配节点
+    for (const n of board.nodes) {
+        if (!levels.has(n.id)) levels.set(n.id, 0);
+    }
+
+    // 按 level 分组
+    const levelGroups = new Map();
+    for (const n of board.nodes) {
+        const lv = levels.get(n.id) || 0;
+        if (!levelGroups.has(lv)) levelGroups.set(lv, []);
+        levelGroups.get(lv).push(n);
+    }
+
+    // 计算坐标
+    const maxLevel = Math.max(...levelGroups.keys(), 0);
+    let totalW = 0;
+    for (let lv = 0; lv <= maxLevel; lv++) {
+        const group = levelGroups.get(lv) || [];
+        totalW = Math.max(totalW, group.length);
+    }
+
+    for (const [lv, group] of levelGroups) {
+        const colX = PAD + lv * (NODE_W + GAP_X);
+        const totalColH = group.length * (NODE_H + GAP_Y);
+        const startY = Math.max(PAD, (Math.max(1, board.nodes.length) * (NODE_H + GAP_Y) - totalColH) / 2 + PAD);
+        group.forEach((n, i) => {
+            pos.set(n.id, { x: colX, y: startY + i * (NODE_H + GAP_Y) });
+        });
+    }
+
+    const svgW = PAD + (maxLevel + 1) * (NODE_W + GAP_X) + PAD;
+    const svgH = Math.max(200, PAD + Math.max(...[...pos.values()].map(p => p.y)) + NODE_H + PAD);
+
+    let svg = `<svg width="${svgW}" height="${svgH}" style="display:block;max-width:100%;font-family:inherit;" xmlns="http://www.w3.org/2000/svg">`;
+
+    // 连线
+    for (const conn of board.connections) {
+        const from = pos.get(conn.fromNodeId);
+        const to = pos.get(conn.toNodeId);
+        if (!from || !to) continue;
+        const tc = typeColors[conn.type] || '#888';
+        const x1 = from.x + NODE_W;
+        const y1 = from.y + NODE_H / 2;
+        const x2 = to.x;
+        const y2 = to.y + NODE_H / 2;
+        const midX = (x1 + x2) / 2;
+        svg += `<path d="M${x1},${y1} C${midX},${y1} ${midX},${y2} ${x2},${y2}" fill="none" stroke="${tc}" stroke-width="1.5" stroke-dasharray="${conn.confidence === 'low' ? '4,3' : 'none'}" opacity="0.7"/>`;
+        // 标签
+        if (conn.label) {
+            svg += `<text x="${midX}" y="${(y1 + y2) / 2 - 4}" text-anchor="middle" font-size="9" fill="${tc}" opacity="0.8">${escapeHtml(conn.label.slice(0, 10))}</text>`;
+        }
+    }
+
+    // 节点
+    for (const n of board.nodes) {
+        const p = pos.get(n.id);
+        if (!p) continue;
+        const rc = refColor[n.refType] || '#888';
+        const label = (n.label || n.id).slice(0, 12);
+        svg += `<rect x="${p.x}" y="${p.y}" width="${NODE_W}" height="${NODE_H}" rx="6" fill="var(--SmartThemeBlurTintColor,#1e1e2e)" stroke="${rc}" stroke-width="1.5" opacity="0.95"/>`;
+        svg += `<text x="${p.x + NODE_W / 2}" y="${p.y + NODE_H / 2 + 1}" text-anchor="middle" dominant-baseline="middle" font-size="11" fill="var(--SmartThemeBodyColor,#e0e0e0)">${escapeHtml(label)}</text>`;
+        // 备注标记
+        if (n.note) {
+            svg += `<circle cx="${p.x + NODE_W - 8}" cy="${p.y + 8}" r="4" fill="#ff9800" opacity="0.7"><title>${escapeHtml(n.note)}</title></circle>`;
+        }
+    }
+
+    svg += '</svg>';
+
+    body.innerHTML = svg;
+    body.style.cssText = 'overflow:auto;max-height:60vh;';
 }
 
 function renderClueBoardBody(body, board, chatId, overlay) {
@@ -345,7 +508,7 @@ function renderClueBoardBody(body, board, chatId, overlay) {
         nodeCard.innerHTML = `
             <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;">
                 <i class="fa-solid ${refIcon}" style="color:${refColor};font-size:0.85em;"></i>
-                <span style="flex:1;font-size:0.88em;font-weight:500;">${escapeHtml(node.label || node.id)}</span>
+                <span class="bb-clue-node-label" data-node-id="${node.id}" style="flex:1;font-size:0.88em;font-weight:500;cursor:text;" title="点击编辑名称">${escapeHtml(node.label || node.id)}</span>
                 <button class="bb-clue-node-edit menu_button" data-node-id="${node.id}" style="font-size:0.7em;padding:2px 6px;" title="编辑备注">
                     <i class="fa-solid fa-pen"></i>
                 </button>
@@ -397,9 +560,41 @@ function renderClueBoardBody(body, board, chatId, overlay) {
             if (newNote === null) return;
             await updateClueNode(chatId, nodeId, { note: newNote.trim() });
             const newBoard = await getClueBoard(chatId);
-            refreshClueBoard(body, newBoard, chatId, overlay);
+            refreshClueBoard(body, newBoard, chatId, overlay, panel);
         });
     });
+    // 内联编辑标签
+    const bindLabelClick = (el) => {
+        el.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            const nId = el.dataset.nodeId;
+            const n = board.nodes.find(nn => nn.id === nId);
+            if (!n) return;
+            const inp = document.createElement('input');
+            inp.type = 'text';
+            inp.value = n.label || '';
+            inp.style.cssText = 'flex:1;font-size:0.88em;font-weight:500;background:var(--SmartThemeInputColor,#1a1a2e);color:var(--SmartThemeTextColor,#ddd);border:1px solid var(--SmartThemeBorderColor,#555);border-radius:4px;padding:2px 6px;width:100%;';
+            el.replaceWith(inp);
+            inp.focus();
+            inp.select();
+            const done = async () => {
+                const newLabel = inp.value.trim();
+                const sp = document.createElement('span');
+                sp.className = 'bb-clue-node-label';
+                sp.dataset.nodeId = nId;
+                sp.style.cssText = 'flex:1;font-size:0.88em;font-weight:500;cursor:text;';
+                sp.title = '';
+                sp.textContent = newLabel || n.label || n.id;
+                inp.replaceWith(sp);
+                bindLabelClick(sp);
+                if (newLabel && newLabel !== n.label) {
+                    await updateClueNode(chatId, nId, { label: newLabel });
+                }
+            };
+            inp.addEventListener('blur', done);
+            inp.addEventListener('keydown', (ev2) => { if (ev2.key === 'Enter') done(); if (ev2.key === 'Escape') { inp.value = n.label || ''; done(); } });
+        });
+    };
     body.querySelectorAll('.bb-clue-node-del').forEach(btn => {
         btn.addEventListener('click', async (e) => {
             e.stopPropagation();
@@ -408,7 +603,7 @@ function renderClueBoardBody(body, board, chatId, overlay) {
             if (!confirm(`确定删除节点"${node?.label || nodeId}"及其所有连线？`)) return;
             await removeClueNode(chatId, nodeId);
             const newBoard = await getClueBoard(chatId);
-            refreshClueBoard(body, newBoard, chatId, overlay);
+            refreshClueBoard(body, newBoard, chatId, overlay, panel);
         });
     });
     body.querySelectorAll('.bb-clue-conn-edit').forEach(btn => {
@@ -421,7 +616,7 @@ function renderClueBoardBody(body, board, chatId, overlay) {
             if (newLabel === null) return;
             await updateClueConnection(chatId, connId, { label: newLabel.trim() });
             const newBoard = await getClueBoard(chatId);
-            refreshClueBoard(body, newBoard, chatId, overlay);
+            refreshClueBoard(body, newBoard, chatId, overlay, panel);
         });
     });
     body.querySelectorAll('.bb-clue-conn-del').forEach(btn => {
@@ -431,7 +626,7 @@ function renderClueBoardBody(body, board, chatId, overlay) {
             if (!confirm('确定删除此连线？')) return;
             await removeClueConnection(chatId, connId);
             const newBoard = await getClueBoard(chatId);
-            refreshClueBoard(body, newBoard, chatId, overlay);
+            refreshClueBoard(body, newBoard, chatId, overlay, panel);
         });
     });
 }
@@ -456,6 +651,13 @@ function showAddNodeDialog(chatId, onDone) {
             <i class="fa-solid fa-magnifying-glass" style="color:#ff9800;"></i>
             <strong>从记忆库添加线索节点</strong>
             <button class="bb-clue-add-close" style="margin-left:auto;background:none;border:none;color:inherit;font-size:20px;cursor:pointer;opacity:0.5;">&times;</button>
+        </div>
+        <div id="bb_clue_node_tabs" style="display:flex;gap:4px;margin-bottom:8px;flex-shrink:0;flex-wrap:wrap;">
+            <button class="bb-clue-tab active" data-pillar="all" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:rgba(255,152,0,0.15);color:inherit;cursor:pointer;">全部</button>
+            <button class="bb-clue-tab" data-pillar="mem" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">记忆</button>
+            <button class="bb-clue-tab" data-pillar="npc" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">NPC</button>
+            <button class="bb-clue-tab" data-pillar="item" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">物品</button>
+            <button class="bb-clue-tab" data-pillar="timeline" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">时间线</button>
         </div>
         <input type="text" id="bb_clue_node_search" class="bb-input" placeholder="搜索条目..." style="margin-bottom:8px;flex-shrink:0;" />
         <div id="bb_clue_node_list" style="flex:1;overflow-y:auto;min-height:0;font-size:0.85em;">加载中...</div>
@@ -487,9 +689,12 @@ function showAddNodeDialog(chatId, onDone) {
         const pillarColor = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784' };
         const truthColor = { unknown: '#9e9e9e', rumor: '#ff9800', misleading: '#f44336', secret_true: '#7c4dff', 'true': '#4caf50', 'false': '#f44336' };
 
+        let activePillar = 'all';
+
         function renderList(filter = '') {
             const q = filter.toLowerCase();
             const filtered = allEntries.filter(e => {
+                if (activePillar !== 'all' && e._pillar !== activePillar) return false;
                 if (!q) return true;
                 return (e._label || '').toLowerCase().includes(q) || (e._preview || '').toLowerCase().includes(q);
             }).slice(0, 50);
@@ -520,6 +725,20 @@ function showAddNodeDialog(chatId, onDone) {
                 });
             });
         }
+
+        // 标签切换
+        const tabs = dialog.querySelectorAll('.bb-clue-tab');
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                activePillar = tab.dataset.pillar;
+                tabs.forEach(t => {
+                    t.classList.toggle('active', t.dataset.pillar === activePillar);
+                    t.style.background = t.dataset.pillar === activePillar ? 'rgba(255,152,0,0.15)' : 'transparent';
+                    t.style.opacity = t.dataset.pillar === activePillar ? '1' : '0.6';
+                });
+                renderList(searchInput.value);
+            });
+        });
 
         renderList();
         searchInput.addEventListener('input', () => renderList(searchInput.value));

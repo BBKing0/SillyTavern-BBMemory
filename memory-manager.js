@@ -349,6 +349,9 @@ function buildEntryItemHTML(e) {
             <button class="menu_button bb-mem-btn-sm bb-mem-archive" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" title="归档" style="font-size:0.85em;">
                 <i class="fa-solid fa-box-archive"></i>
             </button>
+            <button class="menu_button bb-mem-btn-sm bb-mem-to-clue" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" data-label="${escapeHtml(title)}" title="发送到线索板" style="font-size:0.85em;opacity:0.6;">
+                <i class="fa-solid fa-magnifying-glass"></i>
+            </button>
             <button class="menu_button bb-mem-btn-sm bb-mem-delete menu_button_danger" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" title="删除" style="font-size:0.85em;">
                 <i class="fa-solid fa-trash"></i>
             </button>
@@ -651,6 +654,20 @@ function rebindItemActions(overlay, chatId) {
             await archiveEntry(chatId, pillar, id);
             showToast('已归档', 'success');
             await rerenderManagerList(overlay, chatId);
+        });
+    });
+
+    // v8.4.5 发送到线索板
+    overlay.querySelectorAll('.bb-mem-to-clue').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const { addClueNode } = await import('./clue-board.js');
+            await addClueNode(chatId, {
+                refType: btn.dataset.pillar,
+                refId: btn.dataset.id,
+                label: btn.dataset.label || '',
+            });
+            showToast('已添加到线索板', 'success');
         });
     });
 
