@@ -71,11 +71,9 @@
                 </div>
                 <div class="bb-settings-section-body">
                     <div class="bb-mem-sidebar-section">
-                        <label for="bb_active_category">当前激活分类</label>
-                        <small class="bb-mem-hint">选择分类后，仅注入该分类+通用条目。空白=显示全部</small>
-                        <select id="bb_active_category" class="bb-input" style="width:100%;">
-                            <option value="">— 全部（通用）—</option>
-                        </select>
+                        <label>分类注入开关</label>
+                        <small class="bb-mem-hint">勾选=注入该分类条目。全部不勾=注入全部条目。通用条目(未分类)始终注入。</small>
+                        <div id="bb_category_toggles" style="margin-top:4px;"></div>
                     </div>
                     <div class="bb-mem-sidebar-section" style="display:flex;gap:4px;">
                         <input id="bb_new_category_name" type="text" placeholder="新分类名称" class="bb-input" style="flex:1;" />

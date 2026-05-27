@@ -812,13 +812,7 @@ function bindSidebarEvents() {
 
     // ═══ v8.6.0 记忆分类 ═══
 
-    document.querySelector('#bb_active_category')?.addEventListener('change', async function () {
-        const val = this.value;
-        const { setActiveCategory } = await import('./memory-store.js');
-        await setActiveCategory(val);
-        refreshCategoryUI();
-        showToast(val ? `已切换到分类「${val}」` : '已切换到全部（通用）', 'success');
-    });
+    // 分类开关由 refreshCategoryUI 动态渲染，此处不绑定静态元素
 
     document.querySelector('#bb_add_category_btn')?.addEventListener('click', async () => {
         const input = document.querySelector('#bb_new_category_name');
@@ -851,21 +845,53 @@ function bindSidebarEvents() {
     });
 
     async function refreshCategoryUI() {
-        const { getSettings, addCategory, removeCategory, getCategoryStats } = await import('./memory-store.js');
+        const { getSettings, toggleCategory, removeCategory, getCategoryStats } = await import('./memory-store.js');
         const settings = getSettings();
         const chatId = getChatId();
         if (!chatId) return;
 
-        // 更新激活分类下拉
-        const sel = document.querySelector('#bb_active_category');
-        if (sel) {
-            sel.innerHTML = '<option value="">— 全部（通用）—</option>';
-            for (const cat of (settings.categories || [])) {
-                sel.innerHTML += `<option value="${escapeHtml(cat)}" ${settings.activeCategory === cat ? 'selected' : ''}>${escapeHtml(cat)}</option>`;
+        // 分类开关 checkbox 列表
+        const togglesDiv = document.querySelector('#bb_category_toggles');
+        if (togglesDiv) {
+            if (!settings.categories || settings.categories.length === 0) {
+                togglesDiv.innerHTML = '<div style="opacity:0.4;font-size:0.8em;">暂无分类，请添加</div>';
+            } else {
+                let stats = {};
+                try { stats = await getCategoryStats(chatId); } catch { /* ignore */ }
+                const enabled = settings.enabledCategories || {};
+                togglesDiv.innerHTML = settings.categories.map(cat => {
+                    const s = stats[cat] || {};
+                    const total = (s.mem || 0) + (s.npc || 0) + (s.item || 0) + (s.timeline || 0);
+                    const checked = enabled[cat] === true ? 'checked' : '';
+                    return `<label style="display:flex;align-items:center;gap:6px;padding:3px 0;cursor:pointer;font-size:0.85em;">
+                        <input type="checkbox" class="bb-cat-toggle" data-cat="${escapeHtml(cat)}" ${checked} style="cursor:pointer;" />
+                        <span style="flex:1;">${escapeHtml(cat)}</span>
+                        <small style="opacity:0.5;">${total}条</small>
+                        <button class="menu_button bb-cat-del-btn" data-cat="${escapeHtml(cat)}" style="font-size:0.65em;padding:1px 5px;opacity:0.4;">✕</button>
+                    </label>`;
+                }).join('');
+                // 绑定开关事件
+                togglesDiv.querySelectorAll('.bb-cat-toggle').forEach(cb => {
+                    cb.addEventListener('change', async function () {
+                        await toggleCategory(this.dataset.cat, this.checked);
+                        showToast(`「${this.dataset.cat}」${this.checked ? '已开启注入' : '已关闭注入'}`, 'success');
+                    });
+                });
+                // 绑定删除按钮
+                togglesDiv.querySelectorAll('.bb-cat-del-btn').forEach(btn => {
+                    btn.addEventListener('click', async (e) => {
+                        e.preventDefault(); e.stopPropagation();
+                        const catName = btn.dataset.cat;
+                        if (!confirm(`确定删除分类「${catName}」？\n该分类下的所有条目将变为"通用"。`)) return;
+                        await removeCategory(chatId, catName);
+                        refreshCategoryUI();
+                        showToast(`分类「${catName}」已删除`, 'success');
+                    });
+                });
             }
         }
 
-        // 更新重命名选择框
+        // 重命名选择框
         const renameSel = document.querySelector('#bb_category_rename_select');
         if (renameSel) {
             renameSel.innerHTML = '<option value="">— 选择分类 —</option>';
@@ -874,33 +900,19 @@ function bindSidebarEvents() {
             }
         }
 
-        // 更新分类列表（含统计）
-        let stats = {};
-        try { stats = await getCategoryStats(chatId); } catch { /* ignore */ }
+        // 分类统计列表
         const list = document.querySelector('#bb_category_list');
         if (list) {
             if (!settings.categories || settings.categories.length === 0) {
-                list.innerHTML = '<div style="opacity:0.4;font-size:0.8em;">暂无分类，请添加</div>';
+                list.innerHTML = '';
             } else {
+                let stats = {};
+                try { stats = await getCategoryStats(chatId); } catch { /* ignore */ }
                 list.innerHTML = settings.categories.map(cat => {
                     const s = stats[cat] || {};
                     const total = (s.mem || 0) + (s.npc || 0) + (s.item || 0) + (s.timeline || 0);
-                    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--SmartThemeBorderColor,#333);">
-                        <span>${escapeHtml(cat)} <small style="opacity:0.5;">(${total}条)</small></span>
-                        <button class="menu_button bb-cat-del-btn" data-cat="${escapeHtml(cat)}" style="font-size:0.7em;padding:1px 6px;opacity:0.5;">删除</button>
-                    </div>`;
+                    return `<div style="display:flex;align-items:center;gap:4px;font-size:0.75em;opacity:0.6;padding:2px 0;">📁 ${escapeHtml(cat)} — 记忆${s.mem||0} NPC${s.npc||0} 物品${s.item||0} 时间线${s.timeline||0}</div>`;
                 }).join('');
-                // 绑定删除按钮
-                list.querySelectorAll('.bb-cat-del-btn').forEach(btn => {
-                    btn.addEventListener('click', async () => {
-                        const catName = btn.dataset.cat;
-                        if (!confirm(`确定删除分类「${catName}」？\n该分类下的所有条目将变为"通用"。`)) return;
-                        const { removeCategory } = await import('./memory-store.js');
-                        await removeCategory(chatId, catName);
-                        refreshCategoryUI();
-                        showToast(`分类「${catName}」已删除`, 'success');
-                    });
-                });
             }
         }
     }

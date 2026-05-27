@@ -234,9 +234,13 @@ export function mergeExpandedRelevantResults(memories, queryText, relevantResult
  * activeCategory 有值时：只显示 category===null（通用）或 category===activeCategory（匹配分类）
  */
 function matchesActiveCategory(entry) {
-    const active = getSettings().activeCategory;
-    if (!active) return true;
-    return entry.category === null || entry.category === active;
+    const settings = getSettings();
+    const enabled = settings.enabledCategories || {};
+    const hasEnabled = Object.values(enabled).some(v => v === true);
+    // 没有开启任何分类 → 显示全部
+    if (!hasEnabled) return true;
+    // 有开启的分类 → 只显示通用(null) + 已开启的分类
+    return entry.category === null || enabled[entry.category] === true;
 }
 
 // ═══════════════════════════════════════════════════════════

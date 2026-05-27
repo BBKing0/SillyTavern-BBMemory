@@ -86,7 +86,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     activeApiProfile: '',
     // v8.6.0 记忆分类
     categories: [],              // 分类名称列表
-    activeCategory: '',          // 当前激活的分类（空=显示全部）
+    enabledCategories: {},       // { name: true/false } 每个分类的注入开关（空=全部显示）
     // 存档槽
     currentSlotName: 'default',
     // 系统
@@ -655,7 +655,7 @@ export async function removeCategory(chatId, categoryName) {
     const name = (categoryName || '').trim();
     if (!name) return false;
     settings.categories = settings.categories.filter(c => c !== name);
-    if (settings.activeCategory === name) settings.activeCategory = '';
+    delete settings.enabledCategories[name];
     await updateSettings(settings);
 
     // 将四柱中属于该分类的条目重置为 null
@@ -682,7 +682,10 @@ export async function renameCategory(chatId, oldName, newName) {
     if (idx === -1) return false;
 
     settings.categories[idx] = trimmedNew;
-    if (settings.activeCategory === oldName) settings.activeCategory = trimmedNew;
+    if (settings.enabledCategories[oldName] !== undefined) {
+        settings.enabledCategories[trimmedNew] = settings.enabledCategories[oldName];
+        delete settings.enabledCategories[oldName];
+    }
     await updateSettings(settings);
 
     // 更新四柱中属于该分类的条目
@@ -699,12 +702,17 @@ export async function renameCategory(chatId, oldName, newName) {
 }
 
 /**
- * 设置当前激活的分类
+ * 切换分类的注入开关
  */
-export async function setActiveCategory(categoryName) {
+export async function toggleCategory(categoryName, enabled) {
     const settings = getSettings();
     const name = (categoryName || '').trim();
-    settings.activeCategory = name;
+    if (!name || !settings.categories.includes(name)) return false;
+    settings.enabledCategories[name] = !!enabled;
+    // 清理不存在的分类残留
+    for (const key of Object.keys(settings.enabledCategories)) {
+        if (!settings.categories.includes(key)) delete settings.enabledCategories[key];
+    }
     await updateSettings(settings);
     return true;
 }

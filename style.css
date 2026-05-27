@@ -3062,45 +3062,63 @@
 }
 
 /* ═══════════════════════════════════════════════════════════
-   线索板 (v8.4.0)
+   线索板 (v8.6.0 重新设计)
    ═══════════════════════════════════════════════════════════ */
 
-/* 面板滚动条 */
+.bb-clue-overlay {
+    transition: opacity 0.15s;
+}
 .bb-clue-panel {
     scrollbar-width: thin;
 }
 
-/* 节点卡片 hover */
+/* 节点卡片 */
+.bb-clue-node-card {
+    transition: box-shadow 0.15s, transform 0.1s;
+}
 .bb-clue-node-card:hover {
-    background: rgba(128, 128, 128, 0.03);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
 }
 
-/* 连线样式 */
+/* 连线行 */
 .bb-clue-connection {
-    transition: background 0.15s;
+    transition: background 0.12s;
 }
 .bb-clue-connection:hover {
-    background: rgba(128, 128, 128, 0.03);
+    background: rgba(128, 128, 128, 0.04);
 }
 
-/* 添加节点对话框条目 hover */
+/* 分组折叠标题 */
+.bb-clue-group-toggle {
+    transition: background 0.12s;
+}
+.bb-clue-group-toggle:hover {
+    background: rgba(128, 128, 128, 0.04);
+}
+
+/* 添加对话框条目 */
 .bb-clue-add-item:hover {
     background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.05));
 }
 
-/* 移动端适配 */
-@media (max-width: 480px) {
+/* 移动端 */
+@media (max-width: 768px) {
+    .bb-clue-overlay {
+        padding: 0 !important;
+        align-items: flex-start !important;
+        overflow-y: auto;
+    }
     .bb-clue-panel {
-        width: 96vw !important;
-        max-height: 90vh !important;
-        border-radius: 8px !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        max-height: 100vh !important;
+        max-height: 100dvh !important;
+        border-radius: 0 !important;
     }
-    .bb-clue-node-card {
-        font-size: 0.9em;
-    }
-    .bb-clue-connection {
-        margin-left: 8px !important;
-        padding-left: 8px !important;
+}
+@media (max-width: 480px) {
+    .bb-clue-stats-bar {
+        font-size: 0.7em !important;
     }
 }
 

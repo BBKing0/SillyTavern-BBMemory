@@ -256,6 +256,14 @@ function buildEntryItemHTML(e) {
         if (typeDef) statusBadges += `<span class="bb-item-badge" style="font-size:0.7em;">${typeDef.label}</span>`;
     }
 
+    // v8.6.0 分类标签
+    let catBadge = '';
+    if (e.category) {
+        catBadge = `<span class="bb-cat-badge" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" data-cat="${escapeHtml(e.category)}" title="点击切换分类" style="background:rgba(186,104,200,0.15);color:#ba68c8;border:1px solid rgba(186,104,200,0.3);border-radius:3px;padding:1px 6px;font-size:0.72em;cursor:pointer;margin-left:2px;">📁 ${escapeHtml(e.category)}</span>`;
+    } else {
+        catBadge = `<span class="bb-cat-badge bb-cat-none" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" title="点击添加分类" style="background:rgba(255,255,255,0.04);color:var(--SmartThemeBodyColor,#ccc);border:1px dashed var(--SmartThemeBorderColor,#555);border-radius:3px;padding:1px 6px;font-size:0.7em;cursor:pointer;margin-left:2px;">📁 未分类</span>`;
+    }
+
     // 时间行
     const createdDate = e.createdAt ? new Date(e.createdAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
     const updatedDate = (e.updatedAt && e.updatedAt !== e.createdAt) ? new Date(e.updatedAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
@@ -317,7 +325,7 @@ function buildEntryItemHTML(e) {
         <div style="display:flex;align-items:center;margin-bottom:6px;">
             ${cbHTML}
             <strong style="flex:1;font-size:0.95em;">${escapeHtml(title)}</strong>
-            <span style="display:flex;align-items:center;gap:4px;flex-shrink:0;">${statusBadges}</span>
+            <span style="display:flex;align-items:center;gap:4px;flex-shrink:0;">${statusBadges}${catBadge}</span>
             <span class="bb-mem-item-type" style="color:${pillarConfig.color};margin-left:6px;font-size:0.75em;">
                 <i class="fa-solid ${pillarConfig.icon}"></i> ${pillarConfig.label}
             </span>
@@ -515,6 +523,50 @@ function bindManagerEvents(overlay, chatId) {
 
     // 批量操作
     bindBatchEvents(overlay, chatId);
+
+    // v8.6.0 分类标签点击切换
+    overlay.addEventListener('click', async (e) => {
+        const badge = e.target.closest('.bb-cat-badge');
+        if (!badge) return;
+        e.stopPropagation();
+        const entryId = badge.dataset.id;
+        const pillar = badge.dataset.pillar;
+        const currentCat = badge.dataset.cat || '';
+        const { getSettings, updateMemory, updateNpcProfile, updateItem, updateTimelineEntry } = await import('./memory-store.js');
+        const settings = getSettings();
+        const cats = settings.categories || [];
+
+        // 构建选项
+        const options = ['无分类'];
+        for (const c of cats) options.push(c);
+        if (currentCat && !cats.includes(currentCat)) {
+            options.push(currentCat + ' (当前)');
+        }
+        const choice = prompt(`选择分类（当前: ${currentCat || '无分类'}）:\n${options.map((o, i) => `${i}: ${o}`).join('\n')}`, '');
+        if (choice === null) return;
+
+        let newCat = null;
+        const idx = parseInt(choice, 10);
+        if (!isNaN(idx) && idx >= 0 && idx < options.length) {
+            newCat = idx === 0 ? null : options[idx].replace(' (当前)', '');
+        } else if (choice.trim()) {
+            newCat = choice.trim();
+            if (newCat === '无分类') newCat = null;
+        }
+
+        const updater = {
+            mem: (id, p) => updateMemory(chatId, id, p),
+            npc: (id, p) => updateNpcProfile(chatId, id, p),
+            item: (id, p) => updateItem(chatId, id, p),
+            timeline: (id, p) => updateTimelineEntry(chatId, id, p),
+        }[pillar];
+
+        if (updater) {
+            await updater(entryId, { category: newCat });
+            showToast(newCat ? `已归入「${newCat}」` : '已设为通用', 'success');
+            await rerenderManagerList(overlay, chatId);
+        }
+    });
 
     // 条目操作
     rebindItemActions(overlay, chatId);

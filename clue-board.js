@@ -235,16 +235,17 @@ export async function openClueBoard(chatId) {
 
     const overlay = document.createElement('div');
     overlay.className = 'bb-clue-overlay';
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:99990;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:99990;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
 
     const panel = document.createElement('div');
     panel.className = 'bb-clue-panel';
-    panel.style.cssText = 'background:var(--SmartThemeBlurTintColor,#1e1e2e);border:1px solid var(--SmartThemeBorderColor,#45475a);border-radius:12px;width:min(560px,92vw);max-height:82vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.5);';
+    panel.style.cssText = 'background:var(--SmartThemeChatTintColor,#1e1e2e);color:var(--SmartThemeBodyColor,#e0e0e0);border:1px solid var(--SmartThemeBorderColor,#45475a);border-radius:14px;width:min(620px,94vw);max-height:85vh;display:flex;flex-direction:column;box-shadow:0 12px 48px rgba(0,0,0,0.5);';
     overlay.appendChild(panel);
 
     // ── 头部 ──
     const header = document.createElement('div');
+    header.className = 'bb-clue-header';
     header.style.cssText = 'display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--SmartThemeBorderColor,#45475a);flex-shrink:0;';
     // 视图模式：从设置读取，默认 list
     const settings = getSettings();
@@ -282,6 +283,7 @@ export async function openClueBoard(chatId) {
     // ── 主体 ──
     const body = document.createElement('div');
     body.style.cssText = 'flex:1;overflow-y:auto;padding:12px 18px;min-height:0;';
+    body._clueBoard = board;
     panel.appendChild(body);
 
     // ── 底部工具栏 ──
@@ -313,9 +315,9 @@ export async function openClueBoard(chatId) {
         });
     });
     footer.querySelector('#bb_clue_add_conn').addEventListener('click', () => {
-        const nodes = board.nodes;
-        if (nodes.length < 2) return;
-        showAddConnectionDialog(nodes, async (connData) => {
+        const currentBoard = body._clueBoard || board;
+        if (!currentBoard.nodes || currentBoard.nodes.length < 2) return;
+        showAddConnectionDialog(currentBoard.nodes, async (connData) => {
             await addClueConnection(chatId, connData);
             const newBoard = await getClueBoard(chatId);
             refreshClueBoard(body, newBoard, chatId, overlay, panel);
@@ -349,8 +351,10 @@ function refreshClueBoard(body, board, chatId, overlay, panel, viewMode = 'list'
     if (viewMode === 'graph') {
         renderGraphView(body, board);
     } else {
-        renderClueBoardBody(body, board, chatId, overlay);
+        renderClueBoardBody(body, board, chatId, overlay, panel);
     }
+    // 更新共享 board 引用，解决闭包陈旧问题
+    body._clueBoard = board;
     if (panel) {
         const connBtn = panel.querySelector('#bb_clue_add_conn');
         if (connBtn) connBtn.disabled = board.nodes.length < 2;
@@ -476,154 +480,170 @@ function renderGraphView(body, board) {
     body.style.cssText = 'overflow:auto;max-height:60vh;';
 }
 
-function renderClueBoardBody(body, board, chatId, overlay) {
+function renderClueBoardBody(body, board, chatId, overlay, panel) {
     const nodeMap = new Map();
     for (const n of board.nodes) nodeMap.set(n.id, n);
 
     if (!board.nodes.length) {
         body.innerHTML = `
-            <div style="text-align:center;padding:40px;opacity:0.6;">
-                <i class="fa-solid fa-magnifying-glass" style="font-size:2em;display:block;margin-bottom:12px;opacity:0.3;"></i>
-                还没有线索节点<br>
-                <span style="font-size:0.8em;">点击下方"添加节点"从记忆库中选择条目</span>
+            <div style="text-align:center;padding:48px 20px;opacity:0.5;">
+                <i class="fa-solid fa-magnifying-glass" style="font-size:2.5em;display:block;margin-bottom:16px;opacity:0.2;"></i>
+                <div style="font-size:0.95em;">还没有线索节点</div>
+                <div style="font-size:0.78em;margin-top:6px;">点击下方"添加节点"从记忆库中选择条目</div>
             </div>`;
         return;
     }
 
-    // 连线类型颜色与标签
+    // 颜色定义
+    const refColors = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784' };
+    const refIcons = { mem: 'fa-brain', npc: 'fa-user', item: 'fa-box', timeline: 'fa-clock' };
+    const refLabels = { mem: '记忆', npc: 'NPC', item: '物品', timeline: '时间线' };
     const typeColors = { causal: '#ff9800', hint: '#2196f3', contradicts: '#f44336', related: '#9e9e9e', speculation: '#ce93d8' };
     const typeIcons = { causal: '⚡', hint: '💡', contradicts: '⚠️', related: '🔗', speculation: '❓' };
     const typeOrder = { causal: 0, hint: 1, contradicts: 2, related: 3, speculation: 4 };
-    const confidenceColors = { high: '#4caf50', medium: '#ff9800', low: '#9e9e9e' };
+    const confidenceLabels = { high: '确信', medium: '可能', low: '猜测' };
 
-    // 计算统计：入边/出边数
-    const inCount = new Map();
-    const outCount = new Map();
-    const allRefs = new Map(); // 每个节点的出边目标
+    // 统计
+    const inCount = new Map(), outCount = new Map(), nodeConnsMap = new Map();
     for (const node of board.nodes) {
-        inCount.set(node.id, 0);
-        outCount.set(node.id, 0);
-        allRefs.set(node.id, []);
+        inCount.set(node.id, 0); outCount.set(node.id, 0); nodeConnsMap.set(node.id, []);
     }
     for (const conn of board.connections) {
-        if (inCount.has(conn.toNodeId)) inCount.set(conn.toNodeId, (inCount.get(conn.toNodeId) || 0) + 1);
-        if (outCount.has(conn.fromNodeId)) outCount.set(conn.fromNodeId, (outCount.get(conn.fromNodeId) || 0) + 1);
-        const refs = allRefs.get(conn.fromNodeId);
+        inCount.set(conn.toNodeId, (inCount.get(conn.toNodeId) || 0) + 1);
+        outCount.set(conn.fromNodeId, (outCount.get(conn.fromNodeId) || 0) + 1);
+        const refs = nodeConnsMap.get(conn.fromNodeId);
         if (refs) refs.push(conn);
     }
 
-    // 找出推理链（长度>=2的出边路径）
-    function findChains(startId, visited = new Set(), depth = 0) {
-        if (depth > 4 || visited.has(startId)) return [];
-        visited.add(startId);
-        const chains = [];
-        const outConns = board.connections.filter(c => c.fromNodeId === startId && !visited.has(c.toNodeId));
-        for (const conn of outConns) {
-            const subChains = findChains(conn.toNodeId, new Set(visited), depth + 1);
-            if (subChains.length === 0) {
-                chains.push([conn]);
-            } else {
-                for (const sub of subChains) {
-                    chains.push([conn, ...sub]);
-                }
+    // 推理链缓存（每个节点只算一次）
+    const chainCache = new Map();
+    function getChainsForNode(startId) {
+        if (chainCache.has(startId)) return chainCache.get(startId);
+        function findChains(id, visited, depth) {
+            if (depth > 4 || visited.has(id)) return [];
+            visited.add(id);
+            const chains = [];
+            const outConns = board.connections.filter(c => c.fromNodeId === id && !visited.has(c.toNodeId));
+            for (const conn of outConns) {
+                const subChains = findChains(conn.toNodeId, new Set(visited), depth + 1);
+                if (subChains.length === 0) { chains.push([conn]); }
+                else { for (const sub of subChains) chains.push([conn, ...sub]); }
             }
+            return chains;
         }
-        return chains;
+        const result = findChains(startId, new Set(), 0);
+        chainCache.set(startId, result);
+        return result;
     }
 
-    // 渲染概览统计
-    const totalConns = board.connections.length;
-    const chainCounts = { causal: 0, hint: 0, contradicts: 0, related: 0, speculation: 0 };
-    for (const conn of board.connections) {
-        if (chainCounts[conn.type] !== undefined) chainCounts[conn.type]++;
-    }
-    const statsHTML = `
-        <div style="display:flex;flex-wrap:wrap;gap:6px;padding:6px 0;margin-bottom:8px;border-bottom:1px solid var(--SmartThemeBorderColor,#333);font-size:0.72em;opacity:0.7;">
-            <span>${board.nodes.length}节点</span><span>·</span><span>${totalConns}连线</span>
-            ${Object.entries(chainCounts).filter(([,v]) => v > 0).map(([k, v]) =>
-                `<span style="color:${typeColors[k]};">${typeIcons[k]}${v}</span>`
-            ).join('')}
+    // ── 统计栏 ──
+    const connTypeCounts = { causal: 0, hint: 0, contradicts: 0, related: 0, speculation: 0 };
+    for (const conn of board.connections) { if (connTypeCounts[conn.type] !== undefined) connTypeCounts[conn.type]++; }
+    const totalBar = board.connections.length || 1;
+    const barHTML = Object.entries(connTypeCounts).filter(([,v]) => v > 0).map(([k, v]) => {
+        const pct = Math.round((v / totalBar) * 100);
+        return `<span style="display:inline-flex;align-items:center;gap:2px;background:${typeColors[k]}22;border:1px solid ${typeColors[k]}44;border-radius:3px;padding:1px 5px;font-size:0.68em;color:${typeColors[k]};" title="${typeIcons[k]} ${k}: ${v}条">${typeIcons[k]}${v}</span>`;
+    }).join('');
+    body.innerHTML = `
+        <div class="bb-clue-stats-bar" style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 0 10px;margin-bottom:4px;border-bottom:1px solid var(--SmartThemeBorderColor,#3333);font-size:0.78em;opacity:0.75;">
+            <span><strong>${board.nodes.length}</strong> 节点</span>
+            <span style="opacity:0.3;">·</span>
+            <span><strong>${board.connections.length}</strong> 连线</span>
+            <span style="flex:1;"></span>
+            ${barHTML}
         </div>`;
-    body.innerHTML = statsHTML;
 
-    // 渲染每个节点
+    // ── 节点列表 ──
     for (const node of board.nodes) {
-        const nodeConns = (allRefs.get(node.id) || []).sort((a, b) => (typeOrder[a.type] || 99) - (typeOrder[b.type] || 99));
-        const refIcon = { mem: 'fa-brain', npc: 'fa-user', item: 'fa-box', timeline: 'fa-clock' }[node.refType] || 'fa-circle';
-        const refColor = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784' }[node.refType] || '#888';
-        const refLabel = { mem: '记忆', npc: 'NPC', item: '物品', timeline: '时间线' }[node.refType] || '';
+        const nodeConns = (nodeConnsMap.get(node.id) || []).sort((a, b) => (typeOrder[a.type] || 99) - (typeOrder[b.type] || 99));
+        const rc = refColors[node.refType] || '#888';
+        const ri = refIcons[node.refType] || 'fa-circle';
+        const rl = refLabels[node.refType] || '';
         const inN = inCount.get(node.id) || 0;
         const outN = outCount.get(node.id) || 0;
-        const connBadge = (inN > 0 || outN > 0) ?
-            `<span style="font-size:0.65em;opacity:0.5;margin-left:4px;">${inN > 0 ? `←${inN}` : ''}${inN > 0 && outN > 0 ? ' ' : ''}${outN > 0 ? `${outN}→` : ''}</span>` : '';
+        const chains = getChainsForNode(node.id);
+        const hasChain = chains.some(c => c.length >= 2);
 
-        // 节点卡片
-        const nodeCard = document.createElement('div');
-        nodeCard.className = 'bb-clue-node-card';
-        nodeCard.style.cssText = 'margin-bottom:8px;border:1px solid var(--SmartThemeBorderColor,#45475a);border-radius:8px;overflow:hidden;';
-        nodeCard.innerHTML = `
-            <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;background:var(--SmartThemeBlurTintColor,rgba(255,255,255,0.02));">
-                <i class="fa-solid ${refIcon}" style="color:${refColor};font-size:0.85em;" title="${refLabel}"></i>
-                <span class="bb-clue-node-label" data-node-id="${node.id}" style="flex:1;font-size:0.88em;font-weight:500;cursor:text;" title="点击编辑名称">${escapeHtml(node.label || node.id)}</span>
-                ${connBadge}
-                <button class="bb-clue-node-edit menu_button" data-node-id="${node.id}" style="font-size:0.7em;padding:2px 6px;" title="编辑备注">
-                    <i class="fa-solid fa-pen"></i>
-                </button>
-                <button class="bb-clue-node-del menu_button" data-node-id="${node.id}" style="font-size:0.7em;padding:2px 6px;color:#f44336;" title="删除节点">
-                    <i class="fa-solid fa-trash"></i>
-                </button>
+        // 节点卡片 — 左侧色条+简洁布局
+        const card = document.createElement('div');
+        card.className = 'bb-clue-node-card';
+        card.style.cssText = `margin-bottom:10px;background:var(--SmartThemeBlurTintColor,rgba(255,255,255,0.015));border:1px solid var(--SmartThemeBorderColor,#3a3a4a);border-left:4px solid ${rc};border-radius:6px;overflow:hidden;`;
+        card.innerHTML = `
+            <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;">
+                <span style="background:${rc}22;border-radius:3px;padding:1px 5px;font-size:0.65em;color:${rc};flex-shrink:0;" title="来源: ${rl}">${rl}</span>
+                <span class="bb-clue-node-label" data-node-id="${node.id}" style="flex:1;font-size:0.9em;font-weight:600;cursor:text;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="点击编辑名称">${escapeHtml(node.label || node.id)}</span>
+                ${(inN > 0 || outN > 0) ? `<span style="font-size:0.65em;opacity:0.35;flex-shrink:0;">${inN > 0 ? '←'+inN : ''}${inN>0&&outN>0?' ':''}${outN > 0 ? outN+'→' : ''}</span>` : ''}
+                ${hasChain ? `<span style="font-size:0.62em;opacity:0.25;flex-shrink:0;" title="含推理链">🔗</span>` : ''}
+                <button class="bb-clue-node-menu-btn menu_button" data-node-id="${node.id}" style="font-size:0.7em;padding:1px 4px;opacity:0.3;flex-shrink:0;" title="更多操作">···</button>
             </div>
-            ${node.note ? `<div style="padding:0 12px 8px;font-size:0.78em;opacity:0.6;">📝 ${escapeHtml(node.note)}</div>` : ''}`;
-        body.appendChild(nodeCard);
+            ${node.note ? `<div style="padding:0 12px 10px;font-size:0.76em;opacity:0.5;border-top:1px solid var(--SmartThemeBorderColor,#3a3a4a11);margin-top:2px;padding-top:8px;">${escapeHtml(node.note)}</div>` : ''}
+            <div class="bb-clue-node-actions" data-node-id="${node.id}" style="display:none;padding:0 12px 8px;gap:4px;font-size:0.7em;border-top:1px solid var(--SmartThemeBorderColor,#3a3a4a22);padding-top:6px;">
+                <button class="bb-clue-node-edit menu_button" data-node-id="${node.id}" style="font-size:0.85em;padding:2px 8px;">✏️ 备注</button>
+                <button class="bb-clue-node-del menu_button" data-node-id="${node.id}" style="font-size:0.85em;padding:2px 8px;color:#f44336;">🗑 删除</button>
+            </div>`;
+        body.appendChild(card);
 
-        // 按类型分组连线
+        // 连线区 — 可折叠分组
         if (nodeConns.length) {
+            const connBlock = document.createElement('div');
+            connBlock.style.cssText = 'margin-left:12px;margin-bottom:6px;';
+
+            // 分组
             const groups = new Map();
             for (const conn of nodeConns) {
                 if (!groups.has(conn.type)) groups.set(conn.type, []);
                 groups.get(conn.type).push(conn);
             }
 
-            // 渲染每个类型组
             for (const [type, conns] of groups) {
                 const tc = typeColors[type] || '#888';
                 const ti = typeIcons[type] || '🔗';
                 const typeName = CONN_TYPE_LABEL[type]?.replace(/→/g, '') || type;
 
-                // 类型分组标题
-                const groupHeader = document.createElement('div');
-                groupHeader.style.cssText = `margin-left:16px;padding:2px 0 2px 0;font-size:0.7em;opacity:0.5;color:${tc};display:flex;align-items:center;gap:4px;`;
-                groupHeader.innerHTML = `<span style="border-bottom:1px dashed ${tc};">${ti} ${typeName} (${conns.length})</span>`;
-                body.appendChild(groupHeader);
+                // 可折叠组标题
+                const groupToggle = document.createElement('div');
+                groupToggle.className = 'bb-clue-group-toggle';
+                const groupId = `clue_group_${node.id}_${type}`;
+                groupToggle.style.cssText = `display:flex;align-items:center;gap:4px;font-size:0.72em;color:${tc};cursor:pointer;padding:3px 4px;border-radius:3px;user-select:none;`;
+                groupToggle.innerHTML = `<span class="bb-clue-group-arrow" style="display:inline-block;width:10px;transition:transform 0.15s;">▼</span> ${ti} <strong>${typeName}</strong> (${conns.length})`;
+                connBlock.appendChild(groupToggle);
+
+                const groupBody = document.createElement('div');
+                groupBody.className = 'bb-clue-group-body';
+                groupBody.style.cssText = 'padding-left:4px;';
+
+                let isExpanded = true;
+                groupToggle.addEventListener('click', () => {
+                    isExpanded = !isExpanded;
+                    groupBody.style.display = isExpanded ? 'block' : 'none';
+                    groupToggle.querySelector('.bb-clue-group-arrow').textContent = isExpanded ? '▼' : '▶';
+                });
 
                 for (const conn of conns) {
                     const toNode = nodeMap.get(conn.toNodeId);
                     if (!toNode) continue;
-                    const cc = confidenceColors[conn.confidence] || '#888';
+                    const confidenceLabel = confidenceLabels[conn.confidence] || conn.confidence;
 
-                    // 检测此连线是否开启了推理链
-                    const chains = findChains(node.id);
-                    const isChainStart = chains.some(chain => chain.length >= 2 && chain[0].id === conn.id);
+                    // 检查是否推理链起点
+                    const isChainStart = chains.some(c => c.length >= 2 && c[0].id === conn.id);
 
-                    const connRow = document.createElement('div');
-                    connRow.className = 'bb-clue-connection';
-                    connRow.style.cssText = `margin-left:24px;padding:3px 0 3px 12px;position:relative;font-size:0.8em;margin-bottom:1px;border-left:2px solid ${tc};${isChainStart ? 'background:linear-gradient(90deg, rgba(255,255,255,0.02) 0%, transparent 100%);' : ''}`;
-                    connRow.innerHTML = `
-                        <strong>${escapeHtml(toNode.label || toNode.id)}</strong>
-                        <span style="color:${cc};margin-left:4px;font-size:0.9em;">[${CONFIDENCE_LABEL[conn.confidence] || conn.confidence}]</span>
-                        ${conn.label ? `<span style="opacity:0.5;margin-left:4px;font-size:0.85em;">— ${escapeHtml(conn.label)}</span>` : ''}
-                        ${isChainStart ? `<span style="font-size:0.65em;opacity:0.4;margin-left:4px;" title="推理链起点">🔗链</span>` : ''}
-                        <button class="bb-clue-conn-edit menu_button" data-conn-id="${conn.id}" style="font-size:0.6em;padding:1px 4px;margin-left:4px;" title="编辑连线">
-                            <i class="fa-solid fa-pen"></i>
-                        </button>
-                        <button class="bb-clue-conn-del menu_button" data-conn-id="${conn.id}" style="font-size:0.6em;padding:1px 4px;color:#f44336;" title="删除连线">
-                            <i class="fa-solid fa-xmark"></i>
-                        </button>
+                    const row = document.createElement('div');
+                    row.className = 'bb-clue-connection';
+                    row.style.cssText = `display:flex;align-items:center;gap:4px;padding:3px 4px;font-size:0.78em;border-radius:3px;margin-bottom:1px;`;
+                    row.innerHTML = `
+                        <span style="color:${tc};font-size:0.8em;flex-shrink:0;">→</span>
+                        <strong style="font-size:0.95em;">${escapeHtml(toNode.label || toNode.id)}</strong>
+                        <span style="font-size:0.7em;opacity:0.6;">${confidenceLabel}</span>
+                        ${conn.label ? `<span style="font-size:0.7em;opacity:0.4;font-style:italic;">${escapeHtml(conn.label)}</span>` : ''}
+                        ${isChainStart ? `<span style="font-size:0.6em;opacity:0.3;" title="推理链">🔗</span>` : ''}
+                        <span style="flex:1;"></span>
+                        <button class="bb-clue-conn-edit menu_button" data-conn-id="${conn.id}" style="font-size:0.6em;padding:0 3px;opacity:0.3;">✏️</button>
+                        <button class="bb-clue-conn-del menu_button" data-conn-id="${conn.id}" style="font-size:0.6em;padding:0 3px;opacity:0.3;color:#f44336;">✕</button>
                     `;
-                    body.appendChild(connRow);
+                    groupBody.appendChild(row);
 
-                    // 渲染推理链后续步骤
-                    if (isChainStart && chains.length > 0) {
+                    // 推理链后续步
+                    if (isChainStart) {
                         const chain = chains.find(c => c.length >= 2 && c[0].id === conn.id);
                         if (chain) {
                             for (let i = 1; i < chain.length; i++) {
@@ -631,26 +651,35 @@ function renderClueBoardBody(body, board, chatId, overlay) {
                                 const stepTo = nodeMap.get(step.toNodeId);
                                 if (!stepTo) continue;
                                 const stc = typeColors[step.type] || '#888';
-                                const sti = typeIcons[step.type] || '🔗';
-
-                                const chainRow = document.createElement('div');
-                                chainRow.style.cssText = `margin-left:32px;padding:2px 0 2px 12px;font-size:0.73em;opacity:0.75;margin-bottom:1px;border-left:2px dashed ${stc};`;
-                                chainRow.innerHTML = `
-                                    <span style="font-size:0.7em;opacity:0.4;">└─ </span>
-                                    <span style="color:${stc};">${sti}</span>
+                                const subRow = document.createElement('div');
+                                subRow.style.cssText = `display:flex;align-items:center;gap:3px;padding:1px 4px 1px 18px;font-size:0.7em;opacity:0.55;`;
+                                subRow.innerHTML = `
+                                    <span style="font-size:0.7em;">└</span>
+                                    <span style="color:${stc};font-size:0.75em;">→</span>
                                     <strong>${escapeHtml(stepTo.label || stepTo.id)}</strong>
-                                    <span style="opacity:0.4;margin-left:2px;font-size:0.85em;">[${CONFIDENCE_LABEL[step.confidence] || step.confidence}]</span>
+                                    <span style="font-size:0.7em;">${confidenceLabels[step.confidence] || step.confidence}</span>
                                 `;
-                                body.appendChild(chainRow);
+                                groupBody.appendChild(subRow);
                             }
                         }
                     }
                 }
+                connBlock.appendChild(groupBody);
             }
+            body.appendChild(connBlock);
         }
     }
 
-    // ── 节点事件绑定 ──
+    // ── 事件绑定 ──
+    // 节点菜单按钮：切换操作栏显示
+    body.querySelectorAll('.bb-clue-node-menu-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const actions = body.querySelector(`.bb-clue-node-actions[data-node-id="${btn.dataset.nodeId}"]`);
+            if (actions) actions.style.display = actions.style.display === 'none' ? 'flex' : 'none';
+        });
+    });
+    // 编辑备注
     body.querySelectorAll('.bb-clue-node-edit').forEach(btn => {
         btn.addEventListener('click', async (e) => {
             e.stopPropagation();
@@ -664,38 +693,7 @@ function renderClueBoardBody(body, board, chatId, overlay) {
             refreshClueBoard(body, newBoard, chatId, overlay, panel);
         });
     });
-    // 内联编辑标签
-    const bindLabelClick = (el) => {
-        el.addEventListener('click', async (ev) => {
-            ev.stopPropagation();
-            const nId = el.dataset.nodeId;
-            const n = board.nodes.find(nn => nn.id === nId);
-            if (!n) return;
-            const inp = document.createElement('input');
-            inp.type = 'text';
-            inp.value = n.label || '';
-            inp.style.cssText = 'flex:1;font-size:0.88em;font-weight:500;background:var(--SmartThemeInputColor,#1a1a2e);color:var(--SmartThemeTextColor,#ddd);border:1px solid var(--SmartThemeBorderColor,#555);border-radius:4px;padding:2px 6px;width:100%;';
-            el.replaceWith(inp);
-            inp.focus();
-            inp.select();
-            const done = async () => {
-                const newLabel = inp.value.trim();
-                const sp = document.createElement('span');
-                sp.className = 'bb-clue-node-label';
-                sp.dataset.nodeId = nId;
-                sp.style.cssText = 'flex:1;font-size:0.88em;font-weight:500;cursor:text;';
-                sp.title = '';
-                sp.textContent = newLabel || n.label || n.id;
-                inp.replaceWith(sp);
-                bindLabelClick(sp);
-                if (newLabel && newLabel !== n.label) {
-                    await updateClueNode(chatId, nId, { label: newLabel });
-                }
-            };
-            inp.addEventListener('blur', done);
-            inp.addEventListener('keydown', (ev2) => { if (ev2.key === 'Enter') done(); if (ev2.key === 'Escape') { inp.value = n.label || ''; done(); } });
-        });
-    };
+    // 删除节点
     body.querySelectorAll('.bb-clue-node-del').forEach(btn => {
         btn.addEventListener('click', async (e) => {
             e.stopPropagation();
@@ -707,6 +705,37 @@ function renderClueBoardBody(body, board, chatId, overlay) {
             refreshClueBoard(body, newBoard, chatId, overlay, panel);
         });
     });
+    // 内联编辑标签
+    body.querySelectorAll('.bb-clue-node-label').forEach(el => {
+        el.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            const nId = el.dataset.nodeId;
+            const n = board.nodes.find(nn => nn.id === nId);
+            if (!n) return;
+            const inp = document.createElement('input');
+            inp.type = 'text';
+            inp.value = n.label || '';
+            inp.style.cssText = 'flex:1;font-size:0.9em;font-weight:600;background:var(--SmartThemeInputColor,#1a1a2e);color:var(--SmartThemeTextColor,#ddd);border:1px solid var(--SmartThemeBorderColor,#555);border-radius:4px;padding:2px 6px;width:100%;min-width:0;';
+            el.replaceWith(inp);
+            inp.focus(); inp.select();
+            const done = async () => {
+                const newLabel = inp.value.trim();
+                const sp = document.createElement('span');
+                sp.className = 'bb-clue-node-label';
+                sp.dataset.nodeId = nId;
+                sp.style.cssText = 'flex:1;font-size:0.9em;font-weight:600;cursor:text;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+                sp.title = '点击编辑名称';
+                sp.textContent = newLabel || n.label || n.id;
+                inp.replaceWith(sp);
+                if (newLabel && newLabel !== n.label) {
+                    await updateClueNode(chatId, nId, { label: newLabel });
+                }
+            };
+            inp.addEventListener('blur', done);
+            inp.addEventListener('keydown', (ev2) => { if (ev2.key === 'Enter') done(); if (ev2.key === 'Escape') { inp.value = n.label || ''; done(); } });
+        });
+    });
+    // 编辑连线
     body.querySelectorAll('.bb-clue-conn-edit').forEach(btn => {
         btn.addEventListener('click', async (e) => {
             e.stopPropagation();
@@ -720,6 +749,7 @@ function renderClueBoardBody(body, board, chatId, overlay) {
             refreshClueBoard(body, newBoard, chatId, overlay, panel);
         });
     });
+    // 删除连线
     body.querySelectorAll('.bb-clue-conn-del').forEach(btn => {
         btn.addEventListener('click', async (e) => {
             e.stopPropagation();
