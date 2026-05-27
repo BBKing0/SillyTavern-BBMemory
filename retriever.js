@@ -158,7 +158,7 @@ export function getRelevantMemories(memories, queryText, options = {}) {
 
     if (!memories.length || !queryText.trim()) return [];
 
-    let candidates = memories.filter(m => !isArchived(m) && m.status !== 'deleted');
+    let candidates = memories.filter(m => !isArchived(m) && m.status !== 'deleted' && matchesActiveCategory(m));
 
     if (!candidates.length) return [];
 
@@ -225,6 +225,21 @@ export function mergeExpandedRelevantResults(memories, queryText, relevantResult
 }
 
 // ═══════════════════════════════════════════════════════════
+//  v8.6.0 分类过滤
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 判断条目是否匹配当前激活的分类
+ * activeCategory 为空时不过滤（显示全部）
+ * activeCategory 有值时：只显示 category===null（通用）或 category===activeCategory（匹配分类）
+ */
+function matchesActiveCategory(entry) {
+    const active = getSettings().activeCategory;
+    if (!active) return true;
+    return entry.category === null || entry.category === active;
+}
+
+// ═══════════════════════════════════════════════════════════
 //  各支柱检索
 // ═══════════════════════════════════════════════════════════
 
@@ -234,7 +249,7 @@ export function mergeExpandedRelevantResults(memories, queryText, relevantResult
 export function getNpcForInjection(npcProfiles, queryText) {
     const result = [];
     for (const npc of npcProfiles) {
-        if (isArchived(npc)) continue;
+        if (isArchived(npc) || !matchesActiveCategory(npc)) continue;
         if (npc.npcTier === 'core' || npc.npcTier === 'important' || npc.memoryTier === 'eternal') {
             result.push(npc);
         } else if (npc.npcTier === 'minor' && memoryMatchesQueryEntities(npc, queryText)) {
@@ -253,7 +268,7 @@ export function getNpcForInjection(npcProfiles, queryText) {
 export function getItemsForInjection(items, queryText) {
     const result = [];
     for (const item of items) {
-        if (isArchived(item)) continue;
+        if (isArchived(item) || !matchesActiveCategory(item)) continue;
         if (item.itemTier === 'key' || item.itemTier === 'equipped' || item.keepPermanent || item.memoryTier === 'eternal') {
             result.push(item);
         } else if (memoryMatchesQueryEntities(item, queryText)) {
@@ -269,7 +284,7 @@ export function getItemsForInjection(items, queryText) {
  * 时间线：ongoing 全注入，最近 ended 3 条
  */
 export function getTimelineForInjection(timeline) {
-    const active = timeline.filter(t => !isArchived(t));
+    const active = timeline.filter(t => !isArchived(t) && matchesActiveCategory(t));
     const ongoing = active.filter(t => t.isActive && t.status === 'ongoing');
     const ended = active
         .filter(t => !t.isActive || t.status === 'ended')

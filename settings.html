@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v8.5.1</b>
+            <b>BB-Memory v8.6.0</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -58,7 +58,39 @@
                 <button id="bb_clue_board_btn" class="menu_button" title="打开线索板——追踪线索、创建连线推理">
                     <i class="fa-solid fa-magnifying-glass"></i> 线索板
                 </button>
+                <button id="bb_agent_btn" class="menu_button" title="打开记忆管家 Agent——用自然语言管理记忆">
+                    <i class="fa-solid fa-robot"></i> 记忆管家
+                </button>
             </div>
+
+            <!-- v8.6.0 记忆分类 -->
+            <div class="bb-settings-section">
+                <div class="bb-settings-section-header" data-section="categories">
+                    <span><i class="fa-solid fa-tags"></i> 记忆分类</span>
+                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                </div>
+                <div class="bb-settings-section-body">
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_active_category">当前激活分类</label>
+                        <small class="bb-mem-hint">选择分类后，仅注入该分类+通用条目。空白=显示全部</small>
+                        <select id="bb_active_category" class="bb-input" style="width:100%;">
+                            <option value="">— 全部（通用）—</option>
+                        </select>
+                    </div>
+                    <div class="bb-mem-sidebar-section" style="display:flex;gap:4px;">
+                        <input id="bb_new_category_name" type="text" placeholder="新分类名称" class="bb-input" style="flex:1;" />
+                        <button id="bb_add_category_btn" class="menu_button" style="font-size:0.8em;">添加</button>
+                    </div>
+                    <div id="bb_category_list" style="font-size:0.8em;margin-top:4px;"></div>
+                    <div class="bb-mem-sidebar-section" style="display:flex;gap:4px;margin-top:6px;">
+                        <select id="bb_category_rename_select" class="bb-input" style="flex:1;"></select>
+                        <input id="bb_category_rename_input" type="text" placeholder="新名称" class="bb-input" style="flex:1;" />
+                        <button id="bb_rename_category_btn" class="menu_button" style="font-size:0.75em;">重命名</button>
+                    </div>
+                </div>
+            </div>
+
+            <hr />
 
             <!-- 跨设备备份 -->
             <div style="display:flex;gap:4px;margin:4px 0;">

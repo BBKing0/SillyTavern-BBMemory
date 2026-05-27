@@ -1289,6 +1289,11 @@
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
 }
 
+.bb-floor-select-popup {
+    max-width: 360px;
+    min-width: 280px;
+}
+
 .bb-mem-form-header {
     display: flex;
     justify-content: space-between;
@@ -1507,7 +1512,8 @@
         align-items: flex-start;
         overflow-y: auto;
     }
-    .bb-mem-form-popup {
+    .bb-mem-form-popup,
+    .bb-floor-select-popup {
         width: 100%;
         max-width: 100%;
         max-height: 100vh;
@@ -2618,6 +2624,29 @@
     }
 }
 
+/* v8.6.0 错误弹窗基类 */
+.bb-error-popup-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000002;
+    background: rgba(0, 0, 0, 0.65);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.bb-error-popup-dialog {
+    background: var(--SmartThemeChatTintColor, #1e1e2e);
+    color: var(--SmartThemeBodyColor, #e0e0e0);
+    border: 1px solid #f44336;
+    border-radius: 12px;
+    padding: 20px 22px;
+    max-width: 420px;
+    width: 90%;
+    box-shadow: 0 8px 32px rgba(244, 67, 54, 0.2);
+}
+
 /* ═══════════════════════════════════════════════════════
    v2.9.9: 管理面板移动端覆盖（flex 布局已提取为基类）
    ═══════════════════════════════════════════════════════ */
@@ -2710,7 +2739,7 @@
         align-items: flex-start;
         overflow-y: auto;
     }
-    .bb-error-popup-overlay > div {
+    .bb-error-popup-dialog {
         max-height: 100vh;
         overflow-y: auto;
         border-radius: 0;
@@ -3072,5 +3101,164 @@
     .bb-clue-connection {
         margin-left: 8px !important;
         padding-left: 8px !important;
+    }
+}
+
+/* ═══════════════════════════════════════════════════════
+   v8.6.0 记忆管家 Agent 面板
+   ═══════════════════════════════════════════════════════ */
+
+.bb-agent-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000003;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.bb-agent-wrapper {
+    width: 90%;
+    max-width: 600px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.bb-agent-panel {
+    background: var(--SmartThemeChatTintColor, #1e1e2e);
+    color: var(--SmartThemeBodyColor, #e0e0e0);
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    max-height: 85vh;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
+}
+
+.bb-agent-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #444);
+    font-weight: bold;
+    font-size: 1.05em;
+}
+
+.bb-agent-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 16px;
+    max-height: 50vh;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.bb-agent-footer {
+    border-top: 1px solid var(--SmartThemeBorderColor, #444);
+    padding: 10px 16px;
+}
+
+.bb-agent-quick-btns {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.bb-agent-quick {
+    font-size: 0.72em !important;
+    padding: 3px 8px !important;
+    opacity: 0.7;
+}
+
+.bb-agent-input-row {
+    display: flex;
+    gap: 6px;
+    align-items: flex-end;
+}
+
+.bb-agent-input-row textarea {
+    flex: 1;
+    resize: none;
+    font-size: 0.9em;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--SmartThemeBorderColor, #555);
+    background: var(--SmartThemeInputColor, #1a1a2e);
+    color: var(--SmartThemeTextColor, #ddd);
+    font-family: inherit;
+}
+
+.bb-agent-msg {
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 0.88em;
+    line-height: 1.5;
+    max-width: 100%;
+    word-break: break-word;
+}
+
+.bb-agent-msg-user {
+    background: var(--SmartThemeQuoteColor, #4caf50);
+    color: #fff;
+    align-self: flex-end;
+    margin-left: 40px;
+}
+
+.bb-agent-msg-agent {
+    background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.05));
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    align-self: flex-start;
+    margin-right: 40px;
+}
+
+.bb-agent-msg-tool {
+    background: rgba(255, 152, 0, 0.1);
+    border: 1px solid rgba(255, 152, 0, 0.3);
+    font-size: 0.78em;
+    align-self: flex-start;
+    margin-right: 20px;
+    opacity: 0.85;
+}
+
+.bb-agent-msg-system {
+    background: transparent;
+    font-size: 0.82em;
+    opacity: 0.7;
+    align-self: flex-start;
+}
+
+/* 移动端 Agent */
+@media (max-width: 768px) {
+    .bb-agent-overlay {
+        padding: 0;
+        align-items: flex-start;
+        overflow-y: auto;
+    }
+    .bb-agent-wrapper {
+        width: 100%;
+        max-width: 100%;
+        max-height: 100vh;
+        max-height: 100dvh;
+    }
+    .bb-agent-panel {
+        max-height: 100vh;
+        max-height: 100dvh;
+        border-radius: 0;
+    }
+    .bb-agent-body {
+        max-height: 55vh;
+    }
+    .bb-agent-msg-user {
+        margin-left: 20px;
+    }
+    .bb-agent-msg-agent {
+        margin-right: 20px;
     }
 }

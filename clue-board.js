@@ -490,25 +490,82 @@ function renderClueBoardBody(body, board, chatId, overlay) {
         return;
     }
 
-    // 连线类型颜色
+    // 连线类型颜色与标签
     const typeColors = { causal: '#ff9800', hint: '#2196f3', contradicts: '#f44336', related: '#9e9e9e', speculation: '#ce93d8' };
     const typeIcons = { causal: '⚡', hint: '💡', contradicts: '⚠️', related: '🔗', speculation: '❓' };
+    const typeOrder = { causal: 0, hint: 1, contradicts: 2, related: 3, speculation: 4 };
     const confidenceColors = { high: '#4caf50', medium: '#ff9800', low: '#9e9e9e' };
 
-    // 找出每个节点的出边
+    // 计算统计：入边/出边数
+    const inCount = new Map();
+    const outCount = new Map();
+    const allRefs = new Map(); // 每个节点的出边目标
     for (const node of board.nodes) {
-        const nodeConns = board.connections.filter(c => c.fromNodeId === node.id);
+        inCount.set(node.id, 0);
+        outCount.set(node.id, 0);
+        allRefs.set(node.id, []);
+    }
+    for (const conn of board.connections) {
+        if (inCount.has(conn.toNodeId)) inCount.set(conn.toNodeId, (inCount.get(conn.toNodeId) || 0) + 1);
+        if (outCount.has(conn.fromNodeId)) outCount.set(conn.fromNodeId, (outCount.get(conn.fromNodeId) || 0) + 1);
+        const refs = allRefs.get(conn.fromNodeId);
+        if (refs) refs.push(conn);
+    }
+
+    // 找出推理链（长度>=2的出边路径）
+    function findChains(startId, visited = new Set(), depth = 0) {
+        if (depth > 4 || visited.has(startId)) return [];
+        visited.add(startId);
+        const chains = [];
+        const outConns = board.connections.filter(c => c.fromNodeId === startId && !visited.has(c.toNodeId));
+        for (const conn of outConns) {
+            const subChains = findChains(conn.toNodeId, new Set(visited), depth + 1);
+            if (subChains.length === 0) {
+                chains.push([conn]);
+            } else {
+                for (const sub of subChains) {
+                    chains.push([conn, ...sub]);
+                }
+            }
+        }
+        return chains;
+    }
+
+    // 渲染概览统计
+    const totalConns = board.connections.length;
+    const chainCounts = { causal: 0, hint: 0, contradicts: 0, related: 0, speculation: 0 };
+    for (const conn of board.connections) {
+        if (chainCounts[conn.type] !== undefined) chainCounts[conn.type]++;
+    }
+    const statsHTML = `
+        <div style="display:flex;flex-wrap:wrap;gap:6px;padding:6px 0;margin-bottom:8px;border-bottom:1px solid var(--SmartThemeBorderColor,#333);font-size:0.72em;opacity:0.7;">
+            <span>${board.nodes.length}节点</span><span>·</span><span>${totalConns}连线</span>
+            ${Object.entries(chainCounts).filter(([,v]) => v > 0).map(([k, v]) =>
+                `<span style="color:${typeColors[k]};">${typeIcons[k]}${v}</span>`
+            ).join('')}
+        </div>`;
+    body.innerHTML = statsHTML;
+
+    // 渲染每个节点
+    for (const node of board.nodes) {
+        const nodeConns = (allRefs.get(node.id) || []).sort((a, b) => (typeOrder[a.type] || 99) - (typeOrder[b.type] || 99));
         const refIcon = { mem: 'fa-brain', npc: 'fa-user', item: 'fa-box', timeline: 'fa-clock' }[node.refType] || 'fa-circle';
         const refColor = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784' }[node.refType] || '#888';
+        const refLabel = { mem: '记忆', npc: 'NPC', item: '物品', timeline: '时间线' }[node.refType] || '';
+        const inN = inCount.get(node.id) || 0;
+        const outN = outCount.get(node.id) || 0;
+        const connBadge = (inN > 0 || outN > 0) ?
+            `<span style="font-size:0.65em;opacity:0.5;margin-left:4px;">${inN > 0 ? `←${inN}` : ''}${inN > 0 && outN > 0 ? ' ' : ''}${outN > 0 ? `${outN}→` : ''}</span>` : '';
 
         // 节点卡片
         const nodeCard = document.createElement('div');
         nodeCard.className = 'bb-clue-node-card';
         nodeCard.style.cssText = 'margin-bottom:8px;border:1px solid var(--SmartThemeBorderColor,#45475a);border-radius:8px;overflow:hidden;';
         nodeCard.innerHTML = `
-            <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;">
-                <i class="fa-solid ${refIcon}" style="color:${refColor};font-size:0.85em;"></i>
+            <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;background:var(--SmartThemeBlurTintColor,rgba(255,255,255,0.02));">
+                <i class="fa-solid ${refIcon}" style="color:${refColor};font-size:0.85em;" title="${refLabel}"></i>
                 <span class="bb-clue-node-label" data-node-id="${node.id}" style="flex:1;font-size:0.88em;font-weight:500;cursor:text;" title="点击编辑名称">${escapeHtml(node.label || node.id)}</span>
+                ${connBadge}
                 <button class="bb-clue-node-edit menu_button" data-node-id="${node.id}" style="font-size:0.7em;padding:2px 6px;" title="编辑备注">
                     <i class="fa-solid fa-pen"></i>
                 </button>
@@ -519,32 +576,76 @@ function renderClueBoardBody(body, board, chatId, overlay) {
             ${node.note ? `<div style="padding:0 12px 8px;font-size:0.78em;opacity:0.6;">📝 ${escapeHtml(node.note)}</div>` : ''}`;
         body.appendChild(nodeCard);
 
-        // 连线列表
+        // 按类型分组连线
         if (nodeConns.length) {
+            const groups = new Map();
             for (const conn of nodeConns) {
-                const toNode = nodeMap.get(conn.toNodeId);
-                if (!toNode) continue;
-                const tc = typeColors[conn.type] || '#888';
-                const ti = typeIcons[conn.type] || '🔗';
-                const cc = confidenceColors[conn.confidence] || '#888';
+                if (!groups.has(conn.type)) groups.set(conn.type, []);
+                groups.get(conn.type).push(conn);
+            }
 
-                const connRow = document.createElement('div');
-                connRow.className = 'bb-clue-connection';
-                connRow.style.cssText = `border-left:2px solid ${tc};margin-left:16px;padding:4px 0 4px 12px;position:relative;font-size:0.8em;margin-bottom:2px;`;
-                connRow.innerHTML = `
-                    <span style="color:${tc};">${ti} ${CONN_TYPE_LABEL[conn.type]?.replace(/→/g, '') || conn.type}</span>
-                    <span>→ </span>
-                    <strong>${escapeHtml(toNode.label || toNode.id)}</strong>
-                    <span style="color:${cc};margin-left:4px;">[${CONFIDENCE_LABEL[conn.confidence] || conn.confidence}]</span>
-                    ${conn.label ? `<span style="opacity:0.5;margin-left:4px;">— ${escapeHtml(conn.label)}</span>` : ''}
-                    <button class="bb-clue-conn-edit menu_button" data-conn-id="${conn.id}" style="font-size:0.65em;padding:1px 4px;margin-left:4px;" title="编辑连线">
-                        <i class="fa-solid fa-pen"></i>
-                    </button>
-                    <button class="bb-clue-conn-del menu_button" data-conn-id="${conn.id}" style="font-size:0.65em;padding:1px 4px;color:#f44336;" title="删除连线">
-                        <i class="fa-solid fa-xmark"></i>
-                    </button>
-                `;
-                body.appendChild(connRow);
+            // 渲染每个类型组
+            for (const [type, conns] of groups) {
+                const tc = typeColors[type] || '#888';
+                const ti = typeIcons[type] || '🔗';
+                const typeName = CONN_TYPE_LABEL[type]?.replace(/→/g, '') || type;
+
+                // 类型分组标题
+                const groupHeader = document.createElement('div');
+                groupHeader.style.cssText = `margin-left:16px;padding:2px 0 2px 0;font-size:0.7em;opacity:0.5;color:${tc};display:flex;align-items:center;gap:4px;`;
+                groupHeader.innerHTML = `<span style="border-bottom:1px dashed ${tc};">${ti} ${typeName} (${conns.length})</span>`;
+                body.appendChild(groupHeader);
+
+                for (const conn of conns) {
+                    const toNode = nodeMap.get(conn.toNodeId);
+                    if (!toNode) continue;
+                    const cc = confidenceColors[conn.confidence] || '#888';
+
+                    // 检测此连线是否开启了推理链
+                    const chains = findChains(node.id);
+                    const isChainStart = chains.some(chain => chain.length >= 2 && chain[0].id === conn.id);
+
+                    const connRow = document.createElement('div');
+                    connRow.className = 'bb-clue-connection';
+                    connRow.style.cssText = `margin-left:24px;padding:3px 0 3px 12px;position:relative;font-size:0.8em;margin-bottom:1px;border-left:2px solid ${tc};${isChainStart ? 'background:linear-gradient(90deg, rgba(255,255,255,0.02) 0%, transparent 100%);' : ''}`;
+                    connRow.innerHTML = `
+                        <strong>${escapeHtml(toNode.label || toNode.id)}</strong>
+                        <span style="color:${cc};margin-left:4px;font-size:0.9em;">[${CONFIDENCE_LABEL[conn.confidence] || conn.confidence}]</span>
+                        ${conn.label ? `<span style="opacity:0.5;margin-left:4px;font-size:0.85em;">— ${escapeHtml(conn.label)}</span>` : ''}
+                        ${isChainStart ? `<span style="font-size:0.65em;opacity:0.4;margin-left:4px;" title="推理链起点">🔗链</span>` : ''}
+                        <button class="bb-clue-conn-edit menu_button" data-conn-id="${conn.id}" style="font-size:0.6em;padding:1px 4px;margin-left:4px;" title="编辑连线">
+                            <i class="fa-solid fa-pen"></i>
+                        </button>
+                        <button class="bb-clue-conn-del menu_button" data-conn-id="${conn.id}" style="font-size:0.6em;padding:1px 4px;color:#f44336;" title="删除连线">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    `;
+                    body.appendChild(connRow);
+
+                    // 渲染推理链后续步骤
+                    if (isChainStart && chains.length > 0) {
+                        const chain = chains.find(c => c.length >= 2 && c[0].id === conn.id);
+                        if (chain) {
+                            for (let i = 1; i < chain.length; i++) {
+                                const step = chain[i];
+                                const stepTo = nodeMap.get(step.toNodeId);
+                                if (!stepTo) continue;
+                                const stc = typeColors[step.type] || '#888';
+                                const sti = typeIcons[step.type] || '🔗';
+
+                                const chainRow = document.createElement('div');
+                                chainRow.style.cssText = `margin-left:32px;padding:2px 0 2px 12px;font-size:0.73em;opacity:0.75;margin-bottom:1px;border-left:2px dashed ${stc};`;
+                                chainRow.innerHTML = `
+                                    <span style="font-size:0.7em;opacity:0.4;">└─ </span>
+                                    <span style="color:${stc};">${sti}</span>
+                                    <strong>${escapeHtml(stepTo.label || stepTo.id)}</strong>
+                                    <span style="opacity:0.4;margin-left:2px;font-size:0.85em;">[${CONFIDENCE_LABEL[step.confidence] || step.confidence}]</span>
+                                `;
+                                body.appendChild(chainRow);
+                            }
+                        }
+                    }
+                }
             }
         }
     }

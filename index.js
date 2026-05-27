@@ -290,8 +290,7 @@ function promptFloorRange() {
         const overlay = document.createElement('div');
         overlay.className = 'bb-floor-select-overlay';
         const dialog = document.createElement('div');
-        dialog.className = 'bb-mem-form-popup';
-        dialog.style.cssText = 'min-width:280px;max-width:360px;';
+        dialog.className = 'bb-mem-form-popup bb-floor-select-popup';
         dialog.innerHTML = `
             <div style="font-size:1.1em;font-weight:bold;margin-bottom:12px;color:var(--SmartThemeTextColor,#ddd);">
                 <i class="fa-solid fa-layer-group"></i> 手动提取 — 选择楼层范围
@@ -477,11 +476,10 @@ function showErrorPopup(title, message, details = '') {
     // 弹窗
     const overlay = document.createElement('div');
     overlay.className = 'bb-error-popup-overlay';
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:1000002;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;padding:20px;';
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
 
     const dialog = document.createElement('div');
-    dialog.style.cssText = 'background:var(--SmartThemeChatTintColor,#1e1e2e);color:var(--SmartThemeBodyColor,#e0e0e0);border:1px solid #f44336;border-radius:12px;padding:20px 22px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(244,67,54,0.2);';
+    dialog.className = 'bb-error-popup-dialog';
     dialog.innerHTML = `
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
             <i class="fa-solid fa-circle-exclamation" style="color:#f44336;font-size:1.3em;"></i>
@@ -806,6 +804,109 @@ function bindSidebarEvents() {
         if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
         import('./clue-board.js').then(m => m.openClueBoard(chatId));
     });
+    document.querySelector('#bb_agent_btn')?.addEventListener('click', () => {
+        const chatId = getChatId();
+        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        import('./memory-agent.js').then(m => m.openAgent(chatId));
+    });
+
+    // ═══ v8.6.0 记忆分类 ═══
+
+    document.querySelector('#bb_active_category')?.addEventListener('change', async function () {
+        const val = this.value;
+        const { setActiveCategory } = await import('./memory-store.js');
+        await setActiveCategory(val);
+        refreshCategoryUI();
+        showToast(val ? `已切换到分类「${val}」` : '已切换到全部（通用）', 'success');
+    });
+
+    document.querySelector('#bb_add_category_btn')?.addEventListener('click', async () => {
+        const input = document.querySelector('#bb_new_category_name');
+        const name = input?.value?.trim();
+        if (!name) { showToast('请输入分类名称', 'warning'); return; }
+        const { addCategory } = await import('./memory-store.js');
+        const ok = await addCategory(name);
+        if (ok) { input.value = ''; refreshCategoryUI(); showToast(`分类「${name}」已添加`, 'success'); }
+        else { showToast(`分类「${name}」已存在或无效`, 'warning'); }
+    });
+
+    document.querySelector('#bb_rename_category_btn')?.addEventListener('click', async () => {
+        const select = document.querySelector('#bb_category_rename_select');
+        const input = document.querySelector('#bb_category_rename_input');
+        const oldName = select?.value;
+        const newName = input?.value?.trim();
+        if (!oldName) { showToast('请选择要重命名的分类', 'warning'); return; }
+        if (!newName) { showToast('请输入新名称', 'warning'); return; }
+        const chatId = getChatId();
+        if (!chatId) return;
+        const { renameCategory } = await import('./memory-store.js');
+        const ok = await renameCategory(chatId, oldName, newName);
+        if (ok) { input.value = ''; refreshCategoryUI(); showToast(`已重命名为「${newName}」`, 'success'); }
+        else { showToast('重命名失败', 'error'); }
+    });
+
+    document.querySelector('#bb_category_rename_select')?.addEventListener('change', function () {
+        const input = document.querySelector('#bb_category_rename_input');
+        if (input) input.value = this.value;
+    });
+
+    async function refreshCategoryUI() {
+        const { getSettings, addCategory, removeCategory, getCategoryStats } = await import('./memory-store.js');
+        const settings = getSettings();
+        const chatId = getChatId();
+        if (!chatId) return;
+
+        // 更新激活分类下拉
+        const sel = document.querySelector('#bb_active_category');
+        if (sel) {
+            sel.innerHTML = '<option value="">— 全部（通用）—</option>';
+            for (const cat of (settings.categories || [])) {
+                sel.innerHTML += `<option value="${escapeHtml(cat)}" ${settings.activeCategory === cat ? 'selected' : ''}>${escapeHtml(cat)}</option>`;
+            }
+        }
+
+        // 更新重命名选择框
+        const renameSel = document.querySelector('#bb_category_rename_select');
+        if (renameSel) {
+            renameSel.innerHTML = '<option value="">— 选择分类 —</option>';
+            for (const cat of (settings.categories || [])) {
+                renameSel.innerHTML += `<option value="${escapeHtml(cat)}">${escapeHtml(cat)}</option>`;
+            }
+        }
+
+        // 更新分类列表（含统计）
+        let stats = {};
+        try { stats = await getCategoryStats(chatId); } catch { /* ignore */ }
+        const list = document.querySelector('#bb_category_list');
+        if (list) {
+            if (!settings.categories || settings.categories.length === 0) {
+                list.innerHTML = '<div style="opacity:0.4;font-size:0.8em;">暂无分类，请添加</div>';
+            } else {
+                list.innerHTML = settings.categories.map(cat => {
+                    const s = stats[cat] || {};
+                    const total = (s.mem || 0) + (s.npc || 0) + (s.item || 0) + (s.timeline || 0);
+                    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--SmartThemeBorderColor,#333);">
+                        <span>${escapeHtml(cat)} <small style="opacity:0.5;">(${total}条)</small></span>
+                        <button class="menu_button bb-cat-del-btn" data-cat="${escapeHtml(cat)}" style="font-size:0.7em;padding:1px 6px;opacity:0.5;">删除</button>
+                    </div>`;
+                }).join('');
+                // 绑定删除按钮
+                list.querySelectorAll('.bb-cat-del-btn').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const catName = btn.dataset.cat;
+                        if (!confirm(`确定删除分类「${catName}」？\n该分类下的所有条目将变为"通用"。`)) return;
+                        const { removeCategory } = await import('./memory-store.js');
+                        await removeCategory(chatId, catName);
+                        refreshCategoryUI();
+                        showToast(`分类「${catName}」已删除`, 'success');
+                    });
+                });
+            }
+        }
+    }
+    // 初次加载时刷新分类UI
+    refreshCategoryUI();
+
     document.querySelector('#bb_embedding_reindex_btn')?.addEventListener('click', async () => {
         const chatId = getChatId();
         if (!chatId) return;
@@ -1550,6 +1651,13 @@ function registerSlashCommands() {
         openClueBoard(chatId);
     }, '打开线索板 — 追踪线索、创建连线推理');
 
+    addCmd('bb-agent', async () => {
+        const chatId = getChatId();
+        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        const { openAgent } = await import('./memory-agent.js');
+        openAgent(chatId);
+    }, '打开记忆管家 Agent — 用自然语言管理记忆');
+
     if (getSettings().debugLogging) {
         console.log('[BB-Memory] 斜杠命令已注册');
     }
@@ -1710,6 +1818,10 @@ function injectFloatingHub() {
             <div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_clue_board">
                 <i class="fa-solid fa-magnifying-glass"></i>
                 <span>线索板</span>
+            </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_agent">
+                <i class="fa-solid fa-robot"></i>
+                <span>记忆管家</span>
             </div>
             <div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_manager">
                 <i class="fa-solid fa-gear"></i>
@@ -2015,6 +2127,12 @@ async function handleFloatingMenuAction(action) {
         case 'open_clue_board': {
             if (chatId) {
                 import('./clue-board.js').then(m => m.openClueBoard(chatId));
+            }
+            break;
+        }
+        case 'open_agent': {
+            if (chatId) {
+                import('./memory-agent.js').then(m => m.openAgent(chatId));
             }
             break;
         }

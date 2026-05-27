@@ -84,6 +84,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // v8.2.3 API 预设配置
     apiProfiles: [],
     activeApiProfile: '',
+    // v8.6.0 记忆分类
+    categories: [],              // 分类名称列表
+    activeCategory: '',          // 当前激活的分类（空=显示全部）
     // 存档槽
     currentSlotName: 'default',
     // 系统
@@ -204,6 +207,7 @@ export async function addNpcProfile(chatId, data) {
         notes: Array.isArray(data.notes) ? data.notes : [],
         indexCard: data.indexCard || '',
         npcTier: normalizeNpcTier(data.npcTier) || 'minor',
+        category: data.category || null,
         tags: Array.isArray(data.tags) ? data.tags : [],
         hitCount: data.hitCount || 0,
         memoryTier: data.memoryTier || 'transient',
@@ -279,6 +283,7 @@ export async function addItem(chatId, data) {
         significance: data.significance || '',
         keepPermanent: data.keepPermanent || false,
         itemTier: normalizeItemTier(data.itemTier) || 'consumable',
+        category: data.category || null,
         tags: Array.isArray(data.tags) ? data.tags : [],
         hitCount: data.hitCount || 0,
         memoryTier: data.memoryTier || 'transient',
@@ -356,6 +361,7 @@ export async function addTimelineEntry(chatId, data) {
         location: data.location || '',
         isActive: data.isActive !== undefined ? data.isActive : true,
         status: data.status || 'ongoing',   // ongoing | ended | foreshadow
+        category: data.category || null,
         impact: data.impact || '',
         tags: Array.isArray(data.tags) ? data.tags : [],
         hitCount: data.hitCount || 0,
@@ -528,6 +534,7 @@ export async function addMemory(chatId, data) {
         truthStatus: data.truthStatus || 'true',
         hitCount: data.hitCount || 0,
         memoryTier: data.memoryTier || 'transient',
+        category: data.category || null,
         archived: data.archived || false,
         relatedMemoryIds: Array.isArray(data.relatedMemoryIds) ? data.relatedMemoryIds : [],
         isTimelineSummary: data.isTimelineSummary || false,
@@ -621,6 +628,107 @@ export async function restoreEntry(chatId, type, id) {
         case 'thread': return upsertTimelineThread(chatId, { id, status: 'ongoing' });
         default: return updateMemory(chatId, id, { archived: false, status: 'active' });
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  v8.6.0 记忆分类管理
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 添加新分类
+ */
+export async function addCategory(categoryName) {
+    const name = (categoryName || '').trim();
+    if (!name) return false;
+    const settings = getSettings();
+    if (settings.categories.includes(name)) return false;
+    settings.categories = [...settings.categories, name];
+    await updateSettings(settings);
+    return true;
+}
+
+/**
+ * 删除分类，所有该分类下的条目恢复为 null（通用）
+ */
+export async function removeCategory(chatId, categoryName) {
+    const settings = getSettings();
+    const name = (categoryName || '').trim();
+    if (!name) return false;
+    settings.categories = settings.categories.filter(c => c !== name);
+    if (settings.activeCategory === name) settings.activeCategory = '';
+    await updateSettings(settings);
+
+    // 将四柱中属于该分类的条目重置为 null
+    const pillars = ['npc', 'item', 'timeline', 'mem'];
+    for (const type of pillars) {
+        const items = await loadCollection(type, chatId);
+        let changed = false;
+        for (const item of items) {
+            if (item.category === name) { item.category = null; changed = true; }
+        }
+        if (changed) await saveCollection(type, chatId, items);
+    }
+    return true;
+}
+
+/**
+ * 重命名分类
+ */
+export async function renameCategory(chatId, oldName, newName) {
+    const settings = getSettings();
+    const trimmedNew = (newName || '').trim();
+    if (!trimmedNew || !oldName) return false;
+    const idx = settings.categories.indexOf(oldName);
+    if (idx === -1) return false;
+
+    settings.categories[idx] = trimmedNew;
+    if (settings.activeCategory === oldName) settings.activeCategory = trimmedNew;
+    await updateSettings(settings);
+
+    // 更新四柱中属于该分类的条目
+    const pillars = ['npc', 'item', 'timeline', 'mem'];
+    for (const type of pillars) {
+        const items = await loadCollection(type, chatId);
+        let changed = false;
+        for (const item of items) {
+            if (item.category === oldName) { item.category = trimmedNew; changed = true; }
+        }
+        if (changed) await saveCollection(type, chatId, items);
+    }
+    return true;
+}
+
+/**
+ * 设置当前激活的分类
+ */
+export async function setActiveCategory(categoryName) {
+    const settings = getSettings();
+    const name = (categoryName || '').trim();
+    settings.activeCategory = name;
+    await updateSettings(settings);
+    return true;
+}
+
+/**
+ * 获取分类统计信息
+ */
+export async function getCategoryStats(chatId) {
+    const stats = {};
+    const pillars = [
+        { type: 'npc', label: 'NPC' },
+        { type: 'item', label: '物品' },
+        { type: 'timeline', label: '时间线' },
+        { type: 'mem', label: '记忆' },
+    ];
+    for (const p of pillars) {
+        const items = await loadCollection(p.type, chatId);
+        for (const item of items) {
+            const cat = item.category || '(通用)';
+            if (!stats[cat]) stats[cat] = { npc: 0, item: 0, timeline: 0, mem: 0 };
+            stats[cat][p.type]++;
+        }
+    }
+    return stats;
 }
 
 // ═══════════════════════════════════════════════════════════
