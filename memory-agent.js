@@ -59,32 +59,43 @@ async function prepareContext(chatId, userMessage) {
 
     for (const r of searchResults) {
         const p = r._pillar || 'mem';
-        const label = r.title || r.name || r.event || (r.content || '').slice(0, 30);
-        const cat = r.category ? ` [${r.category}]` : '';
-        const tierBadge = r.memoryTier === 'eternal' ? ' ⭐' : r.memoryTier === 'core' ? ' ★' : '';
-        grouped[p].push(`- ${label}${cat}${tierBadge} (${r.id})`);
+        const label = r.title || r.name || r.event || (r.content || '').slice(0, 50);
+        const cat = r.category ? ' [' + r.category + ']' : '';
+        const tierBadge = r.memoryTier === 'eternal' ? '⭐' : r.memoryTier === 'core' ? '★' : '';
+        let detail = '';
+        if (p === 'mem') detail = (r.content || r.summary || '').slice(0, 300);
+        else if (p === 'npc') detail = [r.role, r.personality, (r.notes || []).join('; ')].filter(Boolean).join(' | ').slice(0, 200);
+        else if (p === 'item') detail = (r.significance || '').slice(0, 200);
+        else if (p === 'timeline') detail = (r.summary || r.event || '').slice(0, 200);
+        grouped[p].push('- ' + label + cat + tierBadge + '\n  ' + detail + '\n  ID: ' + r.id);
     }
 
     let catListText = '(无分类)';
     if (categories.length > 0) {
-        catListText = categories.map(c => {
-            const statusIcon = c.enabled ? '✅注入' : '⏸暂停';
-            const counts = `记忆${c.counts.mem||0} NPC${c.counts.npc||0} 物品${c.counts.item||0} 时间线${c.counts.timeline||0}`;
+        catListText = categories.map(function (c) {
+            var statusIcon = c.enabled ? '✅注入' : '⏸暂停';
+            var counts = '记忆' + (c.counts.mem || 0) + ' NPC' + (c.counts.npc || 0) + ' 物品' + (c.counts.item || 0) + ' 时间线' + (c.counts.timeline || 0);
             return '- ' + c.name + ': ' + statusIcon + ' (' + counts + ')';
         }).join('\n');
     }
 
-    let contextText = `【数据快照】
-总条目: ${stats.mem}条记忆 / ${stats.npc}个NPC / ${stats.item}件物品 / ${stats.timeline}条时间线
-注入过滤: ${filterStatus}
-
-【分类列表】
-${catListText}`;
+    let contextText = '【数据概览】\n记忆:' + stats.mem + '条 NPC:' + stats.npc + '个 物品:' + stats.item + '件 时间线:' + stats.timeline + '条\n注入过滤: ' + filterStatus + '\n\n【分类】\n' + catListText;
 
     const pillarLabels = { mem: '记忆', npc: 'NPC', item: '物品', timeline: '时间线' };
     for (const p of pillars) {
         if (grouped[p].length > 0) {
-            contextText += `\n\n【${pillarLabels[p]}搜索结果 (${grouped[p].length}条)】\n${grouped[p].join('\n')}`;
+            contextText += '\n\n【' + pillarLabels[p] + ' (' + grouped[p].length + '条)】\n' + grouped[p].join('\n');
+        }
+    }
+
+    if (searchResults.length === 0) {
+        const recent = allEntries.sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); }).slice(0, 10);
+        if (recent.length > 0) {
+            contextText += '\n\n【最近条目】\n' + recent.map(function (r) {
+                var label = r.title || r.name || r.event || (r.content || '').slice(0, 50);
+                var p2 = r._pillar || 'mem';
+                return '- [' + (pillarLabels[p2] || p2) + '] ' + label;
+            }).join('\n');
         }
     }
 

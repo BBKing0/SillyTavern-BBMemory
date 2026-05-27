@@ -247,9 +247,6 @@ export async function openClueBoard(chatId) {
     const header = document.createElement('div');
     header.className = 'bb-clue-header';
     header.style.cssText = 'display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--SmartThemeBorderColor,#45475a);flex-shrink:0;';
-    // 视图模式：从设置读取，默认 list
-    const settings = getSettings();
-    let viewMode = (typeof window !== 'undefined' && window.innerWidth <= 480) ? 'list' : (settings.clueBoardViewMode || 'list');
 
     header.innerHTML = `
         <i class="fa-solid fa-magnifying-glass" style="color:#ff9800;"></i>
@@ -257,27 +254,9 @@ export async function openClueBoard(chatId) {
             <strong>线索板</strong>
             <span class="bb-clue-count" style="font-size:0.78em;opacity:0.5;margin-left:6px;">${board.nodes.length} 节点 · ${board.connections.length} 连线</span>
         </div>
-        <button class="bb-clue-view-btn menu_button" title="切换视图 (列表/图形)" style="font-size:0.75em;padding:3px 8px;opacity:0.7;">
-            <i class="fa-solid ${viewMode === 'list' ? 'fa-diagram-project' : 'fa-list'}"></i>
-        </button>
         <button class="bb-clue-close-btn" style="background:none;border:none;color:inherit;font-size:22px;cursor:pointer;opacity:0.6;line-height:1;padding:0 4px;">&times;</button>
     `;
     header.querySelector('.bb-clue-close-btn').addEventListener('click', () => overlay.remove());
-    // 视图切换
-    header.querySelector('.bb-clue-view-btn').addEventListener('click', () => {
-        // 移动端强制 list 模式
-        if (typeof window !== 'undefined' && window.innerWidth <= 480) {
-            showToast('移动端仅支持列表视图', 'info');
-            return;
-        }
-        viewMode = viewMode === 'list' ? 'graph' : 'list';
-        updateSettings({ clueBoardViewMode: viewMode });
-        const icon = header.querySelector('.bb-clue-view-btn i');
-        if (icon) {
-            icon.className = 'fa-solid ' + (viewMode === 'list' ? 'fa-diagram-project' : 'fa-list');
-        }
-        refreshClueBoard(body, board, chatId, overlay, panel, viewMode);
-    });
     panel.appendChild(header);
 
     // ── 主体 ──
@@ -346,14 +325,9 @@ export async function openClueBoard(chatId) {
     document.addEventListener('keydown', onKeyDown);
 }
 
-function refreshClueBoard(body, board, chatId, overlay, panel, viewMode = 'list') {
+function refreshClueBoard(body, board, chatId, overlay, panel) {
     body.innerHTML = '';
-    if (viewMode === 'graph') {
-        renderGraphView(body, board);
-    } else {
-        renderClueBoardBody(body, board, chatId, overlay, panel);
-    }
-    // 更新共享 board 引用，解决闭包陈旧问题
+    renderClueBoardBody(body, board, chatId, overlay, panel);
     body._clueBoard = board;
     if (panel) {
         const connBtn = panel.querySelector('#bb_clue_add_conn');
@@ -375,110 +349,6 @@ function showToast(msg, type = 'info') {
 // ═══════════════════════════════════════════════════════════
 //  SVG 图形视图
 // ═══════════════════════════════════════════════════════════
-
-function renderGraphView(body, board) {
-    if (!board.nodes.length) {
-        body.innerHTML = `<div style="text-align:center;padding:40px;opacity:0.6;">
-            <i class="fa-solid fa-magnifying-glass" style="font-size:2em;display:block;margin-bottom:12px;opacity:0.3;"></i>
-            还没有线索节点</div>`;
-        return;
-    }
-
-    const nodeMap = new Map();
-    for (const n of board.nodes) nodeMap.set(n.id, n);
-
-    const typeColors = { causal: '#ff9800', hint: '#2196f3', contradicts: '#f44336', related: '#9e9e9e', speculation: '#ce93d8' };
-    const refColor = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784' };
-
-    // 计算节点位置：按列排列（from 节点在左，to 节点在右）
-    const NODE_W = 140, NODE_H = 48, GAP_X = 140, GAP_Y = 20, PAD = 16;
-    const pos = new Map();
-    const levels = new Map(); // nodeId → column level
-
-    // BFS 分配层级
-    function assignLevel(nodeId, lvl) {
-        if (levels.has(nodeId) && levels.get(nodeId) >= lvl) return;
-        levels.set(nodeId, Math.max(levels.get(nodeId) || 0, lvl));
-        const outConns = board.connections.filter(c => c.fromNodeId === nodeId);
-        for (const c of outConns) assignLevel(c.toNodeId, lvl + 1);
-    }
-    // 起始节点：没有入边的节点为 level 0
-    const hasIncoming = new Set(board.connections.map(c => c.toNodeId));
-    for (const n of board.nodes) {
-        if (!hasIncoming.has(n.id)) assignLevel(n.id, 0);
-    }
-    // 剩余未分配节点
-    for (const n of board.nodes) {
-        if (!levels.has(n.id)) levels.set(n.id, 0);
-    }
-
-    // 按 level 分组
-    const levelGroups = new Map();
-    for (const n of board.nodes) {
-        const lv = levels.get(n.id) || 0;
-        if (!levelGroups.has(lv)) levelGroups.set(lv, []);
-        levelGroups.get(lv).push(n);
-    }
-
-    // 计算坐标
-    const maxLevel = Math.max(...levelGroups.keys(), 0);
-    let totalW = 0;
-    for (let lv = 0; lv <= maxLevel; lv++) {
-        const group = levelGroups.get(lv) || [];
-        totalW = Math.max(totalW, group.length);
-    }
-
-    for (const [lv, group] of levelGroups) {
-        const colX = PAD + lv * (NODE_W + GAP_X);
-        const totalColH = group.length * (NODE_H + GAP_Y);
-        const startY = Math.max(PAD, (Math.max(1, board.nodes.length) * (NODE_H + GAP_Y) - totalColH) / 2 + PAD);
-        group.forEach((n, i) => {
-            pos.set(n.id, { x: colX, y: startY + i * (NODE_H + GAP_Y) });
-        });
-    }
-
-    const svgW = PAD + (maxLevel + 1) * (NODE_W + GAP_X) + PAD;
-    const svgH = Math.max(200, PAD + Math.max(...[...pos.values()].map(p => p.y)) + NODE_H + PAD);
-
-    let svg = `<svg width="${svgW}" height="${svgH}" style="display:block;max-width:100%;font-family:inherit;" xmlns="http://www.w3.org/2000/svg">`;
-
-    // 连线
-    for (const conn of board.connections) {
-        const from = pos.get(conn.fromNodeId);
-        const to = pos.get(conn.toNodeId);
-        if (!from || !to) continue;
-        const tc = typeColors[conn.type] || '#888';
-        const x1 = from.x + NODE_W;
-        const y1 = from.y + NODE_H / 2;
-        const x2 = to.x;
-        const y2 = to.y + NODE_H / 2;
-        const midX = (x1 + x2) / 2;
-        svg += `<path d="M${x1},${y1} C${midX},${y1} ${midX},${y2} ${x2},${y2}" fill="none" stroke="${tc}" stroke-width="1.5" stroke-dasharray="${conn.confidence === 'low' ? '4,3' : 'none'}" opacity="0.7"/>`;
-        // 标签
-        if (conn.label) {
-            svg += `<text x="${midX}" y="${(y1 + y2) / 2 - 4}" text-anchor="middle" font-size="9" fill="${tc}" opacity="0.8">${escapeHtml(conn.label.slice(0, 10))}</text>`;
-        }
-    }
-
-    // 节点
-    for (const n of board.nodes) {
-        const p = pos.get(n.id);
-        if (!p) continue;
-        const rc = refColor[n.refType] || '#888';
-        const label = (n.label || n.id).slice(0, 12);
-        svg += `<rect x="${p.x}" y="${p.y}" width="${NODE_W}" height="${NODE_H}" rx="6" fill="var(--SmartThemeBlurTintColor,#1e1e2e)" stroke="${rc}" stroke-width="1.5" opacity="0.95"/>`;
-        svg += `<text x="${p.x + NODE_W / 2}" y="${p.y + NODE_H / 2 + 1}" text-anchor="middle" dominant-baseline="middle" font-size="11" fill="var(--SmartThemeBodyColor,#e0e0e0)">${escapeHtml(label)}</text>`;
-        // 备注标记
-        if (n.note) {
-            svg += `<circle cx="${p.x + NODE_W - 8}" cy="${p.y + 8}" r="4" fill="#ff9800" opacity="0.7"><title>${escapeHtml(n.note)}</title></circle>`;
-        }
-    }
-
-    svg += '</svg>';
-
-    body.innerHTML = svg;
-    body.style.cssText = 'overflow:auto;max-height:60vh;';
-}
 
 function renderClueBoardBody(body, board, chatId, overlay, panel) {
     const nodeMap = new Map();

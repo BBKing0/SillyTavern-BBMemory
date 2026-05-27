@@ -79,6 +79,9 @@ function buildManagerHTML(npc, items, timeline, memories, chatId) {
             <button class="bb-mgr-tab" data-tab="dashboard">
                 <i class="fa-solid fa-gauge-high"></i> 仪表盘
             </button>
+            <button class="bb-mgr-tab" data-tab="categories">
+                <i class="fa-solid fa-tags"></i> 分类
+            </button>
             <button class="bb-mgr-tab" data-tab="warehouse">
                 <i class="fa-solid fa-box-archive"></i> 归档仓库
             </button>
@@ -184,6 +187,12 @@ function buildManagerHTML(npc, items, timeline, memories, chatId) {
         <!-- 仪表盘标签页 -->
         <div class="bb-mgr-panel" data-panel="dashboard" style="display:none;">
             <div id="bb_dashboard_content">
+                <div class="bb-mem-empty"><i class="fa-solid fa-spinner fa-spin"></i> 加载中...</div>
+            </div>
+        </div>
+        <!-- v8.6.5 分类标签页 -->
+        <div class="bb-mgr-panel" data-panel="categories" style="display:none;">
+            <div id="bb_categories_content">
                 <div class="bb-mem-empty"><i class="fa-solid fa-spinner fa-spin"></i> 加载中...</div>
             </div>
         </div>
@@ -414,6 +423,8 @@ function bindManagerEvents(overlay, chatId) {
                 await renderDashboardPanel(overlay, chatId);
             } else if (panelName === 'threads') {
                 await renderThreadPanel(overlay, chatId);
+            } else if (panelName === 'categories') {
+                await renderCategoriesPanel(overlay, chatId);
             } else if (panelName === 'warehouse') {
                 await renderArchiveWarehouse(overlay, chatId);
             }
@@ -1494,6 +1505,177 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
             input.value = '';
             await renderSlotsPanel(overlay, chatId);
         } catch (err) { showToast(`创建失败: ${err.message}`, 'error'); }
+    });
+}
+
+// ═══ v8.6.5 分类标签页 ═══
+
+async function renderCategoriesPanel(overlay, chatId) {
+    const contentEl = overlay.querySelector('#bb_categories_content');
+    if (!contentEl) return;
+
+    const { getSettings, toggleCategory, addCategory, removeCategory, renameCategory, getCategoryStats } = await import('./memory-store.js');
+    const settings = getSettings();
+    const enabled = settings.enabledCategories || {};
+
+    // 获取所有条目
+    const [npcs, items, timeline, memories] = await Promise.all([
+        getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+    ]);
+    const allEntries = [
+        ...npcs.filter(e => !e.archived).map(e => ({ ...e, _pillar: 'npc' })),
+        ...items.filter(e => !e.archived).map(e => ({ ...e, _pillar: 'item' })),
+        ...timeline.filter(e => !e.archived).map(e => ({ ...e, _pillar: 'timeline' })),
+        ...memories.filter(e => !e.archived && e.status !== 'deleted').map(e => ({ ...e, _pillar: 'mem' })),
+    ];
+
+    // 统计
+    const uncategorized = allEntries.filter(e => !e.category).length;
+
+    // 渲染分类开关列表
+    const catTogglesHTML = (settings.categories || []).length === 0
+        ? '<div style="opacity:0.5;padding:8px;">暂无分类，请在下方添加</div>'
+        : settings.categories.map(cat => {
+            const count = allEntries.filter(e => e.category === cat).length;
+            const checked = enabled[cat] === true ? 'checked' : '';
+            return `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer;">
+                <input type="checkbox" class="bb-mgr-cat-toggle" data-cat="${escapeHtml(cat)}" ${checked} style="cursor:pointer;" />
+                <span style="flex:1;" class="bb-mgr-cat-name" data-cat="${escapeHtml(cat)}" title="点击查看该分类条目">📁 ${escapeHtml(cat)}</span>
+                <span style="font-size:0.75em;opacity:0.5;">${count}条</span>
+            </label>`;
+        }).join('');
+
+    contentEl.innerHTML = `
+        <div style="padding:12px 16px;display:flex;flex-direction:column;gap:12px;">
+            <!-- 分类开关 -->
+            <div style="background:var(--SmartThemeBlurTintColor,rgba(255,255,255,0.02));border:1px solid var(--SmartThemeBorderColor,#444);border-radius:8px;padding:10px 14px;">
+                <div style="font-weight:bold;margin-bottom:8px;font-size:0.9em;">
+                    <i class="fa-solid fa-toggle-on"></i> 注入开关
+                    <small style="opacity:0.5;font-weight:normal;">勾选的分类条目会被注入给AI</small>
+                </div>
+                <div style="font-size:0.85em;">
+                    <label style="display:flex;align-items:center;gap:8px;padding:4px 0;opacity:0.6;">
+                        <span style="flex:1;">📁 通用（未分类）</span>
+                        <span style="font-size:0.75em;">${uncategorized}条 · 始终注入</span>
+                    </label>
+                    ${catTogglesHTML}
+                </div>
+            </div>
+
+            <!-- 分类管理 -->
+            <div style="background:var(--SmartThemeBlurTintColor,rgba(255,255,255,0.02));border:1px solid var(--SmartThemeBorderColor,#444);border-radius:8px;padding:10px 14px;">
+                <div style="font-weight:bold;margin-bottom:8px;font-size:0.9em;">
+                    <i class="fa-solid fa-wrench"></i> 管理分类
+                </div>
+                <div style="display:flex;gap:6px;margin-bottom:8px;">
+                    <input id="bb_mgr_cat_new" type="text" placeholder="新分类名称" class="bb-input" style="flex:1;font-size:0.85em;" />
+                    <button id="bb_mgr_cat_add" class="menu_button" style="font-size:0.8em;">添加</button>
+                </div>
+                <div style="display:flex;gap:6px;">
+                    <select id="bb_mgr_cat_select" class="bb-input" style="flex:1;font-size:0.8em;">
+                        <option value="">— 选择要操作的分焅 —</option>
+                        ${(settings.categories || []).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}
+                    </select>
+                    <input id="bb_mgr_cat_rename" type="text" placeholder="新名称" class="bb-input" style="flex:1;font-size:0.85em;" />
+                    <button id="bb_mgr_cat_rename_btn" class="menu_button" style="font-size:0.75em;">重命名</button>
+                    <button id="bb_mgr_cat_del" class="menu_button" style="font-size:0.75em;color:#f44336;">删除</button>
+                </div>
+            </div>
+
+            <!-- 分类条目列表 -->
+            <div id="bb_mgr_cat_entries" style="background:var(--SmartThemeBlurTintColor,rgba(255,255,255,0.02));border:1px solid var(--SmartThemeBorderColor,#444);border-radius:8px;padding:10px 14px;">
+                <div style="font-weight:bold;margin-bottom:8px;font-size:0.9em;">
+                    <i class="fa-solid fa-list"></i> <span id="bb_mgr_cat_entry_title">点击分类名称查看条目</span>
+                </div>
+                <div id="bb_mgr_cat_entry_list" style="max-height:300px;overflow-y:auto;font-size:0.82em;"></div>
+            </div>
+        </div>`;
+
+    // ── 事件绑定 ──
+
+    // 注入开关
+    contentEl.querySelectorAll('.bb-mgr-cat-toggle').forEach(cb => {
+        cb.addEventListener('change', async function () {
+            await toggleCategory(this.dataset.cat, this.checked);
+            showToast(`「${this.dataset.cat}」${this.checked ? '已开启注入' : '已关闭注入'}`, 'success');
+        });
+    });
+
+    // 点击分类名 → 显示该分类条目
+    contentEl.querySelectorAll('.bb-mgr-cat-name').forEach(el => {
+        el.addEventListener('click', () => {
+            const cat = el.dataset.cat;
+            const entries = allEntries.filter(e => e.category === cat);
+            const titleEl = contentEl.querySelector('#bb_mgr_cat_entry_title');
+            const listEl = contentEl.querySelector('#bb_mgr_cat_entry_list');
+            if (titleEl) titleEl.textContent = `📁 ${cat}（${entries.length}条）`;
+            if (listEl) {
+                listEl.innerHTML = entries.length === 0
+                    ? '<div style="opacity:0.4;">此分类下暂无条目</div>'
+                    : entries.map(e => {
+                        const icon = { mem: 'fa-brain', npc: 'fa-user', item: 'fa-box', timeline: 'fa-clock' }[e._pillar] || 'fa-circle';
+                        const label = e.title || e.name || e.event || (e.content || '').slice(0, 40);
+                        return `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid var(--SmartThemeBorderColor,#3333);">
+                            <i class="fa-solid ${icon}" style="font-size:0.7em;opacity:0.5;"></i>
+                            <span style="flex:1;">${escapeHtml(label)}</span>
+                            <button class="menu_button bb-mgr-cat-remove-entry" data-id="${escapeHtml(e.id)}" data-pillar="${e._pillar}" style="font-size:0.65em;padding:1px 5px;opacity:0.4;" title="移出此分类">✕</button>
+                        </div>`;
+                    }).join('');
+            }
+            // 绑定移除分类按钮
+            listEl?.querySelectorAll('.bb-mgr-cat-remove-entry').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const updater = {
+                        mem: (id, p) => updateMemory(chatId, id, p),
+                        npc: (id, p) => updateNpcProfile(chatId, id, p),
+                        item: (id, p) => updateItem(chatId, id, p),
+                        timeline: (id, p) => updateTimelineEntry(chatId, id, p),
+                    }[btn.dataset.pillar];
+                    if (updater) {
+                        await updater(btn.dataset.id, { category: null });
+                        showToast('已移出分类', 'success');
+                        el.click(); // 刷新列表
+                    }
+                });
+            });
+        });
+    });
+
+    // 管理分类
+    contentEl.querySelector('#bb_mgr_cat_add')?.addEventListener('click', async () => {
+        const input = contentEl.querySelector('#bb_mgr_cat_new');
+        const name = input?.value?.trim();
+        if (!name) { showToast('请输入分类名称', 'warning'); return; }
+        const ok = await addCategory(name);
+        if (ok) { input.value = ''; await renderCategoriesPanel(overlay, chatId); showToast(`分类「${name}」已添加`, 'success'); }
+        else { showToast('分类已存在或无效', 'warning'); }
+    });
+
+    contentEl.querySelector('#bb_mgr_cat_rename_btn')?.addEventListener('click', async () => {
+        const sel = contentEl.querySelector('#bb_mgr_cat_select');
+        const inp = contentEl.querySelector('#bb_mgr_cat_rename');
+        const oldName = sel?.value;
+        const newName = inp?.value?.trim();
+        if (!oldName) { showToast('请先选择分类', 'warning'); return; }
+        if (!newName) { showToast('请输入新名称', 'warning'); return; }
+        const ok = await renameCategory(chatId, oldName, newName);
+        if (ok) { inp.value = ''; await renderCategoriesPanel(overlay, chatId); showToast(`已重命名为「${newName}」`, 'success'); }
+        else { showToast('重命名失败', 'error'); }
+    });
+
+    contentEl.querySelector('#bb_mgr_cat_del')?.addEventListener('click', async () => {
+        const sel = contentEl.querySelector('#bb_mgr_cat_select');
+        const name = sel?.value;
+        if (!name) { showToast('请先选择分类', 'warning'); return; }
+        if (!confirm(`确定删除分类「${name}」？\n该分类下的所有条目将变为"通用"。`)) return;
+        await removeCategory(chatId, name);
+        await renderCategoriesPanel(overlay, chatId);
+        showToast(`分类「${name}」已删除`, 'success');
+    });
+
+    contentEl.querySelector('#bb_mgr_cat_select')?.addEventListener('change', function () {
+        const inp = contentEl.querySelector('#bb_mgr_cat_rename');
+        if (inp) inp.value = this.value;
     });
 }
 
