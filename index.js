@@ -44,6 +44,7 @@ import {
 } from './message-state.js';
 
 import { getClueBoard } from './clue-board.js';
+import { getMap } from './map-store.js';  // v8.7.0
 
 import {
     checkMaintenanceNeeded, dismissMaintenanceRemind,
@@ -113,10 +114,11 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     }
 
     // 4. 加载数据
-    const [npc, items, timeline, memories, threads, clueBoard] = await Promise.all([
+    const [npc, items, timeline, memories, threads, clueBoard, mapData] = await Promise.all([
         getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
         getTimelineThreads(chatId),
         getClueBoard(chatId),
+        getMap(chatId),  // v8.7.0
     ]);
 
     const hasData = npc.length + items.length + timeline.length + memories.length + threads.length > 0;
@@ -188,6 +190,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         settings,
         chatLength: chat.length,
         clueBoard,
+        mapData,  // v8.7.0
     });
 
     // 10. 注入
@@ -803,6 +806,11 @@ function bindSidebarEvents() {
         const chatId = getChatId();
         if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
         import('./clue-board.js').then(m => m.openClueBoard(chatId));
+    });
+    document.querySelector('#bb_map_btn')?.addEventListener('click', () => {
+        const chatId = getChatId();
+        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        import('./map-view.js').then(m => m.openMapView(chatId));
     });
     document.querySelector('#bb_agent_btn')?.addEventListener('click', () => {
         const chatId = getChatId();
@@ -1553,6 +1561,13 @@ function registerSlashCommands() {
         const { openClueBoard } = await import('./clue-board.js');
         openClueBoard(chatId);
     }, '打开线索板 — 追踪线索、创建连线推理');
+
+    addCmd('bb-map', async () => {
+        const chatId = getChatId();
+        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        const { openMapView } = await import('./map-view.js');
+        openMapView(chatId);
+    }, '打开世界地图 — 管理地点和路径');
 
     addCmd('bb-agent', async () => {
         const chatId = getChatId();

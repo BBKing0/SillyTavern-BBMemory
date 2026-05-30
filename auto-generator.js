@@ -195,6 +195,7 @@ function parseItemResponse(responseText) {
                 owner: typeof item.o === 'string' ? item.o.trim() : '',
                 status: ['held', 'used', 'lost', 'destroyed'].includes(item.s) ? item.s : 'held',
                 significance: typeof item.sig === 'string' ? item.sig.trim() : '',
+                location: typeof item.l === 'string' ? item.l.trim() : '',
                 keepPermanent: item.kp === true,
                 itemTier: normalizeItemTier(item.it) || 'consumable',
                 tags: Array.isArray(item.g)
@@ -235,6 +236,34 @@ function parseTimelineResponse(responseText) {
             }));
     } catch (e) {
         if (getSettings().debugLogging) console.warn('[BB-Memory] 时间线响应解析失败:', e.message);
+        return [];
+    }
+}
+
+// v8.7.0 地点解析器
+function parseLocationResponse(responseText) {
+    const text = cleanJsonText(responseText);
+    if (!text) return [];
+    try {
+        const parsed = JSON.parse(text);
+        const arr = Array.isArray(parsed) ? parsed : (parsed && parsed.n ? [parsed] : []);
+        return arr
+            .filter(item => item && item.n && typeof item.n === 'string')
+            .map(item => ({
+                name: (item.n || '').trim(),
+                description: typeof item.desc === 'string' ? item.desc.trim() : '',
+                region: typeof item.reg === 'string' ? item.reg.trim() : '',
+                realWorldRef: typeof item.rw === 'string' ? item.rw.trim() : '',
+                edges: Array.isArray(item.conn)
+                    ? item.conn.filter(c => c && c.to).map(c => ({
+                        toName: c.to, distance: c.dist || '', pathType: c.type || '',
+                        difficulty: ['easy','normal','hard'].includes(c.diff) ? c.diff : 'normal',
+                    }))
+                    : [],
+                source: 'auto',
+            }));
+    } catch (e) {
+        if (getSettings().debugLogging) console.warn('[BB-Memory] 地点响应解析失败:', e.message);
         return [];
     }
 }
@@ -673,11 +702,22 @@ nt=分级(core/important/minor/background) | ic=一行索引卡(含弧线阶段)
 仅提取本轮首次出现或状态改变的有意义物品。
 关注：象征维度（代表什么？）、作为伏笔的潜力（何时可能被使用？）。
 
-字段：n(物品名), o(持有者), s(状态:held/used/lost/destroyed)
+字段：n(物品名), o(持有者), s(状态:held/used/lost/destroyed), l(所在地点)
 sig=意义描述(兼顾实用与象征意义), kp=true/false
 it=分级(key/equipped/clue/consumable/background) | g=标签数组
 
 若无新物品或变化，返回空数组。
+
+═══════════════════════════════════════════════════════
+## 辅助：地图地点更新 v8.7.0（可选，仅本轮新出现或提及的地点）
+═══════════════════════════════════════════════════════
+记录本轮对话中出现或提及的新地点，已有地点不需要重复。
+⚠ 重要：如有现实世界原型参考，务必填写 rw 字段，以便AI保持地理一致性。
+
+字段：n(地名), desc(描述), reg(区域), rw(现实原型参考),
+     conn(连接: [{to:相邻地名, dist:距离, type:路径类型, diff:easy/normal/hard}])
+
+现实原型示例：中世纪巴黎、江户时代京都、指环王夏尔、冰与火之歌君临
 
 ═══════════════════════════════════════════════════════
 ## 辅助：时间线里程碑（可选，仅记录真正重要的故事节点）
@@ -708,7 +748,7 @@ active=true/false, imp(对叙事弧线的影响), g(标签数组含节奏标签[
 function parseMergedResponse(responseText) {
     if (!responseText || !responseText.trim()) {
         console.warn('[BB-Memory] 合并提取响应为空');
-        return { npc: [], items: [], timeline: [], memories: [] };
+        return { npc: [], items: [], timeline: [], memories: [], locations: [] };
     }
     let text = responseText.trim();
     // META_DIALOGUE 检测（安全网：即便 extractMergedStage 已检查，解析阶段也再确认一次）
@@ -731,11 +771,11 @@ function parseMergedResponse(responseText) {
             match = text.match(/\[[\s\S]*\]/);
             if (!match) {
                 console.warn('[BB-Memory] 合并提取响应未找到JSON，前200字符:', text.slice(0, 200));
-                return { npc: [], items: [], timeline: [], memories: [] };
+                return { npc: [], items: [], timeline: [], memories: [], locations: [] };
             }
             try { parsed = JSON.parse(match[0]); } catch (e2) {
                 console.warn('[BB-Memory] 合并响应JSON解析失败:', e2.message, '前200字符:', text.slice(0, 200));
-                return { npc: [], items: [], timeline: [], memories: [] };
+                return { npc: [], items: [], timeline: [], memories: [], locations: [] };
             }
         }
         // 如果解析结果是数组，尝试取第一个对象元素
@@ -744,7 +784,7 @@ function parseMergedResponse(responseText) {
                 parsed = parsed[0];
             } else {
                 console.warn('[BB-Memory] 合并提取响应为数组但无可用的对象元素');
-                return { npc: [], items: [], timeline: [], memories: [] };
+                return { npc: [], items: [], timeline: [], memories: [], locations: [] };
             }
         }
     }
@@ -754,19 +794,21 @@ function parseMergedResponse(responseText) {
         const npcArr = parsed.npc || [];
         const itemsArr = parsed.items || [];
         const tlArr = parsed.timeline || [];
+        const locArr = parsed.locations || parsed.map || [];  // v8.7.0
         const result = {
             npc: parseNpcResponse(JSON.stringify(npcArr)),
             items: parseItemResponse(JSON.stringify(itemsArr)),
             timeline: parseTimelineResponse(JSON.stringify(tlArr)),
             memories: parseMemoryResponse(JSON.stringify(memArr)),
+            locations: parseLocationResponse(JSON.stringify(locArr)),
         };
-        if (memArr.length === 0 && npcArr.length === 0 && itemsArr.length === 0 && tlArr.length === 0) {
+        if (memArr.length === 0 && npcArr.length === 0 && itemsArr.length === 0 && tlArr.length === 0 && locArr.length === 0) {
             console.log('[BB-Memory] 合并提取: 本轮无需提取');
         }
         return result;
     } catch (e) {
         console.warn('[BB-Memory] 合并响应JSON解析失败:', e.message, '前200字符:', text.slice(0, 200));
-        return { npc: [], items: [], timeline: [], memories: [] };
+        return { npc: [], items: [], timeline: [], memories: [], locations: [] };
     }
 }
 
@@ -834,6 +876,40 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
         for (const npc of results.npc) { await upsertNpcProfile(chatId, { ...npc, ...(sourceInfo || {}) }); total++; }
         for (const item of results.items) { await upsertItem(chatId, { ...item, ...(sourceInfo || {}) }); total++; }
         for (const tl of results.timeline) { await upsertTimelineEntry(chatId, { ...tl, ...(sourceInfo || {}) }); total++; }
+        // v8.7.0 地点提取
+        if (results.locations && results.locations.length > 0) {
+            try {
+                const { getLocations, addLocation, addBidirectionalEdge } = await import('./map-store.js');
+                const existingLocs = await getLocations(chatId);
+                for (const loc of results.locations) {
+                    // 按名称去重
+                    const existing = existingLocs.find(l => l.name.toLowerCase() === loc.name.toLowerCase());
+                    let locId;
+                    if (existing) {
+                        locId = existing.id;
+                    } else {
+                        const newLoc = await addLocation(chatId, { ...loc, ...(sourceInfo || {}) });
+                        locId = newLoc.id;
+                        existingLocs.push(newLoc);
+                        total++;
+                    }
+                    // 处理连接（按名称匹配目标地点ID）
+                    if (loc.edges && loc.edges.length > 0) {
+                        for (const edge of loc.edges) {
+                            if (!edge.toName) continue;
+                            const target = existingLocs.find(l => l.name.toLowerCase() === edge.toName.toLowerCase());
+                            if (target && target.id !== locId) {
+                                await addBidirectionalEdge(chatId, locId, target.id, {
+                                    distance: edge.distance, pathType: edge.pathType, difficulty: edge.difficulty,
+                                });
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                if (getSettings().debugLogging) console.warn('[BB-Memory] 地点保存失败:', e.message);
+            }
+        }
         const settings = getSettings();
         const maxPerExchange = settings.maxMemoriesPerExchange ?? 3;
         const limited = results.memories.slice(0, maxPerExchange);

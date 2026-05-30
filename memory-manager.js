@@ -128,6 +128,9 @@ function buildManagerHTML(npc, items, timeline, memories, chatId) {
                 <button class="menu_button bb-mem-type-filter" data-type="timeline">
                     <i class="fa-solid fa-clock"></i> 时间条目
                 </button>
+                <button class="menu_button bb-mem-type-filter" data-type="map">
+                    <i class="fa-solid fa-map"></i> 地图
+                </button>
                 <span style="flex:1;"></span>
                 <span class="bb-batch-count" id="bb_batch_count_label" style="display:none;font-size:0.8em;opacity:0.7;">已选 <strong id="bb_batch_count">0</strong> 条</span>
                 <div id="bb_batch_menu" class="bb-batch-dropdown" style="position:relative;display:inline-block;">
@@ -217,6 +220,7 @@ function buildEntryItemHTML(e) {
         item:     { icon: 'fa-box',          label: '物品',  color: '#4fc3f7' },
         timeline: { icon: 'fa-clock',        label: '时间线', color: '#ffb74d' },
         mem:      { icon: 'fa-brain',        label: '记忆',  color: '#81c784' },
+        map:      { icon: 'fa-map',          label: '地图',  color: '#4fc3f7' },
     }[pillar] || { icon: 'fa-circle', label: pillar, color: '#888' };
 
     const title = e.title || e.name || (e.content || e.description || '').slice(0, 40) || '(无标题)';
@@ -237,6 +241,7 @@ function buildEntryItemHTML(e) {
         if (tier) statusBadges += `<span class="bb-item-badge" style="background:${pillarConfig.color}22;color:${pillarConfig.color};border:1px solid ${pillarConfig.color}44;">${tier.label}</span>`;
         if (e.status) statusBadges += `<span class="bb-item-badge" style="font-size:0.7em;">${escapeHtml(e.status)}</span>`;
         if (e.owner) statusBadges += `<span style="font-size:0.75em;opacity:0.5;">持有: ${escapeHtml(e.owner)}</span>`;
+        if (e.location) statusBadges += `<span style="font-size:0.72em;opacity:0.45;">📍 ${escapeHtml(e.location)}</span>`;
     } else if (pillar === 'timeline') {
         statusBadges += `<span class="bb-item-badge" style="background:${e.isActive ? '#4caf5022' : '#ff980022'};color:${e.isActive ? '#4caf50' : '#ff9800'};border:1px solid ${e.isActive ? '#4caf5044' : '#ff980044'};">${e.isActive ? '进行中' : '已结束'}</span>`;
         if (e.storyTime) statusBadges += `<span style="font-size:0.75em;opacity:0.5;">${escapeHtml(e.storyTime)}</span>`;
@@ -892,6 +897,8 @@ function showQuickAddForm(overlay, chatId) {
                     <div style="flex:1;"><label style="font-size:0.85em;">持有者</label><input class="bb-input bb-f-owner" placeholder="当前持有者" style="width:100%;margin-bottom:8px;" /></div>
                     <div style="flex:1;"><label style="font-size:0.85em;">状态</label><select class="bb-input bb-f-status" style="width:100%;margin-bottom:8px;"><option value="held">持有中</option><option value="used">已使用</option><option value="lost">已丢失</option><option value="destroyed">已销毁</option></select></div>
                 </div>
+                <label style="font-size:0.85em;">所在地点</label>
+                <input class="bb-input bb-f-location" placeholder="物品所在的地图地点（v8.7.0）" style="width:100%;margin-bottom:8px;" />
                 <label style="font-size:0.85em;">重要性</label>
                 <input class="bb-input bb-f-significance" placeholder="对剧情的重要性" style="width:100%;margin-bottom:8px;" />
                 <div style="display:flex;gap:8px;">
@@ -1042,6 +1049,7 @@ function buildPillarFormFields_inner(p) {
         case 'item': return `
             <label style="font-size:0.85em;">名称 <span style="color:#f44336;">*</span></label><input class="bb-input bb-f-name" placeholder="物品名称" style="width:100%;margin-bottom:8px;" />
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">持有者</label><input class="bb-input bb-f-owner" placeholder="当前持有者" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">状态</label><select class="bb-input bb-f-status" style="width:100%;margin-bottom:8px;"><option value="held">持有中</option><option value="used">已使用</option><option value="lost">已丢失</option><option value="destroyed">已销毁</option></select></div></div>
+            <label style="font-size:0.85em;">所在地点</label><input class="bb-input bb-f-location" placeholder="物品所在的地图地点" style="width:100%;margin-bottom:8px;" />
             <label style="font-size:0.85em;">重要性</label><input class="bb-input bb-f-significance" placeholder="对剧情的重要性" style="width:100%;margin-bottom:8px;" />
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">物品等级</label><select class="bb-input bb-f-itemTier" style="width:100%;margin-bottom:8px;">${Object.values(ITEM_TIERS).map(t => `<option value="${t.id}" ${t.id === 'consumable' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div><div style="flex:1;display:flex;align-items:flex-end;padding-bottom:8px;"><label style="font-size:0.85em;display:flex;align-items:center;gap:4px;"><input type="checkbox" class="bb-f-keepPermanent" /> 永久保留</label></div></div>
             <label style="font-size:0.85em;">标签</label><input class="bb-input bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
@@ -1080,6 +1088,7 @@ function collectFormData(formEl, pillar) {
         };
         case 'item': return {
             name: g('bb-f-name'), owner: g('bb-f-owner'),
+            location: g('bb-f-location'),
             status: formEl.querySelector('.bb-f-status')?.value || 'held',
             significance: g('bb-f-significance'),
             itemTier: formEl.querySelector('.bb-f-itemTier')?.value || 'consumable',
@@ -1191,6 +1200,7 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
                 case 'item':
                     setVal('bb-f-name', prefill.name);
                     setVal('bb-f-owner', prefill.owner);
+                    setVal('bb-f-location', prefill.location);
                     if (prefill.status) { const el = formOverlay.querySelector('.bb-f-status'); if (el) el.value = prefill.status; }
                     setVal('bb-f-significance', prefill.significance);
                     if (prefill.itemTier) { const el = formOverlay.querySelector('.bb-f-itemTier'); if (el) el.value = prefill.itemTier; }

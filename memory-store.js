@@ -15,7 +15,8 @@ const STORAGE_KEYS = {
     item:     'bb_item_chat_',
     timeline: 'bb_timeline_chat_',
     mem:      'bb_mem_chat_',
-    threads:  'bb_timeline_threads_',  // v6.7.0 命名线程系统
+    map:      'bb_map_chat_',           // v8.7.0 地图记忆
+    threads:  'bb_timeline_threads_',   // v6.7.0 命名线程系统
 };
 
 const OLD_STORAGE_KEY = 'bb_memory_chat_';
@@ -31,6 +32,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     npcInjectionMax: 8,
     itemInjectionMax: 5,
     timelineEndedMax: 3,
+    mapInjectionMax: 8,             // v8.7.0 地图地点注入上限
     shortTermWindow: 5,
     floorRecentWindow: 6,            // 近 N 轮内的记忆用完整内容
     // AI 自动生成
@@ -279,6 +281,7 @@ export async function addItem(chatId, data) {
         id: generateId(),
         name: data.name || '',
         owner: data.owner || '',
+        location: data.location || '',       // v8.7.0 物品所在地点
         status: data.status || 'held',       // held | used | lost | destroyed
         significance: data.significance || '',
         keepPermanent: data.keepPermanent || false,

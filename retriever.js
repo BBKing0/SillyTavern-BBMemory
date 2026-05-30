@@ -430,7 +430,7 @@ function formatMemoryLine(m, chatLength = 0) {
  * @param {object} params.settings
  * @returns {{ text: string, tokenEstimate: number, stats: object }}
  */
-export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, threadSummary, relevantResults, settings, chatLength = 0, clueBoard = null }) {
+export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, threadSummary, relevantResults, settings, chatLength = 0, clueBoard = null, mapData = null }) {
     const tokenBudget = settings.tokenBudget || 800;
     let tokenUsed = 0;
     const stats = { npcCount: 0, itemCount: 0, timelineCount: 0, memoryCount: 0, threadCount: 0 };
@@ -536,6 +536,37 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline,
     }
 
     // ── 区块 5：线索板（v8.4.0）──
+    // ── 区块6：世界地图 v8.7.0 ──
+    if (mapData && typeof mapData === 'object' && Object.keys(mapData.locations || {}).length > 0) {
+        const locs = Object.values(mapData.locations || {});
+        const mapLines = ['【世界地图 — 相关地点】'];
+        let mapTokens = 0;
+        const maxMapTokens = tokenBudget * 0.15;
+        for (const loc of locs) {
+            const parts = ['◆ ' + (loc.name || '')];
+            if (loc.region) parts.push('(' + loc.region + ')');
+            if (loc.description) parts.push('— ' + loc.description.slice(0, 80));
+            if (loc.realWorldRef) parts.push('[现实参考: ' + loc.realWorldRef + ']');
+            let line = parts.join(' ');
+            if (loc.edges && loc.edges.length > 0) {
+                const conns = loc.edges.slice(0, 4).map(e => {
+                    const target = locs.find(l => l.id === e.toId);
+                    return '  → ' + (target ? target.name : e.toId) + (e.distance ? ' (' + e.distance + ')' : '');
+                });
+                line += '\n' + conns.join('\n');
+            }
+            const lt = Math.ceil(line.length / 3.5);
+            if (mapTokens + lt > maxMapTokens) break;
+            mapLines.push(line);
+            mapTokens += lt;
+        }
+        if (mapLines.length > 1) {
+            sections.push(mapLines.join('\n'));
+            tokenUsed += mapTokens;
+            stats.mapInjected = true;
+        }
+    }
+
     if (clueBoard && typeof clueBoard === 'object') {
         const { hasActiveClues, buildClueBoardInjection } = await import('./clue-board.js');
         if (hasActiveClues(clueBoard)) {
