@@ -855,7 +855,7 @@ function showQuickAddForm(overlay, chatId) {
     if (existing) existing.remove();
 
     let currentPillar = 'mem';
-    const pillarOpts = { mem: '记忆条目', npc: 'NPC档案', item: '物品', timeline: '时间线事件' };
+    const pillarOpts = { mem: '记忆条目', npc: 'NPC档案', item: '物品', timeline: '时间线事件', map: '地图地点' };
 
     const formOverlay = document.createElement('div');
     formOverlay.className = 'bb-form-overlay';
@@ -1029,7 +1029,7 @@ function bindFormEvents(formOverlay, chatId, initialPillar) {
 }
 
 function buildFormHTML_inner(pillar) {
-    const pillarOpts = { mem: '记忆条目', npc: 'NPC档案', item: '物品', timeline: '时间线事件' };
+    const pillarOpts = { mem: '记忆条目', npc: 'NPC档案', item: '物品', timeline: '时间线事件', map: '地图地点' };
     return `
     <div class="bb-mem-form-popup" style="background:var(--SmartThemeChatTintColor,#1e1e2e);border:1px solid var(--SmartThemeBorderColor,#444);border-radius:12px;width:100%;max-width:600px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.5);">
         <div style="display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid var(--SmartThemeBorderColor,#444);">
@@ -1078,6 +1078,12 @@ function buildPillarFormFields_inner(p) {
             <div class="bb-subentries-container" style="margin-bottom:8px;"></div>
             <button type="button" class="menu_button bb-subentry-add" style="font-size:0.8em;width:100%;margin-bottom:8px;"><i class="fa-solid fa-plus"></i> 添加子条目</button>
             <label style="font-size:0.85em;">标签</label><input class="bb-input bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
+        case 'map': return `
+            <label style="font-size:0.85em;">地点名称 <span style="color:#f44336;">*</span></label>
+            <input class="bb-input bb-f-name" placeholder="地点名称" style="width:100%;margin-bottom:8px;" />
+            <label style="font-size:0.85em;">描述</label>
+            <textarea class="bb-input bb-f-desc" rows="3" placeholder="地点描述" style="width:100%;margin-bottom:8px;resize:vertical;"></textarea>
+            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">区域</label><input class="bb-input bb-f-region" placeholder="如：中原" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">现实参考</label><input class="bb-input bb-f-realref" placeholder="可选" style="width:100%;margin-bottom:8px;" /></div></div>`;
         case 'mem': default: return `
             <label style="font-size:0.85em;">标题 <span style="color:#f44336;">*</span></label><input class="bb-input bb-f-title" placeholder="记忆标题（3-8字）" style="width:100%;margin-bottom:8px;" />
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">类型</label><select class="bb-input bb-f-type" style="width:100%;margin-bottom:8px;">${Object.values(MEMORY_TYPES).map(t => `<option value="${t.id}" ${t.id === 'event' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div><div style="flex:1;"><label style="font-size:0.85em;">真值状态</label><select class="bb-input bb-f-truthStatus" style="width:100%;margin-bottom:8px;">${Object.entries(TRUTH_STATUS).map(([k,v]) => `<option value="${k}" ${k === 'true' ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div></div>
@@ -1109,6 +1115,11 @@ function collectFormData(formEl, pillar) {
             itemTier: formEl.querySelector('.bb-f-itemTier')?.value || 'consumable',
             keepPermanent: formEl.querySelector('.bb-f-keepPermanent')?.checked || false,
             tags, source: 'manual',
+        };
+        case 'map': return {
+            name: g('bb-f-name'), description: g('bb-f-desc'),
+            region: g('bb-f-region'), realWorldRef: g('bb-f-realref'),
+            source: 'manual',
         };
         case 'timeline': {
             const subs = [];
@@ -1150,7 +1161,11 @@ async function showQuickEditForm(overlay, chatId, id, pillar) {
         getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
     ]);
     if (pillar === 'map') {
-        showToast('请在世界地图面板中编辑地点', 'info');
+        const { getLocations } = await import('./map-store.js');
+        const locs = await getLocations(chatId);
+        entry = locs.find(l => l.id === id);
+        if (!entry) { showToast('未找到该地点', 'error'); return; }
+        _showQuickFormPopup(overlay, chatId, { mode: 'edit', id, pillar, prefill: entry });
         return;
     }
     if (pillar === 'npc') entry = lists[0].find(e => e.id === id);
@@ -1246,6 +1261,12 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
                         }
                     }
                     break;
+                case 'map':
+                    setVal('bb-f-name', prefill.name);
+                    setVal('bb-f-desc', prefill.description);
+                    setVal('bb-f-region', prefill.region);
+                    setVal('bb-f-realref', prefill.realWorldRef);
+                    break;
                 case 'mem':
                     setVal('bb-f-title', prefill.title);
                     if (prefill.type) { const el = formOverlay.querySelector('.bb-f-type'); if (el) el.value = prefill.type; }
@@ -1315,6 +1336,7 @@ function bindFormEvents_inner(formOverlay, chatId, pillar, editInfo) {
                     case 'npc': await updateNpcProfile(chatId, editInfo.id, data); break;
                     case 'item': await updateItem(chatId, editInfo.id, data); break;
                     case 'timeline': await updateTimelineEntry(chatId, editInfo.id, data); break;
+                    case 'map': { const { updateLocation } = await import('./map-store.js'); await updateLocation(chatId, editInfo.id, data); break; }
                     default: await updateMemory(chatId, editInfo.id, data); break;
                 }
             } else {
@@ -1322,6 +1344,7 @@ function bindFormEvents_inner(formOverlay, chatId, pillar, editInfo) {
                     case 'npc': await addNpcProfile(chatId, data); break;
                     case 'item': await addItem(chatId, data); break;
                     case 'timeline': await addTimelineEntry(chatId, data); break;
+                    case 'map': { const { addLocation } = await import('./map-store.js'); await addLocation(chatId, data); break; }
                     default: await addMemory(chatId, data); break;
                 }
             }

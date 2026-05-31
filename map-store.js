@@ -59,6 +59,8 @@ export async function addLocation(chatId, data) {
         realWorldRef: data.realWorldRef || '',
         region: data.region || '',
         parentId: data.parentId || null,  // v8.7.1 父地点ID（层级）
+        x: typeof data.x === 'number' ? data.x : (0.3 + Math.random() * 0.4),  // v8.8.0 2D坐标
+        y: typeof data.y === 'number' ? data.y : (0.2 + Math.random() * 0.6),
         edges: Array.isArray(data.edges) ? data.edges : [],
         createdAt: now,
         updatedAt: now,
@@ -222,6 +224,100 @@ export async function getMapStats(chatId) {
         edgeCount,
         regions: [...new Set(locations.map(l => l.region).filter(Boolean))],
     };
+}
+
+// ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+//  v8.8.0 自动布局：力导向算法
+// ═══════════════════════════════════════════════════════════
+
+export async function autoLayout(chatId) {
+    const map = await loadMap(chatId);
+    const locs = Object.values(map.locations || {});
+    if (locs.length === 0) return;
+
+    // 按区域分组，分配到不同Y区域
+    const regions = [...new Set(locs.map(l => l.region || ''))];
+    const regionLocs = {};
+    for (const r of regions) {
+        regionLocs[r] = locs.filter(l => (l.region || '') === r);
+    }
+
+    // 为每个区域分配Y范围
+    const regionCount = regions.length || 1;
+    for (let ri = 0; ri < regions.length; ri++) {
+        const r = regions[ri];
+        const rLocs = regionLocs[r];
+        const yBase = ri / regionCount;
+        const yRange = 0.8 / regionCount;
+
+        // 区域内按连通分量分组X
+        const visited = new Set();
+        const components = [];
+        for (const loc of rLocs) {
+            if (visited.has(loc.id)) continue;
+            const comp = [];
+            const queue = [loc.id];
+            while (queue.length) {
+                const id = queue.shift();
+                if (visited.has(id)) continue;
+                visited.add(id);
+                const l = map.locations[id];
+                if (!l) continue;
+                comp.push(l);
+                for (const e of (l.edges || [])) {
+                    if (!visited.has(e.toId)) queue.push(e.toId);
+                }
+            }
+            if (comp.length > 0) components.push(comp);
+        }
+
+        // 分配X坐标：每个分量占据一段X范围
+        const compCount = components.length || 1;
+        for (let ci = 0; ci < components.length; ci++) {
+            const comp = components[ci];
+            const xBase = ci / compCount;
+            const xRange = 0.8 / compCount;
+
+            // 分量内：有连线的节点形成链，无连线的均匀分布
+            const connected = comp.filter(l => (l.edges || []).length > 0);
+            const isolated = comp.filter(l => (l.edges || []).length === 0);
+
+            // 连接节点：BFS排序后均匀分布
+            if (connected.length > 1) {
+                const bfsOrder = [];
+                const bfsVisited = new Set();
+                const start = connected[0];
+                const bfsQueue = [start.id];
+                while (bfsQueue.length) {
+                    const id = bfsQueue.shift();
+                    if (bfsVisited.has(id)) continue;
+                    bfsVisited.add(id);
+                    const l = map.locations[id];
+                    if (l) bfsOrder.push(l);
+                    for (const e of (l?.edges || [])) {
+                        if (!bfsVisited.has(e.toId)) bfsQueue.push(e.toId);
+                    }
+                }
+                for (let i = 0; i < bfsOrder.length; i++) {
+                    bfsOrder[i].x = xBase + 0.05 + (i / (bfsOrder.length - 1 || 1)) * (xRange - 0.1);
+                    bfsOrder[i].y = yBase + 0.02 + Math.random() * yRange * 0.3;
+                }
+            } else if (connected.length === 1) {
+                connected[0].x = xBase + xRange / 2;
+                connected[0].y = yBase + yRange * 0.3;
+            }
+
+            // 孤立节点
+            for (let i = 0; i < isolated.length; i++) {
+                isolated[i].x = xBase + 0.05 + (i % 3) * (xRange / 3);
+                isolated[i].y = yBase + yRange * 0.5 + Math.floor(i / 3) * (yRange * 0.15);
+            }
+        }
+    }
+
+    await saveMap(chatId, map);
+    return map;
 }
 
 // ═══════════════════════════════════════════════════════════
