@@ -92,9 +92,11 @@ function buildListHTML(locations, items, activeRegion) {
 //  2D 空间视图（Canvas连线 + CSS卡片）
 // ═══════════════════════════════════════════════════════════
 
-function renderSpatialView(body, locations, items, activeRegion, onEdit, onConnect, onAddItem, onDelete) {
-    const filtered = activeRegion ? locations.filter(l => l.region === activeRegion) : locations;
+function renderSpatialView(body, locations, items, activeRegion, editMode, onEdit, onConnect, onAddItem, onDelete) {
+    const filtered = (activeRegion ? locations.filter(l => l.region === activeRegion) : locations).filter(l => !l.archived);
     const locMap = {}; for (const l of locations) locMap[l.id] = l;
+    // 父子关系
+    const children = {}; for (const l of filtered) { const pid = l.parentId || ''; if (!children[pid]) children[pid] = []; children[pid].push(l); }
 
     body.innerHTML = '';
     body.style.cssText = 'position:relative;overflow:hidden;min-height:400px;flex:1;';
@@ -151,6 +153,38 @@ function renderSpatialView(body, locations, items, activeRegion, onEdit, onConne
             ctx.fillText(r, minX - 10, minY - 6);
         }
 
+        // v8.8.1 父地点包裹矩形（增强视觉效果）
+        const drawnParents = new Set();
+        for (const loc of filtered) {
+            const subLocs = (children[loc.id] || []).filter(l => !l.archived);
+            if (subLocs.length === 0 || drawnParents.has(loc.id)) continue;
+            drawnParents.add(loc.id);
+            const rc = getRegionColor(loc.region);
+            const padX = 40 * scale, padY = 35 * scale;
+            const minCX = Math.min(loc.x, ...subLocs.map(l => l.x)) * w * scale + panX;
+            const minCY = Math.min(loc.y, ...subLocs.map(l => l.y)) * h * scale + panY;
+            const maxCX = Math.max(loc.x, ...subLocs.map(l => l.x)) * w * scale + panX + 120 * scale;
+            const maxCY = Math.max(loc.y, ...subLocs.map(l => l.y)) * h * scale + panY + 80 * scale;
+            const rx = minCX - padX, ry = minCY - padY, rw = maxCX - minCX + padX * 2, rh = maxCY - minCY + padY * 2;
+            // 半透明填充
+            ctx.fillStyle = rc + '10';
+            ctx.strokeStyle = rc + '44';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([6, 3]);
+            ctx.beginPath();
+            ctx.roundRect(rx, ry, rw, rh, 10);
+            ctx.fill();
+            ctx.stroke();
+            ctx.setLineDash([]);
+            // 父地点标签（左上角）
+            const labelW = ctx.measureText(loc.name).width + 12;
+            ctx.fillStyle = rc + '22';
+            ctx.fillRect(rx + 8, ry - 12, labelW, 18);
+            ctx.fillStyle = rc + '99';
+            ctx.font = 'bold 10px sans-serif';
+            ctx.fillText('📁 ' + loc.name, rx + 12, ry + 2);
+        }
+
         // 连线
         for (const loc of filtered) {
             const fromX = loc.x * w * scale + panX + 60 * scale;
@@ -187,12 +221,14 @@ function renderSpatialView(body, locations, items, activeRegion, onEdit, onConne
 
     function renderCards() {
         cardLayer.innerHTML = '';
+        cardLayer.style.transform = `scale(${scale})`;
+        cardLayer.style.transformOrigin = '0 0';
         for (const loc of filtered) {
             const locItems = items.filter(i => !i.archived && i.location === loc.name);
             const card = document.createElement('div');
             const rc = getRegionColor(loc.region);
             card.className = 'bb-map-spatial-card';
-            card.style.cssText = `position:absolute;left:${loc.x * 100}%;top:${loc.y * 100}%;transform:translate(-50%,-50%) scale(${scale});transform-origin:center center;background:var(--SmartThemeChatTintColor,#1e1e2e);border:2px solid ${rc}66;border-radius:10px;padding:8px 12px;min-width:100px;max-width:160px;pointer-events:auto;cursor:pointer;z-index:3;box-shadow:0 2px 8px rgba(0,0,0,0.3);transition:box-shadow 0.15s;`;
+            card.style.cssText = `position:absolute;left:${loc.x * 100}%;top:${loc.y * 100}%;transform:translate(-50%,-50%);background:var(--SmartThemeChatTintColor,#1e1e2e);border:2px solid ${rc}66;border-radius:10px;padding:8px 12px;min-width:100px;max-width:160px;pointer-events:auto;cursor:pointer;z-index:3;box-shadow:0 2px 8px rgba(0,0,0,0.3);transition:box-shadow 0.15s;`;
             card.innerHTML = `
                 <div style="font-weight:700;font-size:0.75em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(loc.name)}</div>
                 ${loc.description ? `<div style="font-size:0.6em;opacity:0.5;line-height:1.2;max-height:2.4em;overflow:hidden;">${escapeHtml(loc.description).slice(0, 60)}</div>` : ''}
@@ -200,6 +236,32 @@ function renderSpatialView(body, locations, items, activeRegion, onEdit, onConne
             card.addEventListener('mouseenter', () => card.style.boxShadow = '0 4px 16px rgba(0,0,0,0.5)');
             card.addEventListener('mouseleave', () => card.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)');
             card.addEventListener('dblclick', () => onEdit(loc.id));
+            if (editMode) {
+                card.style.cursor = 'grab';
+                card.addEventListener('mousedown', (e) => {
+                    if (e.button !== 0) return;
+                    e.stopPropagation();
+                    const startX = e.clientX, startY = e.clientY;
+                    const origX = loc.x, origY = loc.y;
+                    card.style.cursor = 'grabbing';
+                    card.style.zIndex = '10';
+                    function onMove(ev) {
+                        loc.x = Math.max(0, Math.min(1, origX + (ev.clientX - startX) / (w * scale)));
+                        loc.y = Math.max(0, Math.min(1, origY + (ev.clientY - startY) / (h * scale)));
+                        card.style.left = loc.x * 100 + '%';
+                        card.style.top = loc.y * 100 + '%';
+                        drawCanvas();
+                    }
+                    function onUp() {
+                        card.style.cursor = 'grab';
+                        card.style.zIndex = '3';
+                        window.removeEventListener('mousemove', onMove);
+                        window.removeEventListener('mouseup', onUp);
+                    }
+                    window.addEventListener('mousemove', onMove);
+                    window.addEventListener('mouseup', onUp);
+                });
+            }
             card.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
                 const menu = document.createElement('div');
@@ -243,7 +305,8 @@ function renderSpatialView(body, locations, items, activeRegion, onEdit, onConne
         e.preventDefault();
         const delta = e.deltaY > 0 ? -0.1 : 0.1;
         scale = Math.max(0.3, Math.min(3, scale + delta));
-        renderCards();
+        cardLayer.style.transform = `scale(${scale})`;
+        cardLayer.style.transformOrigin = '0 0';
         drawCanvas();
     });
     // 移动端触摸
@@ -361,6 +424,7 @@ export async function openMapView(chatId) {
     let activeRegion = '';
     let globalRef = settings.worldRealWorldRef || '';
     let viewMode = 'spatial'; // 'spatial' | 'list'
+    let editMode = false; // v8.8.1 编辑布局模式
 
     const overlay = document.createElement('div');
     overlay.className = 'bb-map-overlay';
@@ -378,6 +442,7 @@ export async function openMapView(chatId) {
     header.innerHTML = `<i class="fa-solid fa-map" style="color:#4fc3f7;"></i>
         <div style="flex:1;"><strong>世界地图</strong><span class="bb-map-count" style="font-size:0.78em;opacity:0.5;margin-left:6px;"></span></div>
         <button class="bb-map-auto-layout menu_button" style="font-size:0.7em;padding:2px 6px;" title="自动布局">📐</button>
+        <button class="bb-map-edit-toggle menu_button" style="font-size:0.7em;padding:2px 8px;${editMode ? 'background:var(--SmartThemeQuoteColor,#4caf50);color:#fff;' : ''}" title="编辑地图布局">${editMode ? '✏️ 编辑中' : '🔒 锁定'}</button>
         <button class="bb-map-view-toggle menu_button" style="font-size:0.72em;padding:2px 8px;">${viewMode === 'spatial' ? '📋 列表' : '🗺 空间'}</button>
         <button class="bb-map-edit-ref menu_button" style="font-size:0.7em;padding:2px 6px;">🌍</button>
         <button class="bb-map-close-btn" style="background:none;border:none;color:inherit;font-size:20px;cursor:pointer;opacity:0.6;line-height:1;padding:0 4px;">&times;</button>`;
@@ -392,6 +457,23 @@ export async function openMapView(chatId) {
     header.querySelector('.bb-map-view-toggle').addEventListener('click', () => {
         viewMode = viewMode === 'spatial' ? 'list' : 'spatial';
         header.querySelector('.bb-map-view-toggle').textContent = viewMode === 'spatial' ? '📋 列表' : '🗺 空间';
+        refresh();
+    });
+    header.querySelector('.bb-map-edit-toggle').addEventListener('click', async () => {
+        if (editMode) {
+            // 退出编辑模式，保存所有位置
+            const locs = Object.values(map.locations || {});
+            const { updateLocation } = await import('./map-store.js');
+            for (const loc of locs) {
+                await updateLocation(chatId, loc.id, { x: loc.x, y: loc.y });
+            }
+            map = await getMap(chatId);
+            showToast('布局已保存', 'success');
+        }
+        editMode = !editMode;
+        header.querySelector('.bb-map-edit-toggle').textContent = editMode ? '✏️ 编辑中' : '🔒 锁定';
+        header.querySelector('.bb-map-edit-toggle').style.background = editMode ? 'var(--SmartThemeQuoteColor,#4caf50)' : '';
+        header.querySelector('.bb-map-edit-toggle').style.color = editMode ? '#fff' : '';
         refresh();
     });
     header.querySelector('.bb-map-auto-layout').addEventListener('click', async () => {
@@ -488,7 +570,7 @@ export async function openMapView(chatId) {
         const locs = Object.values(map.locations || {});
         if (viewMode === 'spatial') {
             body.style.cssText = 'flex:1;overflow:hidden;min-height:0;';
-            renderSpatialView(body, locs, items, activeRegion, handleEdit, handleConnect, handleAddItem, handleDelete);
+            renderSpatialView(body, locs, items, activeRegion, editMode, handleEdit, handleConnect, handleAddItem, handleDelete);
         } else {
             body.style.cssText = 'flex:1;overflow-y:auto;padding:12px 16px;min-height:0;';
             body.innerHTML = buildListHTML(locs, items, activeRegion);

@@ -248,15 +248,27 @@ export async function openClueBoard(chatId) {
     header.className = 'bb-clue-header';
     header.style.cssText = 'display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--SmartThemeBorderColor,#45475a);flex-shrink:0;';
 
+    let viewMode = 'list'; // v8.8.1 'list' | 'spatial'
     header.innerHTML = `
         <i class="fa-solid fa-magnifying-glass" style="color:#ff9800;"></i>
         <div style="flex:1;">
             <strong>线索板</strong>
             <span class="bb-clue-count" style="font-size:0.78em;opacity:0.5;margin-left:6px;">${board.nodes.length} 节点 · ${board.connections.length} 连线</span>
         </div>
+        <button class="bb-clue-view-btn menu_button" style="font-size:0.72em;padding:2px 8px;" title="切换视图">🗺 空间</button>
         <button class="bb-clue-close-btn" style="background:none;border:none;color:inherit;font-size:22px;cursor:pointer;opacity:0.6;line-height:1;padding:0 4px;">&times;</button>
     `;
     header.querySelector('.bb-clue-close-btn').addEventListener('click', () => overlay.remove());
+    header.querySelector('.bb-clue-view-btn').addEventListener('click', () => {
+        viewMode = viewMode === 'list' ? 'spatial' : 'list';
+        header.querySelector('.bb-clue-view-btn').textContent = viewMode === 'list' ? '🗺 空间' : '📋 列表';
+        const newBody = panel.querySelector('div[style*="flex:1"]');
+        if (newBody) {
+            const freshBoard = body._clueBoard || board;
+            if (viewMode === 'spatial') renderClueBoardSpatial(newBody, freshBoard);
+            else refreshClueBoard(newBody, freshBoard, chatId, overlay, panel);
+        }
+    });
     panel.appendChild(header);
 
     // ── 主体 ──
@@ -349,6 +361,99 @@ function showToast(msg, type = 'info') {
 // ═══════════════════════════════════════════════════════════
 //  SVG 图形视图
 // ═══════════════════════════════════════════════════════════
+
+// v8.8.1 线索板空间视图
+function renderClueBoardSpatial(body, board) {
+    const nodes = board.nodes || [];
+    const conns = board.connections || [];
+    const nodeMap = {}; for (const n of nodes) nodeMap[n.id] = n;
+
+    body.innerHTML = '';
+    body.style.cssText = 'position:relative;overflow:hidden;min-height:350px;flex:1;';
+
+    const refColors = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784' };
+    const typeColors = { causal: '#ff9800', hint: '#2196f3', contradicts: '#f44336', related: '#9e9e9e', speculation: '#ce93d8' };
+
+    // 给无坐标的节点分配随机位置
+    for (const n of nodes) {
+        if (n._x == null) n._x = 0.15 + Math.random() * 0.7;
+        if (n._y == null) n._y = 0.1 + Math.random() * 0.8;
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.style.cssText = 'position:absolute;inset:0;z-index:1;pointer-events:none;';
+    body.appendChild(canvas);
+
+    const cardLayer = document.createElement('div');
+    cardLayer.style.cssText = 'position:absolute;inset:0;z-index:2;pointer-events:none;';
+    body.appendChild(cardLayer);
+
+    let scale = 1, panX = 0, panY = 0, isDragging = false, dragStartX = 0, dragStartY = 0;
+
+    function drawCanvas() {
+        const dpr = window.devicePixelRatio || 1;
+        const w = body.clientWidth, h = Math.max(body.clientHeight, 350);
+        canvas.width = w * dpr; canvas.height = h * dpr;
+        canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+        const ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, w, h);
+
+        for (const conn of conns) {
+            const from = nodeMap[conn.fromNodeId], to = nodeMap[conn.toNodeId];
+            if (!from || !to) continue;
+            const fx = from._x * w * scale + panX + 60 * scale;
+            const fy = from._y * h * scale + panY + 15 * scale;
+            const tx = to._x * w * scale + panX + 60 * scale;
+            const ty = to._y * h * scale + panY + 15 * scale;
+            const tc = typeColors[conn.type] || '#888';
+            ctx.strokeStyle = tc + (conn.confidence === 'low' ? '55' : '88');
+            ctx.lineWidth = conn.confidence === 'high' ? 2 : 1.2;
+            ctx.setLineDash(conn.confidence === 'low' ? [4, 3] : []);
+            const midX = (fx + tx) / 2;
+            ctx.beginPath();
+            ctx.moveTo(fx, fy);
+            ctx.quadraticCurveTo(midX, fy - 10, tx, ty);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+    }
+
+    function renderCards() {
+        cardLayer.innerHTML = '';
+        for (const n of nodes) {
+            const rc = refColors[n.refType] || '#888';
+            const card = document.createElement('div');
+            card.style.cssText = `position:absolute;left:${n._x * 100}%;top:${n._y * 100}%;transform:translate(-50%,-50%) scale(${scale});background:var(--SmartThemeChatTintColor,#1e1e2e);border:2px solid ${rc}88;border-radius:8px;padding:6px 10px;min-width:80px;max-width:140px;pointer-events:auto;cursor:pointer;z-index:3;box-shadow:0 2px 6px rgba(0,0,0,0.3);font-size:0.8em;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;`;
+            card.textContent = n.label || n.id;
+            card.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                const menu = document.createElement('div');
+                menu.style.cssText = 'position:fixed;z-index:99999;background:var(--SmartThemeChatTintColor);border:1px solid var(--SmartThemeBorderColor);border-radius:8px;padding:4px;box-shadow:0 4px 12px rgba(0,0,0,0.4);font-size:0.8em;';
+                menu.style.left = e.clientX + 'px'; menu.style.top = e.clientY + 'px';
+                const editBtn = document.createElement('button');
+                editBtn.className = 'menu_button'; editBtn.textContent = '✏️ 备注'; editBtn.style.cssText = 'display:block;width:100%;text-align:left;margin:1px 0;';
+                editBtn.addEventListener('click', () => { menu.remove();
+                    const note = prompt('编辑备注：', n.note || '');
+                    if (note !== null) { updateClueNode(body._clueChatId, n.id, { note: note.trim() }); }
+                });
+                menu.appendChild(editBtn);
+                document.body.appendChild(menu);
+                setTimeout(() => document.addEventListener('click', function rm() { menu.remove(); document.removeEventListener('click', rm); }), 10);
+            });
+            cardLayer.appendChild(card);
+        }
+    }
+
+    renderCards();
+    setTimeout(drawCanvas, 50);
+    new ResizeObserver(() => drawCanvas()).observe(body);
+
+    body.addEventListener('mousedown', (e) => { if (e.target === body || e.target === canvas) { isDragging = true; dragStartX = e.clientX; dragStartY = e.clientY; } });
+    window.addEventListener('mousemove', (e) => { if (!isDragging) return; panX += e.clientX - dragStartX; panY += e.clientY - dragStartY; dragStartX = e.clientX; dragStartY = e.clientY; drawCanvas(); });
+    window.addEventListener('mouseup', () => { isDragging = false; });
+    body.addEventListener('wheel', (e) => { e.preventDefault(); scale = Math.max(0.3, Math.min(3, scale + (e.deltaY > 0 ? -0.1 : 0.1))); renderCards(); drawCanvas(); });
+}
 
 function renderClueBoardBody(body, board, chatId, overlay, panel) {
     const nodeMap = new Map();

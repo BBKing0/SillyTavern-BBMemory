@@ -733,7 +733,6 @@ function rebindItemActions(overlay, chatId) {
             e.stopPropagation();
             const id = btn.dataset.id;
             const pillar = btn.dataset.pillar;
-            if (pillar === 'map') { showToast('地图地点暂不支持归档，请直接删除', 'warning'); return; }
             await archiveEntry(chatId, pillar, id);
             showToast('已归档', 'success');
             await rerenderManagerList(overlay, chatId);
@@ -1083,7 +1082,8 @@ function buildPillarFormFields_inner(p) {
             <input class="bb-input bb-f-name" placeholder="地点名称" style="width:100%;margin-bottom:8px;" />
             <label style="font-size:0.85em;">描述</label>
             <textarea class="bb-input bb-f-desc" rows="3" placeholder="地点描述" style="width:100%;margin-bottom:8px;resize:vertical;"></textarea>
-            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">区域</label><input class="bb-input bb-f-region" placeholder="如：中原" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">现实参考</label><input class="bb-input bb-f-realref" placeholder="可选" style="width:100%;margin-bottom:8px;" /></div></div>`;
+            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">区域</label><input class="bb-input bb-f-region" placeholder="如：中原" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">父地点</label><select class="bb-input bb-f-parentid" style="width:100%;margin-bottom:8px;"><option value="">(无)</option></select></div></div>
+            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">现实参考</label><input class="bb-input bb-f-realref" placeholder="可选" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"></div></div>`;
         case 'mem': default: return `
             <label style="font-size:0.85em;">标题 <span style="color:#f44336;">*</span></label><input class="bb-input bb-f-title" placeholder="记忆标题（3-8字）" style="width:100%;margin-bottom:8px;" />
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">类型</label><select class="bb-input bb-f-type" style="width:100%;margin-bottom:8px;">${Object.values(MEMORY_TYPES).map(t => `<option value="${t.id}" ${t.id === 'event' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div><div style="flex:1;"><label style="font-size:0.85em;">真值状态</label><select class="bb-input bb-f-truthStatus" style="width:100%;margin-bottom:8px;">${Object.entries(TRUTH_STATUS).map(([k,v]) => `<option value="${k}" ${k === 'true' ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div></div>
@@ -1118,7 +1118,8 @@ function collectFormData(formEl, pillar) {
         };
         case 'map': return {
             name: g('bb-f-name'), description: g('bb-f-desc'),
-            region: g('bb-f-region'), realWorldRef: g('bb-f-realref'),
+            region: g('bb-f-region'), parentId: formEl.querySelector('.bb-f-parentid')?.value || null,
+            realWorldRef: g('bb-f-realref'),
             source: 'manual',
         };
         case 'timeline': {
@@ -1266,6 +1267,18 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
                     setVal('bb-f-desc', prefill.description);
                     setVal('bb-f-region', prefill.region);
                     setVal('bb-f-realref', prefill.realWorldRef);
+                    if (prefill.parentId) {
+                        const sel = formOverlay.querySelector('.bb-f-parentid');
+                        if (sel) sel.value = prefill.parentId;
+                    }
+                    // 动态填充父地点选项
+                    (async () => {
+                        try { const { getLocations } = await import('./map-store.js');
+                            const locs = await getLocations(chatId);
+                            const sel = formOverlay.querySelector('.bb-f-parentid');
+                            if (sel) { sel.innerHTML = '<option value="">(无)</option>'; for (const l of locs) { if (l.id !== prefill.id) sel.innerHTML += `<option value="${l.id}">${l.name}</option>`; } if (prefill.parentId) sel.value = prefill.parentId; }
+                        } catch {}
+                    })();
                     break;
                 case 'mem':
                     setVal('bb-f-title', prefill.title);
@@ -2514,12 +2527,16 @@ async function renderArchiveWarehouse(overlay, chatId) {
             getTimelineThreads(chatId),
         ]);
 
+        // v8.8.1 加载已归档地图地点
+        let archivedMapLocs = [];
+        try { const { getLocations } = await import('./map-store.js'); archivedMapLocs = (await getLocations(chatId)).filter(l => l.archived); } catch {}
         const allArchived = [
             ...npc.filter(e => isArchived(e)).map(e => ({ ...e, _pillar: 'npc' })),
             ...items.filter(e => isArchived(e)).map(e => ({ ...e, _pillar: 'item' })),
             ...timeline.filter(e => isArchived(e)).map(e => ({ ...e, _pillar: 'timeline' })),
             ...memories.filter(e => isArchived(e)).map(e => ({ ...e, _pillar: 'mem' })),
             ...threads.filter(t => t.status === 'archived').map(t => ({ ...t, _pillar: 'thread', title: t.name, summary: t.summary || '' })),
+            ...archivedMapLocs.map(e => ({ ...e, _pillar: 'map', title: e.name, content: e.description, name: e.name })),
         ];
 
         const pillarConfig = {
@@ -2528,6 +2545,7 @@ async function renderArchiveWarehouse(overlay, chatId) {
             timeline: { icon: 'fa-clock', label: '时间线', color: '#ffb74d' },
             thread: { icon: 'fa-timeline', label: '线程', color: '#ce93d8' },
             mem: { icon: 'fa-brain', label: '记忆', color: '#81c784' },
+            map: { icon: 'fa-map', label: '地图', color: '#4fc3f7' },
         };
         const tierLabels = { transient: '瞬时', stable: '稳固', core: '核心', eternal: '永恒' };
 

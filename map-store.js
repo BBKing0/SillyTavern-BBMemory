@@ -67,6 +67,7 @@ export async function addLocation(chatId, data) {
         source: data.source || 'manual',
         sourceExchange: data.sourceExchange || '',
         sourceFloor: typeof data.sourceFloor === 'number' ? data.sourceFloor : -1,
+        archived: data.archived || false,  // v8.8.1
     };
     map.locations[id] = entry;
     await saveMap(chatId, map);
@@ -227,6 +228,30 @@ export async function getMapStats(chatId) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+//  v8.8.1 归档/恢复
+// ═══════════════════════════════════════════════════════════
+
+export async function archiveLocation(chatId, id) {
+    const map = await loadMap(chatId);
+    const loc = map.locations[id];
+    if (!loc) return false;
+    loc.archived = true;
+    loc.updatedAt = Date.now();
+    await saveMap(chatId, map);
+    return true;
+}
+
+export async function restoreLocation(chatId, id) {
+    const map = await loadMap(chatId);
+    const loc = map.locations[id];
+    if (!loc) return false;
+    loc.archived = false;
+    loc.updatedAt = Date.now();
+    await saveMap(chatId, map);
+    return true;
+}
+
 // ═══════════════════════════════════════════════════════════
 //  v8.8.0 自动布局：力导向算法
 // ═══════════════════════════════════════════════════════════

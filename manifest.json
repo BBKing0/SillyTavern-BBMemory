@@ -4,9 +4,9 @@
     "js": "index.js",
     "css": "style.css",
     "author": "BB-Memory Dev",
-    "version": "8.8.0",
+    "version": "8.8.1",
     "homePage": "https://github.com/BBKing0/SillyTavern-BBMemory",
     "auto_update": true,
     "generate_interceptor": "bbMemoryInterceptor",
-    "description": "智能长期记忆扩展 v8.8.0 - 2D空间地图/Canvas连线/跨区域/自动布局"
+    "description": "智能长期记忆扩展 v8.8.1 - 嵌套地图/编辑布局/线索板2D/地图归档"
 }

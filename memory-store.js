@@ -614,6 +614,7 @@ export async function archiveEntry(chatId, type, id) {
         case 'item': return updateItem(chatId, id, { archived: true });
         case 'timeline': return updateTimelineEntry(chatId, id, { archived: true, isActive: false });
         case 'thread': return upsertTimelineThread(chatId, { id, status: 'archived' });
+        case 'map': { const { archiveLocation } = await import('./map-store.js'); return archiveLocation(chatId, id); }
         default: return updateMemory(chatId, id, { archived: true, status: 'archived' });
     }
 }
@@ -630,6 +631,7 @@ export async function restoreEntry(chatId, type, id) {
         case 'item': return updateItem(chatId, id, { archived: false });
         case 'timeline': return updateTimelineEntry(chatId, id, { archived: false, isActive: true, status: 'ongoing' });
         case 'thread': return upsertTimelineThread(chatId, { id, status: 'ongoing' });
+        case 'map': { const { restoreLocation } = await import('./map-store.js'); return restoreLocation(chatId, id); }
         default: return updateMemory(chatId, id, { archived: false, status: 'active' });
     }
 }
