@@ -1,5 +1,5 @@
 /**
- * clue-board.js —— BB-Memory v8.8.3 线索板系统
+ * clue-board.js —— BB-Memory v8.8.4 线索板系统
  *
  * 让用户将四柱条目摆上线索板，手动创建连线（因果/暗示/矛盾/关联/推测）。
  * AI 在生成回复时看到用户的推理，自主决定顺着线索推进或提供反例。
@@ -455,7 +455,7 @@ function renderClueBoardSpatial(body, board, editMode) {
     function createNodeCard(n, screenPos, rc, isParent) {
         const card = document.createElement('div');
         card.dataset.nodeId = n.id;
-        card.style.cssText = `position:absolute;left:${screenPos.x}px;top:${screenPos.y}px;transform:translate(-50%,-50%) scale(${scale});background:var(--SmartThemeChatTintColor,#1e1e2e);border:${isParent ? '2.5px' : '2px'} solid ${rc}${isParent ? 'aa' : '88'};border-radius:${isParent ? '10px' : '8px'};padding:${isParent ? '8px 12px' : '6px 10px'};min-width:${isParent ? '100px' : '80px'};max-width:140px;pointer-events:auto;cursor:pointer;z-index:3;box-shadow:0 2px 6px rgba(0,0,0,0.3);font-size:${isParent ? '0.82em' : '0.8em'};font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;`;
+        card.style.cssText = `position:absolute;left:${screenPos.x}px;top:${screenPos.y}px;transform:translate(-50%,-50%);background:var(--SmartThemeChatTintColor,#1e1e2e);border:${isParent ? '2.5px' : '2px'} solid ${rc}${isParent ? 'aa' : '88'};border-radius:${isParent ? '10px' : '8px'};padding:${isParent ? '8px 12px' : '6px 10px'};min-width:${isParent ? '100px' : '80px'};max-width:140px;pointer-events:auto;cursor:pointer;z-index:3;box-shadow:0 2px 6px rgba(0,0,0,0.3);font-size:${isParent ? '0.82em' : '0.8em'};font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;`;
         card.textContent = (isParent ? '📁 ' : '') + (n.label || n.id);
 
         // 右键菜单
@@ -500,12 +500,12 @@ function renderClueBoardSpatial(body, board, editMode) {
                         }
                     }
                     // 父节点有子节点时需要重建包围盒 → 全量重渲染
-                    if (children[n.id] && children[n.id].length > 0) {
+                    // v8.8.4 被拖节点有父节点时也需重建（父包围盒跟随）
+                    if ((children[n.id] && children[n.id].length > 0) || (n.parentId && nodeMap[n.parentId])) {
                         renderAllCards();
                     } else {
                         const sp = worldToScreen(n);
                         card.style.left = sp.x + 'px'; card.style.top = sp.y + 'px';
-                        // 也更新可能受影响的子节点（如果被拖的是子节点且有父）
                     }
                     drawCanvas();
                 }
@@ -534,7 +534,7 @@ function renderClueBoardSpatial(body, board, editMode) {
             const sp = worldToScreen(n);
             el.style.left = sp.x + 'px';
             el.style.top = sp.y + 'px';
-            el.style.transform = `translate(-50%,-50%) scale(${scale})`;
+            el.style.transform = `translate(-50%,-50%)`;
         }
     }
 
@@ -553,7 +553,7 @@ function renderClueBoardSpatial(body, board, editMode) {
                 const parentPx = worldToScreen(n);
                 const childPx = myChildren.map(c => worldToScreen(c));
                 const allPx = [parentPx, ...childPx];
-                const pad = 54 * scale;
+                const pad = 54;
                 const boxMinX = Math.min(...allPx.map(p => p.x)) - pad;
                 const boxMinY = Math.min(...allPx.map(p => p.y)) - pad;
                 const boxMaxX = Math.max(...allPx.map(p => p.x)) + pad;
@@ -561,12 +561,35 @@ function renderClueBoardSpatial(body, board, editMode) {
 
                 // 包围盒
                 const box = document.createElement('div');
-                box.style.cssText = `position:absolute;left:${boxMinX}px;top:${boxMinY}px;width:${boxMaxX - boxMinX}px;height:${boxMaxY - boxMinY}px;border:2px dashed ${rc}55;border-radius:14px;background:${rc}08;pointer-events:none;z-index:2;`;
+                box.style.cssText = `position:absolute;left:${boxMinX}px;top:${boxMinY}px;width:${boxMaxX - boxMinX}px;height:${boxMaxY - boxMinY}px;border:2px dashed ${rc}55;border-radius:14px;background:${rc}08;pointer-events:${editMode ? 'auto' : 'none'};z-index:2;cursor:${editMode ? 'grab' : 'default'};`;
+                if (editMode) {
+                    box.addEventListener('mousedown', (e) => {
+                        if (e.button !== 0) return;
+                        e.stopPropagation();
+                        const startX = e.clientX, startY = e.clientY;
+                        const origX = n._x, origY = n._y;
+                        const childBackups = (children[n.id] || []).map(c => ({ id: c.id, x: c._x, y: c._y }));
+                        function onMove(ev) {
+                            const { w, h } = getContainerSize();
+                            const dx = (ev.clientX - startX) / (w * scale);
+                            const dy = (ev.clientY - startY) / (h * scale);
+                            n._x = Math.max(0, Math.min(1, origX + dx));
+                            n._y = Math.max(0, Math.min(1, origY + dy));
+                            for (const cb of childBackups) {
+                                const c = nodeMap[cb.id];
+                                if (c) { c._x = Math.max(0, Math.min(1, cb.x + dx)); c._y = Math.max(0, Math.min(1, cb.y + dy)); }
+                            }
+                            renderAllCards(); drawCanvas();
+                        }
+                        function onUp() { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); }
+                        window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp);
+                    });
+                }
                 cardLayer.appendChild(box);
 
                 // 父标签
                 const label = document.createElement('div');
-                label.style.cssText = `position:absolute;left:${boxMinX + 10}px;top:${boxMinY - 10}px;background:var(--SmartThemeChatTintColor,#1e1e2e);padding:1px 8px;border-radius:4px;font-size:${0.65 * scale}em;font-weight:700;color:${rc};pointer-events:none;white-space:nowrap;z-index:3;`;
+                label.style.cssText = `position:absolute;left:${boxMinX + 10}px;top:${boxMinY - 10}px;background:var(--SmartThemeChatTintColor,#1e1e2e);padding:1px 8px;border-radius:4px;font-size:0.65em;font-weight:700;color:${rc};pointer-events:none;white-space:nowrap;z-index:3;`;
                 label.textContent = '📁 ' + (n.label || n.id);
                 cardLayer.appendChild(label);
                 parentLabelPos[n.id] = { x: boxMinX + 10, y: boxMinY - 10 };
@@ -590,13 +613,23 @@ function renderClueBoardSpatial(body, board, editMode) {
 
     renderAllCards();
     setTimeout(drawCanvas, 50);
-    new ResizeObserver(() => { updateCardsPosition(); drawCanvas(); }).observe(body);
+    new ResizeObserver(() => { renderAllCards(); drawCanvas(); }).observe(body);
 
     // 背景空白区域平移
     body.addEventListener('mousedown', (e) => { if (e.target === body || e.target === canvas) { isDragging = true; dragStartX = e.clientX; dragStartY = e.clientY; } });
     window.addEventListener('mousemove', (e) => { if (!isDragging) return; panX += e.clientX - dragStartX; panY += e.clientY - dragStartY; dragStartX = e.clientX; dragStartY = e.clientY; updateCardsPosition(); drawCanvas(); });
     window.addEventListener('mouseup', () => { isDragging = false; });
-    body.addEventListener('wheel', (e) => { e.preventDefault(); scale = Math.max(0.3, Math.min(3, scale + (e.deltaY > 0 ? -0.1 : 0.1))); updateCardsPosition(); drawCanvas(); }, { passive: false });
+    body.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const oldScale = scale;
+        scale = Math.max(0.3, Math.min(3, scale + (e.deltaY > 0 ? -0.1 : 0.1)));
+        // v8.8.4 鼠标位置居中缩放
+        const rect = body.getBoundingClientRect();
+        const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+        panX = mx - (mx - panX) * scale / oldScale;
+        panY = my - (my - panY) * scale / oldScale;
+        updateCardsPosition(); drawCanvas();
+    }, { passive: false });
 }
 
 function renderClueBoardBody(body, board, chatId, overlay, panel) {
@@ -702,8 +735,8 @@ function renderClueBoardBody(body, board, chatId, overlay, panel) {
         card.innerHTML = `
             <div style="display:flex;align-items:center;gap:8px;padding:${isChild ? '6px 10px' : '10px 12px'};">
                 ${isChild ? '<span style="font-size:0.65em;opacity:0.3;flex-shrink:0;">└─</span>' : ''}
-                ${isChild ? '' : `<span style="background:${rc}22;border-radius:3px;padding:1px 5px;font-size:0.65em;color:${rc};flex-shrink:0;" title="来源: ${rl}">${rl}</span>`}
-                <span class="bb-clue-node-label" data-node-id="${node.id}" style="flex:1;font-size:${isChild ? '0.8em' : '0.9em'};font-weight:${isChild ? '500' : '600'};cursor:text;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="点击编辑名称">${escapeHtml(node.label || node.id)}</span>
+                <span style="background:${rc}22;border-radius:3px;padding:1px 5px;font-size:${isChild ? '0.58em' : '0.65em'};color:${rc};flex-shrink:0;" title="来源: ${rl}">${rl}</span>
+                <span class="bb-clue-node-label" data-node-id="${node.id}" style="flex:1;font-size:${isChild ? '0.85em' : '0.9em'};font-weight:600;cursor:text;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="点击编辑名称">${escapeHtml(node.label || node.id)}</span>
                 ${(inN > 0 || outN > 0) ? `<span style="font-size:0.65em;opacity:0.35;flex-shrink:0;">${inN > 0 ? '←'+inN : ''}${inN>0&&outN>0?' ':''}${outN > 0 ? outN+'→' : ''}</span>` : ''}
                 ${hasChain ? `<span style="font-size:0.62em;opacity:0.25;flex-shrink:0;" title="含推理链">🔗</span>` : ''}
                 <button class="bb-clue-node-menu-btn menu_button" data-node-id="${node.id}" style="font-size:0.7em;padding:1px 4px;opacity:0.3;flex-shrink:0;" title="更多操作">···</button>

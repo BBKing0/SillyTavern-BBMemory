@@ -1,5 +1,5 @@
 /**
- * map-view.js —— BB-Memory v8.8.3 地图视图
+ * map-view.js —— BB-Memory v8.8.4 地图视图
  * 双模式：2D空间视图(Canvas+CSS) + 列表视图
  * 跨区域标签页、缩放拖动、物品选择器
  */
@@ -42,12 +42,31 @@ function buildListHTML(locations, items, activeRegion) {
     if (filtered.length === 0) return '<div style="text-align:center;padding:40px;opacity:0.5;">该区域暂无地点</div>';
 
     const locMap = {}; for (const l of locations) locMap[l.id] = l;
+    // v8.8.4 父子关系
+    const childMap = {}; for (const l of filtered) { const pid = l.parentId || ''; if (!childMap[pid]) childMap[pid] = []; childMap[pid].push(l); }
     const topLevel = filtered.filter(l => !l.parentId || !locMap[l.parentId]);
     const groups = new Map();
     for (const loc of topLevel) {
         const r = loc.region || '(未分区)';
         if (!groups.has(r)) groups.set(r, []);
         groups.get(r).push(loc);
+    }
+
+    function renderLocCard(loc, rc, isChild) {
+        const locItems = items.filter(i => !i.archived && i.location === loc.name);
+        const childPadding = isChild ? 'margin-left:28px;' : '';
+        const childBorder = isChild ? `border:2px dashed ${rc}33;` : `border:2px solid ${rc}44;`;
+        return `<div class="bb-map-node-box" data-loc-id="${loc.id}" style="${childPadding}background:var(--SmartThemeBlurTintColor,rgba(255,255,255,0.03));${childBorder}border-radius:8px;padding:${isChild ? '6px 10px' : '8px 12px'};min-width:${isChild ? '100px' : '130px'};max-width:200px;flex-shrink:0;">
+            <div style="font-weight:${isChild ? '500' : '700'};font-size:${isChild ? '0.72em' : '0.82em'};">
+                ${isChild ? '<span style="font-size:0.7em;opacity:0.3;">└─</span> ' : ''}${escapeHtml(loc.name)}</div>
+            ${loc.description ? `<div style="font-size:0.68em;opacity:0.5;line-height:1.3;">${escapeHtml(loc.description).slice(0, 50)}</div>` : ''}
+            ${locItems.length > 0 ? `<div style="margin-top:3px;font-size:0.62em;opacity:0.4;">📦${locItems.length}件</div>` : ''}
+            <div class="bb-map-node-actions" style="margin-top:4px;font-size:0.55em;opacity:0;display:flex;gap:2px;">
+                <button class="bb-map-box-edit menu_button" data-loc-id="${loc.id}" style="font-size:inherit;padding:1px 4px;">✏️</button>
+                <button class="bb-map-box-connect menu_button" data-loc-id="${loc.id}" style="font-size:inherit;padding:1px 4px;">🔗</button>
+                <button class="bb-map-box-additem menu_button" data-loc-id="${loc.id}" data-loc-name="${escapeHtml(loc.name)}" style="font-size:inherit;padding:1px 4px;">📦</button>
+                <button class="bb-map-box-del menu_button" data-loc-id="${loc.id}" style="font-size:inherit;padding:1px 4px;color:#f44336;">🗑</button>
+            </div></div>`;
     }
 
     let html = '';
@@ -58,17 +77,11 @@ function buildListHTML(locations, items, activeRegion) {
             <div style="padding:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;">`;
 
         for (const loc of locs) {
-            const locItems = items.filter(i => !i.archived && i.location === loc.name);
-            html += `<div class="bb-map-node-box" data-loc-id="${loc.id}" style="background:var(--SmartThemeBlurTintColor,rgba(255,255,255,0.03));border:2px solid ${rc}44;border-radius:8px;padding:8px 12px;min-width:130px;max-width:200px;flex-shrink:0;">
-                <div style="font-weight:700;font-size:0.82em;">${escapeHtml(loc.name)}</div>
-                ${loc.description ? `<div style="font-size:0.68em;opacity:0.5;line-height:1.3;">${escapeHtml(loc.description).slice(0, 50)}</div>` : ''}
-                ${locItems.length > 0 ? `<div style="margin-top:3px;font-size:0.62em;opacity:0.4;">📦${locItems.length}件</div>` : ''}
-                <div class="bb-map-node-actions" style="margin-top:4px;font-size:0.55em;opacity:0;display:flex;gap:2px;">
-                    <button class="bb-map-box-edit menu_button" data-loc-id="${loc.id}" style="font-size:inherit;padding:1px 4px;">✏️</button>
-                    <button class="bb-map-box-connect menu_button" data-loc-id="${loc.id}" style="font-size:inherit;padding:1px 4px;">🔗</button>
-                    <button class="bb-map-box-additem menu_button" data-loc-id="${loc.id}" data-loc-name="${escapeHtml(loc.name)}" style="font-size:inherit;padding:1px 4px;">📦</button>
-                    <button class="bb-map-box-del menu_button" data-loc-id="${loc.id}" style="font-size:inherit;padding:1px 4px;color:#f44336;">🗑</button>
-                </div></div>`;
+            html += renderLocCard(loc, rc, false);
+            // v8.8.4 子地点
+            for (const child of (childMap[loc.id] || [])) {
+                html += renderLocCard(child, getRegionColor(child.region), true);
+            }
             // 连线箭头
             for (const loc of locs) {
                 for (const edge of (loc.edges || [])) {
@@ -145,22 +158,25 @@ function renderSpatialView(body, locations, items, activeRegion, editMode, onEdi
         for (const [r, rLocs] of regions) {
             if (!r) continue;
             const allPx = rLocs.map(l => worldToScreen(l));
-            const pad = 48 * scale;
+            const pad = 48;
             const minX = Math.min(...allPx.map(p => p.x)) - pad;
             const minY = Math.min(...allPx.map(p => p.y)) - pad;
             const maxX = Math.max(...allPx.map(p => p.x)) + pad;
             const maxY = Math.max(...allPx.map(p => p.y)) + pad;
             const rc = getRegionColor(r);
-            ctx.fillStyle = rc + '08';
-            ctx.strokeStyle = rc + '22';
+            ctx.fillStyle = rc + '06';
+            ctx.strokeStyle = rc + '44';
             ctx.lineWidth = 1;
+            ctx.setLineDash([8, 4]);
             ctx.beginPath();
             ctx.roundRect(minX, minY, maxX - minX, maxY - minY, 12);
             ctx.fill();
             ctx.stroke();
-            ctx.fillStyle = rc + '66';
+            ctx.setLineDash([]);
+            ctx.fillStyle = rc + '88';
             ctx.font = '11px sans-serif';
-            ctx.fillText(r, minX + 8, minY - 6);
+            const labelW = ctx.measureText(r).width;
+            ctx.fillText(r, (minX + maxX) / 2 - labelW / 2, minY - 6);
         }
 
         // 连线
@@ -210,7 +226,7 @@ function renderSpatialView(body, locations, items, activeRegion, editMode, onEdi
                 const pp = worldToScreen(loc);
                 const childPx = subLocs.map(s => worldToScreen(s));
                 const allPx = [pp, ...childPx];
-                const pad = 48 * scale;
+                const pad = 48;
                 const minX = Math.min(...allPx.map(p => p.x)) - pad;
                 const minY = Math.min(...allPx.map(p => p.y)) - pad;
                 const maxX = Math.max(...allPx.map(p => p.x)) + pad;
@@ -275,9 +291,14 @@ function renderSpatialView(body, locations, items, activeRegion, editMode, onEdi
                     const { w, h } = getContainerSize();
                     loc.x = Math.max(0, Math.min(1, origX + (ev.clientX - startX) / (w * scale)));
                     loc.y = Math.max(0, Math.min(1, origY + (ev.clientY - startY) / (h * scale)));
-                    const sp = worldToScreen(loc);
-                    card.style.left = sp.x + 'px';
-                    card.style.top = sp.y + 'px';
+                    // v8.8.4 有父节点或有子节点时重建包围盒
+                    if ((children[loc.id] && children[loc.id].length > 0) || (loc.parentId && locMap[loc.parentId])) {
+                        renderAllCards();
+                    } else {
+                        const sp = worldToScreen(loc);
+                        card.style.left = sp.x + 'px';
+                        card.style.top = sp.y + 'px';
+                    }
                     drawCanvas();
                 }
                 function onUp() {
@@ -344,8 +365,14 @@ function renderSpatialView(body, locations, items, activeRegion, editMode, onEdi
     window.addEventListener('mouseup', () => { isDragging = false; });
     body.addEventListener('wheel', (e) => {
         e.preventDefault();
+        const oldScale = scale;
         const delta = e.deltaY > 0 ? -0.1 : 0.1;
         scale = Math.max(0.3, Math.min(3, scale + delta));
+        // v8.8.4 鼠标位置居中缩放
+        const rect = body.getBoundingClientRect();
+        const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+        panX = mx - (mx - panX) * scale / oldScale;
+        panY = my - (my - panY) * scale / oldScale;
         updateCardsPosition();
         drawCanvas();
     }, { passive: false });
