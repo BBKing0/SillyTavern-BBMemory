@@ -38,7 +38,7 @@ function buildListHTML(locations, items, activeRegion) {
     if (locations.length === 0) {
         return `<div style="text-align:center;padding:48px 20px;opacity:0.5;"><i class="fa-solid fa-map" style="font-size:2.5em;display:block;margin-bottom:16px;opacity:0.2;"></i><div style="font-size:0.95em;">还没有地图地点</div></div>`;
     }
-    const filtered = activeRegion ? locations.filter(l => l.region === activeRegion) : locations;
+    const filtered = (activeRegion ? locations.filter(l => l.region === activeRegion) : locations).filter(l => !l.archived);
     if (filtered.length === 0) return '<div style="text-align:center;padding:40px;opacity:0.5;">该区域暂无地点</div>';
 
     const locMap = {}; for (const l of locations) locMap[l.id] = l;
@@ -103,7 +103,7 @@ function renderSpatialView(body, locations, items, activeRegion, editMode, onEdi
 
     // Canvas连线层
     const canvas = document.createElement('canvas');
-    canvas.style.cssText = 'position:absolute;inset:0;z-index:1;pointer-events:none;';
+    canvas.style.cssText = 'position:absolute;inset:0;z-index:4;pointer-events:none;';
     body.appendChild(canvas);
 
     // 地点卡片层
@@ -153,38 +153,6 @@ function renderSpatialView(body, locations, items, activeRegion, editMode, onEdi
             ctx.fillText(r, minX - 10, minY - 6);
         }
 
-        // v8.8.1 父地点包裹矩形（增强视觉效果）
-        const drawnParents = new Set();
-        for (const loc of filtered) {
-            const subLocs = (children[loc.id] || []).filter(l => !l.archived);
-            if (subLocs.length === 0 || drawnParents.has(loc.id)) continue;
-            drawnParents.add(loc.id);
-            const rc = getRegionColor(loc.region);
-            const padX = 40 * scale, padY = 35 * scale;
-            const minCX = Math.min(loc.x, ...subLocs.map(l => l.x)) * w * scale + panX;
-            const minCY = Math.min(loc.y, ...subLocs.map(l => l.y)) * h * scale + panY;
-            const maxCX = Math.max(loc.x, ...subLocs.map(l => l.x)) * w * scale + panX + 120 * scale;
-            const maxCY = Math.max(loc.y, ...subLocs.map(l => l.y)) * h * scale + panY + 80 * scale;
-            const rx = minCX - padX, ry = minCY - padY, rw = maxCX - minCX + padX * 2, rh = maxCY - minCY + padY * 2;
-            // 半透明填充
-            ctx.fillStyle = rc + '10';
-            ctx.strokeStyle = rc + '44';
-            ctx.lineWidth = 1.5;
-            ctx.setLineDash([6, 3]);
-            ctx.beginPath();
-            ctx.roundRect(rx, ry, rw, rh, 10);
-            ctx.fill();
-            ctx.stroke();
-            ctx.setLineDash([]);
-            // 父地点标签（左上角）
-            const labelW = ctx.measureText(loc.name).width + 12;
-            ctx.fillStyle = rc + '22';
-            ctx.fillRect(rx + 8, ry - 12, labelW, 18);
-            ctx.fillStyle = rc + '99';
-            ctx.font = 'bold 10px sans-serif';
-            ctx.fillText('📁 ' + loc.name, rx + 12, ry + 2);
-        }
-
         // 连线
         for (const loc of filtered) {
             const fromX = loc.x * w * scale + panX + 60 * scale;
@@ -223,45 +191,97 @@ function renderSpatialView(body, locations, items, activeRegion, editMode, onEdi
         cardLayer.innerHTML = '';
         cardLayer.style.transform = `scale(${scale})`;
         cardLayer.style.transformOrigin = '0 0';
+        const rendered = new Set();
+
         for (const loc of filtered) {
+            if (rendered.has(loc.id)) continue;
+            const subLocs = (children[loc.id] || []).filter(l => !l.archived);
             const locItems = items.filter(i => !i.archived && i.location === loc.name);
-            const card = document.createElement('div');
             const rc = getRegionColor(loc.region);
+
+            if (subLocs.length > 0) {
+                // 父地点：大容器包裹子节点
+                rendered.add(loc.id);
+                const minX = Math.min(loc.x, ...subLocs.map(l => l.x));
+                const minY = Math.min(loc.y, ...subLocs.map(l => l.y));
+                const maxX = Math.max(loc.x, ...subLocs.map(l => l.x));
+                const maxY = Math.max(loc.y, ...subLocs.map(l => l.y));
+
+                const container = document.createElement('div');
+                container.style.cssText = `position:absolute;left:${minX * 100}%;top:${minY * 100}%;width:${(maxX - minX) * 100 + 16}%;height:${(maxY - minY) * 100 + 10}%;background:${rc}08;border:2px solid ${rc}44;border-radius:12px;pointer-events:none;z-index:2;`;
+                // 标签
+                const label = document.createElement('div');
+                label.style.cssText = `position:absolute;top:-10px;left:12px;background:var(--SmartThemeChatTintColor,#1e1e2e);padding:1px 8px;border-radius:3px;font-size:0.65em;font-weight:700;color:${rc};white-space:nowrap;`;
+                label.textContent = '📁 ' + loc.name;
+                container.appendChild(label);
+                cardLayer.appendChild(container);
+
+                // 父地点卡片（在容器内）
+                const pCard = makeCard(loc, locItems, rc, loc.x, loc.y, true);
+                if (editMode) makeDraggable(pCard, loc);
+                cardLayer.appendChild(pCard);
+                rendered.add(loc.id);
+
+                // 子地点卡片（在容器内，位置相对于父容器）
+                for (const sub of subLocs) {
+                    rendered.add(sub.id);
+                    const subItems = items.filter(i => !i.archived && i.location === sub.name);
+                    const src = getRegionColor(sub.region);
+                    const relX = (sub.x - minX) / (maxX - minX + 0.01);
+                    const relY = (sub.y - minY) / (maxY - minY + 0.01);
+                    const sCard = makeCard(sub, subItems, src, relX, relY, false);
+                    if (editMode) makeDraggable(sCard, sub);
+                    cardLayer.appendChild(sCard);
+                }
+            } else if (!loc.parentId || !locMap[loc.parentId]) {
+                // 无父的普通节点
+                const card = makeCard(loc, locItems, rc, loc.x, loc.y, false);
+                if (editMode) makeDraggable(card, loc);
+                cardLayer.appendChild(card);
+                rendered.add(loc.id);
+            }
+            // 有 parentId 的节点在上面子地点循环中已处理
+        }
+
+        function makeCard(loc, locItems, rc, posX, posY, isParent) {
+            const card = document.createElement('div');
             card.className = 'bb-map-spatial-card';
-            card.style.cssText = `position:absolute;left:${loc.x * 100}%;top:${loc.y * 100}%;transform:translate(-50%,-50%);background:var(--SmartThemeChatTintColor,#1e1e2e);border:2px solid ${rc}66;border-radius:10px;padding:8px 12px;min-width:100px;max-width:160px;pointer-events:auto;cursor:pointer;z-index:3;box-shadow:0 2px 8px rgba(0,0,0,0.3);transition:box-shadow 0.15s;`;
+            card.style.cssText = `position:absolute;left:${posX * 100}%;top:${posY * 100}%;transform:translate(-50%,-50%);background:var(--SmartThemeChatTintColor,#1e1e2e);border:${isParent ? '2.5px' : '2px'} solid ${rc}${isParent ? '88' : '66'};border-radius:${isParent ? '10px' : '8px'};padding:${isParent ? '10px 14px' : '6px 10px'};min-width:${isParent ? '110px' : '80px'};max-width:${isParent ? '180px' : '140px'};pointer-events:auto;cursor:pointer;z-index:3;box-shadow:0 2px 8px rgba(0,0,0,0.3);font-size:${isParent ? '0.8em' : '0.7em'};`;
             card.innerHTML = `
-                <div style="font-weight:700;font-size:0.75em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(loc.name)}</div>
-                ${loc.description ? `<div style="font-size:0.6em;opacity:0.5;line-height:1.2;max-height:2.4em;overflow:hidden;">${escapeHtml(loc.description).slice(0, 60)}</div>` : ''}
-                ${locItems.length > 0 ? `<div style="font-size:0.55em;opacity:0.35;">📦${locItems.length}件</div>` : ''}`;
+                <div style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:${isParent ? '0.9em' : '0.85em'};">${isParent ? '📁 ' : ''}${escapeHtml(loc.name)}</div>
+                ${loc.description ? `<div style="font-size:${isParent ? '0.7em' : '0.65em'};opacity:0.5;line-height:1.2;max-height:2.4em;overflow:hidden;">${escapeHtml(loc.description).slice(0, isParent ? 70 : 40)}</div>` : ''}
+                ${locItems.length > 0 ? `<div style="font-size:0.6em;opacity:0.35;">📦${locItems.length}件</div>` : ''}`;
             card.addEventListener('mouseenter', () => card.style.boxShadow = '0 4px 16px rgba(0,0,0,0.5)');
             card.addEventListener('mouseleave', () => card.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)');
             card.addEventListener('dblclick', () => onEdit(loc.id));
-            if (editMode) {
-                card.style.cursor = 'grab';
-                card.addEventListener('mousedown', (e) => {
-                    if (e.button !== 0) return;
-                    e.stopPropagation();
-                    const startX = e.clientX, startY = e.clientY;
-                    const origX = loc.x, origY = loc.y;
-                    card.style.cursor = 'grabbing';
-                    card.style.zIndex = '10';
-                    function onMove(ev) {
-                        loc.x = Math.max(0, Math.min(1, origX + (ev.clientX - startX) / (w * scale)));
-                        loc.y = Math.max(0, Math.min(1, origY + (ev.clientY - startY) / (h * scale)));
-                        card.style.left = loc.x * 100 + '%';
-                        card.style.top = loc.y * 100 + '%';
-                        drawCanvas();
-                    }
-                    function onUp() {
-                        card.style.cursor = 'grab';
-                        card.style.zIndex = '3';
-                        window.removeEventListener('mousemove', onMove);
-                        window.removeEventListener('mouseup', onUp);
-                    }
-                    window.addEventListener('mousemove', onMove);
-                    window.addEventListener('mouseup', onUp);
-                });
-            }
+            bindCardMenu(card, loc);
+            return card;
+        }
+
+        function makeDraggable(card, loc) {
+            card.style.cursor = 'grab';
+            card.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) return;
+                e.stopPropagation();
+                const startX = e.clientX, startY = e.clientY;
+                const origX = loc.x, origY = loc.y;
+                card.style.cursor = 'grabbing'; card.style.zIndex = '10';
+                function onMove(ev) {
+                    loc.x = Math.max(0, Math.min(1, origX + (ev.clientX - startX) / (body.clientWidth * scale)));
+                    loc.y = Math.max(0, Math.min(1, origY + (ev.clientY - startY) / (body.clientHeight * scale)));
+                    card.style.left = loc.x * 100 + '%';
+                    card.style.top = loc.y * 100 + '%';
+                    drawCanvas();
+                }
+                function onUp() {
+                    card.style.cursor = 'grab'; card.style.zIndex = '3';
+                    window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp);
+                }
+                window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp);
+            });
+        }
+
+        function bindCardMenu(card, loc) {
             card.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
                 const menu = document.createElement('div');

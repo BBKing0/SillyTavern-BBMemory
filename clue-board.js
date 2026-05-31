@@ -1,5 +1,5 @@
 /**
- * clue-board.js —— BB-Memory v8.4.5 线索板系统
+ * clue-board.js —— BB-Memory v8.8.2 线索板系统
  *
  * 让用户将四柱条目摆上线索板，手动创建连线（因果/暗示/矛盾/关联/推测）。
  * AI 在生成回复时看到用户的推理，自主决定顺着线索推进或提供反例。
@@ -58,6 +58,7 @@ export async function addClueNode(chatId, data) {
         refId: data.refId || '',
         label: data.label || '',
         note: data.note || '',
+        parentId: data.parentId || null, // v8.8.2
         createdAt: Date.now(),
     };
     board.nodes.push(node);
@@ -69,6 +70,10 @@ export async function removeClueNode(chatId, nodeId) {
     const board = await loadBoard(chatId);
     const before = board.nodes.length;
     board.nodes = board.nodes.filter(n => n.id !== nodeId);
+    // v8.8.2 孤儿子节点恢复为根节点
+    for (const n of board.nodes) {
+        if (n.parentId === nodeId) n.parentId = null;
+    }
     // 同时删除所有关联连线
     board.connections = board.connections.filter(
         c => c.fromNodeId !== nodeId && c.toNodeId !== nodeId
@@ -86,6 +91,7 @@ export async function updateClueNode(chatId, nodeId, patch) {
     if (!node) return null;
     if (patch.label !== undefined) node.label = patch.label;
     if (patch.note !== undefined) node.note = patch.note;
+    if (patch.parentId !== undefined) node.parentId = patch.parentId; // v8.8.2
     await saveBoard(chatId, board);
     return node;
 }
@@ -249,12 +255,14 @@ export async function openClueBoard(chatId) {
     header.style.cssText = 'display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--SmartThemeBorderColor,#45475a);flex-shrink:0;';
 
     let viewMode = 'list'; // v8.8.1 'list' | 'spatial'
+    let editMode = false;  // v8.8.2
     header.innerHTML = `
         <i class="fa-solid fa-magnifying-glass" style="color:#ff9800;"></i>
         <div style="flex:1;">
             <strong>线索板</strong>
             <span class="bb-clue-count" style="font-size:0.78em;opacity:0.5;margin-left:6px;">${board.nodes.length} 节点 · ${board.connections.length} 连线</span>
         </div>
+        <button class="bb-clue-edit-btn menu_button" style="font-size:0.7em;padding:2px 6px;${editMode ? 'background:var(--SmartThemeQuoteColor,#4caf50);color:#fff;' : ''}" title="编辑布局">${editMode ? '✏️' : '🔒'}</button>
         <button class="bb-clue-view-btn menu_button" style="font-size:0.72em;padding:2px 8px;" title="切换视图">🗺 空间</button>
         <button class="bb-clue-close-btn" style="background:none;border:none;color:inherit;font-size:22px;cursor:pointer;opacity:0.6;line-height:1;padding:0 4px;">&times;</button>
     `;
@@ -265,8 +273,19 @@ export async function openClueBoard(chatId) {
         const newBody = panel.querySelector('div[style*="flex:1"]');
         if (newBody) {
             const freshBoard = body._clueBoard || board;
-            if (viewMode === 'spatial') renderClueBoardSpatial(newBody, freshBoard);
+            if (viewMode === 'spatial') renderClueBoardSpatial(newBody, freshBoard, editMode);
             else refreshClueBoard(newBody, freshBoard, chatId, overlay, panel);
+        }
+    });
+    header.querySelector('.bb-clue-edit-btn').addEventListener('click', () => {
+        editMode = !editMode;
+        header.querySelector('.bb-clue-edit-btn').textContent = editMode ? '✏️' : '🔒';
+        header.querySelector('.bb-clue-edit-btn').style.background = editMode ? 'var(--SmartThemeQuoteColor,#4caf50)' : '';
+        header.querySelector('.bb-clue-edit-btn').style.color = editMode ? '#fff' : '';
+        const newBody = panel.querySelector('div[style*="flex:1"]');
+        if (newBody && viewMode === 'spatial') {
+            const freshBoard = body._clueBoard || board;
+            renderClueBoardSpatial(newBody, freshBoard, editMode);
         }
     });
     panel.appendChild(header);
@@ -296,7 +315,7 @@ export async function openClueBoard(chatId) {
     document.body.appendChild(overlay);
 
     // ── 渲染内容 ──
-    renderClueBoardBody(body, board, chatId, overlay);
+    renderClueBoardBody(body, board, chatId, overlay, panel);
 
     // ── 底部按钮事件 ──
     footer.querySelector('#bb_clue_add_node').addEventListener('click', () => {
@@ -362,8 +381,8 @@ function showToast(msg, type = 'info') {
 //  SVG 图形视图
 // ═══════════════════════════════════════════════════════════
 
-// v8.8.1 线索板空间视图
-function renderClueBoardSpatial(body, board) {
+// v8.8.2 线索板空间视图 —— 统一像素坐标系
+function renderClueBoardSpatial(body, board, editMode) {
     const nodes = board.nodes || [];
     const conns = board.connections || [];
     const nodeMap = {}; for (const n of nodes) nodeMap[n.id] = n;
@@ -380,6 +399,9 @@ function renderClueBoardSpatial(body, board) {
         if (n._y == null) n._y = 0.1 + Math.random() * 0.8;
     }
 
+    // 父子关系映射
+    const children = {}; for (const n of nodes) { const pid = n.parentId || ''; if (!children[pid]) children[pid] = []; children[pid].push(n); }
+
     const canvas = document.createElement('canvas');
     canvas.style.cssText = 'position:absolute;inset:0;z-index:1;pointer-events:none;';
     body.appendChild(canvas);
@@ -390,9 +412,18 @@ function renderClueBoardSpatial(body, board) {
 
     let scale = 1, panX = 0, panY = 0, isDragging = false, dragStartX = 0, dragStartY = 0;
 
+    function getContainerSize() {
+        return { w: body.clientWidth, h: Math.max(body.clientHeight, 350) };
+    }
+
+    function worldToScreen(node) {
+        const { w, h } = getContainerSize();
+        return { x: node._x * w * scale + panX, y: node._y * h * scale + panY };
+    }
+
     function drawCanvas() {
         const dpr = window.devicePixelRatio || 1;
-        const w = body.clientWidth, h = Math.max(body.clientHeight, 350);
+        const { w, h } = getContainerSize();
         canvas.width = w * dpr; canvas.height = h * dpr;
         canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
         const ctx = canvas.getContext('2d');
@@ -402,57 +433,164 @@ function renderClueBoardSpatial(body, board) {
         for (const conn of conns) {
             const from = nodeMap[conn.fromNodeId], to = nodeMap[conn.toNodeId];
             if (!from || !to) continue;
-            const fx = from._x * w * scale + panX + 60 * scale;
-            const fy = from._y * h * scale + panY + 15 * scale;
-            const tx = to._x * w * scale + panX + 60 * scale;
-            const ty = to._y * h * scale + panY + 15 * scale;
+            const fp = worldToScreen(from), tp = worldToScreen(to);
             const tc = typeColors[conn.type] || '#888';
             ctx.strokeStyle = tc + (conn.confidence === 'low' ? '55' : '88');
             ctx.lineWidth = conn.confidence === 'high' ? 2 : 1.2;
             ctx.setLineDash(conn.confidence === 'low' ? [4, 3] : []);
-            const midX = (fx + tx) / 2;
+            const midX = (fp.x + tp.x) / 2;
             ctx.beginPath();
-            ctx.moveTo(fx, fy);
-            ctx.quadraticCurveTo(midX, fy - 10, tx, ty);
+            ctx.moveTo(fp.x, fp.y);
+            ctx.quadraticCurveTo(midX, fp.y - 10, tp.x, tp.y);
             ctx.stroke();
             ctx.setLineDash([]);
         }
     }
 
-    function renderCards() {
-        cardLayer.innerHTML = '';
-        for (const n of nodes) {
-            const rc = refColors[n.refType] || '#888';
-            const card = document.createElement('div');
-            card.style.cssText = `position:absolute;left:${n._x * 100}%;top:${n._y * 100}%;transform:translate(-50%,-50%) scale(${scale});background:var(--SmartThemeChatTintColor,#1e1e2e);border:2px solid ${rc}88;border-radius:8px;padding:6px 10px;min-width:80px;max-width:140px;pointer-events:auto;cursor:pointer;z-index:3;box-shadow:0 2px 6px rgba(0,0,0,0.3);font-size:0.8em;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;`;
-            card.textContent = n.label || n.id;
-            card.addEventListener('contextmenu', (e) => {
-                e.preventDefault();
-                const menu = document.createElement('div');
-                menu.style.cssText = 'position:fixed;z-index:99999;background:var(--SmartThemeChatTintColor);border:1px solid var(--SmartThemeBorderColor);border-radius:8px;padding:4px;box-shadow:0 4px 12px rgba(0,0,0,0.4);font-size:0.8em;';
-                menu.style.left = e.clientX + 'px'; menu.style.top = e.clientY + 'px';
-                const editBtn = document.createElement('button');
-                editBtn.className = 'menu_button'; editBtn.textContent = '✏️ 备注'; editBtn.style.cssText = 'display:block;width:100%;text-align:left;margin:1px 0;';
-                editBtn.addEventListener('click', () => { menu.remove();
-                    const note = prompt('编辑备注：', n.note || '');
-                    if (note !== null) { updateClueNode(body._clueChatId, n.id, { note: note.trim() }); }
-                });
-                menu.appendChild(editBtn);
-                document.body.appendChild(menu);
-                setTimeout(() => document.addEventListener('click', function rm() { menu.remove(); document.removeEventListener('click', rm); }), 10);
+    function createNodeCard(n, screenPos, rc, isParent) {
+        const card = document.createElement('div');
+        card.dataset.nodeId = n.id;
+        card.style.cssText = `position:absolute;left:${screenPos.x}px;top:${screenPos.y}px;transform:translate(-50%,-50%) scale(${scale});background:var(--SmartThemeChatTintColor,#1e1e2e);border:${isParent ? '2.5px' : '2px'} solid ${rc}${isParent ? 'aa' : '88'};border-radius:${isParent ? '10px' : '8px'};padding:${isParent ? '8px 12px' : '6px 10px'};min-width:${isParent ? '100px' : '80px'};max-width:140px;pointer-events:auto;cursor:pointer;z-index:3;box-shadow:0 2px 6px rgba(0,0,0,0.3);font-size:${isParent ? '0.82em' : '0.8em'};font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;`;
+        card.textContent = (isParent ? '📁 ' : '') + (n.label || n.id);
+
+        // 右键菜单
+        card.addEventListener('contextmenu', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            const menu = document.createElement('div');
+            menu.style.cssText = 'position:fixed;z-index:99999;background:var(--SmartThemeChatTintColor);border:1px solid var(--SmartThemeBorderColor);border-radius:8px;padding:4px;box-shadow:0 4px 12px rgba(0,0,0,0.4);font-size:0.8em;';
+            menu.style.left = e.clientX + 'px'; menu.style.top = e.clientY + 'px';
+            const editBtn = document.createElement('button');
+            editBtn.className = 'menu_button'; editBtn.textContent = '✏️ 备注'; editBtn.style.cssText = 'display:block;width:100%;text-align:left;margin:1px 0;';
+            editBtn.addEventListener('click', () => { menu.remove();
+                const note = prompt('编辑备注：', n.note || '');
+                if (note !== null) { updateClueNode(body._clueChatId, n.id, { note: note.trim() }); }
             });
-            cardLayer.appendChild(card);
+            menu.appendChild(editBtn);
+            document.body.appendChild(menu);
+            setTimeout(() => document.addEventListener('click', function rm() { menu.remove(); document.removeEventListener('click', rm); }), 10);
+        });
+
+        if (editMode) {
+            card.style.cursor = 'grab';
+            card.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) return;
+                e.stopPropagation();
+                const startX = e.clientX, startY = e.clientY;
+                const origX = n._x, origY = n._y;
+                // 备份子节点坐标（父节点拖动时子节点跟随）
+                const childBackups = (children[n.id] || []).map(c => ({ id: c.id, x: c._x, y: c._y }));
+                card.style.cursor = 'grabbing'; card.style.zIndex = '10';
+                function onMove(ev) {
+                    const { w, h } = getContainerSize();
+                    const dx = (ev.clientX - startX) / (w * scale);
+                    const dy = (ev.clientY - startY) / (h * scale);
+                    n._x = Math.max(0, Math.min(1, origX + dx));
+                    n._y = Math.max(0, Math.min(1, origY + dy));
+                    // 子节点同步移动
+                    for (const cb of childBackups) {
+                        const child = nodeMap[cb.id];
+                        if (child) {
+                            child._x = Math.max(0, Math.min(1, cb.x + dx));
+                            child._y = Math.max(0, Math.min(1, cb.y + dy));
+                        }
+                    }
+                    // 父节点有子节点时需要重建包围盒 → 全量重渲染
+                    if (children[n.id] && children[n.id].length > 0) {
+                        renderAllCards();
+                    } else {
+                        const sp = worldToScreen(n);
+                        card.style.left = sp.x + 'px'; card.style.top = sp.y + 'px';
+                        // 也更新可能受影响的子节点（如果被拖的是子节点且有父）
+                    }
+                    drawCanvas();
+                }
+                function onUp() { card.style.cursor = 'grab'; card.style.zIndex = '3'; window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); }
+                window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp);
+            });
+        } else {
+            // 锁定模式：拖动 = 平移视角
+            card.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) return;
+                e.stopPropagation();
+                isDragging = true; dragStartX = e.clientX; dragStartY = e.clientY;
+            });
+        }
+
+        return card;
+    }
+
+    function updateCardsPosition() {
+        const cards = cardLayer.querySelectorAll('[data-node-id]');
+        const cardMap = new Map();
+        cards.forEach(c => cardMap.set(c.dataset.nodeId, c));
+        for (const n of nodes) {
+            const el = cardMap.get(n.id);
+            if (!el) continue;
+            const sp = worldToScreen(n);
+            el.style.left = sp.x + 'px';
+            el.style.top = sp.y + 'px';
+            el.style.transform = `translate(-50%,-50%) scale(${scale})`;
         }
     }
 
-    renderCards();
-    setTimeout(drawCanvas, 50);
-    new ResizeObserver(() => drawCanvas()).observe(body);
+    function renderAllCards() {
+        cardLayer.innerHTML = '';
+        const rendered = new Set();
 
+        for (const n of nodes) {
+            if (rendered.has(n.id)) continue;
+            const myChildren = children[n.id] || [];
+            const rc = refColors[n.refType] || '#888';
+
+            if (myChildren.length > 0) {
+                // 父节点：绘制包围盒
+                rendered.add(n.id);
+                const parentPx = worldToScreen(n);
+                const childPx = myChildren.map(c => worldToScreen(c));
+                const allPx = [parentPx, ...childPx];
+                const pad = 28 * scale;
+                const boxMinX = Math.min(...allPx.map(p => p.x)) - pad;
+                const boxMinY = Math.min(...allPx.map(p => p.y)) - pad;
+                const boxMaxX = Math.max(...allPx.map(p => p.x)) + pad;
+                const boxMaxY = Math.max(...allPx.map(p => p.y)) + pad;
+
+                // 包围盒
+                const box = document.createElement('div');
+                box.style.cssText = `position:absolute;left:${boxMinX}px;top:${boxMinY}px;width:${boxMaxX - boxMinX}px;height:${boxMaxY - boxMinY}px;border:2px dashed ${rc}55;border-radius:14px;background:${rc}08;pointer-events:none;z-index:2;`;
+                cardLayer.appendChild(box);
+
+                // 父标签
+                const label = document.createElement('div');
+                label.style.cssText = `position:absolute;left:${boxMinX + 10}px;top:${boxMinY - 10}px;background:var(--SmartThemeChatTintColor,#1e1e2e);padding:1px 8px;border-radius:4px;font-size:${0.65 * scale}em;font-weight:700;color:${rc};pointer-events:none;white-space:nowrap;z-index:3;`;
+                label.textContent = '📁 ' + (n.label || n.id);
+                cardLayer.appendChild(label);
+
+                // 父节点卡片
+                cardLayer.appendChild(createNodeCard(n, parentPx, rc, true));
+                // 子节点卡片
+                for (const child of myChildren) {
+                    rendered.add(child.id);
+                    const crc = refColors[child.refType] || '#888';
+                    cardLayer.appendChild(createNodeCard(child, worldToScreen(child), crc, false));
+                }
+            } else if (!n.parentId || !nodeMap[n.parentId]) {
+                // 无父节点的根节点
+                cardLayer.appendChild(createNodeCard(n, worldToScreen(n), rc, false));
+                rendered.add(n.id);
+            }
+            // 有 parentId 的节点在父节点循环中处理
+        }
+    }
+
+    renderAllCards();
+    setTimeout(drawCanvas, 50);
+    new ResizeObserver(() => { updateCardsPosition(); drawCanvas(); }).observe(body);
+
+    // 背景空白区域平移
     body.addEventListener('mousedown', (e) => { if (e.target === body || e.target === canvas) { isDragging = true; dragStartX = e.clientX; dragStartY = e.clientY; } });
-    window.addEventListener('mousemove', (e) => { if (!isDragging) return; panX += e.clientX - dragStartX; panY += e.clientY - dragStartY; dragStartX = e.clientX; dragStartY = e.clientY; drawCanvas(); });
+    window.addEventListener('mousemove', (e) => { if (!isDragging) return; panX += e.clientX - dragStartX; panY += e.clientY - dragStartY; dragStartX = e.clientX; dragStartY = e.clientY; updateCardsPosition(); drawCanvas(); });
     window.addEventListener('mouseup', () => { isDragging = false; });
-    body.addEventListener('wheel', (e) => { e.preventDefault(); scale = Math.max(0.3, Math.min(3, scale + (e.deltaY > 0 ? -0.1 : 0.1))); renderCards(); drawCanvas(); });
+    body.addEventListener('wheel', (e) => { e.preventDefault(); scale = Math.max(0.3, Math.min(3, scale + (e.deltaY > 0 ? -0.1 : 0.1))); updateCardsPosition(); drawCanvas(); }, { passive: false });
 }
 
 function renderClueBoardBody(body, board, chatId, overlay, panel) {
@@ -528,120 +666,142 @@ function renderClueBoardBody(body, board, chatId, overlay, panel) {
             ${barHTML}
         </div>`;
 
-    // ── 节点列表 ──
-    for (const node of board.nodes) {
+    // v8.8.2 父子层级
+    const childMap = new Map();
+    const rootNodes = [];
+    for (const n of board.nodes) {
+        if (n.parentId && nodeMap.has(n.parentId)) {
+            if (!childMap.has(n.parentId)) childMap.set(n.parentId, []);
+            childMap.get(n.parentId).push(n);
+        } else {
+            rootNodes.push(n);
+        }
+    }
+
+    // ── 节点列表（v8.8.2 父→子层级）──
+    function renderNodeCard(node, isChild) {
         const nodeConns = (nodeConnsMap.get(node.id) || []).sort((a, b) => (typeOrder[a.type] || 99) - (typeOrder[b.type] || 99));
         const rc = refColors[node.refType] || '#888';
-        const ri = refIcons[node.refType] || 'fa-circle';
         const rl = refLabels[node.refType] || '';
         const inN = inCount.get(node.id) || 0;
         const outN = outCount.get(node.id) || 0;
         const chains = getChainsForNode(node.id);
         const hasChain = chains.some(c => c.length >= 2);
 
-        // 节点卡片 — 左侧色条+简洁布局
         const card = document.createElement('div');
         card.className = 'bb-clue-node-card';
-        card.style.cssText = `margin-bottom:10px;background:var(--SmartThemeBlurTintColor,rgba(255,255,255,0.015));border:1px solid var(--SmartThemeBorderColor,#3a3a4a);border-left:4px solid ${rc};border-radius:6px;overflow:hidden;`;
+        const childPadding = isChild ? 'margin-left:28px;' : '';
+        const childBorder = isChild ? `border-left:3px dashed ${rc};` : `border-left:4px solid ${rc};`;
+        card.style.cssText = `margin-bottom:10px;${childPadding}background:var(--SmartThemeBlurTintColor,rgba(255,255,255,0.015));border:1px solid var(--SmartThemeBorderColor,#3a3a4a);${childBorder}border-radius:6px;overflow:hidden;`;
         card.innerHTML = `
-            <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;">
-                <span style="background:${rc}22;border-radius:3px;padding:1px 5px;font-size:0.65em;color:${rc};flex-shrink:0;" title="来源: ${rl}">${rl}</span>
-                <span class="bb-clue-node-label" data-node-id="${node.id}" style="flex:1;font-size:0.9em;font-weight:600;cursor:text;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="点击编辑名称">${escapeHtml(node.label || node.id)}</span>
+            <div style="display:flex;align-items:center;gap:8px;padding:${isChild ? '6px 10px' : '10px 12px'};">
+                ${isChild ? '<span style="font-size:0.65em;opacity:0.3;flex-shrink:0;">└─</span>' : ''}
+                ${isChild ? '' : `<span style="background:${rc}22;border-radius:3px;padding:1px 5px;font-size:0.65em;color:${rc};flex-shrink:0;" title="来源: ${rl}">${rl}</span>`}
+                <span class="bb-clue-node-label" data-node-id="${node.id}" style="flex:1;font-size:${isChild ? '0.8em' : '0.9em'};font-weight:${isChild ? '500' : '600'};cursor:text;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="点击编辑名称">${escapeHtml(node.label || node.id)}</span>
                 ${(inN > 0 || outN > 0) ? `<span style="font-size:0.65em;opacity:0.35;flex-shrink:0;">${inN > 0 ? '←'+inN : ''}${inN>0&&outN>0?' ':''}${outN > 0 ? outN+'→' : ''}</span>` : ''}
                 ${hasChain ? `<span style="font-size:0.62em;opacity:0.25;flex-shrink:0;" title="含推理链">🔗</span>` : ''}
                 <button class="bb-clue-node-menu-btn menu_button" data-node-id="${node.id}" style="font-size:0.7em;padding:1px 4px;opacity:0.3;flex-shrink:0;" title="更多操作">···</button>
             </div>
-            ${node.note ? `<div style="padding:0 12px 10px;font-size:0.76em;opacity:0.5;border-top:1px solid var(--SmartThemeBorderColor,#3a3a4a11);margin-top:2px;padding-top:8px;">${escapeHtml(node.note)}</div>` : ''}
+            ${node.note ? `<div style="padding:0 12px ${isChild ? '6' : '10'}px;font-size:0.76em;opacity:0.5;border-top:1px solid var(--SmartThemeBorderColor,#3a3a4a11);margin-top:2px;padding-top:8px;">${escapeHtml(node.note)}</div>` : ''}
             <div class="bb-clue-node-actions" data-node-id="${node.id}" style="display:none;padding:0 12px 8px;gap:4px;font-size:0.7em;border-top:1px solid var(--SmartThemeBorderColor,#3a3a4a22);padding-top:6px;">
                 <button class="bb-clue-node-edit menu_button" data-node-id="${node.id}" style="font-size:0.85em;padding:2px 8px;">✏️ 备注</button>
                 <button class="bb-clue-node-del menu_button" data-node-id="${node.id}" style="font-size:0.85em;padding:2px 8px;color:#f44336;">🗑 删除</button>
             </div>`;
-        body.appendChild(card);
+        return card;
+    }
 
-        // 连线区 — 可折叠分组
-        if (nodeConns.length) {
-            const connBlock = document.createElement('div');
-            connBlock.style.cssText = 'margin-left:12px;margin-bottom:6px;';
+    function renderConnectionBlock(node) {
+        const nodeConns = (nodeConnsMap.get(node.id) || []).sort((a, b) => (typeOrder[a.type] || 99) - (typeOrder[b.type] || 99));
+        if (!nodeConns.length) return;
+        const chains = getChainsForNode(node.id);
 
-            // 分组
-            const groups = new Map();
-            for (const conn of nodeConns) {
-                if (!groups.has(conn.type)) groups.set(conn.type, []);
-                groups.get(conn.type).push(conn);
-            }
+        const connBlock = document.createElement('div');
+        connBlock.style.cssText = 'margin-left:12px;margin-bottom:6px;';
 
-            for (const [type, conns] of groups) {
-                const tc = typeColors[type] || '#888';
-                const ti = typeIcons[type] || '🔗';
-                const typeName = CONN_TYPE_LABEL[type]?.replace(/→/g, '') || type;
+        const groups = new Map();
+        for (const conn of nodeConns) {
+            if (!groups.has(conn.type)) groups.set(conn.type, []);
+            groups.get(conn.type).push(conn);
+        }
 
-                // 可折叠组标题
-                const groupToggle = document.createElement('div');
-                groupToggle.className = 'bb-clue-group-toggle';
-                const groupId = `clue_group_${node.id}_${type}`;
-                groupToggle.style.cssText = `display:flex;align-items:center;gap:4px;font-size:0.72em;color:${tc};cursor:pointer;padding:3px 4px;border-radius:3px;user-select:none;`;
-                groupToggle.innerHTML = `<span class="bb-clue-group-arrow" style="display:inline-block;width:10px;transition:transform 0.15s;">▼</span> ${ti} <strong>${typeName}</strong> (${conns.length})`;
-                connBlock.appendChild(groupToggle);
+        for (const [type, conns] of groups) {
+            const tc = typeColors[type] || '#888';
+            const ti = typeIcons[type] || '🔗';
+            const typeName = CONN_TYPE_LABEL[type]?.replace(/→/g, '') || type;
 
-                const groupBody = document.createElement('div');
-                groupBody.className = 'bb-clue-group-body';
-                groupBody.style.cssText = 'padding-left:4px;';
+            const groupToggle = document.createElement('div');
+            groupToggle.className = 'bb-clue-group-toggle';
+            groupToggle.style.cssText = `display:flex;align-items:center;gap:4px;font-size:0.72em;color:${tc};cursor:pointer;padding:3px 4px;border-radius:3px;user-select:none;`;
+            groupToggle.innerHTML = `<span class="bb-clue-group-arrow" style="display:inline-block;width:10px;transition:transform 0.15s;">▼</span> ${ti} <strong>${typeName}</strong> (${conns.length})`;
+            connBlock.appendChild(groupToggle);
 
-                let isExpanded = true;
-                groupToggle.addEventListener('click', () => {
-                    isExpanded = !isExpanded;
-                    groupBody.style.display = isExpanded ? 'block' : 'none';
-                    groupToggle.querySelector('.bb-clue-group-arrow').textContent = isExpanded ? '▼' : '▶';
-                });
+            const groupBody = document.createElement('div');
+            groupBody.className = 'bb-clue-group-body';
+            groupBody.style.cssText = 'padding-left:4px;';
 
-                for (const conn of conns) {
-                    const toNode = nodeMap.get(conn.toNodeId);
-                    if (!toNode) continue;
-                    const confidenceLabel = confidenceLabels[conn.confidence] || conn.confidence;
+            let isExpanded = true;
+            groupToggle.addEventListener('click', () => {
+                isExpanded = !isExpanded;
+                groupBody.style.display = isExpanded ? 'block' : 'none';
+                groupToggle.querySelector('.bb-clue-group-arrow').textContent = isExpanded ? '▼' : '▶';
+            });
 
-                    // 检查是否推理链起点
-                    const isChainStart = chains.some(c => c.length >= 2 && c[0].id === conn.id);
+            for (const conn of conns) {
+                const toNode = nodeMap.get(conn.toNodeId);
+                if (!toNode) continue;
+                const confidenceLabel = confidenceLabels[conn.confidence] || conn.confidence;
+                const isChainStart = chains.some(c => c.length >= 2 && c[0].id === conn.id);
 
-                    const row = document.createElement('div');
-                    row.className = 'bb-clue-connection';
-                    row.style.cssText = `display:flex;align-items:center;gap:4px;padding:3px 4px;font-size:0.78em;border-radius:3px;margin-bottom:1px;`;
-                    row.innerHTML = `
-                        <span style="color:${tc};font-size:0.8em;flex-shrink:0;">→</span>
-                        <strong style="font-size:0.95em;">${escapeHtml(toNode.label || toNode.id)}</strong>
-                        <span style="font-size:0.7em;opacity:0.6;">${confidenceLabel}</span>
-                        ${conn.label ? `<span style="font-size:0.7em;opacity:0.4;font-style:italic;">${escapeHtml(conn.label)}</span>` : ''}
-                        ${isChainStart ? `<span style="font-size:0.6em;opacity:0.3;" title="推理链">🔗</span>` : ''}
-                        <span style="flex:1;"></span>
-                        <button class="bb-clue-conn-edit menu_button" data-conn-id="${conn.id}" style="font-size:0.6em;padding:0 3px;opacity:0.3;">✏️</button>
-                        <button class="bb-clue-conn-del menu_button" data-conn-id="${conn.id}" style="font-size:0.6em;padding:0 3px;opacity:0.3;color:#f44336;">✕</button>
-                    `;
-                    groupBody.appendChild(row);
+                const row = document.createElement('div');
+                row.className = 'bb-clue-connection';
+                row.style.cssText = `display:flex;align-items:center;gap:4px;padding:3px 4px;font-size:0.78em;border-radius:3px;margin-bottom:1px;`;
+                row.innerHTML = `
+                    <span style="color:${tc};font-size:0.8em;flex-shrink:0;">→</span>
+                    <strong style="font-size:0.95em;">${escapeHtml(toNode.label || toNode.id)}</strong>
+                    <span style="font-size:0.7em;opacity:0.6;">${confidenceLabel}</span>
+                    ${conn.label ? `<span style="font-size:0.7em;opacity:0.4;font-style:italic;">${escapeHtml(conn.label)}</span>` : ''}
+                    ${isChainStart ? `<span style="font-size:0.6em;opacity:0.3;" title="推理链">🔗</span>` : ''}
+                    <span style="flex:1;"></span>
+                    <button class="bb-clue-conn-edit menu_button" data-conn-id="${conn.id}" style="font-size:0.6em;padding:0 3px;opacity:0.3;">✏️</button>
+                    <button class="bb-clue-conn-del menu_button" data-conn-id="${conn.id}" style="font-size:0.6em;padding:0 3px;opacity:0.3;color:#f44336;">✕</button>
+                `;
+                groupBody.appendChild(row);
 
-                    // 推理链后续步
-                    if (isChainStart) {
-                        const chain = chains.find(c => c.length >= 2 && c[0].id === conn.id);
-                        if (chain) {
-                            for (let i = 1; i < chain.length; i++) {
-                                const step = chain[i];
-                                const stepTo = nodeMap.get(step.toNodeId);
-                                if (!stepTo) continue;
-                                const stc = typeColors[step.type] || '#888';
-                                const subRow = document.createElement('div');
-                                subRow.style.cssText = `display:flex;align-items:center;gap:3px;padding:1px 4px 1px 18px;font-size:0.7em;opacity:0.55;`;
-                                subRow.innerHTML = `
-                                    <span style="font-size:0.7em;">└</span>
-                                    <span style="color:${stc};font-size:0.75em;">→</span>
-                                    <strong>${escapeHtml(stepTo.label || stepTo.id)}</strong>
-                                    <span style="font-size:0.7em;">${confidenceLabels[step.confidence] || step.confidence}</span>
-                                `;
-                                groupBody.appendChild(subRow);
-                            }
+                if (isChainStart) {
+                    const chain = chains.find(c => c.length >= 2 && c[0].id === conn.id);
+                    if (chain) {
+                        for (let i = 1; i < chain.length; i++) {
+                            const step = chain[i], stepTo = nodeMap.get(step.toNodeId);
+                            if (!stepTo) continue;
+                            const stc = typeColors[step.type] || '#888';
+                            const subRow = document.createElement('div');
+                            subRow.style.cssText = `display:flex;align-items:center;gap:3px;padding:1px 4px 1px 18px;font-size:0.7em;opacity:0.55;`;
+                            subRow.innerHTML = `<span style="font-size:0.7em;">└</span><span style="color:${stc};font-size:0.75em;">→</span><strong>${escapeHtml(stepTo.label || stepTo.id)}</strong><span style="font-size:0.7em;">${confidenceLabels[step.confidence] || step.confidence}</span>`;
+                            groupBody.appendChild(subRow);
                         }
                     }
                 }
-                connBlock.appendChild(groupBody);
             }
-            body.appendChild(connBlock);
+            connBlock.appendChild(groupBody);
+        }
+        body.appendChild(connBlock);
+    }
+
+    // 先渲染根节点，再渲染它们的子节点
+    for (const node of rootNodes) {
+        body.appendChild(renderNodeCard(node, false));
+        renderConnectionBlock(node);
+        const kids = childMap.get(node.id) || [];
+        for (const child of kids) {
+            body.appendChild(renderNodeCard(child, true));
+            renderConnectionBlock(child);
+        }
+    }
+    // 孤儿子节点（父节点不存在的）
+    for (const n of board.nodes) {
+        if (n.parentId && !nodeMap.has(n.parentId) && rootNodes.indexOf(n) === -1) {
+            body.appendChild(renderNodeCard(n, false));
+            renderConnectionBlock(n);
         }
     }
 
@@ -766,6 +926,12 @@ function showAddNodeDialog(chatId, onDone) {
             <button class="bb-clue-tab" data-pillar="timeline" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">时间线</button>
         </div>
         <input type="text" id="bb_clue_node_search" class="bb-input" placeholder="搜索条目..." style="margin-bottom:8px;flex-shrink:0;" />
+        <div style="margin-bottom:8px;flex-shrink:0;display:flex;align-items:center;gap:6px;">
+            <label style="font-size:0.75em;opacity:0.55;flex-shrink:0;">父节点:</label>
+            <select id="bb_clue_node_parent" class="bb-input" style="flex:1;font-size:0.75em;">
+                <option value="">(根节点 — 不嵌套)</option>
+            </select>
+        </div>
         <div id="bb_clue_node_list" style="flex:1;overflow-y:auto;min-height:0;font-size:0.85em;">加载中...</div>
     `;
     dialog.querySelector('.bb-clue-add-close').addEventListener('click', () => overlay.remove());
@@ -790,6 +956,16 @@ function showAddNodeDialog(chatId, onDone) {
 
         const listEl = dialog.querySelector('#bb_clue_node_list');
         const searchInput = dialog.querySelector('#bb_clue_node_search');
+        const parentSelect = dialog.querySelector('#bb_clue_node_parent');
+
+        // v8.8.2 填充父节点下拉框
+        const board = await getClueBoard(chatId);
+        for (const n of (board.nodes || [])) {
+            const opt = document.createElement('option');
+            opt.value = n.id;
+            opt.textContent = (n.label || n.id);
+            parentSelect.appendChild(opt);
+        }
 
         const pillarIcon = { mem: 'fa-brain', npc: 'fa-user', item: 'fa-box', timeline: 'fa-clock' };
         const pillarColor = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784' };
@@ -825,7 +1001,8 @@ function showAddNodeDialog(chatId, onDone) {
                     const refType = item.dataset.pillar;
                     const refId = item.dataset.id;
                     const label = item.dataset.label;
-                    await addClueNode(chatId, { refType, refId, label });
+                    const parentId = parentSelect.value || null;
+                    await addClueNode(chatId, { refType, refId, label, parentId });
                     overlay.remove();
                     if (onDone) onDone();
                 });

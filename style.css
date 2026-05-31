@@ -3123,6 +3123,34 @@
 }
 
 /* ═══════════════════════════════════════════════════════
+   v8.8.2 线索板空间视图——父子节点层级
+   ═══════════════════════════════════════════════════════ */
+
+/* 空间视图子节点（轻微缩小） */
+.bb-clue-spatial-child .bb-clue-node-card {
+    font-size: 0.72em !important;
+    padding: 4px 8px !important;
+    min-width: 60px !important;
+    max-width: 110px !important;
+    opacity: 0.88;
+}
+
+/* 列表视图子节点缩进 */
+.bb-clue-child-indent {
+    margin-left: 28px;
+    border-left-style: dashed !important;
+    opacity: 0.9;
+}
+
+/* 移动端适配：空间视图父包围盒 */
+@media (max-width: 768px) {
+    .bb-clue-spatial-parent-box {
+        border-width: 1.5px !important;
+        border-radius: 10px !important;
+    }
+}
+
+/* ═══════════════════════════════════════════════════════
    v8.6.0 记忆管家 Agent 面板
    ═══════════════════════════════════════════════════════ */
 
