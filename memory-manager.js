@@ -75,7 +75,7 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) 
     <div class="bb-mem-popup">
     ${locDatalist}
         <div class="bb-mem-popup-header">
-            <h3><i class="fa-solid fa-brain"></i> BB-Memory 记忆管家</h3>
+            <h3><i class="fa-solid fa-brain"></i> BB-Memory 记忆管理</h3>
             <span class="bb-mem-close" title="关闭">&times;</span>
         </div>
 
@@ -720,6 +720,7 @@ function rebindItemActions(overlay, chatId) {
             if (pillar === 'npc') await removeNpcProfile(chatId, id);
             else if (pillar === 'item') await removeItem(chatId, id);
             else if (pillar === 'timeline') await removeTimelineEntry(chatId, id);
+            else if (pillar === 'map') { const { removeLocation } = await import('./map-store.js'); await removeLocation(chatId, id); }
             else await removeMemory(chatId, id);
             showToast('已删除', 'info');
             await rerenderManagerList(overlay, chatId);
@@ -732,6 +733,7 @@ function rebindItemActions(overlay, chatId) {
             e.stopPropagation();
             const id = btn.dataset.id;
             const pillar = btn.dataset.pillar;
+            if (pillar === 'map') { showToast('地图地点暂不支持归档，请直接删除', 'warning'); return; }
             await archiveEntry(chatId, pillar, id);
             showToast('已归档', 'success');
             await rerenderManagerList(overlay, chatId);
@@ -1147,6 +1149,10 @@ async function showQuickEditForm(overlay, chatId, id, pillar) {
     const lists = await Promise.all([
         getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
     ]);
+    if (pillar === 'map') {
+        showToast('请在世界地图面板中编辑地点', 'info');
+        return;
+    }
     if (pillar === 'npc') entry = lists[0].find(e => e.id === id);
     else if (pillar === 'item') entry = lists[1].find(e => e.id === id);
     else if (pillar === 'timeline') entry = lists[2].find(e => e.id === id);

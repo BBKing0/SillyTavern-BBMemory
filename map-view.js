@@ -9,7 +9,7 @@ import {
     getMap, getLocations, addLocation, updateLocation, removeLocation,
     addEdge, addBidirectionalEdge, removeEdge, getRegions,
 } from './map-store.js';
-import { getItems, addItem, getSettings, updateSettings } from './memory-store.js';
+import { getItems, getSettings, updateSettings } from './memory-store.js';
 
 function escapeHtml(text) {
     if (!text) return '';
@@ -45,72 +45,72 @@ function buildMapBodyHTML(map, locations, items, activeRegion) {
     if (filtered.length === 0) return '<div style="text-align:center;padding:40px;opacity:0.5;">该区域暂无地点</div>';
 
     const locMap = {}; for (const l of locations) locMap[l.id] = l;
-    // 只渲染顶层地点，子地点跟随父地点显示
     const topLevel = filtered.filter(l => !l.parentId || !locMap[l.parentId]);
 
-    let html = '';
+    // 按区域分组
+    const groups = new Map();
     for (const loc of topLevel) {
-        html += renderLocationCard(loc, locMap, locations, items, 0);
+        const r = loc.region || '(未分区)';
+        if (!groups.has(r)) groups.set(r, []);
+        groups.get(r).push(loc);
     }
-    return html;
-}
 
-function renderLocationCard(loc, locMap, allLocs, items, depth) {
-    const rc = getRegionColor(loc.region);
-    const inEdges = allLocs.filter(l2 => (l2.edges || []).some(e => e.toId === loc.id)).length;
-    const outEdges = (loc.edges || []).length;
-    const children = allLocs.filter(l => l.parentId === loc.id);
-    const locItems = items.filter(i => !i.archived && i.location === loc.name);
-    const indent = depth * 16;
+    let html = '';
+    for (const [region, locs] of groups) {
+        const rc = getRegionColor(region);
+        html += `<div style="margin-bottom:16px;border:1px solid ${rc}33;border-radius:10px;overflow:hidden;">
+            <div style="background:${rc}18;padding:6px 12px;font-size:0.78em;font-weight:600;color:${rc};border-bottom:1px solid ${rc}22;">${escapeHtml(region)}</div>
+            <div style="padding:12px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start;">`;
 
-    let html = `<div class="bb-map-location-card" style="margin-bottom:8px;margin-left:${indent}px;background:var(--SmartThemeBlurTintColor,rgba(255,255,255,0.015));border:1px solid var(--SmartThemeBorderColor,#3a3a4a);border-left:4px solid ${rc};border-radius:6px;overflow:hidden;">
-        <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;">
-            ${depth > 0 ? '<span style="font-size:0.6em;opacity:0.3;">└</span>' : ''}
-            <span style="background:${rc}22;border-radius:3px;padding:1px 6px;font-size:0.65em;color:${rc};">${loc.region ? escapeHtml(loc.region) : '未分区'}</span>
-            <span style="flex:1;font-size:0.9em;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(loc.name)}</span>
-            ${(inEdges > 0 || outEdges > 0) ? `<span style="font-size:0.65em;opacity:0.35;">${inEdges > 0 ? '←'+inEdges : ''}${inEdges>0&&outEdges>0?' ':''}${outEdges > 0 ? outEdges+'→' : ''}</span>` : ''}
-            ${children.length > 0 ? `<span style="font-size:0.65em;opacity:0.35;">+${children.length}子</span>` : ''}
-            <button class="bb-map-loc-menu menu_button" data-loc-id="${loc.id}" style="font-size:0.7em;padding:1px 4px;opacity:0.3;">···</button>
-        </div>
-        ${loc.description ? `<div style="padding:0 12px;font-size:0.76em;opacity:0.55;">${escapeHtml(loc.description).slice(0, 120)}</div>` : ''}
-        ${loc.realWorldRef ? `<div style="padding:0 12px 4px;font-size:0.65em;opacity:0.3;">🌍 ${escapeHtml(loc.realWorldRef)}</div>` : ''}
-        <div class="bb-map-loc-actions" data-loc-id="${loc.id}" style="display:none;padding:4px 12px 8px;gap:4px;font-size:0.7em;border-top:1px solid var(--SmartThemeBorderColor,#3a3a4a22);flex-wrap:wrap;">
-            <button class="bb-map-loc-edit menu_button" data-loc-id="${loc.id}" style="font-size:0.85em;padding:2px 8px;">✏️ 编辑</button>
-            <button class="bb-map-loc-connect menu_button" data-loc-id="${loc.id}" style="font-size:0.85em;padding:2px 8px;">🔗 连线</button>
-            <button class="bb-map-loc-additem menu_button" data-loc-id="${loc.id}" data-loc-name="${escapeHtml(loc.name)}" style="font-size:0.85em;padding:2px 8px;">📦 添加物品</button>
-            <button class="bb-map-loc-addchild menu_button" data-loc-id="${loc.id}" style="font-size:0.85em;padding:2px 8px;">📍 子地点</button>
-            <button class="bb-map-loc-del menu_button" data-loc-id="${loc.id}" style="font-size:0.85em;padding:2px 8px;color:#f44336;">🗑 删除</button>
-        </div>`;
+        for (const loc of locs) {
+            const outEdges = (loc.edges || []).length;
+            const locItems = items.filter(i => !i.archived && i.location === loc.name);
 
-    // 出边
-    if (outEdges > 0) {
-        html += `<div style="padding:0 12px 8px;margin-left:12px;">`;
-        for (const edge of (loc.edges || [])) {
-            const target = locMap[edge.toId];
-            const targetName = target ? target.name : edge.toId;
-            const isOneWay = !(target && (target.edges || []).some(e => e.toId === loc.id));
-            const arrow = isOneWay ? '→' : '↔';
-            html += `<div style="display:flex;align-items:center;gap:4px;padding:2px 0;font-size:0.75em;">
-                <span style="color:${rc};font-size:0.8em;">${arrow}</span>
-                <strong>${escapeHtml(targetName)}</strong>
-                <span style="font-size:0.7em;opacity:0.5;">${escapeHtml(edge.distance)} ${escapeHtml(edge.pathType)}</span>
-                ${isOneWay ? '<span style="font-size:0.6em;opacity:0.4;">单向</span>' : ''}
-                <button class="bb-map-edge-del menu_button" data-from="${loc.id}" data-to="${edge.toId}" style="font-size:0.55em;padding:0 2px;opacity:0.2;margin-left:auto;">✕</button>
-            </div>`;
+            // 地点方块
+            html += `<div class="bb-map-node-box" data-loc-id="${loc.id}" style="background:var(--SmartThemeBlurTintColor,rgba(255,255,255,0.03));border:2px solid ${rc}55;border-radius:10px;padding:10px 14px;min-width:140px;max-width:220px;flex-shrink:0;position:relative;cursor:default;">
+                <div style="font-weight:700;font-size:0.85em;margin-bottom:2px;">${escapeHtml(loc.name)}</div>
+                ${loc.description ? `<div style="font-size:0.7em;opacity:0.55;margin-bottom:4px;line-height:1.3;">${escapeHtml(loc.description).slice(0, 60)}</div>` : ''}
+                ${loc.realWorldRef ? `<div style="font-size:0.6em;opacity:0.3;">🌍${escapeHtml(loc.realWorldRef).slice(0, 20)}</div>` : ''}`;
+
+            // 物品标签
+            if (locItems.length > 0) {
+                html += `<div style="margin-top:4px;font-size:0.65em;opacity:0.45;">📦${locItems.map(i => escapeHtml(i.name)).join(' ')}</div>`;
+            }
+
+            // 操作按钮
+            html += `<div style="margin-top:6px;display:flex;gap:3px;font-size:0.6em;opacity:0;">
+                <button class="bb-map-box-edit menu_button" data-loc-id="${loc.id}" style="font-size:inherit;padding:1px 5px;">✏️</button>
+                <button class="bb-map-box-connect menu_button" data-loc-id="${loc.id}" style="font-size:inherit;padding:1px 5px;">🔗</button>
+                <button class="bb-map-box-additem menu_button" data-loc-id="${loc.id}" data-loc-name="${escapeHtml(loc.name)}" style="font-size:inherit;padding:1px 5px;">📦</button>
+                <button class="bb-map-box-del menu_button" data-loc-id="${loc.id}" style="font-size:inherit;padding:1px 5px;color:#f44336;">🗑</button>
+            </div></div>`;
+
+            // 连线箭头（在方块后显示）
+            if (outEdges > 0) {
+                for (const edge of (loc.edges || [])) {
+                    const target = locMap[edge.toId];
+                    if (!target) continue;
+                    const isOneWay = !(target.edges || []).some(e => e.toId === loc.id);
+                    const arrowHTML = isOneWay
+                        ? `<span style="font-size:0.68em;color:#ff9800;font-weight:700;">────→</span>`
+                        : `<span style="font-size:0.68em;color:#4fc3f7;font-weight:700;">←───→</span>`;
+                    html += `<div style="display:flex;flex-direction:column;align-items:center;gap:1px;flex-shrink:0;align-self:center;">
+                        <span style="font-size:0.6em;opacity:0.5;white-space:nowrap;">${escapeHtml(edge.distance)} ${escapeHtml(edge.pathType)}</span>
+                        ${arrowHTML}
+                    </div>`;
+
+                    // 目标地点方块
+                    const tItems = items.filter(i => !i.archived && i.location === target.name);
+                    html += `<div class="bb-map-node-box" data-loc-id="${target.id}" style="background:var(--SmartThemeBlurTintColor,rgba(255,255,255,0.03));border:2px solid ${getRegionColor(target.region)}55;border-radius:10px;padding:10px 14px;min-width:140px;max-width:220px;flex-shrink:0;">
+                        <div style="font-weight:700;font-size:0.85em;margin-bottom:2px;">${escapeHtml(target.name)}</div>
+                        ${target.description ? `<div style="font-size:0.7em;opacity:0.55;margin-bottom:4px;line-height:1.3;">${escapeHtml(target.description).slice(0, 60)}</div>` : ''}
+                        ${tItems.length > 0 ? `<div style="margin-top:4px;font-size:0.65em;opacity:0.45;">📦${tItems.map(i => escapeHtml(i.name)).join(' ')}</div>` : ''}
+                    </div>`;
+                }
+            }
         }
-        html += `</div>`;
-    }
 
-    // 物品
-    if (locItems.length > 0) {
-        html += `<div style="padding:0 12px 6px;margin-left:12px;font-size:0.72em;opacity:0.5;">📦 ${locItems.map(i => escapeHtml(i.name)).join('、')}</div>`;
-    }
-
-    html += `</div>`;
-
-    // 子地点（递归）
-    for (const child of children) {
-        html += renderLocationCard(child, locMap, allLocs, items, depth + 1);
+        html += `</div></div>`;
     }
     return html;
 }
@@ -214,40 +214,48 @@ function showConnectionForm(fromName, locations, onSave) {
     form.querySelector('#bb_map_c_cancel').addEventListener('click', () => overlay.remove());
 }
 
-function showQuickItemForm(locationName, onSave) {
+function showItemPicker(locationName, items, onSave) {
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
 
+    const unplacedItems = items.filter(i => !i.archived && i.location !== locationName);
+    const alreadyPlaced = items.filter(i => !i.archived && i.location === locationName);
+
     const form = document.createElement('div');
-    form.style.cssText = 'background:var(--SmartThemeChatTintColor,#1e1e2e);color:var(--SmartThemeBodyColor,#e0e0e0);border:1px solid var(--SmartThemeBorderColor,#45475a);border-radius:12px;padding:20px 24px;width:min(400px,92vw);box-shadow:0 8px 32px rgba(0,0,0,0.5);';
+    form.style.cssText = 'background:var(--SmartThemeChatTintColor,#1e1e2e);color:var(--SmartThemeBodyColor,#e0e0e0);border:1px solid var(--SmartThemeBorderColor,#45475a);border-radius:12px;padding:20px 24px;width:min(480px,92vw);max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.5);';
+
+    const placedHTML = alreadyPlaced.length > 0
+        ? `<div style="font-size:0.78em;opacity:0.5;margin-bottom:10px;">已在「${escapeHtml(locationName)}」: ${alreadyPlaced.map(i => escapeHtml(i.name)).join('、')}</div>`
+        : '';
+
     form.innerHTML = `
-        <div style="font-weight:bold;margin-bottom:14px;">📦 在「${escapeHtml(locationName)}」添加物品</div>
-        <label style="font-size:0.85em;">物品名称 <span style="color:#f44336;">*</span></label>
-        <input id="bb_map_qi_name" class="bb-input" style="width:100%;margin-bottom:10px;box-sizing:border-box;" placeholder="物品名称" />
-        <label style="font-size:0.85em;">持有者</label>
-        <input id="bb_map_qi_owner" class="bb-input" style="width:100%;margin-bottom:10px;box-sizing:border-box;" placeholder="当前持有者" />
-        <label style="font-size:0.85em;">重要性</label>
-        <input id="bb_map_qi_sig" class="bb-input" style="width:100%;margin-bottom:14px;box-sizing:border-box;" placeholder="对剧情的重要性" />
+        <div style="font-weight:bold;margin-bottom:6px;">📦 为「${escapeHtml(locationName)}」选择物品</div>
+        ${placedHTML}
+        <div style="flex:1;overflow-y:auto;max-height:50vh;margin-bottom:12px;">
+            ${unplacedItems.length === 0
+                ? '<div style="opacity:0.4;text-align:center;padding:20px;">所有物品已放置在此地点</div>'
+                : unplacedItems.map(i => `<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;border-bottom:1px solid var(--SmartThemeBorderColor,#3333);font-size:0.85em;">
+                    <input type="checkbox" class="bb-map-item-cb" data-id="${i.id}" />
+                    <span style="flex:1;">${escapeHtml(i.name)}</span>
+                    <span style="font-size:0.7em;opacity:0.4;">${i.location ? '📍' + escapeHtml(i.location) : ''}</span>
+                </label>`).join('')}
+        </div>
+        <div style="font-size:0.7em;opacity:0.4;margin-bottom:8px;">勾选物品后点击"放置"，物品将移动到「${escapeHtml(locationName)}」</div>
         <div style="display:flex;gap:8px;justify-content:flex-end;">
-            <button id="bb_map_qi_cancel" class="menu_button" style="opacity:0.6;">取消</button>
-            <button id="bb_map_qi_save" class="menu_button" style="background:var(--SmartThemeQuoteColor,#4caf50);color:#fff;">添加</button>
+            <button id="bb_map_pi_cancel" class="menu_button" style="opacity:0.6;">取消</button>
+            <button id="bb_map_pi_save" class="menu_button" style="background:var(--SmartThemeQuoteColor,#4caf50);color:#fff;">放置选中</button>
         </div>`;
     overlay.appendChild(form);
     document.body.appendChild(overlay);
 
-    form.querySelector('#bb_map_qi_save').addEventListener('click', () => {
-        const name = form.querySelector('#bb_map_qi_name').value.trim();
-        if (!name) { showToast('请输入物品名称', 'warning'); return; }
+    form.querySelector('#bb_map_pi_save').addEventListener('click', () => {
+        const checked = form.querySelectorAll('.bb-map-item-cb:checked');
+        const ids = [...checked].map(cb => cb.dataset.id);
         overlay.remove();
-        onSave({
-            name,
-            owner: form.querySelector('#bb_map_qi_owner').value.trim(),
-            significance: form.querySelector('#bb_map_qi_sig').value.trim(),
-            location: locationName,
-        });
+        if (ids.length > 0) onSave(ids);
     });
-    form.querySelector('#bb_map_qi_cancel').addEventListener('click', () => overlay.remove());
+    form.querySelector('#bb_map_pi_cancel').addEventListener('click', () => overlay.remove());
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -333,16 +341,20 @@ export async function openMapView(chatId) {
     }
 
     function bindBodyEvents() {
-        body.querySelectorAll('.bb-map-loc-menu').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const actions = body.querySelector('.bb-map-loc-actions[data-loc-id="' + btn.dataset.locId + '"]');
-                if (actions) actions.style.display = actions.style.display === 'none' ? 'flex' : 'none';
+        // hover显示操作按钮
+        body.querySelectorAll('.bb-map-node-box').forEach(box => {
+            box.addEventListener('mouseenter', () => {
+                const btns = box.querySelector('div:last-child');
+                if (btns) btns.style.opacity = '1';
+            });
+            box.addEventListener('mouseleave', () => {
+                const btns = box.querySelector('div:last-child');
+                if (btns) btns.style.opacity = '0';
             });
         });
 
         // 编辑
-        body.querySelectorAll('.bb-map-loc-edit').forEach(btn => {
+        body.querySelectorAll('.bb-map-box-edit').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const id = btn.dataset.locId;
@@ -357,7 +369,7 @@ export async function openMapView(chatId) {
         });
 
         // 连线
-        body.querySelectorAll('.bb-map-loc-connect').forEach(btn => {
+        body.querySelectorAll('.bb-map-box-connect').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const fromId = btn.dataset.locId;
@@ -379,15 +391,18 @@ export async function openMapView(chatId) {
         });
 
         // 添加物品到地点
-        body.querySelectorAll('.bb-map-loc-additem').forEach(btn => {
+        body.querySelectorAll('.bb-map-box-additem').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const locName = btn.dataset.locName;
-                showQuickItemForm(locName, async (data) => {
-                    await addItem(chatId, { ...data, source: 'manual' });
+                const { updateItem } = await import('./memory-store.js');
+                showItemPicker(locName, items, async (selectedIds) => {
+                    for (const id of selectedIds) {
+                        await updateItem(chatId, id, { location: locName });
+                    }
                     items = await getItems(chatId);
                     refresh();
-                    showToast(`物品「${data.name}」已添加到「${locName}」`, 'success');
+                    showToast(`${selectedIds.length}个物品已放置到「${locName}」`, 'success');
                 });
             });
         });
@@ -408,7 +423,7 @@ export async function openMapView(chatId) {
         });
 
         // 删除
-        body.querySelectorAll('.bb-map-loc-del').forEach(btn => {
+        body.querySelectorAll('.bb-map-box-del').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const id = btn.dataset.locId;
