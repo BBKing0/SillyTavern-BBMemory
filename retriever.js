@@ -539,7 +539,9 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline,
     // ── 区块6：世界地图 v8.7.0 ──
     if (mapData && typeof mapData === 'object' && Object.keys(mapData.locations || {}).length > 0) {
         const locs = Object.values(mapData.locations || {});
-        const mapLines = ['【世界地图 — 相关地点】'];
+        const worldRef = settings.worldRealWorldRef || '';
+        const mapHeader = worldRef ? '【世界地图 — 相关地点】(现实参考: ' + worldRef + ')' : '【世界地图 — 相关地点】';
+        const mapLines = [mapHeader];
         let mapTokens = 0;
         const maxMapTokens = tokenBudget * 0.15;
         for (const loc of locs) {

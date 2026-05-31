@@ -712,12 +712,10 @@ it=分级(key/equipped/clue/consumable/background) | g=标签数组
 ## 辅助：地图地点更新 v8.7.0（可选，仅本轮新出现或提及的地点）
 ═══════════════════════════════════════════════════════
 记录本轮对话中出现或提及的新地点，已有地点不需要重复。
-⚠ 重要：如有现实世界原型参考，务必填写 rw 字段，以便AI保持地理一致性。
+{{WORLD_REF}}
 
-字段：n(地名), desc(描述), reg(区域), rw(现实原型参考),
+字段：n(地名), desc(描述), reg(区域), rw(现实原型参考-可留空使用全局),
      conn(连接: [{to:相邻地名, dist:距离, type:路径类型, diff:easy/normal/hard}])
-
-现实原型示例：中世纪巴黎、江户时代京都、指环王夏尔、冰与火之歌君临
 
 ═══════════════════════════════════════════════════════
 ## 辅助：时间线里程碑（可选，仅记录真正重要的故事节点）
@@ -841,6 +839,11 @@ function buildMergedPrompt(settings, styleBias, calDesc) {
     // 注入历法参考和风格偏置
     prompt = prompt.replace('{{CALENDAR_REF}}', calRef);
     prompt = prompt.replace('{{STYLE_BIAS}}', styleBias || '');
+    // v8.7.1 全局现实原型
+    const worldRef = (s.worldRealWorldRef || '').trim();
+    prompt = prompt.replace('{{WORLD_REF}}', worldRef
+        ? `⚠ 本世界的现实原型参考：${worldRef}。请基于此参考来推断地理关系、距离、方位。`
+        : '');
 
     return prompt;
 }

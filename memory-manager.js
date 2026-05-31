@@ -32,13 +32,20 @@ export async function openMemoryManager(chatId) {
     const existing = document.querySelector('.bb-mem-overlay');
     if (existing) existing.remove();
 
+    // v8.7.1 加载地图数据
+    let mapLocations = [];
+    try {
+        const { getLocations } = await import('./map-store.js');
+        mapLocations = await getLocations(chatId);
+    } catch { /* ignore */ }
+
     const [npc, items, timeline, memories] = await Promise.all([
         getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
     ]);
 
     const overlay = document.createElement('div');
     overlay.className = 'bb-mem-overlay';
-    overlay.innerHTML = buildManagerHTML(npc, items, timeline, memories, chatId);
+    overlay.innerHTML = buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId);
     document.body.appendChild(overlay);
 
     bindManagerEvents(overlay, chatId);
@@ -47,20 +54,26 @@ export async function openMemoryManager(chatId) {
 
 // ═══ HTML 构建 ═══
 
-function buildManagerHTML(npc, items, timeline, memories, chatId) {
+function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) {
     const allEntries = [
         ...npc.map(e => ({ ...e, _pillar: 'npc' })),
         ...items.map(e => ({ ...e, _pillar: 'item' })),
         ...timeline.map(e => ({ ...e, _pillar: 'timeline' })),
         ...memories.map(e => ({ ...e, _pillar: 'mem' })),
+        ...(mapLocations || []).map(e => ({ ...e, _pillar: 'map', title: e.name, content: e.description, name: e.name })),
     ];
 
     const listHTML = allEntries.length
         ? allEntries.map(e => buildEntryItemHTML(e)).join('')
         : '<div class="bb-mem-empty">暂无记忆，点击上方按钮添加第一条记忆吧</div>';
 
+    // v8.7.1 地图地点 datalist（供 location 字段下拉建议）
+    const locNames = [...new Set((mapLocations || []).map(l => l.name).filter(Boolean))];
+    const locDatalist = `<datalist id="bb-location-datalist">${locNames.map(n => `<option value="${escapeHtml(n)}">`).join('')}</datalist>`;
+
     return `
     <div class="bb-mem-popup">
+    ${locDatalist}
         <div class="bb-mem-popup-header">
             <h3><i class="fa-solid fa-brain"></i> BB-Memory 记忆管家</h3>
             <span class="bb-mem-close" title="关闭">&times;</span>
@@ -878,7 +891,7 @@ function showQuickAddForm(overlay, chatId) {
                 <input class="bb-input bb-f-name" placeholder="角色姓名" style="width:100%;margin-bottom:8px;" />
                 <div style="display:flex;gap:8px;">
                     <div style="flex:1;"><label style="font-size:0.85em;">身份</label><input class="bb-input bb-f-role" placeholder="如：王国骑士" style="width:100%;margin-bottom:8px;" /></div>
-                    <div style="flex:1;"><label style="font-size:0.85em;">位置</label><input class="bb-input bb-f-location" placeholder="所在地点" style="width:100%;margin-bottom:8px;" /></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">位置</label><input class="bb-input bb-f-location" placeholder="所在地点" list="bb-location-datalist" style="width:100%;margin-bottom:8px;" /></div>
                 </div>
                 <label style="font-size:0.85em;">性格</label>
                 <textarea class="bb-input bb-f-personality" placeholder="性格特点..." rows="2" style="width:100%;margin-bottom:8px;"></textarea>
@@ -918,7 +931,7 @@ function showQuickAddForm(overlay, chatId) {
                 <textarea class="bb-input bb-f-event" placeholder="事件内容..." rows="3" style="width:100%;margin-bottom:8px;"></textarea>
                 <div style="display:flex;gap:8px;">
                     <div style="flex:1;"><label style="font-size:0.85em;">参与者</label><input class="bb-input bb-f-participants" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" /></div>
-                    <div style="flex:1;"><label style="font-size:0.85em;">地点</label><input class="bb-input bb-f-location" placeholder="事件地点" style="width:100%;margin-bottom:8px;" /></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">地点</label><input class="bb-input bb-f-location" placeholder="事件地点" list="bb-location-datalist" style="width:100%;margin-bottom:8px;" /></div>
                 </div>
                 <label style="font-size:0.85em;">影响</label>
                 <input class="bb-input bb-f-impact" placeholder="对剧情的影响" style="width:100%;margin-bottom:8px;" />
@@ -1041,7 +1054,7 @@ function buildPillarFormFields_inner(p) {
     switch (p) {
         case 'npc': return `
             <label style="font-size:0.85em;">姓名 <span style="color:#f44336;">*</span></label><input class="bb-input bb-f-name" placeholder="角色姓名" style="width:100%;margin-bottom:8px;" />
-            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">身份</label><input class="bb-input bb-f-role" placeholder="如：王国骑士" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">位置</label><input class="bb-input bb-f-location" placeholder="所在地点" style="width:100%;margin-bottom:8px;" /></div></div>
+            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">身份</label><input class="bb-input bb-f-role" placeholder="如：王国骑士" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">位置</label><input class="bb-input bb-f-location" placeholder="所在地点" list="bb-location-datalist" style="width:100%;margin-bottom:8px;" /></div></div>
             <label style="font-size:0.85em;">性格</label><textarea class="bb-input bb-f-personality" placeholder="性格特点..." rows="2" style="width:100%;margin-bottom:8px;"></textarea>
             <label style="font-size:0.85em;">外貌</label><textarea class="bb-input bb-f-appearance" placeholder="外貌描述..." rows="2" style="width:100%;margin-bottom:8px;"></textarea>
             <label style="font-size:0.85em;">关系</label><input class="bb-input bb-f-relationships" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />
@@ -1049,7 +1062,7 @@ function buildPillarFormFields_inner(p) {
         case 'item': return `
             <label style="font-size:0.85em;">名称 <span style="color:#f44336;">*</span></label><input class="bb-input bb-f-name" placeholder="物品名称" style="width:100%;margin-bottom:8px;" />
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">持有者</label><input class="bb-input bb-f-owner" placeholder="当前持有者" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">状态</label><select class="bb-input bb-f-status" style="width:100%;margin-bottom:8px;"><option value="held">持有中</option><option value="used">已使用</option><option value="lost">已丢失</option><option value="destroyed">已销毁</option></select></div></div>
-            <label style="font-size:0.85em;">所在地点</label><input class="bb-input bb-f-location" placeholder="物品所在的地图地点" style="width:100%;margin-bottom:8px;" />
+            <label style="font-size:0.85em;">所在地点</label><input class="bb-input bb-f-location" placeholder="物品所在的地图地点" list="bb-location-datalist" style="width:100%;margin-bottom:8px;" />
             <label style="font-size:0.85em;">重要性</label><input class="bb-input bb-f-significance" placeholder="对剧情的重要性" style="width:100%;margin-bottom:8px;" />
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">物品等级</label><select class="bb-input bb-f-itemTier" style="width:100%;margin-bottom:8px;">${Object.values(ITEM_TIERS).map(t => `<option value="${t.id}" ${t.id === 'consumable' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div><div style="flex:1;display:flex;align-items:flex-end;padding-bottom:8px;"><label style="font-size:0.85em;display:flex;align-items:center;gap:4px;"><input type="checkbox" class="bb-f-keepPermanent" /> 永久保留</label></div></div>
             <label style="font-size:0.85em;">标签</label><input class="bb-input bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
@@ -1057,7 +1070,7 @@ function buildPillarFormFields_inner(p) {
             <label style="font-size:0.85em;">标题 <span style="color:#f44336;">*</span></label><input class="bb-input bb-f-title" placeholder="事件标题" style="width:100%;margin-bottom:8px;" />
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">故事时间</label><input class="bb-input bb-f-storyTime" placeholder="如：第三天清晨" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">状态</label><select class="bb-input bb-f-status" style="width:100%;margin-bottom:8px;"><option value="ongoing" selected>进行中</option><option value="ended">已结束</option><option value="foreshadow">伏笔</option></select></div></div>
             <label style="font-size:0.85em;">事件描述</label><textarea class="bb-input bb-f-event" placeholder="事件内容..." rows="3" style="width:100%;margin-bottom:8px;"></textarea>
-            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">参与者</label><input class="bb-input bb-f-participants" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">地点</label><input class="bb-input bb-f-location" placeholder="事件地点" style="width:100%;margin-bottom:8px;" /></div></div>
+            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">参与者</label><input class="bb-input bb-f-participants" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">地点</label><input class="bb-input bb-f-location" placeholder="事件地点" list="bb-location-datalist" style="width:100%;margin-bottom:8px;" /></div></div>
             <label style="font-size:0.85em;">影响</label><input class="bb-input bb-f-impact" placeholder="对剧情的影响" style="width:100%;margin-bottom:8px;" />
             <label style="font-size:0.85em;">子条目</label>
             <div class="bb-subentries-container" style="margin-bottom:8px;"></div>
@@ -2405,11 +2418,21 @@ async function rerenderManagerList(overlay, chatId, cachedData = null) {
             getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
         ]);
 
+    // v8.7.1 加载地图数据
+    let mapLocations = (cachedData && cachedData.mapLocations) ? cachedData.mapLocations : [];
+    if (!cachedData || !cachedData.mapLocations) {
+        try {
+            const { getLocations } = await import('./map-store.js');
+            mapLocations = await getLocations(chatId);
+        } catch { /* ignore */ }
+    }
+
     let allEntries = [
         ...npc.map(e => ({ ...e, _pillar: 'npc' })),
         ...items.map(e => ({ ...e, _pillar: 'item' })),
         ...timeline.map(e => ({ ...e, _pillar: 'timeline' })),
         ...memories.map(e => ({ ...e, _pillar: 'mem' })),
+        ...(mapLocations || []).map(e => ({ ...e, _pillar: 'map', title: e.name, content: e.description, name: e.name })),
     ];
 
     // v7.6.0 过滤已归档条目

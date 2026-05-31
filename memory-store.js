@@ -33,6 +33,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     itemInjectionMax: 5,
     timelineEndedMax: 3,
     mapInjectionMax: 8,             // v8.7.0 地图地点注入上限
+    worldRealWorldRef: '',           // v8.7.1 全局现实原型参考
     shortTermWindow: 5,
     floorRecentWindow: 6,            // 近 N 轮内的记忆用完整内容
     // AI 自动生成

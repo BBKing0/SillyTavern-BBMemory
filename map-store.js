@@ -58,6 +58,7 @@ export async function addLocation(chatId, data) {
         description: data.description || '',
         realWorldRef: data.realWorldRef || '',
         region: data.region || '',
+        parentId: data.parentId || null,  // v8.7.1 父地点ID（层级）
         edges: Array.isArray(data.edges) ? data.edges : [],
         createdAt: now,
         updatedAt: now,

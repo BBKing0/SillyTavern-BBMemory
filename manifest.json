@@ -4,9 +4,9 @@
     "js": "index.js",
     "css": "style.css",
     "author": "BB-Memory Dev",
-    "version": "8.7.0",
+    "version": "8.7.1",
     "homePage": "https://github.com/BBKing0/SillyTavern-BBMemory",
     "auto_update": true,
     "generate_interceptor": "bbMemoryInterceptor",
-    "description": "智能长期记忆扩展 v8.7.0 - 世界地图/第5支柱/邻接表图结构/现实原型参考"
+    "description": "智能长期记忆扩展 v8.7.1 - 世界地图/邻接表/层级地点/全局现实参考/单向路径"
 }
