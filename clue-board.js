@@ -1,5 +1,5 @@
 /**
- * clue-board.js —— BB-Memory v8.8.2 线索板系统
+ * clue-board.js —— BB-Memory v8.8.3 线索板系统
  *
  * 让用户将四柱条目摆上线索板，手动创建连线（因果/暗示/矛盾/关联/推测）。
  * AI 在生成回复时看到用户的推理，自主决定顺着线索推进或提供反例。
@@ -381,7 +381,7 @@ function showToast(msg, type = 'info') {
 //  SVG 图形视图
 // ═══════════════════════════════════════════════════════════
 
-// v8.8.2 线索板空间视图 —— 统一像素坐标系
+// v8.8.3 线索板空间视图 —— 统一像素坐标系
 function renderClueBoardSpatial(body, board, editMode) {
     const nodes = board.nodes || [];
     const conns = board.connections || [];
@@ -401,6 +401,8 @@ function renderClueBoardSpatial(body, board, editMode) {
 
     // 父子关系映射
     const children = {}; for (const n of nodes) { const pid = n.parentId || ''; if (!children[pid]) children[pid] = []; children[pid].push(n); }
+    // v8.8.3 父节点标签位置（连线端点用）
+    const parentLabelPos = {};
 
     const canvas = document.createElement('canvas');
     canvas.style.cssText = 'position:absolute;inset:0;z-index:1;pointer-events:none;';
@@ -433,7 +435,10 @@ function renderClueBoardSpatial(body, board, editMode) {
         for (const conn of conns) {
             const from = nodeMap[conn.fromNodeId], to = nodeMap[conn.toNodeId];
             if (!from || !to) continue;
-            const fp = worldToScreen(from), tp = worldToScreen(to);
+            const fromIsParent = (children[conn.fromNodeId] || []).length > 0;
+            const toIsParent = (children[conn.toNodeId] || []).length > 0;
+            const fp = fromIsParent && parentLabelPos[from.id] ? parentLabelPos[from.id] : worldToScreen(from);
+            const tp = toIsParent && parentLabelPos[to.id] ? parentLabelPos[to.id] : worldToScreen(to);
             const tc = typeColors[conn.type] || '#888';
             ctx.strokeStyle = tc + (conn.confidence === 'low' ? '55' : '88');
             ctx.lineWidth = conn.confidence === 'high' ? 2 : 1.2;
@@ -548,7 +553,7 @@ function renderClueBoardSpatial(body, board, editMode) {
                 const parentPx = worldToScreen(n);
                 const childPx = myChildren.map(c => worldToScreen(c));
                 const allPx = [parentPx, ...childPx];
-                const pad = 28 * scale;
+                const pad = 54 * scale;
                 const boxMinX = Math.min(...allPx.map(p => p.x)) - pad;
                 const boxMinY = Math.min(...allPx.map(p => p.y)) - pad;
                 const boxMaxX = Math.max(...allPx.map(p => p.x)) + pad;
@@ -564,6 +569,7 @@ function renderClueBoardSpatial(body, board, editMode) {
                 label.style.cssText = `position:absolute;left:${boxMinX + 10}px;top:${boxMinY - 10}px;background:var(--SmartThemeChatTintColor,#1e1e2e);padding:1px 8px;border-radius:4px;font-size:${0.65 * scale}em;font-weight:700;color:${rc};pointer-events:none;white-space:nowrap;z-index:3;`;
                 label.textContent = '📁 ' + (n.label || n.id);
                 cardLayer.appendChild(label);
+                parentLabelPos[n.id] = { x: boxMinX + 10, y: boxMinY - 10 };
 
                 // 父节点卡片
                 cardLayer.appendChild(createNodeCard(n, parentPx, rc, true));

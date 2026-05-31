@@ -1,5 +1,5 @@
 /**
- * map-view.js —— BB-Memory v8.8.0 地图视图
+ * map-view.js —— BB-Memory v8.8.3 地图视图
  * 双模式：2D空间视图(Canvas+CSS) + 列表视图
  * 跨区域标签页、缩放拖动、物品选择器
  */
@@ -115,10 +115,18 @@ function renderSpatialView(body, locations, items, activeRegion, editMode, onEdi
     let scale = 1, panX = 0, panY = 0;
     let isDragging = false, dragStartX = 0, dragStartY = 0;
 
+    // v8.8.3 统一坐标转换
+    function getContainerSize() {
+        return { w: body.clientWidth, h: Math.max(body.clientHeight, 400) };
+    }
+    function worldToScreen(loc) {
+        const { w, h } = getContainerSize();
+        return { x: loc.x * w * scale + panX, y: loc.y * h * scale + panY };
+    }
+
     function drawCanvas() {
         const dpr = window.devicePixelRatio || 1;
-        const w = body.clientWidth;
-        const h = Math.max(body.clientHeight, 400);
+        const { w, h } = getContainerSize();
         canvas.width = w * dpr;
         canvas.height = h * dpr;
         canvas.style.width = w + 'px';
@@ -136,32 +144,32 @@ function renderSpatialView(body, locations, items, activeRegion, editMode, onEdi
         }
         for (const [r, rLocs] of regions) {
             if (!r) continue;
-            const minX = Math.min(...rLocs.map(l => l.x)) * w * scale + panX;
-            const minY = Math.min(...rLocs.map(l => l.y)) * h * scale + panY;
-            const maxX = Math.max(...rLocs.map(l => l.x)) * w * scale + panX + 120 * scale;
-            const maxY = Math.max(...rLocs.map(l => l.y)) * h * scale + panY + 60 * scale;
+            const allPx = rLocs.map(l => worldToScreen(l));
+            const pad = 48 * scale;
+            const minX = Math.min(...allPx.map(p => p.x)) - pad;
+            const minY = Math.min(...allPx.map(p => p.y)) - pad;
+            const maxX = Math.max(...allPx.map(p => p.x)) + pad;
+            const maxY = Math.max(...allPx.map(p => p.y)) + pad;
             const rc = getRegionColor(r);
             ctx.fillStyle = rc + '08';
             ctx.strokeStyle = rc + '22';
             ctx.lineWidth = 1;
             ctx.beginPath();
-            ctx.roundRect(minX - 20, minY - 20, maxX - minX + 40, maxY - minY + 40, 12);
+            ctx.roundRect(minX, minY, maxX - minX, maxY - minY, 12);
             ctx.fill();
             ctx.stroke();
             ctx.fillStyle = rc + '66';
             ctx.font = '11px sans-serif';
-            ctx.fillText(r, minX - 10, minY - 6);
+            ctx.fillText(r, minX + 8, minY - 6);
         }
 
         // 连线
         for (const loc of filtered) {
-            const fromX = loc.x * w * scale + panX + 60 * scale;
-            const fromY = loc.y * h * scale + panY + 20 * scale;
+            const fp = worldToScreen(loc);
             for (const edge of (loc.edges || [])) {
                 const target = locMap[edge.toId];
                 if (!target) continue;
-                const toX = target.x * w * scale + panX + 60 * scale;
-                const toY = target.y * h * scale + panY + 20 * scale;
+                const tp = worldToScreen(target);
                 const crossRegion = target.region !== loc.region;
                 const isOneWay = !(target.edges || []).some(e => e.toId === loc.id);
 
@@ -170,27 +178,24 @@ function renderSpatialView(body, locations, items, activeRegion, editMode, onEdi
                 ctx.setLineDash(crossRegion ? [6, 4] : (isOneWay ? [] : []));
                 if (isOneWay && !crossRegion) ctx.setLineDash([]);
 
-                const midX = (fromX + toX) / 2;
+                const midX = (fp.x + tp.x) / 2;
                 ctx.beginPath();
-                ctx.moveTo(fromX, fromY);
-                ctx.quadraticCurveTo(midX, fromY - 10, toX, toY);
+                ctx.moveTo(fp.x, fp.y);
+                ctx.quadraticCurveTo(midX, fp.y - 10, tp.x, tp.y);
                 ctx.stroke();
                 ctx.setLineDash([]);
 
-                // 距离标签
                 if (edge.distance) {
                     ctx.fillStyle = '#888';
                     ctx.font = '9px sans-serif';
-                    ctx.fillText(edge.distance, midX - 10, (fromY + toY) / 2 - 4);
+                    ctx.fillText(edge.distance, midX - 10, (fp.y + tp.y) / 2 - 4);
                 }
             }
         }
     }
 
-    function renderCards() {
+    function renderAllCards() {
         cardLayer.innerHTML = '';
-        cardLayer.style.transform = `scale(${scale})`;
-        cardLayer.style.transformOrigin = '0 0';
         const rendered = new Set();
 
         for (const loc of filtered) {
@@ -202,51 +207,51 @@ function renderSpatialView(body, locations, items, activeRegion, editMode, onEdi
             if (subLocs.length > 0) {
                 // 父地点：大容器包裹子节点
                 rendered.add(loc.id);
-                const minX = Math.min(loc.x, ...subLocs.map(l => l.x));
-                const minY = Math.min(loc.y, ...subLocs.map(l => l.y));
-                const maxX = Math.max(loc.x, ...subLocs.map(l => l.x));
-                const maxY = Math.max(loc.y, ...subLocs.map(l => l.y));
+                const pp = worldToScreen(loc);
+                const childPx = subLocs.map(s => worldToScreen(s));
+                const allPx = [pp, ...childPx];
+                const pad = 48 * scale;
+                const minX = Math.min(...allPx.map(p => p.x)) - pad;
+                const minY = Math.min(...allPx.map(p => p.y)) - pad;
+                const maxX = Math.max(...allPx.map(p => p.x)) + pad;
+                const maxY = Math.max(...allPx.map(p => p.y)) + pad;
 
                 const container = document.createElement('div');
-                container.style.cssText = `position:absolute;left:${minX * 100}%;top:${minY * 100}%;width:${(maxX - minX) * 100 + 16}%;height:${(maxY - minY) * 100 + 10}%;background:${rc}08;border:2px solid ${rc}44;border-radius:12px;pointer-events:none;z-index:2;`;
-                // 标签
+                container.style.cssText = `position:absolute;left:${minX}px;top:${minY}px;width:${maxX - minX}px;height:${maxY - minY}px;background:${rc}08;border:2px solid ${rc}44;border-radius:12px;pointer-events:none;z-index:2;`;
                 const label = document.createElement('div');
                 label.style.cssText = `position:absolute;top:-10px;left:12px;background:var(--SmartThemeChatTintColor,#1e1e2e);padding:1px 8px;border-radius:3px;font-size:0.65em;font-weight:700;color:${rc};white-space:nowrap;`;
                 label.textContent = '📁 ' + loc.name;
                 container.appendChild(label);
                 cardLayer.appendChild(container);
 
-                // 父地点卡片（在容器内）
-                const pCard = makeCard(loc, locItems, rc, loc.x, loc.y, true);
+                const pCard = makeCard(loc, locItems, rc, pp.x, pp.y, true);
                 if (editMode) makeDraggable(pCard, loc);
                 cardLayer.appendChild(pCard);
                 rendered.add(loc.id);
 
-                // 子地点卡片（在容器内，位置相对于父容器）
                 for (const sub of subLocs) {
                     rendered.add(sub.id);
                     const subItems = items.filter(i => !i.archived && i.location === sub.name);
                     const src = getRegionColor(sub.region);
-                    const relX = (sub.x - minX) / (maxX - minX + 0.01);
-                    const relY = (sub.y - minY) / (maxY - minY + 0.01);
-                    const sCard = makeCard(sub, subItems, src, relX, relY, false);
+                    const sp = worldToScreen(sub);
+                    const sCard = makeCard(sub, subItems, src, sp.x, sp.y, false);
                     if (editMode) makeDraggable(sCard, sub);
                     cardLayer.appendChild(sCard);
                 }
             } else if (!loc.parentId || !locMap[loc.parentId]) {
-                // 无父的普通节点
-                const card = makeCard(loc, locItems, rc, loc.x, loc.y, false);
+                const sp = worldToScreen(loc);
+                const card = makeCard(loc, locItems, rc, sp.x, sp.y, false);
                 if (editMode) makeDraggable(card, loc);
                 cardLayer.appendChild(card);
                 rendered.add(loc.id);
             }
-            // 有 parentId 的节点在上面子地点循环中已处理
         }
 
-        function makeCard(loc, locItems, rc, posX, posY, isParent) {
+        function makeCard(loc, locItems, rc, px, py, isParent) {
             const card = document.createElement('div');
             card.className = 'bb-map-spatial-card';
-            card.style.cssText = `position:absolute;left:${posX * 100}%;top:${posY * 100}%;transform:translate(-50%,-50%);background:var(--SmartThemeChatTintColor,#1e1e2e);border:${isParent ? '2.5px' : '2px'} solid ${rc}${isParent ? '88' : '66'};border-radius:${isParent ? '10px' : '8px'};padding:${isParent ? '10px 14px' : '6px 10px'};min-width:${isParent ? '110px' : '80px'};max-width:${isParent ? '180px' : '140px'};pointer-events:auto;cursor:pointer;z-index:3;box-shadow:0 2px 8px rgba(0,0,0,0.3);font-size:${isParent ? '0.8em' : '0.7em'};`;
+            card.dataset.locId = loc.id;
+            card.style.cssText = `position:absolute;left:${px}px;top:${py}px;transform:translate(-50%,-50%);background:var(--SmartThemeChatTintColor,#1e1e2e);border:${isParent ? '2.5px' : '2px'} solid ${rc}${isParent ? '88' : '66'};border-radius:${isParent ? '10px' : '8px'};padding:${isParent ? '10px 14px' : '6px 10px'};min-width:${isParent ? '110px' : '80px'};max-width:${isParent ? '180px' : '140px'};pointer-events:auto;cursor:pointer;z-index:3;box-shadow:0 2px 8px rgba(0,0,0,0.3);font-size:${isParent ? '0.8em' : '0.7em'};`;
             card.innerHTML = `
                 <div style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:${isParent ? '0.9em' : '0.85em'};">${isParent ? '📁 ' : ''}${escapeHtml(loc.name)}</div>
                 ${loc.description ? `<div style="font-size:${isParent ? '0.7em' : '0.65em'};opacity:0.5;line-height:1.2;max-height:2.4em;overflow:hidden;">${escapeHtml(loc.description).slice(0, isParent ? 70 : 40)}</div>` : ''}
@@ -267,10 +272,12 @@ function renderSpatialView(body, locations, items, activeRegion, editMode, onEdi
                 const origX = loc.x, origY = loc.y;
                 card.style.cursor = 'grabbing'; card.style.zIndex = '10';
                 function onMove(ev) {
-                    loc.x = Math.max(0, Math.min(1, origX + (ev.clientX - startX) / (body.clientWidth * scale)));
-                    loc.y = Math.max(0, Math.min(1, origY + (ev.clientY - startY) / (body.clientHeight * scale)));
-                    card.style.left = loc.x * 100 + '%';
-                    card.style.top = loc.y * 100 + '%';
+                    const { w, h } = getContainerSize();
+                    loc.x = Math.max(0, Math.min(1, origX + (ev.clientX - startX) / (w * scale)));
+                    loc.y = Math.max(0, Math.min(1, origY + (ev.clientY - startY) / (h * scale)));
+                    const sp = worldToScreen(loc);
+                    card.style.left = sp.x + 'px';
+                    card.style.top = sp.y + 'px';
                     drawCanvas();
                 }
                 function onUp() {
@@ -304,7 +311,20 @@ function renderSpatialView(body, locations, items, activeRegion, editMode, onEdi
         }
     }
 
-    renderCards();
+    function updateCardsPosition() {
+        const cards = cardLayer.querySelectorAll('[data-loc-id]');
+        const cardMap = new Map();
+        cards.forEach(c => cardMap.set(c.dataset.locId, c));
+        for (const loc of filtered) {
+            const el = cardMap.get(loc.id);
+            if (!el) continue;
+            const sp = worldToScreen(loc);
+            el.style.left = sp.x + 'px';
+            el.style.top = sp.y + 'px';
+        }
+    }
+
+    renderAllCards();
     setTimeout(drawCanvas, 50);
 
     // 拖动/缩放事件
@@ -318,6 +338,7 @@ function renderSpatialView(body, locations, items, activeRegion, editMode, onEdi
         panX += (e.clientX - dragStartX);
         panY += (e.clientY - dragStartY);
         dragStartX = e.clientX; dragStartY = e.clientY;
+        updateCardsPosition();
         drawCanvas();
     });
     window.addEventListener('mouseup', () => { isDragging = false; });
@@ -325,10 +346,9 @@ function renderSpatialView(body, locations, items, activeRegion, editMode, onEdi
         e.preventDefault();
         const delta = e.deltaY > 0 ? -0.1 : 0.1;
         scale = Math.max(0.3, Math.min(3, scale + delta));
-        cardLayer.style.transform = `scale(${scale})`;
-        cardLayer.style.transformOrigin = '0 0';
+        updateCardsPosition();
         drawCanvas();
-    });
+    }, { passive: false });
     // 移动端触摸
     body.addEventListener('touchstart', (e) => {
         if (e.touches.length === 2) {
@@ -342,12 +362,13 @@ function renderSpatialView(body, locations, items, activeRegion, editMode, onEdi
         const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2;
         panX += (cx - dragStartX); panY += (cy - dragStartY);
         dragStartX = cx; dragStartY = cy;
+        updateCardsPosition();
         drawCanvas();
     });
     body.addEventListener('touchend', () => { isDragging = false; });
 
     // 尺寸变化重绘
-    new ResizeObserver(() => drawCanvas()).observe(body);
+    new ResizeObserver(() => { updateCardsPosition(); drawCanvas(); }).observe(body);
 }
 
 // ═══════════════════════════════════════════════════════════
