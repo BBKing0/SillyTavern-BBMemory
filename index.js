@@ -191,6 +191,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         chatLength: chat.length,
         clueBoard,
         mapData,  // v8.7.0
+        queryText: userMessage,
     });
 
     // 10. 注入

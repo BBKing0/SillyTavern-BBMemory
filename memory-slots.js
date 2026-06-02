@@ -28,6 +28,8 @@ const PILLAR_NAMES = ['npc', 'items', 'timeline', 'memories'];
 
 // v7.5.0 时间线线程存储键（独立于四柱）
 const THREAD_KEY = 'bb_timeline_threads_';
+const MAP_KEY = 'bb_map_chat_';
+const CLUE_BOARD_KEY = 'bb_clue_board_';
 
 function slotKey(charId, slotName) {
     return `${SLOT_PREFIX}${charId}_${slotName}`;
@@ -37,9 +39,11 @@ function slotKey(charId, slotName) {
 
 async function readAllPillarData(chatId) {
     const lf = getLocalForage();
-    const [npc, items, timeline, memories, threads] = await Promise.all([
+    const [npc, items, timeline, memories, threads, map, clueBoard] = await Promise.all([
         ...PILLAR_KEYS.map(k => lf.getItem(k + chatId)),
         lf.getItem(THREAD_KEY + chatId),
+        lf.getItem(MAP_KEY + chatId),
+        lf.getItem(CLUE_BOARD_KEY + chatId),
     ]);
     return {
         npc: Array.isArray(npc) ? npc : [],
@@ -47,25 +51,69 @@ async function readAllPillarData(chatId) {
         timeline: Array.isArray(timeline) ? timeline : [],
         memories: Array.isArray(memories) ? memories : [],
         threads: Array.isArray(threads) ? threads : [],
+        map: normalizeMapData(map),
+        clueBoard: normalizeClueBoardData(clueBoard),
     };
 }
 
 async function writeAllPillarData(chatId, data) {
     const lf = getLocalForage();
+    const normalized = normalizeSlotData(data);
     await Promise.all([
-        lf.setItem(PILLAR_KEYS[0] + chatId, data.npc || []),
-        lf.setItem(PILLAR_KEYS[1] + chatId, data.items || []),
-        lf.setItem(PILLAR_KEYS[2] + chatId, data.timeline || []),
-        lf.setItem(PILLAR_KEYS[3] + chatId, data.memories || []),
-        lf.setItem(THREAD_KEY + chatId, data.threads || []),
+        lf.setItem(PILLAR_KEYS[0] + chatId, normalized.npc),
+        lf.setItem(PILLAR_KEYS[1] + chatId, normalized.items),
+        lf.setItem(PILLAR_KEYS[2] + chatId, normalized.timeline),
+        lf.setItem(PILLAR_KEYS[3] + chatId, normalized.memories),
+        lf.setItem(THREAD_KEY + chatId, normalized.threads),
+        lf.setItem(MAP_KEY + chatId, normalized.map),
+        lf.setItem(CLUE_BOARD_KEY + chatId, normalized.clueBoard),
     ]);
+}
+
+function normalizeMapData(map) {
+    return (map && typeof map === 'object' && map.locations && typeof map.locations === 'object')
+        ? { ...map, locations: map.locations }
+        : { locations: {} };
+}
+
+function normalizeClueBoardData(board) {
+    return {
+        nodes: Array.isArray(board?.nodes) ? board.nodes : [],
+        connections: Array.isArray(board?.connections) ? board.connections : [],
+        updatedAt: board?.updatedAt || 0,
+    };
+}
+
+function normalizeSlotData(raw) {
+    if (Array.isArray(raw)) {
+        return { npc: [], items: [], timeline: [], memories: raw, threads: [], map: { locations: {} }, clueBoard: { nodes: [], connections: [], updatedAt: 0 } };
+    }
+    if (!raw || typeof raw !== 'object') {
+        return { npc: [], items: [], timeline: [], memories: [], threads: [], map: { locations: {} }, clueBoard: { nodes: [], connections: [], updatedAt: 0 } };
+    }
+    return {
+        npc: Array.isArray(raw.npc) ? raw.npc : [],
+        items: Array.isArray(raw.items) ? raw.items : [],
+        timeline: Array.isArray(raw.timeline) ? raw.timeline : [],
+        memories: Array.isArray(raw.memories) ? raw.memories : [],
+        threads: Array.isArray(raw.threads) ? raw.threads : [],
+        map: normalizeMapData(raw.map || raw.mapData),
+        clueBoard: normalizeClueBoardData(raw.clueBoard || raw.clues),
+    };
 }
 
 function totalCount(data) {
     if (!data) return 0;
     // Support old format (flat array) and new format (pillar object)
     if (Array.isArray(data)) return data.length;
-    return (data.npc?.length || 0) + (data.items?.length || 0) + (data.timeline?.length || 0) + (data.memories?.length || 0) + (data.threads?.length || 0);
+    const normalized = normalizeSlotData(data);
+    return normalized.npc.length
+        + normalized.items.length
+        + normalized.timeline.length
+        + normalized.memories.length
+        + normalized.threads.length
+        + Object.keys(normalized.map.locations || {}).length
+        + normalized.clueBoard.nodes.length;
 }
 
 // ═══ 角色ID获取 ═══
@@ -127,7 +175,7 @@ export async function listSlots(charId) {
     const remoteIndex = getRemoteSlotIndex(charId);
     for (const [name, meta] of Object.entries(remoteIndex.slots || {})) {
         if (localNames.has(name)) continue; // 本地已有，跳过
-        const total = (meta.npc || 0) + (meta.items || 0) + (meta.timeline || 0) + (meta.mem || 0) + (meta.threads || 0);
+        const total = (meta.npc || 0) + (meta.items || 0) + (meta.timeline || 0) + (meta.mem || 0) + (meta.threads || 0) + (meta.map || 0) + (meta.clues || 0);
         slots.push({
             name,
             count: total,
@@ -183,30 +231,24 @@ export async function loadFromSlot(charId, chatId, slotName) {
     const lf = getLocalForage();
     let raw = await lf.getItem(slotKey(charId, slotName));
 
-    // 兼容旧格式（扁平记忆数组）和新格式（五柱对象，v7.5.0 含 threads）
-    let data;
-    if (Array.isArray(raw)) {
-        data = { npc: [], items: [], timeline: [], memories: raw, threads: [] };
-    } else if (raw && typeof raw === 'object') {
-        data = {
-            npc: Array.isArray(raw.npc) ? raw.npc : [],
-            items: Array.isArray(raw.items) ? raw.items : [],
-            timeline: Array.isArray(raw.timeline) ? raw.timeline : [],
-            memories: Array.isArray(raw.memories) ? raw.memories : [],
-            threads: Array.isArray(raw.threads) ? raw.threads : [],
-        };
-    } else {
-        data = { npc: [], items: [], timeline: [], memories: [], threads: [] };
-    }
+    // 兼容旧格式（扁平记忆数组）和新格式（五柱对象，v8.9.0 含地图/线索板）
+    let data = normalizeSlotData(raw);
 
     // 检查当前聊天是否已有数据，仅在有冲突风险时重新生成 ID
     const currentData = await readAllPillarData(chatId);
     const hasExistingData = currentData.npc.length > 0 || currentData.items.length > 0 ||
-        currentData.timeline.length > 0 || currentData.memories.length > 0;
+        currentData.timeline.length > 0 || currentData.memories.length > 0 ||
+        currentData.threads.length > 0 || Object.keys(currentData.map.locations || {}).length > 0 ||
+        currentData.clueBoard.nodes.length > 0;
 
     if (hasExistingData) {
-        // v8.5.1 保存旧 timeline ID 用于 refId 重映射，防止引用断裂
-        const oldTimelineIds = data.timeline.map(e => e.id);
+        const oldIds = {
+            npc: data.npc.map(e => e.id),
+            item: data.items.map(e => e.id),
+            timeline: data.timeline.map(e => e.id),
+            mem: data.memories.map(e => e.id),
+            thread: data.threads.map(e => e.id),
+        };
 
         const now = Date.now();
         const newId = (i) => `bb_${now + i}_${Math.random().toString(36).slice(2, 7)}`;
@@ -216,13 +258,23 @@ export async function loadFromSlot(charId, chatId, slotName) {
         data.memories = data.memories.map((e, i) => ({ ...e, id: newId(i + data.npc.length + data.items.length + data.timeline.length) }));
         data.threads = data.threads.map((e, i) => ({ ...e, id: newId(i + data.npc.length + data.items.length + data.timeline.length + data.memories.length) }));
 
-        // v8.5.1 重映射 thread entries 中的 refId，修复 ID 重生后引用断裂
-        const timelineIdMap = new Map();
-        for (let i = 0; i < oldTimelineIds.length; i++) {
-            timelineIdMap.set(oldTimelineIds[i], data.timeline[i].id);
-        }
+        // v8.9.0 重映射线程与线索板引用，修复 ID 重生后引用断裂
+        const idMaps = {
+            npc: new Map(oldIds.npc.map((id, i) => [id, data.npc[i]?.id])),
+            item: new Map(oldIds.item.map((id, i) => [id, data.items[i]?.id])),
+            timeline: new Map(oldIds.timeline.map((id, i) => [id, data.timeline[i]?.id])),
+            mem: new Map(oldIds.mem.map((id, i) => [id, data.memories[i]?.id])),
+            thread: new Map(oldIds.thread.map((id, i) => [id, data.threads[i]?.id])),
+        };
+        idMaps.items = idMaps.item;
+        idMaps.memory = idMaps.mem;
+        idMaps.memories = idMaps.mem;
+        const timelineIdMap = idMaps.timeline;
         if (timelineIdMap.size > 0) {
             for (const thread of data.threads) {
+                if (thread.parentThreadId && idMaps.thread.has(thread.parentThreadId)) {
+                    thread.parentThreadId = idMaps.thread.get(thread.parentThreadId);
+                }
                 if (Array.isArray(thread.entries)) {
                     for (const entry of thread.entries) {
                         if (entry.refId && timelineIdMap.has(entry.refId)) {
@@ -230,6 +282,12 @@ export async function loadFromSlot(charId, chatId, slotName) {
                         }
                     }
                 }
+            }
+        }
+        for (const node of data.clueBoard.nodes) {
+            const map = idMaps[node.refType];
+            if (node.refId && map?.has(node.refId)) {
+                node.refId = map.get(node.refId);
             }
         }
     }
@@ -310,21 +368,7 @@ export async function exportSlot(charId, slotName) {
 
     const lf = getLocalForage();
     const raw = await lf.getItem(slotKey(charId, slotName));
-
-    let data;
-    if (Array.isArray(raw)) {
-        data = { npc: [], items: [], timeline: [], memories: raw, threads: [] };
-    } else if (raw && typeof raw === 'object') {
-        data = {
-            npc: Array.isArray(raw.npc) ? raw.npc : [],
-            items: Array.isArray(raw.items) ? raw.items : [],
-            timeline: Array.isArray(raw.timeline) ? raw.timeline : [],
-            memories: Array.isArray(raw.memories) ? raw.memories : [],
-            threads: Array.isArray(raw.threads) ? raw.threads : [],
-        };
-    } else {
-        data = { npc: [], items: [], timeline: [], memories: [], threads: [] };
-    }
+    const data = normalizeSlotData(raw);
 
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -366,14 +410,17 @@ async function getSlotPillarCounts(charId, slotName) {
     const lf = getLocalForage();
     const data = await lf.getItem(slotKey(charId, slotName));
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
-        return { npc: 0, items: 0, timeline: 0, mem: 0, threads: 0 };
+        return { npc: 0, items: 0, timeline: 0, mem: 0, threads: 0, map: 0, clues: 0 };
     }
+    const normalized = normalizeSlotData(data);
     return {
-        npc: data.npc?.length || 0,
-        items: data.items?.length || 0,
-        timeline: data.timeline?.length || 0,
-        mem: data.memories?.length || 0,
-        threads: data.threads?.length || 0,
+        npc: normalized.npc.length,
+        items: normalized.items.length,
+        timeline: normalized.timeline.length,
+        mem: normalized.memories.length,
+        threads: normalized.threads.length,
+        map: Object.keys(normalized.map.locations || {}).length,
+        clues: normalized.clueBoard.nodes.length,
     };
 }
 
@@ -444,20 +491,7 @@ export async function pullSlotFromChatMetadata(charId, slotName) {
     let data;
     try { data = JSON.parse(raw); } catch { return null; }
 
-    let normalized;
-    if (Array.isArray(data)) {
-        normalized = { npc: [], items: [], timeline: [], memories: data, threads: [] };
-    } else if (data && typeof data === 'object') {
-        normalized = {
-            npc: Array.isArray(data.npc) ? data.npc : [],
-            items: Array.isArray(data.items) ? data.items : [],
-            timeline: Array.isArray(data.timeline) ? data.timeline : [],
-            memories: Array.isArray(data.memories) ? data.memories : [],
-            threads: Array.isArray(data.threads) ? data.threads : [],
-        };
-    } else {
-        return null;
-    }
+    const normalized = normalizeSlotData(data);
 
     const lf = getLocalForage();
     await lf.setItem(slotKey(charId, slotName), normalized);

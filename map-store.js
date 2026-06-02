@@ -30,9 +30,14 @@ async function loadMap(chatId) {
     return (data && typeof data === 'object' && data.locations) ? data : { locations: {} };
 }
 
-async function saveMap(chatId, data) {
+async function saveMap(chatId, data, options = {}) {
     const lf = getLocalForage();
     await lf.setItem(MAP_KEY + chatId, data);
+    if (!options.skipBackup) {
+        import('./memory-store.js')
+            .then(m => m.scheduleAutoBackup?.(chatId))
+            .catch(() => {});
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -41,6 +46,14 @@ async function saveMap(chatId, data) {
 
 export async function getMap(chatId) {
     return loadMap(chatId);
+}
+
+export async function setMap(chatId, data, options = {}) {
+    const safe = (data && typeof data === 'object' && data.locations)
+        ? { ...data, locations: data.locations || {} }
+        : { locations: {} };
+    await saveMap(chatId, safe, options);
+    return safe;
 }
 
 export async function getLocations(chatId) {

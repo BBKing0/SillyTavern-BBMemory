@@ -2443,7 +2443,7 @@ function showThreadEntryEditForm(overlay, chatId, thread, entryIdx) {
             const event = formOverlay.querySelector('.bb-thread-form-event')?.value?.trim();
             const status = formOverlay.querySelector('.bb-thread-form-entry-status')?.value;
             if (!event) return;
-            thread.entries[entryIdx] = { period: period || '', event, status: status || 'ongoing' };
+            thread.entries[entryIdx] = { ...entry, period: period || '', event, status: status || 'ongoing' };
             await upsertTimelineThread(chatId, thread);
             close();
             await renderThreadPanel(overlay, chatId);

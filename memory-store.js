@@ -1004,22 +1004,30 @@ export async function getMemoryStats(chatId) {
 const BACKUP_METADATA_KEY = 'bb_memory_v5_backup';
 
 export async function exportMemoriesToChatMetadata(chatId) {
-    const [npc, items, timeline, memories, threads] = await Promise.all([
+    const [{ getMap }, { getClueBoard }] = await Promise.all([
+        import('./map-store.js'),
+        import('./clue-board.js'),
+    ]);
+    const [npc, items, timeline, memories, threads, map, clueBoard] = await Promise.all([
         getNpcProfiles(chatId),
         getItems(chatId),
         getTimeline(chatId),
         getMemories(chatId),
         getTimelineThreads(chatId),
+        getMap(chatId),
+        getClueBoard(chatId),
     ]);
 
     const backup = {
-        version: '5.1',
+        version: '8.9.0',
         timestamp: Date.now(),
         npc,
         items,
         timeline,
         memories,
         threads,
+        map,
+        clueBoard,
     };
 
     const json = JSON.stringify(backup);
@@ -1039,7 +1047,147 @@ export async function exportMemoriesToChatMetadata(chatId) {
     settings.lastBackupTimestamp = Date.now();
     updateSettings({ lastBackupTimestamp: settings.lastBackupTimestamp });
 
-    return { count: npc.length + items.length + timeline.length + memories.length + threads.length, size: json.length };
+    const mapCount = Object.keys(map?.locations || {}).length;
+    const clueCount = Array.isArray(clueBoard?.nodes) ? clueBoard.nodes.length : 0;
+    return { count: npc.length + items.length + timeline.length + memories.length + threads.length + mapCount + clueCount, size: json.length };
+}
+
+async function restoreMapBackup(chatId, backupMap) {
+    const idMap = new Map();
+    if (!backupMap || typeof backupMap !== 'object' || !backupMap.locations) {
+        return { restored: 0, skipped: 0, idMap };
+    }
+
+    const { getMap, setMap } = await import('./map-store.js');
+    const current = await getMap(chatId);
+    const locations = current?.locations && typeof current.locations === 'object' ? { ...current.locations } : {};
+    const existingIds = new Set(Object.keys(locations));
+    const existingNames = new Map();
+    for (const loc of Object.values(locations)) {
+        const key = (loc.name || '').toLowerCase().trim();
+        if (key) existingNames.set(key, loc);
+    }
+
+    let restored = 0;
+    let skipped = 0;
+    const addedIds = [];
+    for (const raw of Object.values(backupMap.locations || {})) {
+        if (!raw || typeof raw !== 'object') continue;
+        const oldId = raw.id;
+        const nameKey = (raw.name || '').toLowerCase().trim();
+        if (oldId && existingIds.has(oldId)) {
+            idMap.set(oldId, oldId);
+            skipped++;
+            continue;
+        }
+        const duplicate = nameKey ? existingNames.get(nameKey) : null;
+        if (duplicate) {
+            if (oldId) idMap.set(oldId, duplicate.id);
+            skipped++;
+            continue;
+        }
+
+        const loc = { ...raw };
+        if (!loc.id || existingIds.has(loc.id)) loc.id = generateId();
+        locations[loc.id] = loc;
+        existingIds.add(loc.id);
+        if (nameKey) existingNames.set(nameKey, loc);
+        if (oldId) idMap.set(oldId, loc.id);
+        addedIds.push(loc.id);
+        restored++;
+    }
+
+    for (const locId of addedIds) {
+        const loc = locations[locId];
+        if (loc.parentId && idMap.has(loc.parentId)) loc.parentId = idMap.get(loc.parentId);
+        if (Array.isArray(loc.edges)) {
+            loc.edges = loc.edges
+                .map(edge => ({ ...edge, toId: idMap.get(edge.toId) || edge.toId }))
+                .filter(edge => edge.toId && locations[edge.toId]);
+        } else {
+            loc.edges = [];
+        }
+    }
+
+    await setMap(chatId, { ...backupMap, locations }, { skipBackup: true });
+    return { restored, skipped, idMap };
+}
+
+async function restoreClueBoardBackup(chatId, backupBoard, idMaps = {}) {
+    const nodeIdMap = new Map();
+    if (!backupBoard || typeof backupBoard !== 'object') {
+        return { restored: 0, skipped: 0, idMap: nodeIdMap };
+    }
+
+    const { getClueBoard, setClueBoard } = await import('./clue-board.js');
+    const current = await getClueBoard(chatId);
+    const nodes = Array.isArray(current?.nodes) ? [...current.nodes] : [];
+    const connections = Array.isArray(current?.connections) ? [...current.connections] : [];
+    const existingNodeIds = new Set(nodes.map(n => n.id).filter(Boolean));
+    const existingNodeKeys = new Map();
+    for (const node of nodes) {
+        const key = `${node.refType || ''}|${node.refId || ''}|${(node.label || '').toLowerCase().trim()}`;
+        existingNodeKeys.set(key, node);
+    }
+
+    let restored = 0;
+    let skipped = 0;
+    for (const raw of (backupBoard.nodes || [])) {
+        if (!raw || typeof raw !== 'object') continue;
+        const node = { ...raw };
+        const refMap = idMaps[node.refType];
+        if (node.refId && refMap?.has(node.refId)) node.refId = refMap.get(node.refId);
+        const oldNodeId = raw.id;
+        const key = `${node.refType || ''}|${node.refId || ''}|${(node.label || '').toLowerCase().trim()}`;
+
+        if (oldNodeId && existingNodeIds.has(oldNodeId)) {
+            nodeIdMap.set(oldNodeId, oldNodeId);
+            skipped++;
+            continue;
+        }
+        const duplicate = existingNodeKeys.get(key);
+        if (duplicate) {
+            if (oldNodeId) nodeIdMap.set(oldNodeId, duplicate.id);
+            skipped++;
+            continue;
+        }
+        if (!node.id || existingNodeIds.has(node.id)) node.id = generateId();
+        nodes.push(node);
+        existingNodeIds.add(node.id);
+        existingNodeKeys.set(key, node);
+        if (oldNodeId) nodeIdMap.set(oldNodeId, node.id);
+        restored++;
+    }
+
+    for (const node of nodes) {
+        if (node.parentId && nodeIdMap.has(node.parentId)) node.parentId = nodeIdMap.get(node.parentId);
+    }
+
+    const existingConnKeys = new Set(connections.map(c => `${c.fromNodeId}|${c.toNodeId}|${c.type || ''}|${c.label || ''}`));
+    for (const raw of (backupBoard.connections || [])) {
+        if (!raw || typeof raw !== 'object') continue;
+        const conn = {
+            ...raw,
+            fromNodeId: nodeIdMap.get(raw.fromNodeId) || raw.fromNodeId,
+            toNodeId: nodeIdMap.get(raw.toNodeId) || raw.toNodeId,
+        };
+        if (!existingNodeIds.has(conn.fromNodeId) || !existingNodeIds.has(conn.toNodeId)) {
+            skipped++;
+            continue;
+        }
+        const key = `${conn.fromNodeId}|${conn.toNodeId}|${conn.type || ''}|${conn.label || ''}`;
+        if (existingConnKeys.has(key)) {
+            skipped++;
+            continue;
+        }
+        if (!conn.id || connections.some(c => c.id === conn.id)) conn.id = generateId();
+        connections.push(conn);
+        existingConnKeys.add(key);
+        restored++;
+    }
+
+    await setClueBoard(chatId, { nodes, connections, updatedAt: backupBoard.updatedAt || Date.now() }, { skipBackup: true });
+    return { restored, skipped, idMap: nodeIdMap };
 }
 
 export async function importMemoriesFromChatMetadata(chatId) {
@@ -1055,90 +1203,94 @@ export async function importMemoriesFromChatMetadata(chatId) {
     }
 
     let restored = 0, skipped = 0;
+    const idMaps = {};
+    const restorePart = async (type, entries, loader, keyFn, transform = null) => {
+        const idMap = new Map();
+        idMaps[type] = idMap;
+        if (!Array.isArray(entries) || entries.length === 0) return;
 
-    // 恢复 NPC
-    if (Array.isArray(backup.npc)) {
-        const existing = await getNpcProfiles(chatId);
-        const existingIds = new Set(existing.map(e => e.id));
-        const existingNames = new Set(existing.map(e => e.name.toLowerCase()));
-        for (const entry of backup.npc) {
-            if (existingIds.has(entry.id) || existingNames.has((entry.name || '').toLowerCase())) {
+        const existing = await loader(chatId);
+        const next = [...existing];
+        const existingIds = new Set(existing.map(e => e.id).filter(Boolean));
+        const existingKeys = new Map();
+        for (const entry of existing) {
+            const key = keyFn(entry);
+            if (key) existingKeys.set(key, entry);
+        }
+
+        let changed = false;
+        for (const raw of entries) {
+            if (!raw || typeof raw !== 'object') continue;
+            const oldId = raw.id;
+            if (oldId && existingIds.has(oldId)) {
+                idMap.set(oldId, oldId);
                 skipped++;
-            } else {
-                const { id: _id, ...data } = entry;
-                await addNpcProfile(chatId, { ...data, id: undefined });
-                restored++;
+                continue;
+            }
+
+            const key = keyFn(raw);
+            const duplicate = key ? existingKeys.get(key) : null;
+            if (duplicate) {
+                if (oldId) idMap.set(oldId, duplicate.id);
+                skipped++;
+                continue;
+            }
+
+            const entry = transform ? transform({ ...raw }) : { ...raw };
+            if (!entry.id || existingIds.has(entry.id)) entry.id = generateId();
+            existingIds.add(entry.id);
+            const nextKey = keyFn(entry);
+            if (nextKey) existingKeys.set(nextKey, entry);
+            next.push(entry);
+            if (oldId) idMap.set(oldId, entry.id);
+            restored++;
+            changed = true;
+        }
+
+        if (changed) await saveCollection(type, chatId, next);
+    };
+
+    await restorePart('npc', backup.npc, getNpcProfiles, e => (e.name || '').toLowerCase().trim());
+    await restorePart('item', backup.items, getItems, e => (e.name || '').toLowerCase().trim());
+    await restorePart('timeline', backup.timeline, getTimeline, e => `${(e.event || '').toLowerCase().trim()}|${e.storyTime || ''}`);
+    await restorePart('mem', backup.memories, getMemories, e => `${(e.title || '').toLowerCase().trim()}|${(e.content || '').toLowerCase().trim().slice(0, 80)}`);
+    await restorePart('threads', backup.threads, getTimelineThreads, e => (e.name || '').toLowerCase().trim(), thread => {
+        if (thread.parentThreadId && idMaps.threads?.has(thread.parentThreadId)) {
+            thread.parentThreadId = idMaps.threads.get(thread.parentThreadId);
+        }
+        if (Array.isArray(thread.entries) && idMaps.timeline) {
+            thread.entries = thread.entries.map(entry => ({
+                ...entry,
+                refId: idMaps.timeline.get(entry.refId) || entry.refId,
+            }));
+        }
+        return thread;
+    });
+    if (idMaps.threads?.size > 0) {
+        const threads = await getTimelineThreads(chatId);
+        let changed = false;
+        for (const thread of threads) {
+            if (thread.parentThreadId && idMaps.threads.has(thread.parentThreadId)) {
+                thread.parentThreadId = idMaps.threads.get(thread.parentThreadId);
+                changed = true;
             }
         }
+        if (changed) await saveCollection('threads', chatId, threads);
     }
 
-    // 恢复物品
-    if (Array.isArray(backup.items)) {
-        const existing = await getItems(chatId);
-        const existingIds = new Set(existing.map(e => e.id));
-        const existingNames = new Set(existing.map(e => e.name.toLowerCase()));
-        for (const entry of backup.items) {
-            if (existingIds.has(entry.id) || existingNames.has((entry.name || '').toLowerCase())) {
-                skipped++;
-            } else {
-                const { id: _id, ...data } = entry;
-                await addItem(chatId, { ...data, id: undefined });
-                restored++;
-            }
-        }
-    }
+    const mapResult = await restoreMapBackup(chatId, backup.map || backup.mapData);
+    restored += mapResult.restored;
+    skipped += mapResult.skipped;
 
-    // 恢复时间线（id 去重 + event+storyTime 指纹去重，防止跨设备重复）
-    if (Array.isArray(backup.timeline)) {
-        const existing = await getTimeline(chatId);
-        const existingIds = new Set(existing.map(e => e.id));
-        const existingKeys = new Set(existing.map(e => `${(e.event || '').toLowerCase().trim()}|${e.storyTime || ''}`));
-        for (const entry of backup.timeline) {
-            if (existingIds.has(entry.id)) { skipped++; continue; }
-            const entryKey = `${(entry.event || '').toLowerCase().trim()}|${entry.storyTime || ''}`;
-            if (existingKeys.has(entryKey)) { skipped++; continue; }
-            existingKeys.add(entryKey);
-            const { id: _id, ...data } = entry;
-            await addTimelineEntry(chatId, { ...data, id: undefined });
-            restored++;
-        }
-    }
-
-    // 恢复记忆（id 去重 + title+content前80字符 指纹去重，防止跨设备重复）
-    if (Array.isArray(backup.memories)) {
-        const existing = await getMemories(chatId);
-        const existingIds = new Set(existing.map(e => e.id));
-        const existingKeys = new Set(existing.map(e => {
-            const t = (e.title || '').toLowerCase().trim();
-            const c = (e.content || '').toLowerCase().trim().slice(0, 80);
-            return `${t}|${c}`;
-        }));
-        for (const entry of backup.memories) {
-            if (existingIds.has(entry.id)) { skipped++; continue; }
-            const et = (entry.title || '').toLowerCase().trim();
-            const ec = (entry.content || '').toLowerCase().trim().slice(0, 80);
-            if (existingKeys.has(`${et}|${ec}`)) { skipped++; continue; }
-            existingKeys.add(`${et}|${ec}`);
-            const { id: _id, ...data } = entry;
-            await addMemory(chatId, { ...data, id: undefined });
-            restored++;
-        }
-    }
-
-    // v8.5.1 恢复时间线线程（id + name 去重）
-    if (Array.isArray(backup.threads)) {
-        const existingThreads = await getTimelineThreads(chatId);
-        const existingIds = new Set(existingThreads.map(t => t.id));
-        const existingNames = new Set(existingThreads.map(t => (t.name || '').toLowerCase().trim()));
-        for (const thread of backup.threads) {
-            if (existingIds.has(thread.id)) { skipped++; continue; }
-            if (existingNames.has((thread.name || '').toLowerCase().trim())) { skipped++; continue; }
-            existingNames.add((thread.name || '').toLowerCase().trim());
-            const { id: _id, ...data } = thread;
-            await upsertTimelineThread(chatId, { ...data, id: undefined });
-            restored++;
-        }
-    }
+    const clueResult = await restoreClueBoardBackup(chatId, backup.clueBoard || backup.clues, {
+        ...idMaps,
+        items: idMaps.item,
+        memory: idMaps.mem,
+        memories: idMaps.mem,
+        map: mapResult.idMap,
+    });
+    restored += clueResult.restored;
+    skipped += clueResult.skipped;
 
     // v8.2.7 恢复后清除 chatMetadata 中的备份数据，避免聊天文件持续膨胀
     if (ctx.chatMetadata?.[BACKUP_METADATA_KEY]) {
@@ -1392,10 +1544,15 @@ function mergeTags(existing, incoming) {
  * 兼容旧的 exportMemories / importMemories JSON 导出
  */
 export async function exportMemories(chatId) {
-    const [npc, items, timeline, memories] = await Promise.all([
-        getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+    const [{ getMap }, { getClueBoard }] = await Promise.all([
+        import('./map-store.js'),
+        import('./clue-board.js'),
     ]);
-    return JSON.stringify({ version: '5.0', npc, items, timeline, memories }, null, 2);
+    const [npc, items, timeline, memories, threads, map, clueBoard] = await Promise.all([
+        getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+        getTimelineThreads(chatId), getMap(chatId), getClueBoard(chatId),
+    ]);
+    return JSON.stringify({ version: '8.9.0', npc, items, timeline, memories, threads, map, clueBoard }, null, 2);
 }
 
 export async function importMemories(chatId, jsonString) {
@@ -1412,6 +1569,17 @@ export async function importMemories(chatId, jsonString) {
     }
     if (Array.isArray(data.memories)) {
         for (const e of data.memories) { await addMemory(chatId, e); count++; }
+    }
+    if (Array.isArray(data.threads)) {
+        for (const e of data.threads) { await upsertTimelineThread(chatId, e); count++; }
+    }
+    if (data.map || data.mapData) {
+        const result = await restoreMapBackup(chatId, data.map || data.mapData);
+        count += result.restored;
+    }
+    if (data.clueBoard || data.clues) {
+        const result = await restoreClueBoardBackup(chatId, data.clueBoard || data.clues, {});
+        count += result.restored;
     }
     // 兼容旧格式（单数组）
     if (!data.npc && !data.items && !data.timeline && !data.memories && Array.isArray(data)) {

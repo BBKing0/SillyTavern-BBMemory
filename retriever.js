@@ -416,6 +416,87 @@ function formatMemoryLine(m, chatLength = 0) {
     return parts.join(' ');
 }
 
+function formatMapEdgeMeta(edge) {
+    const meta = [edge.distance, edge.pathType, edge.difficulty && edge.difficulty !== 'normal' ? edge.difficulty : ''].filter(Boolean);
+    return meta.length ? `(${meta.join('/')})` : '';
+}
+
+function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 800) {
+    if (!mapData || typeof mapData !== 'object' || Object.keys(mapData.locations || {}).length === 0) {
+        return { lines: [], tokens: 0, truncated: false };
+    }
+
+    const locs = Object.values(mapData.locations || {}).filter(loc => loc && !loc.archived);
+    if (!locs.length) return { lines: [], tokens: 0, truncated: false };
+
+    const locById = new Map(locs.map(loc => [loc.id, loc]));
+    const incoming = new Map(locs.map(loc => [loc.id, []]));
+    const children = new Map(locs.map(loc => [loc.id, []]));
+    for (const loc of locs) {
+        if (loc.parentId && children.has(loc.parentId)) children.get(loc.parentId).push(loc);
+        for (const edge of (loc.edges || [])) {
+            if (incoming.has(edge.toId)) incoming.get(edge.toId).push({ ...edge, fromId: loc.id });
+        }
+    }
+
+    const queryTokens = extractTokens(queryText || '');
+    const scoreLoc = (loc) => {
+        const text = [loc.name, loc.region, loc.description, loc.realWorldRef].filter(Boolean).join(' ').toLowerCase();
+        const queryBoost = queryTokens.some(token => text.includes(token)) ? 100 : 0;
+        const degree = (loc.edges?.length || 0) + (incoming.get(loc.id)?.length || 0) + (children.get(loc.id)?.length || 0);
+        return queryBoost + degree * 5 + (loc.updatedAt || 0) / 10000000000000;
+    };
+    const maxLocations = Math.max(1, settings.mapInjectionMax || 8);
+    const selected = [...locs].sort((a, b) => scoreLoc(b) - scoreLoc(a)).slice(0, maxLocations);
+
+    const worldRef = settings.worldRealWorldRef || '';
+    const header = worldRef ? `【世界地图 — 空间关系】(现实参考: ${worldRef})` : '【世界地图 — 空间关系】';
+    const lines = [header];
+    let tokens = 0;
+    const maxTokens = tokenBudget * 0.18;
+
+    const chainFor = (loc) => {
+        const prev = (incoming.get(loc.id) || [])[0];
+        const next = (loc.edges || []).find(e => locById.has(e.toId));
+        const names = [];
+        if (prev) names.push(locById.get(prev.fromId)?.name || prev.fromId);
+        names.push(loc.name || loc.id);
+        if (next) names.push(locById.get(next.toId)?.name || next.toId);
+        return names.length > 1 ? names.join(' → ') : '';
+    };
+
+    for (const loc of selected) {
+        const parent = loc.parentId ? locById.get(loc.parentId) : null;
+        const outEdges = (loc.edges || []).filter(e => locById.has(e.toId)).slice(0, 3);
+        const inEdges = (incoming.get(loc.id) || []).slice(0, 3);
+        const childNames = (children.get(loc.id) || []).slice(0, 4).map(child => child.name || child.id);
+        const parts = [`◆ ${loc.name || loc.id}`];
+        if (loc.region) parts.push(`区域:${loc.region}`);
+        if (parent) parts.push(`父地点:${parent.name || parent.id}`);
+        if (loc.description) parts.push(`说明:${loc.description.slice(0, 80)}`);
+        if (loc.realWorldRef) parts.push(`现实参考:${loc.realWorldRef}`);
+
+        const relationLines = [];
+        if (outEdges.length) {
+            relationLines.push('  可前往: ' + outEdges.map(e => `${locById.get(e.toId)?.name || e.toId}${formatMapEdgeMeta(e)}`).join('；'));
+        }
+        if (inEdges.length) {
+            relationLines.push('  入口来源: ' + inEdges.map(e => `${locById.get(e.fromId)?.name || e.fromId}${formatMapEdgeMeta(e)}`).join('；'));
+        }
+        if (childNames.length) relationLines.push('  子地点: ' + childNames.join('、'));
+        const chain = chainFor(loc);
+        if (chain) relationLines.push('  局部空间链: ' + chain);
+
+        const line = [parts.join(' | '), ...relationLines].join('\n');
+        const lt = estimateTokens(line);
+        if (tokens + lt > maxTokens) return { lines, tokens, truncated: true };
+        lines.push(line);
+        tokens += lt;
+    }
+
+    return { lines, tokens, truncated: selected.length < locs.length };
+}
+
 // ═══════════════════════════════════════════════════════════
 //  统一注入构建
 // ═══════════════════════════════════════════════════════════
@@ -430,7 +511,7 @@ function formatMemoryLine(m, chatLength = 0) {
  * @param {object} params.settings
  * @returns {{ text: string, tokenEstimate: number, stats: object }}
  */
-export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, threadSummary, relevantResults, settings, chatLength = 0, clueBoard = null, mapData = null }) {
+export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, threadSummary, relevantResults, settings, chatLength = 0, clueBoard = null, mapData = null, queryText = '' }) {
     const tokenBudget = settings.tokenBudget || 800;
     let tokenUsed = 0;
     const stats = { npcCount: 0, itemCount: 0, timelineCount: 0, memoryCount: 0, threadCount: 0 };
@@ -537,36 +618,12 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline,
 
     // ── 区块 5：线索板（v8.4.0）──
     // ── 区块6：世界地图 v8.7.0 ──
-    if (mapData && typeof mapData === 'object' && Object.keys(mapData.locations || {}).length > 0) {
-        const locs = Object.values(mapData.locations || {});
-        const worldRef = settings.worldRealWorldRef || '';
-        const mapHeader = worldRef ? '【世界地图 — 相关地点】(现实参考: ' + worldRef + ')' : '【世界地图 — 相关地点】';
-        const mapLines = [mapHeader];
-        let mapTokens = 0;
-        const maxMapTokens = tokenBudget * 0.15;
-        for (const loc of locs) {
-            const parts = ['◆ ' + (loc.name || '')];
-            if (loc.region) parts.push('(' + loc.region + ')');
-            if (loc.description) parts.push('— ' + loc.description.slice(0, 80));
-            if (loc.realWorldRef) parts.push('[现实参考: ' + loc.realWorldRef + ']');
-            let line = parts.join(' ');
-            if (loc.edges && loc.edges.length > 0) {
-                const conns = loc.edges.slice(0, 4).map(e => {
-                    const target = locs.find(l => l.id === e.toId);
-                    return '  → ' + (target ? target.name : e.toId) + (e.distance ? ' (' + e.distance + ')' : '');
-                });
-                line += '\n' + conns.join('\n');
-            }
-            const lt = Math.ceil(line.length / 3.5);
-            if (mapTokens + lt > maxMapTokens) break;
-            mapLines.push(line);
-            mapTokens += lt;
-        }
-        if (mapLines.length > 1) {
-            sections.push(mapLines.join('\n'));
-            tokenUsed += mapTokens;
-            stats.mapInjected = true;
-        }
+    const mapContext = buildMapContextLines(mapData, settings, queryText, tokenBudget);
+    if (mapContext.lines.length > 1) {
+        sections.push(mapContext.lines.join('\n'));
+        tokenUsed += mapContext.tokens;
+        stats.mapInjected = true;
+        if (mapContext.truncated) truncated.push('地图(按空间关系截断)');
     }
 
     if (clueBoard && typeof clueBoard === 'object') {

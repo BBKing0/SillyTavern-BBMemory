@@ -7,7 +7,7 @@
 
 import {
     getNpcProfiles, getItems, getTimeline, getMemories,
-    getSettings, updateSettings,
+    scheduleAutoBackup,
 } from './memory-store.js';
 import {
     createGraphViewport,
@@ -46,6 +46,7 @@ async function loadBoard(chatId) {
 async function saveBoard(chatId, board) {
     board.updatedAt = Date.now();
     await getLocalForage().setItem(CLUE_BOARD_KEY + chatId, board);
+    scheduleAutoBackup(chatId);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -54,6 +55,20 @@ async function saveBoard(chatId, board) {
 
 export async function getClueBoard(chatId) {
     return loadBoard(chatId);
+}
+
+export async function setClueBoard(chatId, data, options = {}) {
+    const safe = {
+        nodes: Array.isArray(data?.nodes) ? data.nodes : [],
+        connections: Array.isArray(data?.connections) ? data.connections : [],
+        updatedAt: data?.updatedAt || Date.now(),
+    };
+    if (options.skipBackup) {
+        await getLocalForage().setItem(CLUE_BOARD_KEY + chatId, safe);
+    } else {
+        await saveBoard(chatId, safe);
+    }
+    return safe;
 }
 
 export async function addClueNode(chatId, data) {
@@ -171,6 +186,17 @@ export function buildClueBoardInjection(board) {
 
     const nodeMap = new Map();
     for (const n of board.nodes) nodeMap.set(n.id, n);
+    const validConnections = (board.connections || []).filter(c => nodeMap.has(c.fromNodeId) && nodeMap.has(c.toNodeId));
+    const incoming = new Map();
+    const outgoing = new Map();
+    for (const node of board.nodes) {
+        incoming.set(node.id, []);
+        outgoing.set(node.id, []);
+    }
+    for (const conn of validConnections) {
+        incoming.get(conn.toNodeId)?.push(conn);
+        outgoing.get(conn.fromNodeId)?.push(conn);
+    }
 
     const lines = [
         '【玩家推理板】',
@@ -179,9 +205,43 @@ export function buildClueBoardInjection(board) {
         '',
     ];
 
+    const confidenceWeight = { high: 3, medium: 2, low: 1 };
+    const sortedConnections = [...validConnections].sort((a, b) => {
+        const scoreA = confidenceWeight[a.confidence] || 2;
+        const scoreB = confidenceWeight[b.confidence] || 2;
+        return scoreB - scoreA;
+    });
+
+    const roots = board.nodes
+        .filter(n => (outgoing.get(n.id) || []).length > 0 && (incoming.get(n.id) || []).length === 0)
+        .slice(0, 3);
+    const chainLines = [];
+    for (const root of roots) {
+        const visited = new Set([root.id]);
+        const names = [root.label || root.id];
+        let current = root;
+        for (let depth = 0; depth < 4; depth++) {
+            const nextConn = (outgoing.get(current.id) || [])
+                .filter(c => !visited.has(c.toNodeId))
+                .sort((a, b) => (confidenceWeight[b.confidence] || 2) - (confidenceWeight[a.confidence] || 2))[0];
+            if (!nextConn) break;
+            const nextNode = nodeMap.get(nextConn.toNodeId);
+            if (!nextNode) break;
+            names.push(`${CONN_TYPE_LABEL[nextConn.type] || '→关联→'} ${nextNode.label || nextNode.id}`);
+            visited.add(nextNode.id);
+            current = nextNode;
+        }
+        if (names.length > 1) chainLines.push('● ' + names.join(' '));
+    }
+    if (chainLines.length) {
+        lines.push('关键推理链：');
+        lines.push(...chainLines);
+        lines.push('');
+    }
+
     // 有连线的节点：按连线格式化
     const connectedNodes = new Set();
-    for (const conn of board.connections) {
+    for (const conn of sortedConnections) {
         const fromNode = nodeMap.get(conn.fromNodeId);
         const toNode = nodeMap.get(conn.toNodeId);
         if (!fromNode || !toNode) continue;
@@ -193,11 +253,16 @@ export function buildClueBoardInjection(board) {
         const confStr = CONFIDENCE_LABEL[conn.confidence] || '信心：中';
         const fromLabel = fromNode.label || fromNode.id;
         const toLabel = toNode.label || toNode.id;
+        const fromDegree = `${incoming.get(fromNode.id)?.length || 0}入/${outgoing.get(fromNode.id)?.length || 0}出`;
+        const toDegree = `${incoming.get(toNode.id)?.length || 0}入/${outgoing.get(toNode.id)?.length || 0}出`;
 
-        lines.push(`● [${fromLabel}] ${typeStr} [${toLabel}]（${confStr}）`);
+        lines.push(`● [${fromLabel}] ${typeStr} [${toLabel}]（${confStr}；${fromLabel}:${fromDegree}，${toLabel}:${toDegree}）`);
 
         if (fromNode.note) {
             lines.push(`  玩家推测：${fromNode.note}`);
+        }
+        if (toNode.note && toNode.note !== fromNode.note) {
+            lines.push(`  相关备注：${toNode.note}`);
         }
         if (conn.label) {
             lines.push(`  备注：${conn.label}`);
@@ -213,8 +278,8 @@ export function buildClueBoardInjection(board) {
     }
 
     lines.push('');
-    lines.push('叙事建议：高信心线索通常应顺着发展；中信心可部分证实部分推翻；');
-    lines.push('低信心线索是设置反转的最佳位置。不要一次性回收所有线索——留一些给未来的轮次。');
+    lines.push('叙事建议：高信心链路通常应顺着发展；中信心可部分证实部分推翻；');
+    lines.push('低信心或孤立线索适合埋伏、误导或反转。不要一次性回收所有线索——留一些给未来的轮次。');
 
     return lines.join('\n');
 }
