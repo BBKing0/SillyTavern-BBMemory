@@ -262,19 +262,31 @@ export async function autoLayout(chatId) {
     if (locs.length === 0) return;
 
     // 按区域分组，分配到不同Y区域
-    const regions = [...new Set(locs.map(l => l.region || ''))];
+    const regions = [...new Set(locs.map(l => l.region || ''))].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
     const regionLocs = {};
     for (const r of regions) {
         regionLocs[r] = locs.filter(l => (l.region || '') === r);
     }
+    const locRegion = new Map(locs.map(l => [l.id, l.region || '']));
 
     // 为每个区域分配Y范围
     const regionCount = regions.length || 1;
+    const cols = Math.max(1, Math.ceil(Math.sqrt(regionCount)));
+    const rows = Math.max(1, Math.ceil(regionCount / cols));
+    const gap = 0.035;
     for (let ri = 0; ri < regions.length; ri++) {
         const r = regions[ri];
         const rLocs = regionLocs[r];
-        const yBase = ri / regionCount;
-        const yRange = 0.8 / regionCount;
+        const col = ri % cols;
+        const row = Math.floor(ri / cols);
+        const cellW = 1 / cols;
+        const cellH = 1 / rows;
+        const xMin = Math.min(0.95, col * cellW + gap);
+        const yMin = Math.min(0.95, row * cellH + gap);
+        const xMax = Math.max(xMin + 0.05, (col + 1) * cellW - gap);
+        const yMax = Math.max(yMin + 0.05, (row + 1) * cellH - gap);
+        const xRange = Math.max(0.05, xMax - xMin);
+        const yRange = Math.max(0.05, yMax - yMin);
 
         // 区域内按连通分量分组X
         const visited = new Set();
@@ -291,7 +303,7 @@ export async function autoLayout(chatId) {
                 if (!l) continue;
                 comp.push(l);
                 for (const e of (l.edges || [])) {
-                    if (!visited.has(e.toId)) queue.push(e.toId);
+                    if (locRegion.get(e.toId) === r && !visited.has(e.toId)) queue.push(e.toId);
                 }
             }
             if (comp.length > 0) components.push(comp);
@@ -301,12 +313,17 @@ export async function autoLayout(chatId) {
         const compCount = components.length || 1;
         for (let ci = 0; ci < components.length; ci++) {
             const comp = components[ci];
-            const xBase = ci / compCount;
-            const xRange = 0.8 / compCount;
+            const compMinX = xMin + (ci / compCount) * xRange;
+            const compMaxX = xMin + ((ci + 1) / compCount) * xRange;
+            const compWidth = Math.max(0.04, compMaxX - compMinX);
+            const compPadX = Math.min(0.035, compWidth * 0.18);
+            const compLeft = compMinX + compPadX;
+            const compRight = compMaxX - compPadX;
+            const compSpan = Math.max(0.02, compRight - compLeft);
 
             // 分量内：有连线的节点形成链，无连线的均匀分布
-            const connected = comp.filter(l => (l.edges || []).length > 0);
-            const isolated = comp.filter(l => (l.edges || []).length === 0);
+            const connected = comp.filter(l => (l.edges || []).some(e => locRegion.get(e.toId) === r));
+            const isolated = comp.filter(l => !(l.edges || []).some(e => locRegion.get(e.toId) === r));
 
             // 连接节点：BFS排序后均匀分布
             if (connected.length > 1) {
@@ -321,23 +338,50 @@ export async function autoLayout(chatId) {
                     const l = map.locations[id];
                     if (l) bfsOrder.push(l);
                     for (const e of (l?.edges || [])) {
-                        if (!bfsVisited.has(e.toId)) bfsQueue.push(e.toId);
+                        if (locRegion.get(e.toId) === r && !bfsVisited.has(e.toId)) bfsQueue.push(e.toId);
                     }
                 }
                 for (let i = 0; i < bfsOrder.length; i++) {
-                    bfsOrder[i].x = xBase + 0.05 + (i / (bfsOrder.length - 1 || 1)) * (xRange - 0.1);
-                    bfsOrder[i].y = yBase + 0.02 + Math.random() * yRange * 0.3;
+                    bfsOrder[i].x = compLeft + (i / (bfsOrder.length - 1 || 1)) * compSpan;
+                    bfsOrder[i].y = yMin + yRange * (0.2 + (i % 2) * 0.18);
                 }
             } else if (connected.length === 1) {
-                connected[0].x = xBase + xRange / 2;
-                connected[0].y = yBase + yRange * 0.3;
+                connected[0].x = compMinX + compWidth / 2;
+                connected[0].y = yMin + yRange * 0.28;
             }
 
             // 孤立节点
             for (let i = 0; i < isolated.length; i++) {
-                isolated[i].x = xBase + 0.05 + (i % 3) * (xRange / 3);
-                isolated[i].y = yBase + yRange * 0.5 + Math.floor(i / 3) * (yRange * 0.15);
+                const isoCols = Math.max(1, Math.min(3, Math.ceil(Math.sqrt(isolated.length))));
+                const isoRows = Math.max(1, Math.ceil(isolated.length / isoCols));
+                const ix = i % isoCols;
+                const iy = Math.floor(i / isoCols);
+                isolated[i].x = compMinX + compWidth * ((ix + 1) / (isoCols + 1));
+                isolated[i].y = yMin + yRange * (0.55 + (iy / Math.max(1, isoRows)) * 0.35);
+                isolated[i].x = Math.max(xMin + 0.02, Math.min(xMax - 0.02, isolated[i].x));
+                isolated[i].y = Math.max(yMin + 0.02, Math.min(yMax - 0.02, isolated[i].y));
             }
+        }
+
+        const childrenByParent = new Map();
+        for (const loc of rLocs) {
+            const parent = loc.parentId ? map.locations[loc.parentId] : null;
+            if (!parent || (parent.region || '') !== r) continue;
+            if (!childrenByParent.has(parent.id)) childrenByParent.set(parent.id, []);
+            childrenByParent.get(parent.id).push(loc);
+        }
+        for (const [parentId, children] of childrenByParent.entries()) {
+            const parent = map.locations[parentId];
+            if (!parent) continue;
+            const radius = Math.max(0.035, Math.min(xRange, yRange) * 0.16);
+            const angleStep = (Math.PI * 2) / Math.max(1, children.length);
+            children.forEach((child, i) => {
+                const angle = -Math.PI / 2 + i * angleStep;
+                child.x = parent.x + Math.cos(angle) * radius;
+                child.y = parent.y + Math.sin(angle) * radius;
+                child.x = Math.max(xMin + 0.025, Math.min(xMax - 0.025, child.x));
+                child.y = Math.max(yMin + 0.025, Math.min(yMax - 0.025, child.y));
+            });
         }
     }
 

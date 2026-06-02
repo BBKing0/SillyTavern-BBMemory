@@ -9,6 +9,12 @@ import {
     getNpcProfiles, getItems, getTimeline, getMemories,
     getSettings, updateSettings,
 } from './memory-store.js';
+import {
+    createGraphViewport,
+    fitToGraph,
+    worldToScreen,
+    bindGraphPointerControls,
+} from './graph-view-core.js';
 
 // ═══════════════════════════════════════════════════════════
 //  数据层
@@ -59,6 +65,8 @@ export async function addClueNode(chatId, data) {
         label: data.label || '',
         note: data.note || '',
         parentId: data.parentId || null, // v8.8.2
+        x: typeof data.x === 'number' ? data.x : null,
+        y: typeof data.y === 'number' ? data.y : null,
         createdAt: Date.now(),
     };
     board.nodes.push(node);
@@ -92,6 +100,8 @@ export async function updateClueNode(chatId, nodeId, patch) {
     if (patch.label !== undefined) node.label = patch.label;
     if (patch.note !== undefined) node.note = patch.note;
     if (patch.parentId !== undefined) node.parentId = patch.parentId; // v8.8.2
+    if (patch.x !== undefined) node.x = patch.x;
+    if (patch.y !== undefined) node.y = patch.y;
     await saveBoard(chatId, board);
     return node;
 }
@@ -233,7 +243,11 @@ async function getChatId() {
 
 export async function openClueBoard(chatId) {
     const existing = document.querySelector('.bb-clue-overlay');
-    if (existing) existing.remove();
+    if (existing) {
+        const existingBody = existing.querySelector('.bb-clue-spatial-body');
+        if (typeof existingBody?._clueCleanup === 'function') existingBody._clueCleanup();
+        existing.remove();
+    }
 
     const board = await getClueBoard(chatId);
     const nodeMap = new Map();
@@ -242,7 +256,7 @@ export async function openClueBoard(chatId) {
     const overlay = document.createElement('div');
     overlay.className = 'bb-clue-overlay';
     overlay.style.cssText = 'position:fixed;inset:0;z-index:99990;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeOverlay(); });
 
     const panel = document.createElement('div');
     panel.className = 'bb-clue-panel';
@@ -266,11 +280,11 @@ export async function openClueBoard(chatId) {
         <button class="bb-clue-view-btn menu_button" style="font-size:0.72em;padding:2px 8px;" title="切换视图">🗺 空间</button>
         <button class="bb-clue-close-btn" style="background:none;border:none;color:inherit;font-size:22px;cursor:pointer;opacity:0.6;line-height:1;padding:0 4px;">&times;</button>
     `;
-    header.querySelector('.bb-clue-close-btn').addEventListener('click', () => overlay.remove());
+    header.querySelector('.bb-clue-close-btn').addEventListener('click', () => closeOverlay());
     header.querySelector('.bb-clue-view-btn').addEventListener('click', () => {
         viewMode = viewMode === 'list' ? 'spatial' : 'list';
         header.querySelector('.bb-clue-view-btn').textContent = viewMode === 'list' ? '🗺 空间' : '📋 列表';
-        const newBody = panel.querySelector('div[style*="flex:1"]');
+        const newBody = body;
         if (newBody) {
             const freshBoard = body._clueBoard || board;
             if (viewMode === 'spatial') renderClueBoardSpatial(newBody, freshBoard, editMode);
@@ -282,7 +296,7 @@ export async function openClueBoard(chatId) {
         header.querySelector('.bb-clue-edit-btn').textContent = editMode ? '✏️' : '🔒';
         header.querySelector('.bb-clue-edit-btn').style.background = editMode ? 'var(--SmartThemeQuoteColor,#4caf50)' : '';
         header.querySelector('.bb-clue-edit-btn').style.color = editMode ? '#fff' : '';
-        const newBody = panel.querySelector('div[style*="flex:1"]');
+        const newBody = body;
         if (newBody && viewMode === 'spatial') {
             const freshBoard = body._clueBoard || board;
             renderClueBoardSpatial(newBody, freshBoard, editMode);
@@ -292,8 +306,10 @@ export async function openClueBoard(chatId) {
 
     // ── 主体 ──
     const body = document.createElement('div');
+    body.className = 'bb-clue-body';
     body.style.cssText = 'flex:1;overflow-y:auto;padding:12px 18px;min-height:0;';
     body._clueBoard = board;
+    body._clueChatId = chatId;
     panel.appendChild(body);
 
     // ── 底部工具栏 ──
@@ -314,6 +330,28 @@ export async function openClueBoard(chatId) {
 
     document.body.appendChild(overlay);
 
+    let onKeyDown = null;
+    function closeOverlay() {
+        if (typeof body._clueCleanup === 'function') body._clueCleanup();
+        if (onKeyDown) document.removeEventListener('keydown', onKeyDown);
+        overlay.remove();
+    }
+
+    function updatePanelStats(nextBoard) {
+        const connBtn = panel.querySelector('#bb_clue_add_conn');
+        if (connBtn) connBtn.disabled = nextBoard.nodes.length < 2;
+        const countEl = panel.querySelector('.bb-clue-count');
+        if (countEl) countEl.textContent = nextBoard.nodes.length + ' 节点 · ' + nextBoard.connections.length + ' 连线';
+    }
+
+    function renderCurrentBoard(nextBoard) {
+        body._clueBoard = nextBoard;
+        body._clueChatId = chatId;
+        if (viewMode === 'spatial') renderClueBoardSpatial(body, nextBoard, editMode);
+        else refreshClueBoard(body, nextBoard, chatId, overlay, panel);
+        updatePanelStats(nextBoard);
+    }
+
     // ── 渲染内容 ──
     renderClueBoardBody(body, board, chatId, overlay, panel);
 
@@ -321,7 +359,7 @@ export async function openClueBoard(chatId) {
     footer.querySelector('#bb_clue_add_node').addEventListener('click', () => {
         showAddNodeDialog(chatId, async () => {
             const newBoard = await getClueBoard(chatId);
-            refreshClueBoard(body, newBoard, chatId, overlay, panel);
+            renderCurrentBoard(newBoard);
         });
     });
     footer.querySelector('#bb_clue_add_conn').addEventListener('click', () => {
@@ -330,7 +368,7 @@ export async function openClueBoard(chatId) {
         showAddConnectionDialog(currentBoard.nodes, async (connData) => {
             await addClueConnection(chatId, connData);
             const newBoard = await getClueBoard(chatId);
-            refreshClueBoard(body, newBoard, chatId, overlay, panel);
+            renderCurrentBoard(newBoard);
         });
     });
     footer.querySelector('#bb_clue_help').addEventListener('click', () => {
@@ -352,14 +390,18 @@ export async function openClueBoard(chatId) {
     });
 
     // ESC 关闭
-    const onKeyDown = (e) => { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onKeyDown); } };
+    onKeyDown = (e) => { if (e.key === 'Escape') closeOverlay(); };
     document.addEventListener('keydown', onKeyDown);
 }
 
 function refreshClueBoard(body, board, chatId, overlay, panel) {
+    if (typeof body._clueCleanup === 'function') body._clueCleanup();
+    body.className = 'bb-clue-body';
+    body.style.cssText = 'flex:1;overflow-y:auto;padding:12px 18px;min-height:0;';
     body.innerHTML = '';
     renderClueBoardBody(body, board, chatId, overlay, panel);
     body._clueBoard = board;
+    body._clueChatId = chatId;
     if (panel) {
         const connBtn = panel.querySelector('#bb_clue_add_conn');
         if (connBtn) connBtn.disabled = board.nodes.length < 2;
@@ -381,51 +423,97 @@ function showToast(msg, type = 'info') {
 //  SVG 图形视图
 // ═══════════════════════════════════════════════════════════
 
-// v8.8.3 线索板空间视图 —— 统一像素坐标系
+function clamp01(value) {
+    if (!Number.isFinite(value)) return 0.5;
+    return Math.max(0.02, Math.min(0.98, value));
+}
+
+// v8.8.8 线索板空间视图 —— 复用地图图视口核心
 function renderClueBoardSpatial(body, board, editMode) {
+    if (typeof body._clueCleanup === 'function') body._clueCleanup();
+
     const nodes = board.nodes || [];
     const conns = board.connections || [];
-    const nodeMap = {}; for (const n of nodes) nodeMap[n.id] = n;
+    const nodeMap = new Map(nodes.map(n => [n.id, n]));
 
     body.innerHTML = '';
-    body.style.cssText = 'position:relative;overflow:hidden;min-height:350px;flex:1;';
+    body.className = 'bb-clue-spatial-body';
+    body.style.cssText = '';
 
     const refColors = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784' };
+    const refIcons = { mem: 'fa-brain', npc: 'fa-user', item: 'fa-box', timeline: 'fa-clock' };
+    const refLabels = { mem: '记忆', npc: 'NPC', item: '物品', timeline: '时间线' };
     const typeColors = { causal: '#ff9800', hint: '#2196f3', contradicts: '#f44336', related: '#9e9e9e', speculation: '#ce93d8' };
 
-    // 给无坐标的节点分配随机位置
-    for (const n of nodes) {
-        if (n._x == null) n._x = 0.15 + Math.random() * 0.7;
-        if (n._y == null) n._y = 0.1 + Math.random() * 0.8;
+    if (!nodes.length) {
+        body.innerHTML = '<div class="bb-map-empty"><i class="fa-solid fa-magnifying-glass"></i><div>还没有线索节点</div></div>';
+        body._clueCleanup = null;
+        return;
     }
 
-    // 父子关系映射
-    const children = {}; for (const n of nodes) { const pid = n.parentId || ''; if (!children[pid]) children[pid] = []; children[pid].push(n); }
-    // v8.8.3 父节点标签位置（连线端点用）
-    const parentLabelPos = {};
+    nodes.forEach((node, index) => {
+        if (!Number.isFinite(node.x)) node.x = Number.isFinite(node._x) ? node._x : 0.16 + (index % 4) * 0.22;
+        if (!Number.isFinite(node.y)) node.y = Number.isFinite(node._y) ? node._y : 0.18 + Math.floor(index / 4) * 0.2;
+        node.x = clamp01(node.x);
+        node.y = clamp01(node.y);
+    });
+
+    const children = new Map();
+    for (const node of nodes) {
+        const pid = node.parentId || '';
+        if (!children.has(pid)) children.set(pid, []);
+        children.get(pid).push(node);
+    }
 
     const canvas = document.createElement('canvas');
-    canvas.style.cssText = 'position:absolute;inset:0;z-index:1;pointer-events:none;';
-    body.appendChild(canvas);
-
+    canvas.className = 'bb-clue-spatial-canvas';
+    const groupLayer = document.createElement('div');
+    groupLayer.className = 'bb-clue-spatial-group-layer';
     const cardLayer = document.createElement('div');
-    cardLayer.style.cssText = 'position:absolute;inset:0;z-index:2;pointer-events:none;';
+    cardLayer.className = 'bb-clue-spatial-card-layer';
+    const detailPane = document.createElement('div');
+    detailPane.className = 'bb-clue-detail-pane';
+    detailPane.style.display = 'none';
+
+    body.appendChild(canvas);
+    body.appendChild(groupLayer);
     body.appendChild(cardLayer);
+    body.appendChild(detailPane);
 
-    let scale = 1, panX = 0, panY = 0, isDragging = false, dragStartX = 0, dragStartY = 0;
+    const viewport = createGraphViewport(body, { minScale: 0.35, maxScale: 2.8, minHeight: 350 });
+    fitToGraph(nodes, viewport, {
+        padding: window.innerWidth <= 480 ? 58 : 92,
+        minScale: 0.35,
+        maxScale: 2.1,
+    });
 
-    function getContainerSize() {
-        return { w: body.clientWidth, h: Math.max(body.clientHeight, 350) };
+    let selectedId = null;
+    let activeDragCleanup = null;
+
+    function getDescendants(node) {
+        const result = [];
+        const queue = [...(children.get(node.id) || [])];
+        while (queue.length) {
+            const child = queue.shift();
+            result.push(child);
+            queue.push(...(children.get(child.id) || []));
+        }
+        return result;
     }
 
-    function worldToScreen(node) {
-        const { w, h } = getContainerSize();
-        return { x: node._x * w * scale + panX, y: node._y * h * scale + panY };
+    function pointBounds(boundsNodes, pad = 52) {
+        const points = boundsNodes.map(n => worldToScreen(n, viewport));
+        return {
+            minX: Math.min(...points.map(p => p.x)) - pad,
+            minY: Math.min(...points.map(p => p.y)) - pad,
+            maxX: Math.max(...points.map(p => p.x)) + pad,
+            maxY: Math.max(...points.map(p => p.y)) + pad,
+        };
     }
 
     function drawCanvas() {
         const dpr = window.devicePixelRatio || 1;
-        const { w, h } = getContainerSize();
+        const { w, h } = viewport.getSize();
         canvas.width = w * dpr; canvas.height = h * dpr;
         canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
         const ctx = canvas.getContext('2d');
@@ -433,203 +521,235 @@ function renderClueBoardSpatial(body, board, editMode) {
         ctx.clearRect(0, 0, w, h);
 
         for (const conn of conns) {
-            const from = nodeMap[conn.fromNodeId], to = nodeMap[conn.toNodeId];
+            const from = nodeMap.get(conn.fromNodeId), to = nodeMap.get(conn.toNodeId);
             if (!from || !to) continue;
-            const fromIsParent = (children[conn.fromNodeId] || []).length > 0;
-            const toIsParent = (children[conn.toNodeId] || []).length > 0;
-            const fp = fromIsParent && parentLabelPos[from.id] ? parentLabelPos[from.id] : worldToScreen(from);
-            const tp = toIsParent && parentLabelPos[to.id] ? parentLabelPos[to.id] : worldToScreen(to);
+            const fp = worldToScreen(from, viewport);
+            const tp = worldToScreen(to, viewport);
             const tc = typeColors[conn.type] || '#888';
             ctx.strokeStyle = tc + (conn.confidence === 'low' ? '55' : '88');
             ctx.lineWidth = conn.confidence === 'high' ? 2 : 1.2;
             ctx.setLineDash(conn.confidence === 'low' ? [4, 3] : []);
             const midX = (fp.x + tp.x) / 2;
+            const midY = (fp.y + tp.y) / 2;
             ctx.beginPath();
             ctx.moveTo(fp.x, fp.y);
-            ctx.quadraticCurveTo(midX, fp.y - 10, tp.x, tp.y);
+            ctx.quadraticCurveTo(midX, midY - 20, tp.x, tp.y);
             ctx.stroke();
             ctx.setLineDash([]);
+
+            if (conn.label) {
+                ctx.fillStyle = tc + 'cc';
+                ctx.font = '10px sans-serif';
+                ctx.fillText(conn.label.slice(0, 18), midX + 6, midY - 10);
+            }
         }
     }
 
-    function createNodeCard(n, screenPos, rc, isParent) {
-        const card = document.createElement('div');
-        card.dataset.nodeId = n.id;
-        card.style.cssText = `position:absolute;left:${screenPos.x}px;top:${screenPos.y}px;transform:translate(-50%,-50%);background:var(--SmartThemeChatTintColor,#1e1e2e);border:${isParent ? '2.5px' : '2px'} solid ${rc}${isParent ? 'aa' : '88'};border-radius:${isParent ? '10px' : '8px'};padding:${isParent ? '8px 12px' : '6px 10px'};min-width:${isParent ? '100px' : '80px'};max-width:140px;pointer-events:auto;cursor:pointer;z-index:3;box-shadow:0 2px 6px rgba(0,0,0,0.3);font-size:${isParent ? '0.82em' : '0.8em'};font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;`;
-        card.textContent = (isParent ? '📁 ' : '') + (n.label || n.id);
+    function positionElements() {
+        for (const card of cardLayer.querySelectorAll('.bb-clue-spatial-card')) {
+            const node = nodeMap.get(card.dataset.nodeId);
+            if (!node) continue;
+            const p = worldToScreen(node, viewport);
+            card.style.left = p.x + 'px';
+            card.style.top = p.y + 'px';
+        }
 
-        // 右键菜单
-        card.addEventListener('contextmenu', (e) => {
-            e.preventDefault(); e.stopPropagation();
-            const menu = document.createElement('div');
-            menu.style.cssText = 'position:fixed;z-index:99999;background:var(--SmartThemeChatTintColor);border:1px solid var(--SmartThemeBorderColor);border-radius:8px;padding:4px;box-shadow:0 4px 12px rgba(0,0,0,0.4);font-size:0.8em;';
-            menu.style.left = e.clientX + 'px'; menu.style.top = e.clientY + 'px';
-            const editBtn = document.createElement('button');
-            editBtn.className = 'menu_button'; editBtn.textContent = '✏️ 备注'; editBtn.style.cssText = 'display:block;width:100%;text-align:left;margin:1px 0;';
-            editBtn.addEventListener('click', () => { menu.remove();
-                const note = prompt('编辑备注：', n.note || '');
-                if (note !== null) { updateClueNode(body._clueChatId, n.id, { note: note.trim() }); }
-            });
-            menu.appendChild(editBtn);
-            document.body.appendChild(menu);
-            setTimeout(() => document.addEventListener('click', function rm() { menu.remove(); document.removeEventListener('click', rm); }), 10);
+        for (const box of groupLayer.querySelectorAll('.bb-clue-spatial-parent-box')) {
+            const node = nodeMap.get(box.dataset.nodeId);
+            if (!node) continue;
+            const grouped = [node, ...getDescendants(node)];
+            const b = pointBounds(grouped, 56);
+            box.style.left = b.minX + 'px';
+            box.style.top = b.minY + 'px';
+            box.style.width = Math.max(130, b.maxX - b.minX) + 'px';
+            box.style.height = Math.max(90, b.maxY - b.minY) + 'px';
+        }
+    }
+
+    async function saveNodePositions(changedNodes) {
+        const unique = [...new Map((changedNodes || []).map(n => [n.id, n])).values()];
+        for (const node of unique) {
+            await updateClueNode(body._clueChatId, node.id, { x: node.x, y: node.y });
+        }
+    }
+
+    function renderDetails(node) {
+        if (!node) {
+            detailPane.style.display = 'none';
+            detailPane.innerHTML = '';
+            return;
+        }
+        const rc = refColors[node.refType] || '#888';
+        detailPane.style.display = '';
+        detailPane.innerHTML = `
+            <div class="bb-clue-detail-title" style="--bb-clue-color:${rc};">${escapeHtml(node.label || node.id)}</div>
+            <div class="bb-clue-detail-meta"><i class="fa-solid ${refIcons[node.refType] || 'fa-circle'}"></i> ${refLabels[node.refType] || node.refType}</div>
+            ${node.note ? `<div class="bb-clue-detail-note">${escapeHtml(node.note)}</div>` : '<div class="bb-clue-detail-note empty">暂无备注</div>'}
+            <div class="bb-clue-detail-actions">
+                <button class="menu_button bb-clue-detail-note-btn"><i class="fa-solid fa-pen"></i> 备注</button>
+            </div>`;
+        detailPane.querySelector('.bb-clue-detail-note-btn')?.addEventListener('click', async () => {
+            const note = prompt('编辑备注：', node.note || '');
+            if (note === null) return;
+            node.note = note.trim();
+            await updateClueNode(body._clueChatId, node.id, { note: node.note });
+            renderDetails(node);
+            renderElements();
+            showToast('备注已更新', 'success');
         });
-
-        if (editMode) {
-            card.style.cursor = 'grab';
-            card.addEventListener('mousedown', (e) => {
-                if (e.button !== 0) return;
-                e.stopPropagation();
-                const startX = e.clientX, startY = e.clientY;
-                const origX = n._x, origY = n._y;
-                // 备份子节点坐标（父节点拖动时子节点跟随）
-                const childBackups = (children[n.id] || []).map(c => ({ id: c.id, x: c._x, y: c._y }));
-                card.style.cursor = 'grabbing'; card.style.zIndex = '10';
-                function onMove(ev) {
-                    const { w, h } = getContainerSize();
-                    const dx = (ev.clientX - startX) / (w * scale);
-                    const dy = (ev.clientY - startY) / (h * scale);
-                    n._x = Math.max(0, Math.min(1, origX + dx));
-                    n._y = Math.max(0, Math.min(1, origY + dy));
-                    // 子节点同步移动
-                    for (const cb of childBackups) {
-                        const child = nodeMap[cb.id];
-                        if (child) {
-                            child._x = Math.max(0, Math.min(1, cb.x + dx));
-                            child._y = Math.max(0, Math.min(1, cb.y + dy));
-                        }
-                    }
-                    // 父节点有子节点时需要重建包围盒 → 全量重渲染
-                    // v8.8.4 被拖节点有父节点时也需重建（父包围盒跟随）
-                    if ((children[n.id] && children[n.id].length > 0) || (n.parentId && nodeMap[n.parentId])) {
-                        renderAllCards();
-                    } else {
-                        const sp = worldToScreen(n);
-                        card.style.left = sp.x + 'px'; card.style.top = sp.y + 'px';
-                    }
-                    drawCanvas();
-                }
-                function onUp() { card.style.cursor = 'grab'; card.style.zIndex = '3'; window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); }
-                window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp);
-            });
-        } else {
-            // 锁定模式：拖动 = 平移视角
-            card.addEventListener('mousedown', (e) => {
-                if (e.button !== 0) return;
-                e.stopPropagation();
-                isDragging = true; dragStartX = e.clientX; dragStartY = e.clientY;
-            });
-        }
-
-        return card;
     }
 
-    function updateCardsPosition() {
-        const cards = cardLayer.querySelectorAll('[data-node-id]');
-        const cardMap = new Map();
-        cards.forEach(c => cardMap.set(c.dataset.nodeId, c));
-        for (const n of nodes) {
-            const el = cardMap.get(n.id);
-            if (!el) continue;
-            const sp = worldToScreen(n);
-            el.style.left = sp.x + 'px';
-            el.style.top = sp.y + 'px';
-            el.style.transform = `translate(-50%,-50%)`;
+    function selectNode(node) {
+        selectedId = node.id;
+        for (const card of cardLayer.querySelectorAll('.bb-clue-spatial-card')) {
+            card.classList.toggle('selected', card.dataset.nodeId === selectedId);
         }
+        renderDetails(node);
     }
 
-    function renderAllCards() {
+    function startDrag(event, dragNodes) {
+        if (!editMode || (event.pointerType === 'mouse' && event.button !== 0)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof activeDragCleanup === 'function') activeDragCleanup();
+
+        const startX = event.clientX;
+        const startY = event.clientY;
+        const originals = dragNodes.map(node => ({ node, x: node.x, y: node.y }));
+        const pointerId = event.pointerId;
+        const dragTarget = event.currentTarget;
+        dragTarget.setPointerCapture?.(pointerId);
+        body.classList.add('dragging');
+        let finished = false;
+
+        function onMove(ev) {
+            if (ev.pointerId !== pointerId) return;
+            const { w, h } = viewport.getSize();
+            const dx = (ev.clientX - startX) / (w * viewport.scale);
+            const dy = (ev.clientY - startY) / (h * viewport.scale);
+            for (const item of originals) {
+                item.node.x = clamp01(item.x + dx);
+                item.node.y = clamp01(item.y + dy);
+            }
+            positionElements();
+            drawCanvas();
+        }
+
+        function onUp() {
+            if (finished) return;
+            finished = true;
+            body.classList.remove('dragging');
+            try {
+                if (dragTarget.hasPointerCapture?.(pointerId)) dragTarget.releasePointerCapture(pointerId);
+            } catch { /* pointer may already be released */ }
+            document.removeEventListener('pointermove', onMove, true);
+            document.removeEventListener('pointerup', onUp, true);
+            document.removeEventListener('pointercancel', onUp, true);
+            dragTarget.removeEventListener('lostpointercapture', onUp);
+            window.removeEventListener('blur', onUp);
+            activeDragCleanup = null;
+            saveNodePositions(originals.map(i => i.node));
+        }
+
+        activeDragCleanup = onUp;
+        document.addEventListener('pointermove', onMove, true);
+        document.addEventListener('pointerup', onUp, true);
+        document.addEventListener('pointercancel', onUp, true);
+        dragTarget.addEventListener('lostpointercapture', onUp);
+        window.addEventListener('blur', onUp);
+    }
+
+    function createNodeCard(node) {
+        const rc = refColors[node.refType] || '#888';
+        const hasChildren = (children.get(node.id) || []).length > 0;
+        const card = document.createElement('div');
+        card.className = `bb-clue-spatial-card${hasChildren ? ' parent' : ''}`;
+        card.dataset.nodeId = node.id;
+        card.style.setProperty('--bb-clue-color', rc);
+        card.innerHTML = `
+            <div class="bb-clue-spatial-title"><i class="fa-solid ${refIcons[node.refType] || 'fa-circle'}"></i> ${escapeHtml(node.label || node.id)}</div>
+            ${node.note ? `<div class="bb-clue-spatial-note">${escapeHtml(node.note).slice(0, 72)}</div>` : ''}`;
+        card.addEventListener('click', (e) => {
+            e.stopPropagation();
+            selectNode(node);
+        });
+        card.addEventListener('dblclick', async (e) => {
+            e.stopPropagation();
+            const note = prompt('编辑备注：', node.note || '');
+            if (note === null) return;
+            node.note = note.trim();
+            await updateClueNode(body._clueChatId, node.id, { note: node.note });
+            renderDetails(node);
+            renderElements();
+        });
+        card.addEventListener('pointerdown', (e) => startDrag(e, [node]));
+        cardLayer.appendChild(card);
+    }
+
+    function renderElements() {
+        groupLayer.innerHTML = '';
         cardLayer.innerHTML = '';
         const rendered = new Set();
 
-        for (const n of nodes) {
-            if (rendered.has(n.id)) continue;
-            const myChildren = children[n.id] || [];
-            const rc = refColors[n.refType] || '#888';
-
-            if (myChildren.length > 0) {
-                // 父节点：绘制包围盒
-                rendered.add(n.id);
-                const parentPx = worldToScreen(n);
-                const childPx = myChildren.map(c => worldToScreen(c));
-                const allPx = [parentPx, ...childPx];
-                const pad = 54;
-                const boxMinX = Math.min(...allPx.map(p => p.x)) - pad;
-                const boxMinY = Math.min(...allPx.map(p => p.y)) - pad;
-                const boxMaxX = Math.max(...allPx.map(p => p.x)) + pad;
-                const boxMaxY = Math.max(...allPx.map(p => p.y)) + pad;
-
-                // 包围盒
+        for (const node of nodes) {
+            const descendants = getDescendants(node);
+            if (descendants.length) {
+                const rc = refColors[node.refType] || '#888';
                 const box = document.createElement('div');
-                box.style.cssText = `position:absolute;left:${boxMinX}px;top:${boxMinY}px;width:${boxMaxX - boxMinX}px;height:${boxMaxY - boxMinY}px;border:2px dashed ${rc}55;border-radius:14px;background:${rc}08;pointer-events:${editMode ? 'auto' : 'none'};z-index:2;cursor:${editMode ? 'grab' : 'default'};`;
-                if (editMode) {
-                    box.addEventListener('mousedown', (e) => {
-                        if (e.button !== 0) return;
-                        e.stopPropagation();
-                        const startX = e.clientX, startY = e.clientY;
-                        const origX = n._x, origY = n._y;
-                        const childBackups = (children[n.id] || []).map(c => ({ id: c.id, x: c._x, y: c._y }));
-                        function onMove(ev) {
-                            const { w, h } = getContainerSize();
-                            const dx = (ev.clientX - startX) / (w * scale);
-                            const dy = (ev.clientY - startY) / (h * scale);
-                            n._x = Math.max(0, Math.min(1, origX + dx));
-                            n._y = Math.max(0, Math.min(1, origY + dy));
-                            for (const cb of childBackups) {
-                                const c = nodeMap[cb.id];
-                                if (c) { c._x = Math.max(0, Math.min(1, cb.x + dx)); c._y = Math.max(0, Math.min(1, cb.y + dy)); }
-                            }
-                            renderAllCards(); drawCanvas();
-                        }
-                        function onUp() { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); }
-                        window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp);
-                    });
-                }
-                cardLayer.appendChild(box);
-
-                // 父标签
-                const label = document.createElement('div');
-                label.style.cssText = `position:absolute;left:${boxMinX + 10}px;top:${boxMinY - 10}px;background:var(--SmartThemeChatTintColor,#1e1e2e);padding:1px 8px;border-radius:4px;font-size:0.65em;font-weight:700;color:${rc};pointer-events:none;white-space:nowrap;z-index:3;`;
-                label.textContent = '📁 ' + (n.label || n.id);
-                cardLayer.appendChild(label);
-                parentLabelPos[n.id] = { x: boxMinX + 10, y: boxMinY - 10 };
-
-                // 父节点卡片
-                cardLayer.appendChild(createNodeCard(n, parentPx, rc, true));
-                // 子节点卡片
-                for (const child of myChildren) {
-                    rendered.add(child.id);
-                    const crc = refColors[child.refType] || '#888';
-                    cardLayer.appendChild(createNodeCard(child, worldToScreen(child), crc, false));
-                }
-            } else if (!n.parentId || !nodeMap[n.parentId]) {
-                // 无父节点的根节点
-                cardLayer.appendChild(createNodeCard(n, worldToScreen(n), rc, false));
-                rendered.add(n.id);
+                box.className = `bb-clue-spatial-parent-box${editMode ? ' editable' : ''}`;
+                box.dataset.nodeId = node.id;
+                box.style.setProperty('--bb-clue-color', rc);
+                box.innerHTML = `<div class="bb-clue-spatial-parent-label"><i class="fa-solid fa-layer-group"></i> ${escapeHtml(node.label || node.id)}</div>`;
+                box.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    selectNode(node);
+                });
+                box.addEventListener('pointerdown', (e) => startDrag(e, [node, ...descendants]));
+                groupLayer.appendChild(box);
             }
-            // 有 parentId 的节点在父节点循环中处理
         }
+
+        for (const node of nodes) {
+            if (rendered.has(node.id)) continue;
+            rendered.add(node.id);
+            createNodeCard(node);
+        }
+        positionElements();
+        drawCanvas();
     }
 
-    renderAllCards();
-    setTimeout(drawCanvas, 50);
-    new ResizeObserver(() => { renderAllCards(); drawCanvas(); }).observe(body);
+    renderElements();
 
-    // 背景空白区域平移
-    body.addEventListener('mousedown', (e) => { if (e.target === body || e.target === canvas) { isDragging = true; dragStartX = e.clientX; dragStartY = e.clientY; } });
-    window.addEventListener('mousemove', (e) => { if (!isDragging) return; panX += e.clientX - dragStartX; panY += e.clientY - dragStartY; dragStartX = e.clientX; dragStartY = e.clientY; updateCardsPosition(); drawCanvas(); });
-    window.addEventListener('mouseup', () => { isDragging = false; });
-    body.addEventListener('wheel', (e) => {
-        e.preventDefault();
-        const oldScale = scale;
-        scale = Math.max(0.3, Math.min(3, scale + (e.deltaY > 0 ? -0.1 : 0.1)));
-        // v8.8.4 鼠标位置居中缩放
-        const rect = body.getBoundingClientRect();
-        const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-        panX = mx - (mx - panX) * scale / oldScale;
-        panY = my - (my - panY) * scale / oldScale;
-        updateCardsPosition(); drawCanvas();
-    }, { passive: false });
+    const unbind = bindGraphPointerControls(body, viewport, {
+        shouldStartPan(event) {
+            const target = event.target;
+            return !target.closest?.('.bb-clue-spatial-card,.bb-clue-spatial-parent-box,.bb-clue-detail-pane');
+        },
+        onChange() {
+            positionElements();
+            drawCanvas();
+        },
+    });
+
+    const resizeObserver = new ResizeObserver(() => {
+        positionElements();
+        drawCanvas();
+    });
+    resizeObserver.observe(body);
+
+    body.addEventListener('click', (event) => {
+        if (event.target === body || event.target === canvas) {
+            selectedId = null;
+            renderDetails(null);
+            for (const card of cardLayer.querySelectorAll('.bb-clue-spatial-card')) card.classList.remove('selected');
+        }
+    });
+
+    body._clueCleanup = () => {
+        if (typeof activeDragCleanup === 'function') activeDragCleanup();
+        unbind();
+        resizeObserver.disconnect();
+    };
 }
 
 function renderClueBoardBody(body, board, chatId, overlay, panel) {

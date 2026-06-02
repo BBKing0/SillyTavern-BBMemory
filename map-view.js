@@ -9,6 +9,12 @@ import {
     addEdge, addBidirectionalEdge, removeEdge, getRegions, autoLayout,
 } from './map-store.js';
 import { getItems, getSettings, updateSettings } from './memory-store.js';
+import {
+    createGraphViewport,
+    fitToGraph,
+    worldToScreen,
+    bindGraphPointerControls,
+} from './graph-view-core.js';
 
 function escapeHtml(text) {
     if (!text) return '';
@@ -24,79 +30,194 @@ function getChatId() {
 }
 
 const REGION_COLORS = ['#64b5f6','#81c784','#ffb74d','#ce93d8','#ef5350','#4fc3f7','#aed581','#ff8a65'];
+const MAP_UI_PREF_KEY = 'bb_map_ui_pref';
+
 function getRegionColor(region) {
     if (!region) return '#888';
     let hash = 0; for (let i = 0; i < region.length; i++) hash = ((hash << 5) - hash) + region.charCodeAt(i);
     return REGION_COLORS[Math.abs(hash) % REGION_COLORS.length];
 }
 
+function loadMapUiPref() {
+    try {
+        const raw = localStorage.getItem(MAP_UI_PREF_KEY);
+        const parsed = raw ? JSON.parse(raw) : null;
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+        return {};
+    }
+}
+
+function saveMapUiPref(patch) {
+    try {
+        localStorage.setItem(MAP_UI_PREF_KEY, JSON.stringify({ ...loadMapUiPref(), ...patch }));
+    } catch { /* ignore */ }
+}
+
+function clamp01(value) {
+    if (!Number.isFinite(value)) return 0.5;
+    return Math.max(0.02, Math.min(0.98, value));
+}
+
+function getLocationRegion(loc) {
+    return loc?.region || '';
+}
+
+function getRegionLabel(region) {
+    return region || '(未分区)';
+}
+
+function getRegionKeys(locations, knownRegions = []) {
+    const keys = new Set((knownRegions || []).map(r => r || ''));
+    for (const loc of locations || []) {
+        if (loc && !loc.archived) keys.add(getLocationRegion(loc));
+    }
+    return [...keys].sort((a, b) => getRegionLabel(a).localeCompare(getRegionLabel(b), 'zh-Hans-CN'));
+}
+
+function suggestLocationPosition(data, locations) {
+    const all = (locations || []).filter(l => l && !l.archived);
+    const parent = data?.parentId ? all.find(l => l.id === data.parentId) : null;
+    if (parent) {
+        return {
+            x: clamp01((parent.x ?? 0.5) + 0.055),
+            y: clamp01((parent.y ?? 0.5) + 0.055),
+        };
+    }
+
+    const region = data?.region || '';
+    const sameRegion = all.filter(l => getLocationRegion(l) === region);
+    if (sameRegion.length) {
+        const cx = sameRegion.reduce((sum, loc) => sum + (Number.isFinite(loc.x) ? loc.x : 0.5), 0) / sameRegion.length;
+        const cy = sameRegion.reduce((sum, loc) => sum + (Number.isFinite(loc.y) ? loc.y : 0.5), 0) / sameRegion.length;
+        const offset = 0.055 + Math.min(0.08, sameRegion.length * 0.012);
+        return { x: clamp01(cx + offset), y: clamp01(cy + offset * 0.7) };
+    }
+
+    const count = Math.max(4, getRegionKeys(all, [region]).length + 1);
+    const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
+    const rows = Math.max(1, Math.ceil(count / cols));
+    let best = { x: 0.5, y: 0.5, score: -1 };
+    for (let i = 0; i < count; i++) {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        const candidate = {
+            x: clamp01((col + 0.5) / cols),
+            y: clamp01((row + 0.5) / rows),
+        };
+        const score = all.length
+            ? Math.min(...all.map(loc => {
+                const dx = candidate.x - (Number.isFinite(loc.x) ? loc.x : 0.5);
+                const dy = candidate.y - (Number.isFinite(loc.y) ? loc.y : 0.5);
+                return dx * dx + dy * dy;
+            }))
+            : 1;
+        if (score > best.score) best = { ...candidate, score };
+    }
+    return { x: best.x, y: best.y };
+}
+
 // ═══════════════════════════════════════════════════════════
 //  列表视图（保留原有的区域分组+流程图式）
 // ═══════════════════════════════════════════════════════════
 
-function buildListHTML(locations, items, activeRegion) {
-    if (locations.length === 0) {
-        return `<div style="text-align:center;padding:48px 20px;opacity:0.5;"><i class="fa-solid fa-map" style="font-size:2.5em;display:block;margin-bottom:16px;opacity:0.2;"></i><div style="font-size:0.95em;">还没有地图地点</div></div>`;
-    }
-    const filtered = (activeRegion ? locations.filter(l => l.region === activeRegion) : locations).filter(l => !l.archived);
-    if (filtered.length === 0) return '<div style="text-align:center;padding:40px;opacity:0.5;">该区域暂无地点</div>';
-
-    const locMap = {}; for (const l of locations) locMap[l.id] = l;
-    // v8.8.4 父子关系
-    const childMap = {}; for (const l of filtered) { const pid = l.parentId || ''; if (!childMap[pid]) childMap[pid] = []; childMap[pid].push(l); }
-    const topLevel = filtered.filter(l => !l.parentId || !locMap[l.parentId]);
-    const groups = new Map();
-    for (const loc of topLevel) {
-        const r = loc.region || '(未分区)';
-        if (!groups.has(r)) groups.set(r, []);
-        groups.get(r).push(loc);
+function buildListHTML(locations, items, visibleRegions, editMode = false) {
+    const all = (locations || []).filter(l => l && !l.archived);
+    if (all.length === 0) {
+        return `<div class="bb-map-empty"><i class="fa-solid fa-map"></i><div>还没有地图地点</div></div>`;
     }
 
-    function renderLocCard(loc, rc, isChild) {
+    const selectedRegions = visibleRegions instanceof Set ? visibleRegions : new Set(getRegionKeys(all));
+    const locMap = new Map(all.map(l => [l.id, l]));
+    const childMap = new Map();
+    for (const loc of all) {
+        const pid = loc.parentId || '';
+        if (!childMap.has(pid)) childMap.set(pid, []);
+        childMap.get(pid).push(loc);
+    }
+
+    const matchesRegion = loc => selectedRegions.has(getLocationRegion(loc));
+    const visible = all.filter(matchesRegion);
+    if (selectedRegions.size === 0) return '<div class="bb-map-empty">未显示任何地区。点击上方地区标签显示地点。</div>';
+    if (visible.length === 0) return '<div class="bb-map-empty">当前显示的地区暂无地点</div>';
+
+    function renderLocCard(loc, depth, parentHint = '') {
         const locItems = items.filter(i => !i.archived && i.location === loc.name);
-        const childPadding = isChild ? 'margin-left:28px;' : '';
-        const childBorder = isChild ? `border:2px dashed ${rc}33;` : `border:2px solid ${rc}44;`;
-        return `<div class="bb-map-node-box" data-loc-id="${loc.id}" style="${childPadding}background:var(--SmartThemeBlurTintColor,rgba(255,255,255,0.03));${childBorder}border-radius:8px;padding:${isChild ? '6px 10px' : '8px 12px'};min-width:${isChild ? '100px' : '130px'};max-width:200px;flex-shrink:0;">
-            <div style="font-weight:${isChild ? '500' : '700'};font-size:${isChild ? '0.72em' : '0.82em'};">
-                ${isChild ? '<span style="font-size:0.7em;opacity:0.3;">└─</span> ' : ''}${escapeHtml(loc.name)}</div>
-            ${loc.description ? `<div style="font-size:0.68em;opacity:0.5;line-height:1.3;">${escapeHtml(loc.description).slice(0, 50)}</div>` : ''}
-            ${locItems.length > 0 ? `<div style="margin-top:3px;font-size:0.62em;opacity:0.4;">📦${locItems.length}件</div>` : ''}
-            <div class="bb-map-node-actions" style="margin-top:4px;font-size:0.55em;opacity:0;display:flex;gap:2px;">
-                <button class="bb-map-box-edit menu_button" data-loc-id="${loc.id}" style="font-size:inherit;padding:1px 4px;">✏️</button>
-                <button class="bb-map-box-connect menu_button" data-loc-id="${loc.id}" style="font-size:inherit;padding:1px 4px;">🔗</button>
-                <button class="bb-map-box-additem menu_button" data-loc-id="${loc.id}" data-loc-name="${escapeHtml(loc.name)}" style="font-size:inherit;padding:1px 4px;">📦</button>
-                <button class="bb-map-box-del menu_button" data-loc-id="${loc.id}" style="font-size:inherit;padding:1px 4px;color:#f44336;">🗑</button>
-            </div></div>`;
+        const rc = getRegionColor(loc.region || parentHint);
+        const parentLine = parentHint
+            ? `<div class="bb-map-list-parent">父地点: ${escapeHtml(parentHint)}</div>`
+            : '';
+        return `<div class="bb-map-node-box bb-map-list-node" data-loc-id="${escapeHtml(loc.id)}" style="--bb-map-level:${Math.min(depth, 5)};--bb-map-color:${rc};">
+            <div class="bb-map-list-title">${depth > 0 ? '<span class="bb-map-list-branch">└</span>' : ''}${escapeHtml(loc.name)}</div>
+            ${parentLine}
+            ${loc.region ? `<div class="bb-map-list-meta">${escapeHtml(loc.region)}</div>` : ''}
+            ${loc.description ? `<div class="bb-map-list-desc">${escapeHtml(loc.description).slice(0, 90)}</div>` : ''}
+            ${locItems.length > 0 ? `<div class="bb-map-list-items"><i class="fa-solid fa-box"></i> ${locItems.length} 件物品</div>` : ''}
+            <div class="bb-map-node-actions">
+                <button class="bb-map-box-edit menu_button" data-loc-id="${escapeHtml(loc.id)}" title="编辑"><i class="fa-solid fa-pen"></i></button>
+                <button class="bb-map-box-connect menu_button" data-loc-id="${escapeHtml(loc.id)}" title="连线" ${editMode ? '' : 'disabled'}><i class="fa-solid fa-link"></i></button>
+                <button class="bb-map-box-additem menu_button" data-loc-id="${escapeHtml(loc.id)}" data-loc-name="${escapeHtml(loc.name)}" title="放置物品" ${editMode ? '' : 'disabled'}><i class="fa-solid fa-box"></i></button>
+                <button class="bb-map-box-del menu_button" data-loc-id="${escapeHtml(loc.id)}" title="删除" ${editMode ? '' : 'disabled'}><i class="fa-solid fa-trash"></i></button>
+            </div>
+        </div>`;
+    }
+
+    function renderTree(loc, depth, rendered, regionKey) {
+        if (rendered.has(loc.id)) return '';
+        if (getLocationRegion(loc) !== regionKey) return '';
+        rendered.add(loc.id);
+        let html = renderLocCard(loc, depth);
+        for (const child of (childMap.get(loc.id) || [])) {
+            html += renderTree(child, depth + 1, rendered, regionKey);
+        }
+        return html;
+    }
+
+    function renderCrossLinks(groupLocs) {
+        const lines = [];
+        for (const loc of groupLocs) {
+            for (const edge of (loc.edges || [])) {
+                const target = locMap.get(edge.toId);
+                if (!target || target.archived || target.region === loc.region) continue;
+                lines.push(`<button class="bb-map-cross-link" data-region="${escapeHtml(target.region || '')}">
+                    <span>${escapeHtml(loc.name)}</span>
+                    <i class="fa-solid fa-arrow-right"></i>
+                    <span>${escapeHtml(target.name)}</span>
+                    ${edge.distance ? `<small>${escapeHtml(edge.distance)}</small>` : ''}
+                </button>`);
+            }
+        }
+        return lines.length ? `<div class="bb-map-cross-links">${lines.join('')}</div>` : '';
+    }
+
+    const groups = new Map();
+    for (const loc of visible) {
+        const region = getLocationRegion(loc);
+        if (!groups.has(region)) groups.set(region, []);
+        groups.get(region).push(loc);
     }
 
     let html = '';
-    for (const [region, locs] of groups) {
+    for (const [region, locs] of [...groups.entries()].sort((a, b) => getRegionLabel(a[0]).localeCompare(getRegionLabel(b[0]), 'zh-Hans-CN'))) {
         const rc = getRegionColor(region);
-        html += `<div style="margin-bottom:12px;border:1px solid ${rc}33;border-radius:8px;overflow:hidden;">
-            <div style="background:${rc}18;padding:5px 12px;font-size:0.75em;font-weight:600;color:${rc};">${escapeHtml(region)}</div>
-            <div style="padding:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;">`;
-
-        for (const loc of locs) {
-            html += renderLocCard(loc, rc, false);
-            // v8.8.4 子地点
-            for (const child of (childMap[loc.id] || [])) {
-                html += renderLocCard(child, getRegionColor(child.region), true);
-            }
-            // 连线箭头
-            for (const loc of locs) {
-                for (const edge of (loc.edges || [])) {
-                    const target = locMap[edge.toId];
-                    if (!target || target.region === loc.region) continue; // 同区域跳过（已在方块后）
-                    const crossRegion = target.region !== loc.region;
-                    html += `<div style="display:flex;flex-direction:column;align-items:center;gap:1px;flex-shrink:0;align-self:center;cursor:pointer;" class="bb-map-cross-link" data-region="${escapeHtml(target.region || '')}">
-                        <span style="font-size:0.55em;opacity:0.5;">${escapeHtml(edge.distance)}</span>
-                        <span style="font-size:0.6em;color:#ff9800;">──🌉──</span>
-                        <span style="font-size:0.55em;opacity:0.5;">${escapeHtml(target.name)}</span>
-                    </div>`;
-                }
+        const rendered = new Set();
+        const content = [];
+        const visibleIds = new Set(locs.map(l => l.id));
+        const roots = locs.filter(l => !l.parentId || !visibleIds.has(l.parentId));
+        for (const loc of roots) {
+            const parent = loc.parentId ? locMap.get(loc.parentId) : null;
+            if (parent && getLocationRegion(parent) !== region) {
+                content.push(renderLocCard(loc, 1, parent.name));
+                rendered.add(loc.id);
+                for (const child of (childMap.get(loc.id) || [])) content.push(renderTree(child, 2, rendered, region));
+            } else {
+                content.push(renderTree(loc, parent ? 1 : 0, rendered, region));
             }
         }
-        html += `</div></div>`;
+        html += `<section class="bb-map-list-region" style="--bb-map-color:${rc};">
+            <div class="bb-map-list-region-title">${escapeHtml(getRegionLabel(region))}</div>
+            <div class="bb-map-list-region-body">${content.join('')}${renderCrossLinks(locs)}</div>
+        </section>`;
     }
     return html;
 }
@@ -402,6 +523,377 @@ function renderSpatialView(body, locations, items, activeRegion, editMode, onEdi
 //  表单弹窗（与之前相同）
 // ═══════════════════════════════════════════════════════════
 
+function renderSpatialViewV2(body, locations, items, visibleRegions, editMode, onEdit, onConnect, onAddItem, onDelete, onLayoutChanged) {
+    if (typeof body._bbMapCleanup === 'function') body._bbMapCleanup();
+
+    const allLocations = (locations || []).filter(l => l && !l.archived);
+    allLocations.forEach((loc, index) => {
+        if (!Number.isFinite(loc.x)) loc.x = 0.18 + (index % 5) * 0.16;
+        if (!Number.isFinite(loc.y)) loc.y = 0.18 + Math.floor(index / 5) * 0.14;
+        loc.x = clamp01(loc.x);
+        loc.y = clamp01(loc.y);
+    });
+
+    const selectedRegions = visibleRegions instanceof Set ? visibleRegions : new Set(getRegionKeys(allLocations));
+    const visible = allLocations.filter(l => selectedRegions.has(getLocationRegion(l)));
+    const visibleIds = new Set(visible.map(l => l.id));
+    const locMap = new Map(allLocations.map(l => [l.id, l]));
+    const children = new Map();
+    for (const loc of visible) {
+        const pid = loc.parentId || '';
+        if (!children.has(pid)) children.set(pid, []);
+        children.get(pid).push(loc);
+    }
+
+    body.innerHTML = '';
+    body.className = 'bb-map-spatial-body';
+    body.style.cssText = '';
+
+    if (!visible.length) {
+        body.innerHTML = selectedRegions.size === 0
+            ? '<div class="bb-map-empty">未显示任何地区。点击上方地区标签显示地点。</div>'
+            : '<div class="bb-map-empty">当前显示的地区暂无地点</div>';
+        body._bbMapCleanup = null;
+        return;
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.className = 'bb-map-spatial-canvas';
+    const groupLayer = document.createElement('div');
+    groupLayer.className = 'bb-map-group-layer';
+    const cardLayer = document.createElement('div');
+    cardLayer.className = 'bb-map-card-layer';
+    const detailPane = document.createElement('div');
+    detailPane.className = 'bb-map-detail-pane';
+    detailPane.style.display = 'none';
+
+    body.appendChild(canvas);
+    body.appendChild(groupLayer);
+    body.appendChild(cardLayer);
+    body.appendChild(detailPane);
+
+    const viewport = createGraphViewport(body, { minScale: 0.35, maxScale: 2.8, minHeight: 400 });
+    fitToGraph(visible, viewport, {
+        padding: window.innerWidth <= 480 ? 54 : 86,
+        minScale: 0.35,
+        maxScale: 2.2,
+    });
+
+    let selectedId = null;
+
+    function getDescendants(loc) {
+        const result = [];
+        const queue = [...(children.get(loc.id) || [])];
+        while (queue.length) {
+            const child = queue.shift();
+            result.push(child);
+            queue.push(...(children.get(child.id) || []));
+        }
+        return result;
+    }
+
+    function getLocItems(loc) {
+        return items.filter(i => !i.archived && i.location === loc.name);
+    }
+
+    function pointBounds(nodes, pad = 48) {
+        const points = nodes.map(n => worldToScreen(n, viewport));
+        return {
+            minX: Math.min(...points.map(p => p.x)) - pad,
+            minY: Math.min(...points.map(p => p.y)) - pad,
+            maxX: Math.max(...points.map(p => p.x)) + pad,
+            maxY: Math.max(...points.map(p => p.y)) + pad,
+        };
+    }
+
+    function drawCanvas() {
+        const dpr = window.devicePixelRatio || 1;
+        const { w, h } = viewport.getSize();
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+        canvas.style.width = w + 'px';
+        canvas.style.height = h + 'px';
+
+        const ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, w, h);
+
+        for (const loc of visible) {
+            const fp = worldToScreen(loc, viewport);
+            for (const edge of (loc.edges || [])) {
+                if (!visibleIds.has(edge.toId)) continue;
+                const target = locMap.get(edge.toId);
+                if (!target) continue;
+                const tp = worldToScreen(target, viewport);
+                const crossRegion = target.region !== loc.region;
+                const midX = (fp.x + tp.x) / 2;
+                const midY = (fp.y + tp.y) / 2;
+
+                ctx.strokeStyle = crossRegion ? '#ff9800aa' : '#4fc3f777';
+                ctx.lineWidth = crossRegion ? 2 : 1.3;
+                ctx.setLineDash(crossRegion ? [7, 5] : []);
+                ctx.beginPath();
+                ctx.moveTo(fp.x, fp.y);
+                ctx.quadraticCurveTo(midX, midY - 18, tp.x, tp.y);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                if (edge.distance) {
+                    ctx.fillStyle = '#aaa';
+                    ctx.font = '10px sans-serif';
+                    ctx.fillText(edge.distance, midX + 4, midY - 8);
+                }
+            }
+        }
+    }
+
+    function positionElements() {
+        for (const card of cardLayer.querySelectorAll('.bb-map-spatial-card')) {
+            const loc = locMap.get(card.dataset.locId);
+            if (!loc) continue;
+            const p = worldToScreen(loc, viewport);
+            card.style.left = p.x + 'px';
+            card.style.top = p.y + 'px';
+        }
+
+        for (const box of groupLayer.querySelectorAll('.bb-map-region-box')) {
+            const region = box.dataset.region || '';
+            const nodes = visible.filter(loc => getLocationRegion(loc) === region);
+            if (!nodes.length) continue;
+            const b = pointBounds(nodes, 86);
+            box.style.left = b.minX + 'px';
+            box.style.top = b.minY + 'px';
+            box.style.width = Math.max(180, b.maxX - b.minX) + 'px';
+            box.style.height = Math.max(118, b.maxY - b.minY) + 'px';
+        }
+
+        for (const box of groupLayer.querySelectorAll('.bb-map-parent-box')) {
+            const loc = locMap.get(box.dataset.locId);
+            if (!loc) continue;
+            const grouped = [loc, ...getDescendants(loc)];
+            const b = pointBounds(grouped, 56);
+            box.style.left = b.minX + 'px';
+            box.style.top = b.minY + 'px';
+            box.style.width = Math.max(120, b.maxX - b.minX) + 'px';
+            box.style.height = Math.max(82, b.maxY - b.minY) + 'px';
+        }
+    }
+
+    function renderDetails(loc) {
+        if (!loc) {
+            detailPane.style.display = 'none';
+            detailPane.innerHTML = '';
+            return;
+        }
+        const locItems = getLocItems(loc);
+        detailPane.style.display = '';
+        detailPane.innerHTML = `
+            <div class="bb-map-detail-title">${escapeHtml(loc.name)}</div>
+            ${loc.region ? `<div class="bb-map-detail-meta">${escapeHtml(loc.region)}</div>` : ''}
+            ${loc.description ? `<div class="bb-map-detail-desc">${escapeHtml(loc.description)}</div>` : ''}
+            ${locItems.length ? `<div class="bb-map-detail-items"><i class="fa-solid fa-box"></i> ${locItems.map(i => escapeHtml(i.name)).join('、')}</div>` : ''}
+            <div class="bb-map-detail-actions">
+                <button class="menu_button bb-map-detail-edit"><i class="fa-solid fa-pen"></i> 编辑</button>
+                <button class="menu_button bb-map-detail-connect" ${editMode ? '' : 'disabled'}><i class="fa-solid fa-link"></i> 连线</button>
+                <button class="menu_button bb-map-detail-item" ${editMode ? '' : 'disabled'}><i class="fa-solid fa-box"></i> 物品</button>
+                <button class="menu_button bb-map-detail-delete" ${editMode ? '' : 'disabled'}><i class="fa-solid fa-trash"></i></button>
+            </div>`;
+        detailPane.querySelector('.bb-map-detail-edit')?.addEventListener('click', () => onEdit(loc.id));
+        detailPane.querySelector('.bb-map-detail-connect')?.addEventListener('click', () => editMode && onConnect(loc.id));
+        detailPane.querySelector('.bb-map-detail-item')?.addEventListener('click', () => editMode && onAddItem(loc.id, loc.name));
+        detailPane.querySelector('.bb-map-detail-delete')?.addEventListener('click', () => editMode && onDelete(loc.id));
+    }
+
+    function selectLoc(loc) {
+        selectedId = loc.id;
+        for (const card of cardLayer.querySelectorAll('.bb-map-spatial-card')) {
+            card.classList.toggle('selected', card.dataset.locId === selectedId);
+        }
+        renderDetails(loc);
+    }
+
+    let activeDragCleanup = null;
+
+    function startDrag(event, dragLocs) {
+        if (!editMode || (event.pointerType === 'mouse' && event.button !== 0)) return;
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (typeof activeDragCleanup === 'function') activeDragCleanup();
+
+        const startX = event.clientX;
+        const startY = event.clientY;
+        const originals = dragLocs.map(loc => ({ loc, x: loc.x, y: loc.y }));
+        const pointerId = event.pointerId;
+        const dragTarget = event.currentTarget;
+        dragTarget.setPointerCapture?.(pointerId);
+        body.classList.add('dragging');
+        let finished = false;
+
+        function onMove(ev) {
+            if (ev.pointerId !== pointerId) return;
+            const { w, h } = viewport.getSize();
+            const dx = (ev.clientX - startX) / (w * viewport.scale);
+            const dy = (ev.clientY - startY) / (h * viewport.scale);
+            for (const item of originals) {
+                item.loc.x = clamp01(item.x + dx);
+                item.loc.y = clamp01(item.y + dy);
+            }
+            positionElements();
+            drawCanvas();
+        }
+
+        function onUp() {
+            if (finished) return;
+            finished = true;
+            body.classList.remove('dragging');
+            try {
+                if (dragTarget.hasPointerCapture?.(pointerId)) dragTarget.releasePointerCapture(pointerId);
+            } catch { /* pointer may already be released */ }
+            document.removeEventListener('pointermove', onMove, true);
+            document.removeEventListener('pointerup', onUp, true);
+            document.removeEventListener('pointercancel', onUp, true);
+            dragTarget.removeEventListener('lostpointercapture', onUp);
+            window.removeEventListener('blur', onUp);
+            activeDragCleanup = null;
+            if (typeof onLayoutChanged === 'function') onLayoutChanged(originals.map(i => i.loc));
+        }
+
+        activeDragCleanup = onUp;
+        document.addEventListener('pointermove', onMove, true);
+        document.addEventListener('pointerup', onUp, true);
+        document.addEventListener('pointercancel', onUp, true);
+        dragTarget.addEventListener('lostpointercapture', onUp);
+        window.addEventListener('blur', onUp);
+    }
+
+    function showContextMenu(event, loc) {
+        if (!editMode) return;
+        event.preventDefault();
+        const menu = document.createElement('div');
+        menu.className = 'bb-map-context-menu';
+        menu.style.left = event.clientX + 'px';
+        menu.style.top = event.clientY + 'px';
+        menu.innerHTML = `
+            <button class="menu_button"><i class="fa-solid fa-pen"></i> 编辑</button>
+            <button class="menu_button"><i class="fa-solid fa-link"></i> 连线</button>
+            <button class="menu_button"><i class="fa-solid fa-box"></i> 物品</button>
+            <button class="menu_button danger"><i class="fa-solid fa-trash"></i> 删除</button>`;
+        document.body.appendChild(menu);
+        const buttons = menu.querySelectorAll('button');
+        buttons[0].addEventListener('click', () => { menu.remove(); onEdit(loc.id); });
+        buttons[1].addEventListener('click', () => { menu.remove(); onConnect(loc.id); });
+        buttons[2].addEventListener('click', () => { menu.remove(); onAddItem(loc.id, loc.name); });
+        buttons[3].addEventListener('click', () => { menu.remove(); onDelete(loc.id); });
+        setTimeout(() => document.addEventListener('click', function close() {
+            menu.remove();
+            document.removeEventListener('click', close);
+        }), 10);
+    }
+
+    function createCard(loc) {
+        const locItems = getLocItems(loc);
+        const hasChildren = (children.get(loc.id) || []).length > 0;
+        const card = document.createElement('div');
+        card.className = `bb-map-spatial-card${hasChildren ? ' parent' : ''}`;
+        card.dataset.locId = loc.id;
+        card.style.setProperty('--bb-map-color', getRegionColor(loc.region));
+        card.innerHTML = `
+            <div class="bb-map-spatial-title">${escapeHtml(loc.name)}</div>
+            ${loc.description ? `<div class="bb-map-spatial-desc">${escapeHtml(loc.description).slice(0, hasChildren ? 80 : 48)}</div>` : ''}
+            ${locItems.length ? `<div class="bb-map-spatial-items"><i class="fa-solid fa-box"></i> ${locItems.length}</div>` : ''}`;
+        card.addEventListener('click', (e) => {
+            e.stopPropagation();
+            selectLoc(loc);
+        });
+        card.addEventListener('dblclick', (e) => {
+            e.stopPropagation();
+            onEdit(loc.id);
+        });
+        card.addEventListener('contextmenu', (e) => showContextMenu(e, loc));
+        card.addEventListener('pointerdown', (e) => startDrag(e, [loc]));
+        cardLayer.appendChild(card);
+    }
+
+    function renderElements() {
+        groupLayer.innerHTML = '';
+        cardLayer.innerHTML = '';
+        const renderedGroups = new Set();
+        const regionGroups = new Map();
+
+        for (const loc of visible) {
+            const region = getLocationRegion(loc);
+            if (!regionGroups.has(region)) regionGroups.set(region, []);
+            regionGroups.get(region).push(loc);
+        }
+
+        for (const [region, nodes] of regionGroups) {
+            const box = document.createElement('div');
+            box.className = `bb-map-region-box${editMode ? ' editable' : ''}`;
+            box.dataset.region = region;
+            box.style.setProperty('--bb-map-color', getRegionColor(region));
+            box.innerHTML = `<div class="bb-map-region-label"><i class="fa-solid fa-map-location-dot"></i> ${escapeHtml(getRegionLabel(region))}</div>`;
+            box.addEventListener('pointerdown', (e) => startDrag(e, nodes));
+            groupLayer.appendChild(box);
+        }
+
+        for (const loc of visible) {
+            const descendants = getDescendants(loc);
+            if (descendants.length && !renderedGroups.has(loc.id)) {
+                renderedGroups.add(loc.id);
+                const box = document.createElement('div');
+                box.className = `bb-map-parent-box${editMode ? ' editable' : ''}`;
+                box.dataset.locId = loc.id;
+                box.style.setProperty('--bb-map-color', getRegionColor(loc.region));
+                box.innerHTML = `<div class="bb-map-parent-label"><i class="fa-solid fa-layer-group"></i> ${escapeHtml(loc.name)}</div>`;
+                box.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    selectLoc(loc);
+                });
+                box.addEventListener('pointerdown', (e) => startDrag(e, [loc, ...descendants]));
+                groupLayer.appendChild(box);
+            }
+        }
+
+        for (const loc of visible) createCard(loc);
+        positionElements();
+        drawCanvas();
+    }
+
+    renderElements();
+
+    const unbind = bindGraphPointerControls(body, viewport, {
+        shouldStartPan(event) {
+            const target = event.target;
+            return !target.closest?.('.bb-map-spatial-card,.bb-map-parent-box,.bb-map-region-box,.bb-map-detail-pane,.bb-map-context-menu');
+        },
+        onChange() {
+            positionElements();
+            drawCanvas();
+        },
+    });
+
+    const resizeObserver = new ResizeObserver(() => {
+        positionElements();
+        drawCanvas();
+    });
+    resizeObserver.observe(body);
+
+    body.addEventListener('click', (event) => {
+        if (event.target === body || event.target === canvas) {
+            selectedId = null;
+            renderDetails(null);
+            for (const card of cardLayer.querySelectorAll('.bb-map-spatial-card')) card.classList.remove('selected');
+        }
+    });
+
+    body._bbMapCleanup = () => {
+        if (typeof activeDragCleanup === 'function') activeDragCleanup();
+        unbind();
+        resizeObserver.disconnect();
+    };
+}
+
 function showLocationForm(title, defaults, onSave) {
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
@@ -483,21 +975,25 @@ function showItemPicker(locationName, items, onSave) {
 
 export async function openMapView(chatId) {
     const existing = document.querySelector('.bb-map-overlay');
-    if (existing) existing.remove();
+    if (existing) {
+        const existingBody = existing.querySelector('.bb-map-spatial-body');
+        if (typeof existingBody?._bbMapCleanup === 'function') existingBody._bbMapCleanup();
+        existing.remove();
+    }
 
     const settings = getSettings();
     let map = await getMap(chatId);
     let items = await getItems(chatId);
     let regions = await getRegions(chatId);
-    let activeRegion = '';
+    let visibleRegions = new Set(getRegionKeys(Object.values(map.locations || {}), regions));
     let globalRef = settings.worldRealWorldRef || '';
-    let viewMode = 'spatial'; // 'spatial' | 'list'
+    let viewMode = loadMapUiPref().viewMode === 'list' ? 'list' : 'spatial'; // 'spatial' | 'list'
     let editMode = false; // v8.8.1 编辑布局模式
 
     const overlay = document.createElement('div');
     overlay.className = 'bb-map-overlay';
     overlay.style.cssText = 'position:fixed;inset:0;z-index:99991;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;padding:20px;';
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeOverlay(); });
 
     const panel = document.createElement('div');
     panel.className = 'bb-map-panel';
@@ -514,7 +1010,7 @@ export async function openMapView(chatId) {
         <button class="bb-map-view-toggle menu_button" style="font-size:0.72em;padding:2px 8px;">${viewMode === 'spatial' ? '📋 列表' : '🗺 空间'}</button>
         <button class="bb-map-edit-ref menu_button" style="font-size:0.7em;padding:2px 6px;">🌍</button>
         <button class="bb-map-close-btn" style="background:none;border:none;color:inherit;font-size:20px;cursor:pointer;opacity:0.6;line-height:1;padding:0 4px;">&times;</button>`;
-    header.querySelector('.bb-map-close-btn').addEventListener('click', () => overlay.remove());
+    header.querySelector('.bb-map-close-btn').addEventListener('click', () => closeOverlay());
     header.querySelector('.bb-map-edit-ref').addEventListener('click', () => {
         const val = prompt('全局现实参考：', globalRef);
         if (val === null) return;
@@ -524,6 +1020,7 @@ export async function openMapView(chatId) {
     });
     header.querySelector('.bb-map-view-toggle').addEventListener('click', () => {
         viewMode = viewMode === 'spatial' ? 'list' : 'spatial';
+        saveMapUiPref({ viewMode });
         header.querySelector('.bb-map-view-toggle').textContent = viewMode === 'spatial' ? '📋 列表' : '🗺 空间';
         refresh();
     });
@@ -560,14 +1057,25 @@ export async function openMapView(chatId) {
     panel.appendChild(tabBar);
 
     function renderTabs() {
-        tabBar.innerHTML = `<button class="menu_button bb-map-region-tab ${activeRegion === '' ? 'active' : ''}" data-region="" style="font-size:0.72em;padding:3px 8px;${activeRegion === '' ? 'background:var(--SmartThemeQuoteColor,#4caf50);color:#fff;' : ''}">全部</button>`;
-        for (const r of regions) {
+        const regionKeys = getRegionKeys(Object.values(map.locations || {}), regions);
+        visibleRegions = new Set([...visibleRegions].filter(r => regionKeys.includes(r)));
+        const allVisible = regionKeys.length > 0 && regionKeys.every(r => visibleRegions.has(r));
+        tabBar.innerHTML = `<button class="menu_button bb-map-region-tab ${allVisible ? 'active' : ''}" data-all="1" style="font-size:0.72em;padding:3px 8px;${allVisible ? 'background:var(--SmartThemeQuoteColor,#4caf50);color:#fff;' : ''}">全部</button>`;
+        for (const r of regionKeys) {
             const rc = getRegionColor(r);
-            tabBar.innerHTML += `<button class="menu_button bb-map-region-tab" data-region="${escapeHtml(r)}" style="font-size:0.72em;padding:3px 8px;${activeRegion === r ? 'background:' + rc + '33;border-color:' + rc + ';' : ''}">${escapeHtml(r)}</button>`;
+            const isVisible = visibleRegions.has(r);
+            tabBar.innerHTML += `<button class="menu_button bb-map-region-tab ${isVisible ? 'active' : ''}" data-region="${escapeHtml(r)}" style="font-size:0.72em;padding:3px 8px;${isVisible ? 'background:' + rc + '33;border-color:' + rc + ';' : ''}">${escapeHtml(getRegionLabel(r))}</button>`;
         }
         tabBar.querySelectorAll('.bb-map-region-tab').forEach(btn => {
             btn.addEventListener('click', () => {
-                activeRegion = btn.dataset.region;
+                if (btn.dataset.all) {
+                    if (regionKeys.length > 0 && regionKeys.every(r => visibleRegions.has(r))) visibleRegions.clear();
+                    else visibleRegions = new Set(regionKeys);
+                } else {
+                    const region = btn.dataset.region || '';
+                    if (visibleRegions.has(region)) visibleRegions.delete(region);
+                    else visibleRegions.add(region);
+                }
                 renderTabs();
                 refresh();
             });
@@ -634,14 +1142,32 @@ export async function openMapView(chatId) {
         map = await getMap(chatId); regions = await getRegions(chatId); renderTabs(); refresh(); showToast('已删除', 'success');
     }
 
+    let escHandler = null;
+
+    async function saveLayout(changedLocs) {
+        const unique = [...new Map((changedLocs || []).map(loc => [loc.id, loc])).values()];
+        for (const loc of unique) {
+            if (!loc?.id) continue;
+            await updateLocation(chatId, loc.id, { x: loc.x, y: loc.y });
+        }
+    }
+
+    function closeOverlay() {
+        if (typeof body._bbMapCleanup === 'function') body._bbMapCleanup();
+        if (escHandler) document.removeEventListener('keydown', escHandler);
+        overlay.remove();
+    }
+
     function refresh() {
         const locs = Object.values(map.locations || {});
         if (viewMode === 'spatial') {
             body.style.cssText = 'flex:1;overflow:hidden;min-height:0;';
-            renderSpatialView(body, locs, items, activeRegion, editMode, handleEdit, handleConnect, handleAddItem, handleDelete);
+            renderSpatialViewV2(body, locs, items, visibleRegions, editMode, handleEdit, handleConnect, handleAddItem, handleDelete, saveLayout);
         } else {
+            if (typeof body._bbMapCleanup === 'function') body._bbMapCleanup();
+            body.className = 'bb-map-list-body';
             body.style.cssText = 'flex:1;overflow-y:auto;padding:12px 16px;min-height:0;';
-            body.innerHTML = buildListHTML(locs, items, activeRegion);
+            body.innerHTML = buildListHTML(locs, items, visibleRegions, editMode);
             bindListEvents();
         }
         const edges = locs.reduce((s, l) => s + (l.edges || []).length, 0);
@@ -661,7 +1187,7 @@ export async function openMapView(chatId) {
         // 跨区域跳转
         body.querySelectorAll('.bb-map-cross-link').forEach(el => {
             el.addEventListener('click', () => {
-                activeRegion = el.dataset.region;
+                visibleRegions.add(el.dataset.region || '');
                 renderTabs(); refresh();
             });
         });
@@ -671,7 +1197,9 @@ export async function openMapView(chatId) {
 
     footer.querySelector('#bb_map_add_loc').addEventListener('click', () => {
         showLocationForm('添加地点', {}, async (data) => {
-            await addLocation(chatId, { ...data, source: 'manual' });
+            const position = suggestLocationPosition(data, Object.values(map.locations || {}));
+            await addLocation(chatId, { ...data, ...position, source: 'manual' });
+            visibleRegions.add(data.region || '');
             map = await getMap(chatId); regions = await getRegions(chatId); renderTabs(); refresh();
             showToast('地点已添加', 'success');
         });
@@ -679,7 +1207,8 @@ export async function openMapView(chatId) {
     footer.querySelector('#bb_map_help').addEventListener('click', () => {
         alert('世界地图 v8.8.0\n\n🗺 空间视图：Canvas连线+CSS卡片\n  - 滚轮缩放 | 拖动平移 | 右键菜单\n  - 双击编辑 | 触摸两指拖动\n📋 列表视图：区域分组+连线\n🌉 跨区域：虚线连接，点击跳转\n📐 自动布局：一键整理地点位置');
     });
-    document.addEventListener('keydown', function escHandler(e) {
-        if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escHandler); }
-    });
+    escHandler = (e) => {
+        if (e.key === 'Escape') closeOverlay();
+    };
+    document.addEventListener('keydown', escHandler);
 }
