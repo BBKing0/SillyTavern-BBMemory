@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v8.9.1</b>
+            <b>BB-Memory v8.9.2</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -130,6 +130,11 @@
                         <input id="bb_map_injection_max" type="number" class="bb-input" min="1" max="30" value="8" />
                     </div>
 
+                    <label class="checkbox_label" style="margin: 8px 0;">
+                        <input id="bb_clue_board_injection_enabled" type="checkbox" checked />
+                        <span>启用线索板注入</span>
+                    </label>
+
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_token_budget">Token 预算</label>
                         <input id="bb_token_budget" type="number" class="bb-input" min="100" max="4000" step="50" value="800" />
@@ -239,6 +244,12 @@
                         <label for="bb_health_check_stale_hit_threshold">休眠命中次数阈值</label>
                         <small class="bb-mem-hint">命中次数低于此值且长期未命中视为休眠（默认3）</small>
                         <input id="bb_health_check_stale_hit_threshold" type="number" class="bb-input" min="0" max="20" value="3" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_health_check_clue_stale_days">线索板更新提醒（天）</label>
+                        <small class="bb-mem-hint">线索板启用注入但超过此天数未更新时提醒（默认14）</small>
+                        <input id="bb_health_check_clue_stale_days" type="number" class="bb-input" min="1" max="90" value="14" />
                     </div>
 
                 </div>

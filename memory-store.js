@@ -34,8 +34,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     timelineEndedMax: 3,
     mapInjectionMax: 8,             // v8.7.0 地图地点注入上限
     worldRealWorldRef: '',           // v8.7.1 全局现实原型参考
-    shortTermWindow: 5,
     floorRecentWindow: 6,            // 近 N 轮内的记忆用完整内容
+    clueBoardInjectionEnabled: true,  // 线索板是否注入给 AI
     // AI 自动生成
     autoGenEnabled: false,
     autoGenMode: 'main',           // 'main' | 'custom'
@@ -78,6 +78,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     healthCheckStaleDays: 7,               // 长期休眠判定天数
     healthCheckStaleHitThreshold: 3,       // 休眠命中次数阈值
     healthCheckThreadStaleDays: 30,        // 线程长期停滞判定天数
+    healthCheckClueStaleDays: 14,          // 线索板多久未更新时提醒
     // 时间线总结
     timelineSummaryEnabled: true,
     maxActiveThreads: 5,               // v6.7.0 活跃线程最大注入数
@@ -941,7 +942,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '8.9.1',
+        version: '8.9.2',
         timestamp: Date.now(),
         npc: [],
         items: [],
@@ -1062,7 +1063,7 @@ export async function exportMemoriesToChatMetadata(chatId) {
     ]);
 
     const backup = {
-        version: '8.9.0',
+        version: '8.9.2',
         timestamp: Date.now(),
         npc,
         items,
@@ -1595,7 +1596,7 @@ export async function exportMemories(chatId) {
         getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
         getTimelineThreads(chatId), getMap(chatId), getClueBoard(chatId),
     ]);
-    return JSON.stringify({ version: '8.9.0', npc, items, timeline, memories, threads, map, clueBoard }, null, 2);
+    return JSON.stringify({ version: '8.9.2', npc, items, timeline, memories, threads, map, clueBoard }, null, 2);
 }
 
 export async function importMemories(chatId, jsonString) {

@@ -122,7 +122,8 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     ]);
 
     const hasMapData = Object.values(mapData?.locations || {}).some(loc => loc && !loc.archived);
-    const hasClueData = Array.isArray(clueBoard?.nodes) && clueBoard.nodes.length > 0;
+    const activeClueBoard = settings.clueBoardInjectionEnabled === false ? null : clueBoard;
+    const hasClueData = Array.isArray(activeClueBoard?.nodes) && activeClueBoard.nodes.length > 0;
     const hasData = npc.length + items.length + timeline.length + memories.length + threads.length > 0 || hasMapData || hasClueData;
     if (!hasData) { clearInjection(); return chat; }
 
@@ -186,7 +187,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         relevantResults: merged,
         settings,
         chatLength: chat.length,
-        clueBoard,
+        clueBoard: activeClueBoard,
         mapData,  // v8.7.0
         queryText: userMessage,
         queryEmbedding,
@@ -651,6 +652,7 @@ function bindSidebarEvents() {
     bindCheckbox('#bb_dedup_enabled', 'dedupEnabled');
     bindCheckbox('#bb_debug_logging', 'debugLogging');
     bindCheckbox('#bb_timeline_summary_enabled', 'timelineSummaryEnabled');
+    bindCheckbox('#bb_clue_board_injection_enabled', 'clueBoardInjectionEnabled');
     bindCheckbox('#bb_auto_backup_enabled', 'autoBackupEnabled');
 
     // v7.9.0 自动备份状态指示器
@@ -734,6 +736,7 @@ function bindSidebarEvents() {
     bindInput('#bb_health_check_isolation_threshold', 'healthCheckIsolationThreshold', 'number');
     bindInput('#bb_health_check_stale_days', 'healthCheckStaleDays', 'number');
     bindInput('#bb_health_check_stale_hit_threshold', 'healthCheckStaleHitThreshold', 'number');
+    bindInput('#bb_health_check_clue_stale_days', 'healthCheckClueStaleDays', 'number');
     bindInput('#bb_injection_template', 'injectionTemplate', 'string');
     // API 配置字段绑定
     bindInput('#bb_auto_gen_endpoint', 'autoGenEndpoint', 'string');

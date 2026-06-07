@@ -286,6 +286,9 @@ function buildEntryItemHTML(e) {
         }
         const typeDef = MEMORY_TYPES[e.type];
         if (typeDef) statusBadges += `<span class="bb-item-badge" style="font-size:0.7em;">${typeDef.label}</span>`;
+        if (Array.isArray(e.hiddenNotes) && e.hiddenNotes.length) {
+            statusBadges += `<span class="bb-item-badge" title="隐藏备注仅在编辑中查看；允许注入的备注会给 AI" style="font-size:0.7em;background:#2196f322;color:#64b5f6;border:1px solid #2196f344;"><i class="fa-solid fa-eye-slash"></i> ${e.hiddenNotes.length}</span>`;
+        }
     }
 
     // v8.6.0 分类标签
@@ -421,6 +424,35 @@ function addSubEntryRow(container, description, id) {
     `;
     row.querySelector('.bb-subentry-remove').addEventListener('click', () => row.remove());
     container.appendChild(row);
+}
+
+function formatHiddenNotesForEditor(notes) {
+    if (!Array.isArray(notes)) return '';
+    return notes
+        .filter(n => n && String(n.content || '').trim())
+        .map(n => {
+            const type = n.type || 'note';
+            const noInject = n.allowInjection === false ? '|noinject' : '';
+            return `[${type}${noInject}] ${String(n.content || '').trim()}`;
+        })
+        .join('\n');
+}
+
+function parseHiddenNotesFromEditor(text) {
+    return String(text || '')
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+        .map(line => {
+            const m = line.match(/^\[([^\]|]+)(\|noinject)?\]\s*(.+)$/);
+            return {
+                id: 'hn_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7),
+                type: m ? m[1].trim() : 'note',
+                content: m ? m[3].trim() : line,
+                allowInjection: m ? m[2] !== '|noinject' : true,
+                createdAt: Date.now(),
+            };
+        });
 }
 
 // ═══ 事件绑定 ═══
@@ -970,6 +1002,8 @@ function showQuickAddForm(overlay, chatId) {
                 <textarea class="bb-input bb-f-summary" placeholder="一句话摘要" rows="1" style="width:100%;margin-bottom:8px;"></textarea>
                 <label style="font-size:0.85em;">原话</label>
                 <textarea class="bb-input bb-f-verbatim" placeholder="角色原话（可选）" rows="1" style="width:100%;margin-bottom:8px;"></textarea>
+                <label style="font-size:0.85em;">隐藏备注 <small style="opacity:0.55;">AI 可见，用户列表默认不展开；每行一条</small></label>
+                <textarea class="bb-input bb-f-hiddenNotes" placeholder="[note] 只给 AI 看的备注&#10;[secret|noinject] 保留但不注入" rows="3" style="width:100%;margin-bottom:8px;"></textarea>
                 <div style="display:flex;gap:8px;">
                     <div style="flex:1;"><label style="font-size:0.85em;">重要性: <span class="bb-f-importance-val">50</span>%</label><input type="range" class="bb-f-importance" min="0" max="100" value="50" style="width:100%;" /></div>
                     <div style="flex:1;"><label style="font-size:0.85em;">情感权重: <span class="bb-f-emotional-val">0</span>%</label><input type="range" class="bb-f-emotional" min="0" max="100" value="0" style="width:100%;" /></div>
@@ -1091,11 +1125,15 @@ function buildPillarFormFields_inner(p) {
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">现实参考</label><input class="bb-input bb-f-realref" placeholder="可选" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;display:flex;align-items:flex-end;padding-bottom:8px;"><label style="font-size:0.85em;display:flex;align-items:center;gap:4px;"><input type="checkbox" class="bb-f-mapResident" /> 常驻地点</label></div></div>`;
         case 'mem': default: return `
             <label style="font-size:0.85em;">标题 <span style="color:#f44336;">*</span></label><input class="bb-input bb-f-title" placeholder="记忆标题（3-8字）" style="width:100%;margin-bottom:8px;" />
-            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">类型</label><select class="bb-input bb-f-type" style="width:100%;margin-bottom:8px;">${Object.values(MEMORY_TYPES).map(t => `<option value="${t.id}" ${t.id === 'event' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div><div style="flex:1;"><label style="font-size:0.85em;">真值状态</label><select class="bb-input bb-f-truthStatus" style="width:100%;margin-bottom:8px;">${Object.entries(TRUTH_STATUS).map(([k,v]) => `<option value="${k}" ${k === 'true' ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div></div>
+            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">类型</label><select class="bb-input bb-f-type" style="width:100%;margin-bottom:8px;">${Object.values(MEMORY_TYPES).map(t => `<option value="${t.id}" ${t.id === 'event' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div><div style="flex:1;"><label style="font-size:0.85em;">等级</label><select class="bb-input bb-f-memoryTier" style="width:100%;margin-bottom:8px;"><option value="transient">模糊</option><option value="stable" selected>稳固</option><option value="core">核心</option><option value="eternal">永恒</option></select></div></div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"><label style="font-size:0.85em;display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="bb-f-archived" style="width:auto;margin:0;" /><i class="fa-solid fa-box-archive" style="opacity:0.5;"></i> 已归档</label></div>
+            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">真值状态</label><select class="bb-input bb-f-truthStatus" style="width:100%;margin-bottom:8px;">${Object.entries(TRUTH_STATUS).map(([k,v]) => `<option value="${k}" ${k === 'true' ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div><div style="flex:1;"></div></div>
             <label style="font-size:0.85em;">内容</label><textarea class="bb-input bb-f-content" placeholder="记忆内容..." rows="3" style="width:100%;margin-bottom:8px;"></textarea>
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">主体</label><input class="bb-input bb-f-subject" placeholder="记忆主体" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">对象</label><input class="bb-input bb-f-target" placeholder="记忆对象" style="width:100%;margin-bottom:8px;" /></div></div>
             <label style="font-size:0.85em;">摘要</label><textarea class="bb-input bb-f-summary" placeholder="一句话摘要" rows="1" style="width:100%;margin-bottom:8px;"></textarea>
             <label style="font-size:0.85em;">原话</label><textarea class="bb-input bb-f-verbatim" placeholder="角色原话（可选）" rows="1" style="width:100%;margin-bottom:8px;"></textarea>
+            <label style="font-size:0.85em;">隐藏备注 <small style="opacity:0.55;">AI 可见，用户列表默认不展开；每行一条</small></label>
+            <textarea class="bb-input bb-f-hiddenNotes" placeholder="[note] 只给 AI 看的备注&#10;[secret|noinject] 保留但不注入" rows="3" style="width:100%;margin-bottom:8px;"></textarea>
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">重要性: <span class="bb-f-importance-val">50</span>%</label><input type="range" class="bb-f-importance" min="0" max="100" value="50" style="width:100%;" /></div><div style="flex:1;"><label style="font-size:0.85em;">情感权重: <span class="bb-f-emotional-val">0</span>%</label><input type="range" class="bb-f-emotional" min="0" max="100" value="0" style="width:100%;" /></div></div>
             <label style="font-size:0.85em;">标签</label><input class="bb-input bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
     }
@@ -1152,6 +1190,7 @@ function collectFormData(formEl, pillar) {
             subject: g('bb-f-subject'), target: g('bb-f-target'),
             memoryTier: formEl.querySelector('.bb-f-memoryTier')?.value || 'stable',
             truthStatus: formEl.querySelector('.bb-f-truthStatus')?.value || 'true',
+            hiddenNotes: parseHiddenNotesFromEditor(g('bb-f-hiddenNotes')),
             importance: parseInt(formEl.querySelector('.bb-f-importance')?.value || '50', 10) / 100,
             emotionalWeight: parseInt(formEl.querySelector('.bb-f-emotional')?.value || '0', 10) / 100,
             archived: formEl.querySelector('.bb-f-archived')?.checked || false,
@@ -1298,6 +1337,7 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
                     setVal('bb-f-target', prefill.target);
                     setVal('bb-f-summary', prefill.summary);
                     setVal('bb-f-verbatim', prefill.verbatim);
+                    setVal('bb-f-hiddenNotes', formatHiddenNotesForEditor(prefill.hiddenNotes));
                     { const el = formOverlay.querySelector('.bb-f-importance'); if (el) { el.value = Math.round((prefill.importance || 0.5) * 100); el.dispatchEvent(new Event('input')); } }
                     { const el = formOverlay.querySelector('.bb-f-emotional'); if (el) { el.value = Math.round((prefill.emotionalWeight || 0) * 100); el.dispatchEvent(new Event('input')); } }
                     setCheck('bb-f-archived', prefill.archived || prefill.status === 'archived');

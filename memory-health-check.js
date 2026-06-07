@@ -7,6 +7,7 @@
 
 import {
     getSettings,
+    updateSettings,
     getMemories, getNpcProfiles, getItems, getTimeline,
     addMemory, updateMemory, removeMemory,
     updateNpcProfile, removeNpcProfile,
@@ -470,6 +471,76 @@ export function detectFloorGaps(chatId) {
     return issues;
 }
 
+/**
+ * 轻量线索板提醒：用户手动编辑的内容不做质量体检，只提醒长时间未更新的注入风险。
+ */
+export function detectClueBoardStale(board, settings) {
+    if (settings.clueBoardInjectionEnabled === false) return [];
+    if (!board || !Array.isArray(board.nodes) || board.nodes.length === 0) return [];
+    const staleDays = settings.healthCheckClueStaleDays ?? 14;
+    const updatedAt = board.updatedAt || board.createdAt || 0;
+    if (!updatedAt) return [];
+    const ageDays = Math.floor((Date.now() - updatedAt) / (24 * 60 * 60 * 1000));
+    if (ageDays < staleDays) return [];
+    return [{
+        id: '__clue_board_stale__',
+        collection: 'clue',
+        title: '线索板长期未更新',
+        type: 'clue_board_stale',
+        detail: `线索板已 ${ageDays} 天未更新，当前仍会注入给 AI。建议更新线索板，或暂时关闭线索板注入。`,
+        severity: 'info',
+        entry: board,
+    }];
+}
+
+/**
+ * 地图孤立地点：没有可达路径关系，也没有物品存放线索的地点。
+ */
+export function detectMapIsolation(mapData, items = []) {
+    const locs = Object.values(mapData?.locations || {}).filter(loc => loc && !loc.archived);
+    if (locs.length < 2) return [];
+
+    const byId = new Map(locs.map(loc => [loc.id, loc]));
+    const degree = new Map(locs.map(loc => [loc.id, 0]));
+    const children = new Map(locs.map(loc => [loc.id, 0]));
+
+    for (const loc of locs) {
+        if (loc.parentId && byId.has(loc.parentId)) {
+            degree.set(loc.id, (degree.get(loc.id) || 0) + 1);
+            degree.set(loc.parentId, (degree.get(loc.parentId) || 0) + 1);
+            children.set(loc.parentId, (children.get(loc.parentId) || 0) + 1);
+        }
+        for (const edge of (loc.edges || [])) {
+            if (!byId.has(edge.toId)) continue;
+            degree.set(loc.id, (degree.get(loc.id) || 0) + 1);
+            degree.set(edge.toId, (degree.get(edge.toId) || 0) + 1);
+        }
+    }
+
+    const itemLocationTokens = new Set();
+    for (const item of items || []) {
+        const loc = String(item.location || '').trim();
+        if (loc) itemLocationTokens.add(loc.toLowerCase());
+    }
+
+    return locs
+        .filter(loc => {
+            const hasPath = (degree.get(loc.id) || 0) > 0 || (children.get(loc.id) || 0) > 0;
+            const names = [loc.id, loc.name].filter(Boolean).map(s => String(s).toLowerCase());
+            const hasStoredItem = names.some(name => itemLocationTokens.has(name));
+            return !hasPath && !hasStoredItem;
+        })
+        .map(loc => ({
+            id: loc.id,
+            collection: 'map',
+            title: loc.name || loc.id,
+            type: 'map_isolated_location',
+            detail: '该地点没有可达路径/层级关系，也没有物品标记存放在此处。',
+            severity: 'info',
+            entry: loc,
+        }));
+}
+
 // ═══════════════════════════════════════════════════════════
 //  主编排器
 // ═══════════════════════════════════════════════════════════
@@ -477,12 +548,18 @@ export function detectFloorGaps(chatId) {
 export async function runHealthCheck(chatId) {
     const settings = getSettings();
     const { getTimelineThreads } = await import('./memory-store.js');
-    const [memories, npcs, items, timelines, threads] = await Promise.all([
+    const [{ getMap }, { getClueBoard }] = await Promise.all([
+        import('./map-store.js'),
+        import('./clue-board.js'),
+    ]);
+    const [memories, npcs, items, timelines, threads, mapData, clueBoard] = await Promise.all([
         getMemories(chatId),
         getNpcProfiles(chatId),
         getItems(chatId),
         getTimeline(chatId),
         getTimelineThreads(chatId).catch(() => []),
+        getMap(chatId).catch(() => ({ locations: {} })),
+        getClueBoard(chatId).catch(() => ({ nodes: [], connections: [] })),
     ]);
 
     const results = {
@@ -567,6 +644,20 @@ export async function runHealthCheck(chatId) {
         ],
     };
 
+    // Category 10: Clue board light reminder
+    results.categories.clueBoard = {
+        label: '线索板提醒',
+        icon: 'fa-solid fa-magnifying-glass',
+        issues: detectClueBoardStale(clueBoard, settings),
+    };
+
+    // Category 11: Map graph health
+    results.categories.map = {
+        label: '地图连通性',
+        icon: 'fa-solid fa-map',
+        issues: detectMapIsolation(mapData, items),
+    };
+
     // Compute summary
     let totalIssues = 0;
     let score = 100;
@@ -577,7 +668,7 @@ export async function runHealthCheck(chatId) {
             score -= severityPenalty[issue.severity] || 3;
         }
     }
-    results.summary.totalEntries = memories.length + npcs.length + items.length + timelines.length + (threads?.length || 0);
+    results.summary.totalEntries = memories.length + npcs.length + items.length + timelines.length + (threads?.length || 0) + Object.keys(mapData?.locations || {}).length;
     results.summary.totalIssues = totalIssues;
     results.summary.healthScore = Math.max(0, score);
 
@@ -677,6 +768,15 @@ function getActionButtonsForIssue(issue) {
             btn('忽略', 'ignore');
             break;
         case 'thread_overload':
+            btn('忽略', 'ignore');
+            break;
+        case 'clue_board_stale':
+            btn('关闭线索板注入', 'disable_clue_injection', '#ff9800');
+            btn('忽略', 'ignore');
+            break;
+        case 'map_isolated_location':
+            btn('打开地图', 'open_map', '#2196f3');
+            btn('归档地点', 'archive_map_location', '#ff9800');
             btn('忽略', 'ignore');
             break;
         default:
@@ -1042,6 +1142,32 @@ async function handleHealthAction(op, issue, chatId, callbacks, rowEl) {
             }
             break;
         }
+        case 'disable_clue_injection': {
+            updateSettings({ clueBoardInjectionEnabled: false });
+            itemEl.remove();
+            notifyCallbacks(callbacks, '已关闭线索板注入，线索板内容仍会保留');
+            break;
+        }
+        case 'open_map': {
+            try {
+                const { openMapView } = await import('./map-view.js');
+                await openMapView(chatId);
+            } catch (e) {
+                if (typeof toastr !== 'undefined') toastr.error('打开地图失败: ' + e.message);
+            }
+            break;
+        }
+        case 'archive_map_location': {
+            try {
+                const { archiveLocation } = await import('./map-store.js');
+                await archiveLocation(chatId, issue.id);
+                itemEl.remove();
+                notifyCallbacks(callbacks, `已归档地点: ${(issue.title || issue.id).slice(0, 30)}`);
+            } catch (e) {
+                if (typeof toastr !== 'undefined') toastr.error('归档地点失败: ' + e.message);
+            }
+            break;
+        }
     }
 }
 
@@ -1164,6 +1290,7 @@ async function updateEntry(chatId, collection, id, patch) {
         case 'npc': return updateNpcProfile(chatId, id, patch);
         case 'item': return updateItem(chatId, id, patch);
         case 'timeline': return updateTimelineEntry(chatId, id, patch);
+        case 'map': { const { updateLocation } = await import('./map-store.js'); return updateLocation(chatId, id, patch); }
     }
 }
 
@@ -1173,6 +1300,7 @@ async function removeEntry(chatId, collection, id) {
         case 'npc': return removeNpcProfile(chatId, id);
         case 'item': return removeItem(chatId, id);
         case 'timeline': return removeTimelineEntry(chatId, id);
+        case 'map': { const { removeLocation } = await import('./map-store.js'); return removeLocation(chatId, id); }
     }
 }
 

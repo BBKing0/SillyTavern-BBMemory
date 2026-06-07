@@ -364,7 +364,7 @@ bb-memory/
 - NPC 四级：`core`（核心）／`important`（重要）／`minor`（配角）／`background`（路人），影响检索分与注入档位（未命中对话实体时路人大幅下降占位）。
 - 物品五级：`key`／`equipped`／`clue`／`consumable`／`background`，同样参与检索乘数与档位封顶逻辑。
 - 自动提取：`standaloneArchive=false` + `npc.profile` → 自动改为情景记忆 `episode.event`，避免路人落成完整档案；物品可走 `background` 分级减负。
-- 常驻索引卡：字段 `indexCard` + `buildDefaultIndexCard()`，常驻注入仅用短卡片（不写全长列传）。
+- 记忆索引卡：字段 `indexCard` + `buildDefaultIndexCard()`，低相关/模糊记忆优先注入短卡片或摘要；核心、永恒或高相关记忆注入完整内容。
 - 按需展开：`mergeExpandedRelevantResults()` 在用户消息命中实体名时，合并关联记忆并拉高档位；支持 `relatedMemoryIds` 链式展开。
 - 分类扩展：`npc.emotion`、`npc.secret`、`npc.goal`、`item.key`、`item.clue`。
 - 控制台接口：`globalThis.bbMemoryExpandEntityKeyword(keyword, limit)` 返回关键词关联记忆数组。
@@ -458,7 +458,7 @@ bb-memory/
 **修改文件：**
 - `auto-generator.js` — 提取流程改为 exchange 模式，每个周期最多处理 3 个 exchange
 - `index.js` — 在 MESSAGE_RECEIVED 和 CHAT_CHANGED 事件中集成消息同步
-- `memory-store.js` — 新增 `shortTermWindow` 设置项（默认 5）
+- `memory-store.js` — 旧版曾新增 `shortTermWindow` 设置项；新版本已由提取窗口与楼层状态标记取代。
 - `manifest.json` — 版本号升级到 2.1.0
 
 **向后兼容：**

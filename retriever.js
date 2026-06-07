@@ -10,6 +10,7 @@ import {
     tierScoreMultiplier,
     buildNpcIndexCard,
     buildItemIndexCard,
+    buildDefaultIndexCard,
     memoryMatchesQueryEntities,
     expandEntityMemories,
     extractEntityHints,
@@ -453,7 +454,19 @@ function formatTimelineLine(t) {
     return `▸ ${timeStr} ${t.event} ${activeMark}\n  ${t.summary}${t.impact ? ' — ' + t.impact : ''}`;
 }
 
-function formatMemoryLine(m, chatLength = 0) {
+function formatHiddenNotesForInjection(m) {
+    if (!Array.isArray(m.hiddenNotes) || !m.hiddenNotes.length) return '';
+    const lines = m.hiddenNotes
+        .filter(note => note && note.allowInjection !== false && String(note.content || '').trim())
+        .slice(0, 4)
+        .map(note => {
+            const type = note.type ? `[${note.type}]` : '';
+            return `  [AI隐藏备注${type}] ${String(note.content).trim().slice(0, 180)}`;
+        });
+    return lines.length ? '\n' + lines.join('\n') : '';
+}
+
+function formatMemoryLine(m, chatLength = 0, level = 'L2') {
     const parts = [];
     if (m.title) parts.push(`[${m.title}]`);
     const typeLabel = MEMORY_TYPES[m.type]?.label || '';
@@ -462,15 +475,12 @@ function formatMemoryLine(m, chatLength = 0) {
         const ts = TRUTH_STATUS[m.truthStatus];
         if (ts) parts.push(`{${ts.label}}`);
     }
-    // 基于楼层距离决定使用摘要还是完整内容
-    const floorWindow = getSettings().floorRecentWindow ?? 6;
-    const floorDist = chatLength > 0 && typeof m.sourceFloor === 'number' && m.sourceFloor >= 0
-        ? chatLength - m.sourceFloor
-        : Infinity;
-    const isRecent = floorDist <= floorWindow;
-    const isStable = (m.memoryTier === 'stable' || m.memoryTier === 'core' || m.memoryTier === 'eternal');
+    const isResident = isResidentEntry(m);
+    const shouldUseFull = isResident || level === 'L3' || level === 'L4';
 
-    if ((isRecent || isStable) && m.content) {
+    if (level === 'L1' && !shouldUseFull) {
+        parts.push(buildDefaultIndexCard(m));
+    } else if (shouldUseFull && m.content) {
         parts.push(m.content);
     } else if (m.summary) {
         parts.push(m.summary);
@@ -480,7 +490,7 @@ function formatMemoryLine(m, chatLength = 0) {
     if (m.verbatim) parts.push(`「${m.verbatim}」`);
     if (m.subject && m.target) parts.push(`(${m.subject} → ${m.target})`);
     else if (m.subject) parts.push(`(${m.subject})`);
-    return parts.join(' ');
+    return parts.join(' ') + formatHiddenNotesForInjection(m);
 }
 
 function formatMapEdgeMeta(edge) {
@@ -710,7 +720,7 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline,
         let sectionTokens = 0;
         for (const { memory, level } of relevantResults) {
             if (count >= MAX_MEM && !isResidentEntry(memory)) break;
-            const line = (count + 1) + '. ' + formatMemoryLine(memory, chatLength);
+            const line = (count + 1) + '. ' + formatMemoryLine(memory, chatLength, level);
             const lt = estimateTokens(line);
             if (sectionTokens + lt > tokenBudget * 0.7 && !isResidentEntry(memory)) break;
             lines.push(line);
