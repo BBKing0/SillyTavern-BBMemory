@@ -40,7 +40,7 @@ import {
 
 import {
     syncMessageVisibility, refreshExtractionMarkers,
-    markExchangeExtracted, hideExchange, unmarkExchangeProcessed,
+    markExchangeExtracted, hideExchange, unmarkExchangeProcessed, computeExchangeHash,
 } from './message-state.js';
 
 import { getClueBoard } from './clue-board.js';
@@ -121,7 +121,9 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         getMap(chatId),  // v8.7.0
     ]);
 
-    const hasData = npc.length + items.length + timeline.length + memories.length + threads.length > 0;
+    const hasMapData = Object.values(mapData?.locations || {}).some(loc => loc && !loc.archived);
+    const hasClueData = Array.isArray(clueBoard?.nodes) && clueBoard.nodes.length > 0;
+    const hasData = npc.length + items.length + timeline.length + memories.length + threads.length > 0 || hasMapData || hasClueData;
     if (!hasData) { clearInjection(); return chat; }
 
     // 5. 降格检查
@@ -137,9 +139,9 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     }
 
     // 7. 检索各支柱
-    const npcForInjection = getNpcForInjection(npc, userMessage);
-    const itemsForInjection = getItemsForInjection(items, userMessage);
-    const tlForInjection = getTimelineForInjection(timeline);
+    const npcForInjection = getNpcForInjection(npc, userMessage, queryEmbedding);
+    const itemsForInjection = getItemsForInjection(items, userMessage, queryEmbedding);
+    const tlForInjection = getTimelineForInjection(timeline, userMessage, queryEmbedding);
     const threadSummary = settings.timelineSummaryEnabled
         ? getThreadSummaryForInjection(threads, settings.maxActiveThreads || 5)
         : { text: '', threads: [] };
@@ -150,9 +152,10 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         minScore: settings.minScoreThreshold ?? 0.05,
         queryEmbedding,
     });
+    const relevantWithResidents = mergeResidentMemoryResults(residentMems, relevantResults);
     const excludeIds = new Set([...npcForInjection.map(n => n.id), ...residentMems.map(m => m.id)]);
-    for (const r of relevantResults) excludeIds.add(r.memory.id);
-    const merged = mergeExpandedRelevantResults(memories, userMessage, relevantResults, excludeIds, 12, settings.maxResults, queryEmbedding);
+    for (const r of relevantWithResidents) excludeIds.add(r.memory.id);
+    const merged = mergeExpandedRelevantResults(memories, userMessage, relevantWithResidents, excludeIds, 12, settings.maxResults, queryEmbedding);
 
     // v8.2.2 重roll 时仅对 L2/L3 同分段做局部 swap（相邻分数互换），不全局洗牌
     if (isReroll && merged.length > 2) {
@@ -169,16 +172,10 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     }
 
     if (!npcForInjection.length && !itemsForInjection.length &&
-        !tlForInjection.ongoing.length && !tlForInjection.ended.length && !merged.length && !threadSummary.text) {
+        !tlForInjection.ongoing.length && !tlForInjection.ended.length && !tlForInjection.foreshadow.length &&
+        !merged.length && !threadSummary.text && !hasMapData && !hasClueData) {
         clearInjection(); return chat;
     }
-
-    // 8. 记录命中
-    const hitRecords = [];
-    for (const n of npcForInjection) hitRecords.push({ collection: 'npc', id: n.id });
-    for (const i of itemsForInjection) hitRecords.push({ collection: 'item', id: i.id });
-    for (const r of merged) hitRecords.push({ collection: 'mem', id: r.memory.id });
-    recordHits(chatId, hitRecords).catch(() => {});
 
     // 9. 构建注入文本
     const { text, tokenEstimate, stats, truncated, tokenBudget } = await buildMemoryInjectionPrompt({
@@ -192,7 +189,18 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         clueBoard,
         mapData,  // v8.7.0
         queryText: userMessage,
+        queryEmbedding,
     });
+    if (!text.trim()) { clearInjection(); return chat; }
+
+    // 8. 记录实际注入命中
+    const hitRecords = [];
+    for (const n of npcForInjection) hitRecords.push({ collection: 'npc', id: n.id });
+    for (const i of itemsForInjection) hitRecords.push({ collection: 'item', id: i.id });
+    for (const t of [...tlForInjection.foreshadow, ...tlForInjection.ongoing, ...tlForInjection.ended]) hitRecords.push({ collection: 'timeline', id: t.id });
+    for (const r of merged) hitRecords.push({ collection: 'mem', id: r.memory.id });
+    for (const id of stats.mapLocationIds || []) hitRecords.push({ collection: 'map', id });
+    recordHits(chatId, hitRecords).catch(() => {});
 
     // 10. 注入
     const injectionText = (settings.injectionTemplate || '[BB-Memory 长期记忆]\n{{memories}}')
@@ -205,19 +213,24 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
 
     if (settings.debugLogging) {
         const prefix = isReroll ? '[BB-Memory] 重roll注入' : '[BB-Memory] 注入';
-        console.log(`${prefix}: 线程${stats.threadCount} NPC${stats.npcCount} 物品${stats.itemCount} 时间线${stats.timelineCount} 记忆${stats.memoryCount} | ~${tokenEstimate} tokens`);
+        console.log(`${prefix}: 线程${stats.threadCount} NPC${stats.npcCount} 物品${stats.itemCount} 时间线${stats.timelineCount} 记忆${stats.memoryCount} 地图${stats.mapCount || 0}${stats.clueBoard ? ' 线索板1' : ''} | ~${tokenEstimate} tokens`);
     }
 
     // 11. 存储命中追踪
     lastRetrievalResult = {
         chatId, timestamp: Date.now(),
-        hits: merged.map(r => ({ id: r.memory.id, title: r.memory.title, type: r.memory.type, score: r.score, level: r.level, cognitiveType: r.memory.cognitiveType })),
+        hits: merged.map(r => ({ id: r.memory.id, title: r.memory.title, type: r.memory.type, score: r.score, level: r.level })),
         npcHits: npcForInjection.map(n => ({ id: n.id, name: n.name, npcTier: n.npcTier })),
         itemHits: itemsForInjection.map(i => ({ id: i.id, name: i.name, itemTier: i.itemTier })),
         timelineHits: {
-            ongoing: tlForInjection.ongoing.map(t => ({ id: t.id, title: t.title, status: t.status })),
-            ended: tlForInjection.ended.map(t => ({ id: t.id, title: t.title, status: t.status })),
+            foreshadow: tlForInjection.foreshadow.map(t => ({ id: t.id, title: t.title || t.event, status: t.status })),
+            ongoing: tlForInjection.ongoing.map(t => ({ id: t.id, title: t.title || t.event, status: t.status })),
+            ended: tlForInjection.ended.map(t => ({ id: t.id, title: t.title || t.event, status: t.status })),
         },
+        mapHits: (stats.mapLocationIds || []).map(id => {
+            const loc = mapData?.locations?.[id];
+            return loc ? { id, name: loc.name, region: loc.region } : { id, name: id, region: '' };
+        }),
         stats,
     };
     // 同步侧边栏命中列表
@@ -241,6 +254,20 @@ function clearInjection() {
     try {
         SillyTavern.getContext().setExtensionPrompt(INJECTION_KEY, '', POSITION_IN_CHAT, 0, ROLE_SYSTEM);
     } catch { /* ignore */ }
+}
+
+function mergeResidentMemoryResults(residentMems, relevantResults) {
+    const byId = new Map();
+    for (const mem of residentMems || []) {
+        if (!mem?.id) continue;
+        byId.set(mem.id, { memory: mem, score: 1.0, breakdown: { resident: 1 }, level: 'L4' });
+    }
+    for (const result of relevantResults || []) {
+        const id = result?.memory?.id;
+        if (!id || byId.has(id)) continue;
+        byId.set(id, result);
+    }
+    return [...byId.values()];
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -291,6 +318,7 @@ function getExtensionFolder() {
 
 function promptFloorRange() {
     return new Promise((resolve) => {
+        const summary = getFloorRangeSummary();
         const overlay = document.createElement('div');
         overlay.className = 'bb-floor-select-overlay';
         const dialog = document.createElement('div');
@@ -302,7 +330,10 @@ function promptFloorRange() {
             <div style="font-size:0.8em;opacity:0.6;margin-bottom:10px;color:var(--SmartThemeTextColor,#ddd);">
                 输入楼层范围（如 <b>0-10</b>），留空则提取最近 8 轮对话
             </div>
-            <input id="bb_floor_range_input" type="text" placeholder="如 0-10（留空=最近8轮）"
+            <div style="font-size:0.78em;line-height:1.5;margin-bottom:10px;padding:8px 10px;border:1px solid var(--SmartThemeBorderColor,#444);border-radius:6px;background:rgba(255,255,255,0.04);color:var(--SmartThemeTextColor,#ddd);">
+                ${summary.html}
+            </div>
+            <input id="bb_floor_range_input" type="text" placeholder="${summary.placeholder}"
                 style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid var(--SmartThemeBorderColor,#555);background:var(--SmartThemeInputColor,#1a1a2e);color:var(--SmartThemeTextColor,#ddd);font-size:0.95em;box-sizing:border-box;margin-bottom:14px;" />
             <div style="display:flex;gap:8px;justify-content:flex-end;">
                 <button id="bb_floor_range_cancel" class="menu_button" style="opacity:0.6;">取消</button>
@@ -322,16 +353,81 @@ function promptFloorRange() {
         };
 
         okBtn.addEventListener('click', () => cleanup(input.value.trim()));
-        cancelBtn.addEventListener('click', () => cleanup(''));
+        cancelBtn.addEventListener('click', () => cleanup(null));
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') cleanup(input.value.trim());
-            if (e.key === 'Escape') cleanup('');
+            if (e.key === 'Escape') cleanup(null);
         });
         overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) cleanup('');
+            if (e.target === overlay) cleanup(null);
         });
         setTimeout(() => input.focus(), 100);
     });
+}
+
+function getFloorRangeSummary() {
+    try {
+        const ctx = SillyTavern.getContext();
+        const chat = ctx.chat || [];
+        let latestAi = -1;
+        const pending = [];
+        const untreated = [];
+        for (let i = 0; i < chat.length; i++) {
+            const msg = chat[i];
+            if (!msg || msg.is_user || msg.is_system) continue;
+            latestAi = i;
+            if (msg._bbmem_pendingExtraction && !msg._bbmem_extracted && !msg._bbmem_meta_marker) pending.push(i);
+            else if (!msg._bbmem_extracted && !msg._bbmem_skipped && !msg._bbmem_meta_marker) untreated.push(i);
+        }
+        const start = latestAi >= 0 ? Math.max(0, latestAi - 15) : 0;
+        const suggest = latestAi >= 0 ? `${start}-${latestAi}` : '';
+        const pendingText = pending.length
+            ? pending.slice(0, 12).join(', ') + (pending.length > 12 ? ` 等${pending.length}层` : '')
+            : '暂无已入队楼层';
+        const untreatedText = untreated.length
+            ? untreated.slice(-12).join(', ') + (untreated.length > 12 ? ` 等${untreated.length}层` : '')
+            : '暂无明显未提取楼层';
+        return {
+            placeholder: suggest ? `建议 ${suggest}；留空=最近8轮` : '如 0-10（留空=最近8轮）',
+            html: [
+                `<div><i class="fa-solid fa-location-dot"></i> 最新 AI 楼层：<b>${latestAi >= 0 ? latestAi : '无'}</b>${suggest ? `，建议范围：<b>${suggest}</b>` : ''}</div>`,
+                `<div><i class="fa-solid fa-spinner"></i> 待提取楼层：${escapeHtml(pendingText)}</div>`,
+                `<div><i class="fa-regular fa-circle"></i> 尚未提取楼层：${escapeHtml(untreatedText)}</div>`,
+            ].join(''),
+        };
+    } catch {
+        return { placeholder: '如 0-10（留空=最近8轮）', html: '无法读取当前聊天楼层；可手动输入范围，留空使用最近 8 轮。' };
+    }
+}
+
+async function toggleMetaMarkerForMessage(chat, aiIdx) {
+    if (!chat?.[aiIdx]) return;
+    const msg = chat[aiIdx];
+    msg._bbmem_meta_marker = !msg._bbmem_meta_marker;
+    let userText = '';
+    for (let j = aiIdx - 1; j >= 0; j--) {
+        if (chat[j].is_user && chat[j].mes) { userText = chat[j].mes; break; }
+    }
+    const hash = msg._bbmem_exchangeHash || computeExchangeHash(userText, msg.mes || '');
+
+    if (!msg._bbmem_meta_marker) {
+        msg.is_hidden = false;
+        msg._bbmem_hideSource = undefined;
+        msg._bbmem_pendingExtraction = true;
+        msg._bbmem_extracted = false;
+        msg._bbmem_skipped = false;
+        msg._bbmem_meta_reason = undefined;
+        await unmarkExchangeProcessed(getChatId(), hash);
+    } else {
+        delete msg._bbmem_pendingExtraction;
+        msg._bbmem_extracted = false;
+        msg._bbmem_skipped = true;
+        msg._bbmem_exchangeHash = hash;
+    }
+
+    try { SillyTavern.getContext().saveChatDebounced?.(); } catch {}
+    setTimeout(() => refreshExtractionMarkers(), 100);
+    showToast(msg._bbmem_meta_marker ? '已标记为元对话：窗口内正常显示，进入提取窗口后跳过' : '已恢复为可提取楼层', 'info');
 }
 
 async function handleInitMemory(chatId, rangeStr = '') {
@@ -396,11 +492,11 @@ async function handleInitMemory(chatId, rangeStr = '') {
     const results = await extractFromContext(chatId, contextText, { onProgress: updateProgress, sourceInfo });
 
     if (progressEl) {
-        progressEl.textContent = `初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 记忆 ${results.memories}`;
+        progressEl.textContent = `初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`;
         setTimeout(() => progressEl.remove(), 3000);
     }
 
-    showToast(`初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 记忆 ${results.memories}`, 'success');
+    showToast(`初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
     return results;
 }
 
@@ -502,6 +598,7 @@ function showErrorPopup(title, message, details = '') {
 
 // 全局暴露，供 auto-generator.js 调用
 globalThis.bbShowErrorPopup = showErrorPopup;
+globalThis.bbMemoryShowToast = showToast;
 
 // ═══════════════════════════════════════════════════════════
 //  设置面板绑定
@@ -626,6 +723,7 @@ function bindSidebarEvents() {
     bindInput('#bb_npc_injection_max', 'npcInjectionMax', 'number');
     bindInput('#bb_item_injection_max', 'itemInjectionMax', 'number');
     bindInput('#bb_timeline_ended_max', 'timelineEndedMax', 'number');
+    bindInput('#bb_map_injection_max', 'mapInjectionMax', 'number');
     bindInput('#bb_maintenance_mem_threshold', 'maintenanceMemThreshold', 'number');
     bindInput('#bb_maintenance_npc_threshold', 'maintenanceNpcThreshold', 'number');
     bindInput('#bb_maintenance_item_threshold', 'maintenanceItemThreshold', 'number');
@@ -702,10 +800,10 @@ function bindSidebarEvents() {
         const chatId = getChatId();
         if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
         const range = await promptFloorRange();
-        if (range === '') return;
+        if (range === null) return;
         try {
             const results = await handleInitMemory(chatId, range);
-            showToast(`初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 记忆 ${results.memories}`, 'success');
+            showToast(`初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
         } catch (e) {
             showToast(`初始化失败: ${e.message}`, 'error');
         }
@@ -723,18 +821,18 @@ function bindSidebarEvents() {
         const chatId = getChatId();
         if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
         const range = await promptFloorRange();
-        if (range === '') return; // 用户取消
+        if (range === null) return; // 用户取消
         showToast('正在收集上下文并提取记忆...', 'info');
         try {
             const results = await handleInitMemory(chatId, range);
-            showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 记忆 ${results.memories}`, 'success');
+            showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
         } catch (e) {
             showToast(`提取失败: ${e.message}`, 'error');
         }
     });
 
     // v5.3: 标记消息
-    document.querySelector('#bb_memory_meta_btn')?.addEventListener('click', () => {
+    document.querySelector('#bb_memory_meta_btn')?.addEventListener('click', async () => {
         const ctx = SillyTavern.getContext();
         const chat = ctx.chat;
         if (!chat || chat.length < 2) { showToast('聊天消息不足', 'warning'); return; }
@@ -743,18 +841,7 @@ function bindSidebarEvents() {
             if (!chat[i].is_user && !chat[i].is_system) { aiIdx = i; break; }
         }
         if (aiIdx === -1) { showToast('未找到 AI 消息', 'warning'); return; }
-        chat[aiIdx]._bbmem_meta_marker = !chat[aiIdx]._bbmem_meta_marker;
-        if (!chat[aiIdx]._bbmem_meta_marker) {
-            // 取消元标记：恢复消息为待提取状态
-            chat[aiIdx].is_hidden = false;
-            chat[aiIdx]._bbmem_hideSource = undefined;
-            chat[aiIdx]._bbmem_pendingExtraction = true;
-            chat[aiIdx]._bbmem_extracted = false;
-        }
-        try { ctx.saveChatDebounced(); } catch {}
-        setTimeout(() => refreshExtractionMarkers(), 100);
-        const label = chat[aiIdx]._bbmem_meta_marker ? '已标记为元指令（不提取）' : '已标记为可提取';
-        showToast(label, 'info');
+        await toggleMetaMarkerForMessage(chat, aiIdx);
     });
     document.querySelector('#bb_memory_toggle_vis_btn')?.addEventListener('click', () => {
         cycleExtractedVisibility();
@@ -820,13 +907,41 @@ function bindSidebarEvents() {
     });
 
     document.querySelector('#bb_embedding_reindex_btn')?.addEventListener('click', async () => {
+        const btn = document.querySelector('#bb_embedding_reindex_btn');
+        const origHTML = btn?.innerHTML;
         const chatId = getChatId();
         if (!chatId) return;
-        const memories = await getMemories(chatId);
-        await embedExistingMemories(memories, (done, total) => {
-            if (done % 10 === 0) console.log(`[BB-Memory] Reindex: ${done}/${total}`);
-        });
-        showToast(`Reindex 完成：${memories.length} 条`, 'success');
+        if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 重建中...'; }
+        try {
+            const [npc, items, timeline, memories, mapData] = await Promise.all([
+                getNpcProfiles(chatId),
+                getItems(chatId),
+                getTimeline(chatId),
+                getMemories(chatId),
+                getMap(chatId),
+            ]);
+            const collections = [
+                { key: 'npc', label: 'NPC', entries: npc },
+                { key: 'item', label: '物品', entries: items },
+                { key: 'timeline', label: '时间线', entries: timeline },
+                { key: 'mem', label: '记忆', entries: memories },
+                { key: 'map', label: '地图', entries: Object.values(mapData?.locations || {}) },
+            ];
+            const totalResult = { total: 0, updated: 0, failed: 0 };
+            for (const group of collections) {
+                const result = await embedExistingMemories(chatId, group.entries, (done, total) => {
+                    if (done % 10 === 0) console.log(`[BB-Memory] Reindex ${group.label}: ${done}/${total}`);
+                }, group.key);
+                totalResult.total += result.total;
+                totalResult.updated += result.updated;
+                totalResult.failed += result.failed;
+            }
+            showToast(`Reindex 完成：检查 ${totalResult.total} 条，更新 ${totalResult.updated} 条，失败 ${totalResult.failed} 条`, totalResult.failed ? 'warning' : 'success');
+        } catch (e) {
+            showToast(`Reindex 失败: ${e.message}`, 'error');
+        } finally {
+            if (btn) { btn.disabled = false; btn.innerHTML = origHTML; }
+        }
     });
 
     // ═══ v8.2.3 API 测试连接 ═══
@@ -865,20 +980,11 @@ function bindSidebarEvents() {
             const key = document.querySelector('#bb_embedding_api_key')?.value?.trim();
             const model = document.querySelector('#bb_embedding_model')?.value?.trim();
             if (!ep) { showToast('请先填写 Embedding API 端点', 'warning'); return; }
-            // Embedding 端点用 embedding 格式测试
+            updateSettings({ embeddingEndpoint: ep, embeddingApiKey: key, embeddingModel: model });
             const start = Date.now();
-            const resp = await fetch(ep, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-                body: JSON.stringify({ model, input: 'test' }),
-            });
+            const embedding = await callEmbeddingApi('test', 15000);
             const latency = Date.now() - start;
-            if (resp.ok) {
-                showToast(`连接成功！延迟 ${latency}ms`, 'success');
-            } else {
-                const errText = await resp.text().catch(() => '');
-                showToast(`连接失败: HTTP ${resp.status} (${latency}ms)`, 'error');
-            }
+            showToast(`连接成功！延迟 ${latency}ms，维度 ${embedding.length}`, 'success');
         } catch (e) {
             showToast(`测试异常: ${e.message}`, 'error');
         } finally {
@@ -1420,10 +1526,10 @@ function registerSlashCommands() {
         if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
         // 支持参数传楼层范围，如 /bb-init 0-10；无参数则弹窗
         const range = (args && args.trim()) ? args.trim() : await promptFloorRange();
-        if (range === '') return;
+        if (range === null) return;
         try {
             const results = await handleInitMemory(chatId, range);
-            showToast(`初始化：NPC${results.npc}/物品${results.items}/时间线${results.timeline}/记忆${results.memories}`, 'success');
+            showToast(`初始化：NPC${results.npc}/物品${results.items}/时间线${results.timeline}/地点${results.locations || 0}/记忆${results.memories}`, 'success');
         } catch (e) {
             showToast(`初始化失败: ${e.message}`, 'error');
         }
@@ -1511,7 +1617,7 @@ function registerSlashCommands() {
         msg._bbmem_pendingExtraction = true;
         try { ctx2.saveChatDebounced(); } catch {}
         refreshExtractionMarkers();
-        showToast(`已删除: NPC${result.npc}/物品${result.items}/时间线${result.timeline}/记忆${result.memories}`, 'success');
+        showToast(`已删除: NPC${result.npc}/物品${result.items}/时间线${result.timeline}/地点${result.map || 0}/记忆${result.memories}`, 'success');
     }, '删除指定楼层的所有关联记忆');
 
     addCmd('bb-re-extract', async (args) => {
@@ -1650,7 +1756,7 @@ function onNewMessage() {
 // ═══════════════════════════════════════════════════════════
 
 function renderHubHitItem(h, typeIcons, levelColors, dimmed) {
-    const icon = typeIcons[h.cognitiveType] || 'fa-circle';
+    const icon = typeIcons[h.type] || 'fa-circle';
     const color = levelColors[h.level] || '#888';
     const scorePct = Math.round(h.score * 100);
     const shortTitle = (h.title || '').length > 14
@@ -1667,7 +1773,7 @@ function renderHubHitItem(h, typeIcons, levelColors, dimmed) {
 
 async function renderHubHitList(listEl, chatId) {
     const result = lastRetrievalResult;
-    const typeIcons = { fact: 'fa-lightbulb', episode: 'fa-film', emotion: 'fa-heart', habit: 'fa-repeat' };
+    const typeIcons = { fact: 'fa-lightbulb', event: 'fa-film', emotion: 'fa-heart', habit: 'fa-repeat' };
     const levelColors = { L4: '#ce93d8', L3: '#4fc3f7', L2: '#ffb74d', L1: '#9e9e9e' };
 
     if (!result || !result.hits || !result.hits.length) {
@@ -1989,18 +2095,7 @@ async function handleFloatingMenuAction(action) {
                 if (!chat[i].is_user && !chat[i].is_system) { aiIdx = i; break; }
             }
             if (aiIdx === -1) { showToast('未找到 AI 消息', 'warning'); return; }
-            chat[aiIdx]._bbmem_meta_marker = !chat[aiIdx]._bbmem_meta_marker;
-            if (!chat[aiIdx]._bbmem_meta_marker) {
-                // 取消元标记：恢复消息为待提取状态
-                chat[aiIdx].is_hidden = false;
-                chat[aiIdx]._bbmem_hideSource = undefined;
-                chat[aiIdx]._bbmem_pendingExtraction = true;
-                chat[aiIdx]._bbmem_extracted = false;
-            }
-            try { ctx.saveChatDebounced(); } catch {}
-            setTimeout(() => refreshExtractionMarkers(), 100);
-            const label = chat[aiIdx]._bbmem_meta_marker ? '🤖 已标记为元指令（不提取）' : '🗃️ 已标记为可提取';
-            showToast(label, 'info');
+            await toggleMetaMarkerForMessage(chat, aiIdx);
             break;
         }
         case 'manual_extract': {
@@ -2008,11 +2103,11 @@ async function handleFloatingMenuAction(action) {
             const menu = document.getElementById('bb_floating_menu');
             if (menu) { menu.style.display = 'none'; floatingMenuVisible = false; }
             const range = await promptFloorRange();
-            if (range === '') return;
+            if (range === null) return;
             showToast('正在提取记忆...', 'info');
             try {
                 const results = await handleInitMemory(chatId, range);
-                showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 记忆 ${results.memories}`, 'success');
+                showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
                 refreshSidebar();
             } catch (e) {
                 showToast(`提取失败: ${e.message}`, 'error');
@@ -2289,9 +2384,9 @@ async function handleMessageDeletedByExchange(exchangeHash) {
     if (!chatId || !exchangeHash) return;
     try {
         const removed = await deleteByExchange(chatId, exchangeHash);
-        const total = removed.npc + removed.items + removed.timeline + removed.memories;
+        const total = removed.npc + removed.items + removed.timeline + removed.memories + (removed.map || 0);
         if (total > 0) {
-            console.log(`[BB-Memory] 自动清理已删除楼层的关联记忆: NPC${removed.npc}/物品${removed.items}/时间线${removed.timeline}/记忆${removed.memories}`);
+            console.log(`[BB-Memory] 自动清理已删除楼层的关联记忆: NPC${removed.npc}/物品${removed.items}/时间线${removed.timeline}/地点${removed.map || 0}/记忆${removed.memories}`);
             showToast(`已自动清理 ${total} 条关联记忆`, 'info');
         }
     } catch (e) {
@@ -2324,7 +2419,8 @@ function updateSidebarHitList() {
         (result.hits && result.hits.length) ||
         (result.npcHits && result.npcHits.length) ||
         (result.itemHits && result.itemHits.length) ||
-        (result.timelineHits && (result.timelineHits.ongoing.length + result.timelineHits.ended.length))
+        (result.timelineHits && ((result.timelineHits.foreshadow?.length || 0) + result.timelineHits.ongoing.length + result.timelineHits.ended.length)) ||
+        (result.mapHits && result.mapHits.length)
     );
 
     if (!hasAny) {
@@ -2337,7 +2433,7 @@ function updateSidebarHitList() {
         tsEl.textContent = d.toLocaleTimeString();
     }
 
-    const typeIcons = { fact: 'fa-lightbulb', episode: 'fa-film', emotion: 'fa-heart', habit: 'fa-repeat' };
+    const typeIcons = { fact: 'fa-lightbulb', event: 'fa-film', emotion: 'fa-heart', habit: 'fa-repeat' };
     const levelColors = { L4: '#ce93d8', L3: '#4fc3f7', L2: '#ffb74d', L1: '#9e9e9e' };
     const tierColors = { core: '#ce93d8', important: '#4fc3f7', minor: '#ffb74d', background: '#9e9e9e', key: '#ce93d8', equipped: '#4fc3f7', clue: '#ffb74d', consumable: '#9e9e9e' };
 
@@ -2371,26 +2467,37 @@ function updateSidebarHitList() {
 
     // 时间线命中
     if (result.timelineHits) {
-        const tlAll = [...(result.timelineHits.ongoing || []), ...(result.timelineHits.ended || [])];
+        const tlAll = [...(result.timelineHits.foreshadow || []), ...(result.timelineHits.ongoing || []), ...(result.timelineHits.ended || [])];
         if (tlAll.length) {
             html += `<div class="bb-hit-section-label"><i class="fa-solid fa-timeline"></i> 时间线 <span style="font-size:0.75em;opacity:0.6;">${tlAll.length}条</span></div>`;
             html += tlAll.map(t => {
                 const isOngoing = t.status === 'ongoing';
-                const color = isOngoing ? '#4fc3f7' : '#9e9e9e';
+                const isForeshadow = t.status === 'foreshadow';
+                const color = isForeshadow ? '#ffb74d' : (isOngoing ? '#4fc3f7' : '#9e9e9e');
                 return `<div class="bb-hub-hit-item" title="${escapeHtml(t.title)}" style="cursor:default;">
-                    <i class="fa-solid ${isOngoing ? 'fa-play' : 'fa-check'}" style="color:${color};font-size:0.7em;"></i>
+                    <i class="fa-solid ${isForeshadow ? 'fa-eye' : (isOngoing ? 'fa-play' : 'fa-check')}" style="color:${color};font-size:0.7em;"></i>
                     <span class="bb-hub-hit-title">${escapeHtml((t.title || '').length > 18 ? t.title.slice(0, 18) + '...' : (t.title || ''))}</span>
-                    <span class="bb-hub-hit-level" style="color:${color}">${isOngoing ? '进行中' : '已结束'}</span>
+                    <span class="bb-hub-hit-level" style="color:${color}">${isForeshadow ? '伏笔' : (isOngoing ? '进行中' : '已结束')}</span>
                 </div>`;
             }).join('');
         }
+    }
+
+    // 地图命中
+    if (result.mapHits && result.mapHits.length) {
+        html += `<div class="bb-hit-section-label"><i class="fa-solid fa-map"></i> 地图 <span style="font-size:0.75em;opacity:0.6;">${result.mapHits.length}处</span></div>`;
+        html += result.mapHits.map(loc => `<div class="bb-hub-hit-item" title="${escapeHtml(loc.name)}" style="cursor:default;">
+            <i class="fa-solid fa-location-dot" style="color:#4fc3f7;font-size:0.7em;"></i>
+            <span class="bb-hub-hit-title">${escapeHtml(loc.name || loc.id)}</span>
+            <span class="bb-hub-hit-level" style="color:#4fc3f7">${escapeHtml(loc.region || '')}</span>
+        </div>`).join('');
     }
 
     // 记忆命中
     if (result.hits && result.hits.length) {
         html += `<div class="bb-hit-section-label"><i class="fa-solid fa-brain"></i> 记忆 <span style="font-size:0.75em;opacity:0.6;">${result.hits.length}条</span></div>`;
         html += result.hits.map(h => {
-            const icon = typeIcons[h.cognitiveType] || 'fa-circle';
+            const icon = typeIcons[h.type] || 'fa-circle';
             const color = levelColors[h.level] || '#888';
             const scorePct = Math.round(h.score * 100);
             const shortTitle = (h.title || '').length > 18

@@ -10,16 +10,12 @@ import {
     tierScoreMultiplier,
     buildNpcIndexCard,
     buildItemIndexCard,
-    buildDefaultIndexCard,
     memoryMatchesQueryEntities,
     expandEntityMemories,
     extractEntityHints,
-    NPC_TIERS,
-    ITEM_TIERS,
 } from './entity-tiers.js';
 import {
-    getNpcProfiles, getItems, getTimeline, getMemories,
-    getTimelineThreads, isArchived, getSettings,
+    isArchived, getSettings,
 } from './memory-store.js';
 
 // ═══════════════════════════════════════════════════════════
@@ -66,6 +62,49 @@ function estimateTokens(text) {
     const rest = text.replace(/[一-鿿぀-ヿ가-힯]/g, '');
     const wordTokens = rest.split(/\s+/).filter(Boolean).length;
     return Math.ceil(cjkTokens + wordTokens);
+}
+
+function isResidentEntry(entry) {
+    if (!entry) return false;
+    return entry.memoryTier === 'core'
+        || entry.memoryTier === 'eternal'
+        || entry.resident === true
+        || entry.status === 'resident';
+}
+
+function cloneForInjection(entry, mode, reason = '') {
+    return { ...entry, _bbInjectMode: mode, _bbInjectReason: reason };
+}
+
+function uniqueById(entries) {
+    const seen = new Set();
+    const out = [];
+    for (const entry of entries) {
+        if (!entry || !entry.id || seen.has(entry.id)) continue;
+        seen.add(entry.id);
+        out.push(entry);
+    }
+    return out;
+}
+
+function embeddingSimilarity(entry, queryEmbedding) {
+    if (!queryEmbedding || !entry?.embedding || !Array.isArray(entry.embedding)) return 0;
+    if (queryEmbedding.length !== entry.embedding.length) return 0;
+    return cosineSimilarity(queryEmbedding, entry.embedding);
+}
+
+function entryTextMatches(entry, queryText, fields = [], queryEmbedding = null, semanticThreshold = 0.62) {
+    if (!entry || !queryText?.trim()) return false;
+    if (embeddingSimilarity(entry, queryEmbedding) >= semanticThreshold) return true;
+    if (memoryMatchesQueryEntities(entry, queryText)) return true;
+    const tokens = extractTokens(queryText);
+    if (!tokens.length) return false;
+    const tagText = (entry.tags || []).map(t => typeof t === 'string' ? t : t.name).filter(Boolean).join(' ');
+    const pool = [...fields.map(f => entry[f]), tagText]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+    return tokens.some(token => pool.includes(token));
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -221,7 +260,9 @@ export function mergeExpandedRelevantResults(memories, queryText, relevantResult
 
     merged.sort((a, b) => b.score - a.score);
     const ceiling = Math.min(maxResults + Math.ceil(maxResults * 0.3), merged.length);
-    return merged.slice(0, ceiling);
+    const residents = merged.filter(r => isResidentEntry(r.memory));
+    const rest = merged.filter(r => !isResidentEntry(r.memory));
+    return [...residents, ...rest.slice(0, Math.max(0, ceiling - residents.length))];
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -239,8 +280,9 @@ function matchesActiveCategory(entry) {
     const hasEnabled = Object.values(enabled).some(v => v === true);
     // 没有开启任何分类 → 显示全部
     if (!hasEnabled) return true;
-    // 有开启的分类 → 只显示通用(null) + 已开启的分类
-    return entry.category === null || enabled[entry.category] === true;
+    // 有开启的分类 → 只显示通用(null/undefined/空串) + 已开启的分类
+    const category = entry?.category;
+    return category === null || category === undefined || category === '' || enabled[category] === true;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -250,52 +292,80 @@ function matchesActiveCategory(entry) {
 /**
  * NPC 档案：core+important 全注入，minor 按命中
  */
-export function getNpcForInjection(npcProfiles, queryText) {
-    const result = [];
+export function getNpcForInjection(npcProfiles, queryText, queryEmbedding = null) {
+    const required = [];
+    const optional = [];
     for (const npc of npcProfiles) {
         if (isArchived(npc) || !matchesActiveCategory(npc)) continue;
-        if (npc.npcTier === 'core' || npc.npcTier === 'important' || npc.memoryTier === 'eternal') {
-            result.push(npc);
-        } else if (npc.npcTier === 'minor' && memoryMatchesQueryEntities(npc, queryText)) {
-            result.push(npc);
+        const resident = isResidentEntry(npc);
+        const alwaysIndex = npc.npcTier === 'core' || npc.npcTier === 'important';
+        const hit = entryTextMatches(npc, queryText, ['name', 'role', 'personality', 'appearance', 'status', 'location'], queryEmbedding);
+        if (resident || hit) {
+            const target = resident || alwaysIndex ? required : optional;
+            target.push(cloneForInjection(npc, 'full', resident ? 'resident' : 'hit'));
+        } else if (alwaysIndex) {
+            required.push(cloneForInjection(npc, 'index', 'always_index'));
         }
     }
     // 排序：tier 优先
     const tierOrder = { core: 0, important: 1, minor: 2, background: 3 };
-    result.sort((a, b) => (tierOrder[a.npcTier] || 2) - (tierOrder[b.npcTier] || 2));
-    return result.slice(0, getSettings().npcInjectionMax ?? 8);
+    const sortNpc = (a, b) => {
+        const residentDelta = (isResidentEntry(b) ? 1 : 0) - (isResidentEntry(a) ? 1 : 0);
+        if (residentDelta) return residentDelta;
+        return (tierOrder[a.npcTier] || 2) - (tierOrder[b.npcTier] || 2);
+    };
+    required.sort(sortNpc);
+    optional.sort(sortNpc);
+    return uniqueById([...required, ...optional.slice(0, getSettings().npcInjectionMax ?? 8)]);
 }
 
 /**
  * 物品栏：key+equipped+kp 全注入，其余按命中
  */
-export function getItemsForInjection(items, queryText) {
-    const result = [];
+export function getItemsForInjection(items, queryText, queryEmbedding = null) {
+    const required = [];
+    const optional = [];
     for (const item of items) {
         if (isArchived(item) || !matchesActiveCategory(item)) continue;
-        if (item.itemTier === 'key' || item.itemTier === 'equipped' || item.keepPermanent || item.memoryTier === 'eternal') {
-            result.push(item);
-        } else if (memoryMatchesQueryEntities(item, queryText)) {
-            result.push(item);
+        const resident = isResidentEntry(item);
+        const alwaysIndex = item.itemTier === 'key' || item.itemTier === 'equipped' || item.keepPermanent;
+        const hit = entryTextMatches(item, queryText, ['name', 'owner', 'status', 'significance', 'location'], queryEmbedding);
+        if (resident || hit) {
+            const target = resident || alwaysIndex ? required : optional;
+            target.push(cloneForInjection(item, 'full', resident ? 'resident' : 'hit'));
+        } else if (alwaysIndex) {
+            required.push(cloneForInjection(item, 'index', 'always_index'));
         }
     }
     const tierOrder = { key: 0, equipped: 1, clue: 2, consumable: 3, background: 4 };
-    result.sort((a, b) => (tierOrder[a.itemTier] || 3) - (tierOrder[b.itemTier] || 3));
-    return result.slice(0, getSettings().itemInjectionMax ?? 5);
+    const sortItem = (a, b) => {
+        const residentDelta = (isResidentEntry(b) ? 1 : 0) - (isResidentEntry(a) ? 1 : 0);
+        if (residentDelta) return residentDelta;
+        return (tierOrder[a.itemTier] || 3) - (tierOrder[b.itemTier] || 3);
+    };
+    required.sort(sortItem);
+    optional.sort(sortItem);
+    return uniqueById([...required, ...optional.slice(0, getSettings().itemInjectionMax ?? 5)]);
 }
 
 /**
  * 时间线：ongoing 全注入，最近 ended 3 条
  */
-export function getTimelineForInjection(timeline) {
+export function getTimelineForInjection(timeline, queryText = '', queryEmbedding = null) {
     const active = timeline.filter(t => !isArchived(t) && matchesActiveCategory(t));
-    const ongoing = active.filter(t => t.isActive && t.status === 'ongoing');
-    const ended = active
-        .filter(t => !t.isActive || t.status === 'ended')
+    const ongoing = active.filter(t => (t.isActive && t.status === 'ongoing') || (isResidentEntry(t) && t.status === 'ongoing'));
+    const foreshadow = active.filter(t => t.status === 'foreshadow');
+    const residentEnded = active.filter(t => isResidentEntry(t) && t.status !== 'ongoing' && t.status !== 'foreshadow');
+    const endedHits = active
+        .filter(t => (!t.isActive || t.status === 'ended') && !isResidentEntry(t))
+        .filter(t => entryTextMatches(t, queryText, ['title', 'event', 'summary', 'impact', 'location', 'storyTime'], queryEmbedding))
         .sort((a, b) => (b.storyTimeSort ?? b.updatedAt ?? 0) - (a.storyTimeSort ?? a.updatedAt ?? 0))
         .slice(0, getSettings().timelineEndedMax ?? 3);
-    const foreshadow = active.filter(t => t.status === 'foreshadow');
-    return { ongoing, ended, foreshadow };
+    return {
+        ongoing: uniqueById(ongoing),
+        ended: uniqueById([...residentEnded, ...endedHits]),
+        foreshadow: uniqueById(foreshadow),
+    };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -311,25 +381,16 @@ export function getTimelineForInjection(timeline) {
 export function getThreadSummaryForInjection(threads, maxActive = 5) {
     if (!threads || !threads.length) return { text: '', threads: [] };
 
-    // 优先级排序：resident > high > medium > low
+    // 用户预期：时间线程作为全局叙事地图全部注入，仅跳过已归档线程。
     const priorityOrder = { resident: 0, high: 1, medium: 2, low: 3 };
-    const sorted = [...threads].sort((a, b) => {
+    const sorted = threads.filter(t => !isArchived(t) && t.status !== 'archived').sort((a, b) => {
         const pa = priorityOrder[a.priority || 'medium'] ?? 2;
         const pb = priorityOrder[b.priority || 'medium'] ?? 2;
         if (pa !== pb) return pa - pb;
         return (b.updatedAt || 0) - (a.updatedAt || 0);
     });
 
-    // Resident 线程不计入 maxActive 限制
-    const residents = sorted.filter(t => t.status === 'resident');
-    const nonResidents = sorted.filter(t => t.status !== 'resident');
-
-    // Active 线程（ongoing + paused），受 maxActive 限制
-    const active = nonResidents.filter(t => t.status === 'ongoing' || t.status === 'paused');
-    const limited = active.slice(0, maxActive);
-
-    // 合并：resident 线程 + 限制后的活跃线程
-    const forInjection = [...residents, ...limited];
+    const forInjection = sorted;
 
     if (!forInjection.length) return { text: '', threads: [] };
 
@@ -359,6 +420,9 @@ export function getThreadSummaryForInjection(threads, maxActive = 5) {
 // ═══════════════════════════════════════════════════════════
 
 function formatNpcLine(npc) {
+    if (npc._bbInjectMode === 'index') {
+        return '◆ ' + buildNpcIndexCard(npc);
+    }
     const parts = [npc.name, npc.role, npc.personality, npc.appearance, npc.status].filter(Boolean);
     const line = '◆ ' + parts.join(' | ');
     const relLines = (npc.relationships || []).map(r =>
@@ -368,6 +432,9 @@ function formatNpcLine(npc) {
 }
 
 function formatItemLine(item) {
+    if (item._bbInjectMode === 'index') {
+        return '◆ ' + buildItemIndexCard(item);
+    }
     const statusLabel = { held: '持有中', used: '已使用', lost: '已失去', destroyed: '已销毁' }[item.status] || item.status;
     const parts = [
         '◆ ' + item.name,
@@ -421,13 +488,13 @@ function formatMapEdgeMeta(edge) {
     return meta.length ? `(${meta.join('/')})` : '';
 }
 
-function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 800) {
+function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 800, queryEmbedding = null) {
     if (!mapData || typeof mapData !== 'object' || Object.keys(mapData.locations || {}).length === 0) {
-        return { lines: [], tokens: 0, truncated: false };
+        return { lines: [], tokens: 0, truncated: false, ids: [] };
     }
 
     const locs = Object.values(mapData.locations || {}).filter(loc => loc && !loc.archived);
-    if (!locs.length) return { lines: [], tokens: 0, truncated: false };
+    if (!locs.length) return { lines: [], tokens: 0, truncated: false, ids: [] };
 
     const locById = new Map(locs.map(loc => [loc.id, loc]));
     const incoming = new Map(locs.map(loc => [loc.id, []]));
@@ -439,15 +506,56 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
         }
     }
 
-    const queryTokens = extractTokens(queryText || '');
-    const scoreLoc = (loc) => {
-        const text = [loc.name, loc.region, loc.description, loc.realWorldRef].filter(Boolean).join(' ').toLowerCase();
-        const queryBoost = queryTokens.some(token => text.includes(token)) ? 100 : 0;
-        const degree = (loc.edges?.length || 0) + (incoming.get(loc.id)?.length || 0) + (children.get(loc.id)?.length || 0);
-        return queryBoost + degree * 5 + (loc.updatedAt || 0) / 10000000000000;
-    };
     const maxLocations = Math.max(1, settings.mapInjectionMax || 8);
-    const selected = [...locs].sort((a, b) => scoreLoc(b) - scoreLoc(a)).slice(0, maxLocations);
+    const queryTokens = extractTokens(queryText || '');
+    const locMatchesQuery = (loc) => {
+        if (embeddingSimilarity(loc, queryEmbedding) >= 0.62) return true;
+        if (!queryTokens.length) return false;
+        const neighborNames = [
+            ...(loc.edges || []).map(e => locById.get(e.toId)?.name || ''),
+            ...(incoming.get(loc.id) || []).map(e => locById.get(e.fromId)?.name || ''),
+            ...(children.get(loc.id) || []).map(child => child.name || ''),
+        ];
+        const text = [loc.name, loc.region, loc.description, loc.realWorldRef, ...neighborNames]
+            .filter(Boolean).join(' ').toLowerCase();
+        return queryTokens.some(token => text.includes(token));
+    };
+    const scoreLoc = (loc) => {
+        const degree = (loc.edges?.length || 0) + (incoming.get(loc.id)?.length || 0) + (children.get(loc.id)?.length || 0);
+        return (locMatchesQuery(loc) ? 100 : 0)
+            + (isResidentEntry(loc) ? 90 : 0)
+            + degree * 5
+            + (loc.updatedAt || 0) / 10000000000000;
+    };
+
+    const baseMatches = locs
+        .filter(loc => isResidentEntry(loc) || locMatchesQuery(loc))
+        .sort((a, b) => scoreLoc(b) - scoreLoc(a));
+
+    if (!baseMatches.length) return { lines: [], tokens: 0, truncated: false, ids: [] };
+
+    const selectedMap = new Map();
+    const addSelected = (loc, reason) => {
+        if (!loc || selectedMap.has(loc.id)) return;
+        selectedMap.set(loc.id, { ...loc, _bbMapInjectReason: reason });
+    };
+
+    for (const loc of baseMatches) addSelected(loc, isResidentEntry(loc) ? 'resident' : 'hit');
+    for (const loc of baseMatches) {
+        if (selectedMap.size >= maxLocations) break;
+        const neighbors = [
+            loc.parentId ? locById.get(loc.parentId) : null,
+            ...(children.get(loc.id) || []),
+            ...(loc.edges || []).map(e => locById.get(e.toId)),
+            ...(incoming.get(loc.id) || []).map(e => locById.get(e.fromId)),
+        ].filter(Boolean);
+        for (const neighbor of neighbors) {
+            if (selectedMap.size >= maxLocations) break;
+            addSelected(neighbor, 'nearby');
+        }
+    }
+
+    const selected = [...selectedMap.values()];
 
     const worldRef = settings.worldRealWorldRef || '';
     const header = worldRef ? `【世界地图 — 空间关系】(现实参考: ${worldRef})` : '【世界地图 — 空间关系】';
@@ -470,7 +578,9 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
         const outEdges = (loc.edges || []).filter(e => locById.has(e.toId)).slice(0, 3);
         const inEdges = (incoming.get(loc.id) || []).slice(0, 3);
         const childNames = (children.get(loc.id) || []).slice(0, 4).map(child => child.name || child.id);
-        const parts = [`◆ ${loc.name || loc.id}`];
+        const mark = loc._bbMapInjectReason === 'resident' ? '★常驻' :
+                     loc._bbMapInjectReason === 'nearby' ? '周边' : '命中';
+        const parts = [`◆ [${mark}] ${loc.name || loc.id}`];
         if (loc.region) parts.push(`区域:${loc.region}`);
         if (parent) parts.push(`父地点:${parent.name || parent.id}`);
         if (loc.description) parts.push(`说明:${loc.description.slice(0, 80)}`);
@@ -489,12 +599,14 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
 
         const line = [parts.join(' | '), ...relationLines].join('\n');
         const lt = estimateTokens(line);
-        if (tokens + lt > maxTokens) return { lines, tokens, truncated: true };
+        if (tokens + lt > maxTokens && !isResidentEntry(loc)) {
+            return { lines, tokens, truncated: true, ids: selected.slice(0, lines.length - 1).map(l => l.id) };
+        }
         lines.push(line);
         tokens += lt;
     }
 
-    return { lines, tokens, truncated: selected.length < locs.length };
+    return { lines, tokens, truncated: selected.length < baseMatches.length, ids: selected.map(l => l.id) };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -511,10 +623,10 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
  * @param {object} params.settings
  * @returns {{ text: string, tokenEstimate: number, stats: object }}
  */
-export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, threadSummary, relevantResults, settings, chatLength = 0, clueBoard = null, mapData = null, queryText = '' }) {
+export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, threadSummary, relevantResults, settings, chatLength = 0, clueBoard = null, mapData = null, queryText = '', queryEmbedding = null }) {
     const tokenBudget = settings.tokenBudget || 800;
     let tokenUsed = 0;
-    const stats = { npcCount: 0, itemCount: 0, timelineCount: 0, memoryCount: 0, threadCount: 0 };
+    const stats = { npcCount: 0, itemCount: 0, timelineCount: 0, memoryCount: 0, threadCount: 0, mapCount: 0, mapLocationIds: [] };
     const truncated = [];
 
     const sections = [];
@@ -523,13 +635,10 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline,
     if (threadSummary && threadSummary.text) {
         const threadText = threadSummary.text;
         const threadTokens = estimateTokens(threadText);
-        if (threadTokens <= tokenBudget * 0.2) {
-            sections.push(threadText);
-            tokenUsed += threadTokens;
-            stats.threadCount = threadSummary.threads?.length || 0;
-        } else {
-            truncated.push('线程地图(超出token预算)');
-        }
+        sections.push(threadText);
+        tokenUsed += threadTokens;
+        stats.threadCount = threadSummary.threads?.length || 0;
+        if (threadTokens > tokenBudget * 0.25) truncated.push('线程地图(超过建议预算但已保留)');
     }
 
     // ── 区块 1：角色档案 ──
@@ -539,7 +648,7 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline,
         for (const npc of npcProfiles) {
             const line = formatNpcLine(npc);
             const lt = estimateTokens(line);
-            if (sectionTokens + lt > tokenBudget * 0.3) break;
+            if (sectionTokens + lt > tokenBudget * 0.3 && !isResidentEntry(npc)) break;
             lines.push(line);
             sectionTokens += lt;
             stats.npcCount++;
@@ -558,7 +667,7 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline,
         for (const item of items) {
             const line = formatItemLine(item);
             const lt = estimateTokens(line);
-            if (sectionTokens + lt > tokenBudget * 0.2) break;
+            if (sectionTokens + lt > tokenBudget * 0.2 && !isResidentEntry(item)) break;
             lines.push(line);
             sectionTokens += lt;
             stats.itemCount++;
@@ -580,7 +689,7 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline,
             for (const t of all) {
                 const line = formatTimelineLine(t);
                 const lt = estimateTokens(line);
-                if (sectionTokens + lt > tokenBudget * 0.25) break;
+                if (sectionTokens + lt > tokenBudget * 0.25 && !isResidentEntry(t) && t.status !== 'ongoing' && t.status !== 'foreshadow') break;
                 lines.push(line);
                 sectionTokens += lt;
                 stats.timelineCount++;
@@ -600,10 +709,10 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline,
         let count = 0;
         let sectionTokens = 0;
         for (const { memory, level } of relevantResults) {
-            if (count >= MAX_MEM) break;
+            if (count >= MAX_MEM && !isResidentEntry(memory)) break;
             const line = (count + 1) + '. ' + formatMemoryLine(memory, chatLength);
             const lt = estimateTokens(line);
-            if (sectionTokens + lt > tokenBudget * 0.7) break;
+            if (sectionTokens + lt > tokenBudget * 0.7 && !isResidentEntry(memory)) break;
             lines.push(line);
             sectionTokens += lt;
             count++;
@@ -618,11 +727,13 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline,
 
     // ── 区块 5：线索板（v8.4.0）──
     // ── 区块6：世界地图 v8.7.0 ──
-    const mapContext = buildMapContextLines(mapData, settings, queryText, tokenBudget);
+    const mapContext = buildMapContextLines(mapData, settings, queryText, tokenBudget, queryEmbedding);
     if (mapContext.lines.length > 1) {
         sections.push(mapContext.lines.join('\n'));
         tokenUsed += mapContext.tokens;
         stats.mapInjected = true;
+        stats.mapCount = mapContext.ids.length;
+        stats.mapLocationIds = mapContext.ids;
         if (mapContext.truncated) truncated.push('地图(按空间关系截断)');
     }
 
@@ -636,7 +747,10 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline,
                 tokenUsed += clueTokens;
                 stats.clueBoard = true;
             } else {
-                truncated.push('线索板(超出token预算)');
+                sections.push(clueText);
+                tokenUsed += clueTokens;
+                stats.clueBoard = true;
+                truncated.push('线索板(超过建议预算但已保留)');
             }
         }
     }
@@ -675,6 +789,6 @@ export function simpleSearch(items, queryText, maxResults = 100) {
 export function getResidentMemories(memories) {
     return memories.filter(m =>
         (m.memoryTier === 'core' || m.memoryTier === 'eternal') &&
-        !isArchived(m) && m.status !== 'deleted'
+        !isArchived(m) && m.status !== 'deleted' && matchesActiveCategory(m)
     );
 }

@@ -209,6 +209,7 @@ export async function addNpcProfile(chatId, data) {
         relationships: Array.isArray(data.relationships) ? data.relationships : [],
         notes: Array.isArray(data.notes) ? data.notes : [],
         indexCard: data.indexCard || '',
+        embedding: data.embedding ?? null,
         npcTier: normalizeNpcTier(data.npcTier) || 'minor',
         category: data.category || null,
         tags: Array.isArray(data.tags) ? data.tags : [],
@@ -285,6 +286,7 @@ export async function addItem(chatId, data) {
         location: data.location || '',       // v8.7.0 物品所在地点
         status: data.status || 'held',       // held | used | lost | destroyed
         significance: data.significance || '',
+        embedding: data.embedding ?? null,
         keepPermanent: data.keepPermanent || false,
         itemTier: normalizeItemTier(data.itemTier) || 'consumable',
         category: data.category || null,
@@ -373,6 +375,7 @@ export async function addTimelineEntry(chatId, data) {
         archived: data.archived || false,
         relatedEventIds: Array.isArray(data.relatedEventIds) ? data.relatedEventIds : [],
         subEntries: Array.isArray(data.subEntries) ? data.subEntries : [],  // v8.0.0 子条目
+        embedding: data.embedding ?? null,
         createdAt: now,
         updatedAt: now,
         lastHitAt: null,
@@ -766,6 +769,17 @@ export async function recordHit(chatId, collection, id) {
         case 'item': items = await getItems(chatId); break;
         case 'timeline': items = await getTimeline(chatId); break;
         case 'mem': items = await getMemories(chatId); break;
+        case 'map': {
+            const { getMap, setMap } = await import('./map-store.js');
+            const map = await getMap(chatId);
+            const entry = map?.locations?.[id];
+            if (!entry) return null;
+            entry.hitCount = (entry.hitCount || 0) + 1;
+            entry.lastHitAt = Date.now();
+            entry.updatedAt = Date.now();
+            await setMap(chatId, map);
+            return entry;
+        }
         default: return null;
     }
     const entry = items.find(e => e.id === id);
@@ -918,15 +932,34 @@ export async function clearAllData(chatId) {
         lf.removeItem(storageKey('item', chatId)),
         lf.removeItem(storageKey('timeline', chatId)),
         lf.removeItem(storageKey('mem', chatId)),
+        lf.removeItem(storageKey('map', chatId)),
         lf.removeItem(storageKey('threads', chatId)),
+        lf.removeItem('bb_clue_board_' + chatId),
+        lf.removeItem('bb_calendar_chat_' + chatId),
+        lf.removeItem('bb_memory_exchanges_' + chatId),
     ]);
+    const ctx = getContext();
+    if (!ctx.chatMetadata) ctx.chatMetadata = {};
+    ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
+        version: '8.9.1',
+        timestamp: Date.now(),
+        npc: [],
+        items: [],
+        timeline: [],
+        memories: [],
+        threads: [],
+        map: { locations: {} },
+        clueBoard: { nodes: [], connections: [] },
+    });
+    if (typeof ctx.saveChatDebounced === 'function') ctx.saveChatDebounced();
+    else if (typeof ctx.saveChat === 'function') ctx.saveChat();
 }
 
 /**
  * 按 exchange hash 删除关联的记忆条目（支持 ROLL 后清理）
  */
 export async function deleteByExchange(chatId, exchangeHash) {
-    if (!exchangeHash) return { npc: 0, items: 0, timeline: 0, memories: 0 };
+    if (!exchangeHash) return { npc: 0, items: 0, timeline: 0, memories: 0, map: 0 };
     const [npc, items, timeline, memories] = await Promise.all([
         getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
     ]);
@@ -936,13 +969,23 @@ export async function deleteByExchange(chatId, exchangeHash) {
         items: filterOut(items).length,
         timeline: filterOut(timeline).length,
         memories: filterOut(memories).length,
+        map: 0,
     };
+    try {
+        const { getLocations, removeLocation } = await import('./map-store.js');
+        const locs = await getLocations(chatId);
+        const matchedLocs = locs.filter(e => e.sourceExchange === exchangeHash);
+        for (const loc of matchedLocs) {
+            if (await removeLocation(chatId, loc.id)) removed.map++;
+        }
+    } catch { /* 地图模块不可用时忽略 */ }
     await Promise.all([
         saveCollection('npc', chatId, npc.filter(e => e.sourceExchange !== exchangeHash)),
         saveCollection('item', chatId, items.filter(e => e.sourceExchange !== exchangeHash)),
         saveCollection('timeline', chatId, timeline.filter(e => e.sourceExchange !== exchangeHash)),
         saveCollection('mem', chatId, memories.filter(e => e.sourceExchange !== exchangeHash)),
     ]);
+    scheduleAutoBackup(chatId);
     return removed;
 }
 
@@ -1631,6 +1674,7 @@ export async function addHiddenNote(chatId, memoryId, note) {
     };
     entry.hiddenNotes.push(noteEntry);
     await saveCollection('mem', chatId, memories);
+    scheduleAutoBackup(chatId);
     return noteEntry;
 }
 
@@ -1643,6 +1687,7 @@ export async function removeHiddenNote(chatId, memoryId, noteId) {
     entry.hiddenNotes = entry.hiddenNotes.filter(n => n.id !== noteId);
     if (entry.hiddenNotes.length < before) {
         await saveCollection('mem', chatId, memories);
+        scheduleAutoBackup(chatId);
         return true;
     }
     return false;

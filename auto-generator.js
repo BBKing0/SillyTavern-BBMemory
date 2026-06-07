@@ -8,12 +8,13 @@
 import {
     getSettings, updateSettings, getMemories, addMemory, updateMemory,
     upsertNpcProfile, upsertItem, upsertTimelineEntry,
+    updateNpcProfile, updateItem, updateTimelineEntry,
     getNpcProfiles, getItems, getTimeline,
     getCalendarDescription,
 } from './memory-store.js';
 import {
     getExtractableExchanges, markExchangeExtracted, isExchangeProcessed,
-    computeExchangeHash, cyrb53Hash, hideExchange, refreshExtractionMarkers,
+    markExchangeMetaSkipped, computeExchangeHash, cyrb53Hash, hideExchange, refreshExtractionMarkers,
     syncMessageVisibility,
 } from './message-state.js';
 import { normalizeNpcTier, normalizeItemTier } from './entity-tiers.js';
@@ -81,7 +82,7 @@ const PROMPT_META_GUARD = `你是一个角色扮演(RP)叙事记忆提取助手�
 - 如果整条消息都是元对话、不包含任何RP剧情，只输出一句话：META_DIALOGUE
 
 **提取优先级（重要）**：
-- 🅼 记忆条目：每条 exchange 必须至少提取 1 条。即使看似平淡，也必有情感流动。
+- 🅼 记忆条目：优先提取真正值得长期保留的剧情、情感、习惯、事实。不要为了凑数制造记忆。
 - 🅽 NPC 更新：可选。仅当新角色出场或已知角色属性/关系发生明显变化时。
 - 🅸 物品更新：可选。仅当新物品出现或已知物品状态/持有者改变时。
 - 🆃 时间线：可选。仅当达到故事里程碑级别时记录。
@@ -436,7 +437,12 @@ export async function testApiConnection(endpoint, apiKey, model) {
 
 let _lastEmbeddingErrorTime = 0;
 async function embedMemoryEntry(mem) {
-    const text = mem.summary || mem.content?.slice(0, 100) || '';
+    const tags = (mem.tags || []).map(t => typeof t === 'string' ? t : t.name).filter(Boolean).join(' ');
+    const text = [
+        mem.title, mem.name, mem.summary, mem.content, mem.description,
+        mem.event, mem.significance, mem.role, mem.personality,
+        mem.location, mem.region, mem.subject, mem.target, tags,
+    ].filter(Boolean).join('\n').slice(0, 1200);
     if (!text) return null;
     try {
         return await callEmbeddingApi(text, 8000);
@@ -673,12 +679,12 @@ g=标签数组(结构标签可选：情感类[恐惧/喜悦/愤怒/悲伤/温柔
 【正剧场景示例】
 {"n":"指尖的颤抖","tp":"emotion","m":"宣战后玩家难以掩饰恐惧，用握拳来压制","c":"雅赫摩斯宣布宣战后，玩家站在王座厅的阴影中，右手无意识地摩挲着剑柄上的缠绳。当侍从递上征召令时，他的指尖微微颤抖——只一瞬，便握紧了拳头。","v":"","s":"玩家","a":"","i":0.7,"e":0.8,"st":"123年4月15日","g":["恐惧","压抑","战争前夕","内心挣扎"]}
 
-{"n":"老兵的苦笑","tp":"event","m":"酒馆老兵对速胜论露出意味深长的苦笑——暗示战争没那么简单","c":"玩家在酒馆谈论"一个月结束战争"时，邻桌老兵放下酒杯，嘴角扯出一丝苦笑，低声说"我三十年前也这么想"便起身离去。这句轻描淡写的话与主流论调形成尖锐反差。","v":"我三十年前也这么想","s":"无名老兵","a":"玩家","i":0.55,"e":0.4,"st":"123年4月15日","g":["伏笔","反差","老兵","暗示","世界观的复杂性"]}
+{"n":"老兵的苦笑","tp":"event","m":"酒馆老兵对速胜论露出意味深长的苦笑——暗示战争没那么简单","c":"玩家在酒馆谈论“一个月结束战争”时，邻桌老兵放下酒杯，嘴角扯出一丝苦笑，低声说“我三十年前也这么想”便起身离去。这句轻描淡写的话与主流论调形成尖锐反差。","v":"我三十年前也这么想","s":"无名老兵","a":"玩家","i":0.55,"e":0.4,"st":"123年4月15日","g":["伏笔","反差","老兵","暗示","世界观的复杂性"]}
 
 【日常场景示例】
 {"n":"雨天的默契","tp":"habit","m":"每周三下午他都会在咖啡馆靠窗的位子等她——一个未说破的约定","c":"连续第三周的星期三。下午三点十五分，他坐在靠窗的第二个位子上，面前摆着两杯咖啡——一杯已经凉了。门推开时带来一阵潮湿的风，她的伞还在滴水。他什么也没说，把热的那杯推了过去。","v":"","s":"他","a":"她","i":0.5,"e":0.45,"st":"","g":["习惯","默契","等待","温柔","潜台词"]}
 
-{"n":"栀子花香","tp":"emotion","m":"她在花市闻到了童年外婆院子里的栀子花香，一时恍惚","c":"花市的人潮中，她突然停下脚步。是栀子花的味道——很淡，混在潮湿的空气里，差点就错过了。她闭上眼站了几秒，再睁开时眼眶有点红。"外婆走以后，我再也没闻到过这个味道了"，她小声说。","v":"外婆走以后，我再也没闻到过这个味道了","s":"她","a":"","i":0.4,"e":0.7,"st":"","g":["思念","感官锚点","童年记忆","脆弱时刻"]}
+{"n":"栀子花香","tp":"emotion","m":"她在花市闻到了童年外婆院子里的栀子花香，一时恍惚","c":"花市的人潮中，她突然停下脚步。是栀子花的味道——很淡，混在潮湿的空气里，差点就错过了。她闭上眼站了几秒，再睁开时眼眶有点红。“外婆走以后，我再也没闻到过这个味道了”，她小声说。","v":"外婆走以后，我再也没闻到过这个味道了","s":"她","a":"","i":0.4,"e":0.7,"st":"","g":["思念","感官锚点","童年记忆","脆弱时刻"]}
 
 若无值得记忆的内容（极罕见），返回空数组 []。
 
@@ -711,11 +717,13 @@ it=分级(key/equipped/clue/consumable/background) | g=标签数组
 ═══════════════════════════════════════════════════════
 ## 辅助：地图地点更新 v8.7.0（可选，仅本轮新出现或提及的地点）
 ═══════════════════════════════════════════════════════
-记录本轮对话中出现或提及的新地点，已有地点不需要重复。
+记录本轮对话中出现或提及的新地点，已有地点不需要重复；若只是新增了相邻关系或重要描述，也可以返回该地点用于更新连接。
 {{WORLD_REF}}
 
 字段：n(地名), desc(描述), reg(区域), rw(现实原型参考-可留空使用全局),
      conn(连接: [{to:相邻地名, dist:距离, type:路径类型, diff:easy/normal/hard}])
+
+若无新地点或空间关系变化，返回空数组。
 
 ═══════════════════════════════════════════════════════
 ## 辅助：时间线里程碑（可选，仅记录真正重要的故事节点）
@@ -734,7 +742,7 @@ active=true/false, imp(对叙事弧线的影响), g(标签数组含节奏标签[
 ═══════════════════════════════════════════════════════
 
 返回纯JSON对象（不要markdown代码块）：
-{"memories":[...记忆数组，核心输出...], "npc":[...], "items":[...], "timeline":[...]}
+{"memories":[...记忆数组，核心输出...], "npc":[...], "items":[...], "timeline":[...], "locations":[...地点数组...]}
 
 {{CALENDAR_REF}}
 {{STYLE_BIAS}}
@@ -865,6 +873,71 @@ async function callMergedExtraction(chatId, userMessage, aiMessage) {
     return { isMetaDialogue: false, results };
 }
 
+function notifyMetaDialogueFloor(aiIndex) {
+    const msg = `[BB-Memory] 检测到第 ${aiIndex} 楼为纯元对话楼层，已选择不提取`;
+    try {
+        const ctx = SillyTavern.getContext();
+        if (typeof ctx.toastr?.warning === 'function') {
+            ctx.toastr.warning(msg, '', { timeOut: 3500 });
+            return;
+        }
+    } catch { /* ignore */ }
+    if (typeof globalThis.bbMemoryShowToast === 'function') {
+        globalThis.bbMemoryShowToast(msg, 'warning');
+    } else {
+        console.log(msg);
+    }
+}
+
+async function saveExtractedLocations(chatId, locations, sourceInfo = {}) {
+    if (!locations || locations.length === 0) return 0;
+    let count = 0;
+    try {
+        const { getLocations, addLocation, updateLocation, addBidirectionalEdge } = await import('./map-store.js');
+        const existingLocs = await getLocations(chatId);
+        const findByName = (name) => existingLocs.find(l => (l.name || '').toLowerCase() === String(name || '').toLowerCase());
+        const settings = getSettings();
+        const hasEmbedding = settings.embeddingEnabled && settings.embeddingEndpoint;
+        for (const loc of locations) {
+            if (!loc?.name) continue;
+            const embedding = hasEmbedding ? await embedMemoryEntry(loc) : null;
+            const existing = findByName(loc.name);
+            let locId;
+            if (existing) {
+                locId = existing.id;
+                const patch = {};
+                if (loc.description && loc.description !== existing.description) patch.description = loc.description;
+                if (loc.region && loc.region !== existing.region) patch.region = loc.region;
+                if (loc.realWorldRef && loc.realWorldRef !== existing.realWorldRef) patch.realWorldRef = loc.realWorldRef;
+                if (embedding && !existing.embedding) patch.embedding = embedding;
+                if (Object.keys(patch).length) {
+                    const updated = await updateLocation(chatId, locId, patch);
+                    Object.assign(existing, updated || patch);
+                }
+            } else {
+                const newLoc = await addLocation(chatId, { ...loc, embedding, ...(sourceInfo || {}) });
+                locId = newLoc.id;
+                existingLocs.push(newLoc);
+                count++;
+            }
+            if (loc.edges && loc.edges.length > 0) {
+                for (const edge of loc.edges) {
+                    if (!edge.toName) continue;
+                    const target = findByName(edge.toName);
+                    if (target && target.id !== locId) {
+                        await addBidirectionalEdge(chatId, locId, target.id, {
+                            distance: edge.distance, pathType: edge.pathType, difficulty: edge.difficulty,
+                        });
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        if (getSettings().debugLogging) console.warn('[BB-Memory] 地点保存失败:', e.message);
+    }
+    return count;
+}
+
 async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
     try {
         reportProgress('merged', 0, 5, '正在调用 AI 提取记忆...');
@@ -874,51 +947,31 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
             return { isMetaDialogue: true, total: 0 };
         }
         let total = 0;
+        const settings = getSettings();
+        const hasEmbedding = settings.embeddingEnabled && settings.embeddingEndpoint;
         reportProgress('merged', 1, 5, '正在解析提取结果...');
         reportProgress('merged', 2, 5, '正在保存 NPC/物品/时间线...');
-        for (const npc of results.npc) { await upsertNpcProfile(chatId, { ...npc, ...(sourceInfo || {}) }); total++; }
-        for (const item of results.items) { await upsertItem(chatId, { ...item, ...(sourceInfo || {}) }); total++; }
-        for (const tl of results.timeline) { await upsertTimelineEntry(chatId, { ...tl, ...(sourceInfo || {}) }); total++; }
-        // v8.7.0 地点提取
-        if (results.locations && results.locations.length > 0) {
-            try {
-                const { getLocations, addLocation, addBidirectionalEdge } = await import('./map-store.js');
-                const existingLocs = await getLocations(chatId);
-                for (const loc of results.locations) {
-                    // 按名称去重
-                    const existing = existingLocs.find(l => l.name.toLowerCase() === loc.name.toLowerCase());
-                    let locId;
-                    if (existing) {
-                        locId = existing.id;
-                    } else {
-                        const newLoc = await addLocation(chatId, { ...loc, ...(sourceInfo || {}) });
-                        locId = newLoc.id;
-                        existingLocs.push(newLoc);
-                        total++;
-                    }
-                    // 处理连接（按名称匹配目标地点ID）
-                    if (loc.edges && loc.edges.length > 0) {
-                        for (const edge of loc.edges) {
-                            if (!edge.toName) continue;
-                            const target = existingLocs.find(l => l.name.toLowerCase() === edge.toName.toLowerCase());
-                            if (target && target.id !== locId) {
-                                await addBidirectionalEdge(chatId, locId, target.id, {
-                                    distance: edge.distance, pathType: edge.pathType, difficulty: edge.difficulty,
-                                });
-                            }
-                        }
-                    }
-                }
-            } catch (e) {
-                if (getSettings().debugLogging) console.warn('[BB-Memory] 地点保存失败:', e.message);
-            }
+        for (const npc of results.npc) {
+            const embedding = hasEmbedding ? await embedMemoryEntry(npc) : null;
+            await upsertNpcProfile(chatId, { ...npc, embedding, ...(sourceInfo || {}) });
+            total++;
         }
-        const settings = getSettings();
+        for (const item of results.items) {
+            const embedding = hasEmbedding ? await embedMemoryEntry(item) : null;
+            await upsertItem(chatId, { ...item, embedding, ...(sourceInfo || {}) });
+            total++;
+        }
+        for (const tl of results.timeline) {
+            const embedding = hasEmbedding ? await embedMemoryEntry(tl) : null;
+            await upsertTimelineEntry(chatId, { ...tl, embedding, ...(sourceInfo || {}) });
+            total++;
+        }
+        // v8.7.0 地点提取
+        total += await saveExtractedLocations(chatId, results.locations, sourceInfo);
         const maxPerExchange = settings.maxMemoriesPerExchange ?? 3;
         const limited = results.memories.slice(0, maxPerExchange);
         const existingMemories = await getMemories(chatId);
         const activeMemories = existingMemories.filter(m => m.embedding);
-        const hasEmbedding = settings.embeddingEnabled && settings.embeddingEndpoint;
         reportProgress('merged', 3, 5, hasEmbedding ? '正在向量化记忆...' : '正在保存记忆条目...');
         for (const mem of limited) {
             const embedding = hasEmbedding
@@ -935,8 +988,8 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
                     }
                 }
             }
-            await addMemory(chatId, { ...mem, embedding, memoryTier: 'stable', ...(sourceInfo || {}) });
-            if (embedding) activeMemories.push({ embedding });
+            const saved = await addMemory(chatId, { ...mem, embedding, memoryTier: 'stable', ...(sourceInfo || {}) });
+            if (embedding) activeMemories.push(saved);
             total++;
         }
         reportProgress('merged', 4, 5, '正在汇总结果...');
@@ -990,6 +1043,8 @@ async function processLatestExchange(chatId) {
                     const { isMetaDialogue, results } = await callMergedExtraction(chatId, ex.userMessage, ex.aiMessage);
                     if (isMetaDialogue || !results) {
                         console.log('[BB-Memory] Active模式检测到纯元对话，跳过');
+                        await markExchangeMetaSkipped(ex.userIndex, ex.aiIndex, ex.hash, 'auto');
+                        notifyMetaDialogueFloor(ex.aiIndex);
                         continue;
                     }
                     const sourceInfo = {
@@ -998,10 +1053,22 @@ async function processLatestExchange(chatId) {
                         sourceChatId: chatId,
                         sourceMessageHash: cyrb53Hash(ex.aiMessage || ''),
                     };
+                    const settings = getSettings();
+                    const hasEmbedding = settings.embeddingEnabled && settings.embeddingEndpoint;
                     // NPC/物品/时间线直接保存
-                    for (const npc of results.npc) { await upsertNpcProfile(chatId, { ...npc, ...sourceInfo }); }
-                    for (const item of results.items) { await upsertItem(chatId, { ...item, ...sourceInfo }); }
-                    for (const tl of results.timeline) { await upsertTimelineEntry(chatId, { ...tl, ...sourceInfo }); }
+                    for (const npc of results.npc) {
+                        const embedding = hasEmbedding ? await embedMemoryEntry(npc) : null;
+                        await upsertNpcProfile(chatId, { ...npc, embedding, ...sourceInfo });
+                    }
+                    for (const item of results.items) {
+                        const embedding = hasEmbedding ? await embedMemoryEntry(item) : null;
+                        await upsertItem(chatId, { ...item, embedding, ...sourceInfo });
+                    }
+                    for (const tl of results.timeline) {
+                        const embedding = hasEmbedding ? await embedMemoryEntry(tl) : null;
+                        await upsertTimelineEntry(chatId, { ...tl, embedding, ...sourceInfo });
+                    }
+                    await saveExtractedLocations(chatId, results.locations, sourceInfo);
                     // 记忆条目存入待审核队列
                     if (results.memories.length > 0) {
                         pendingAutoCandidates.push(...results.memories.map(c => ({ ...c, _chatId: chatId, _sourceInfo: sourceInfo })));
@@ -1026,6 +1093,8 @@ async function processLatestExchange(chatId) {
                     const result = await extractMergedStage(chatId, ex.userMessage, ex.aiMessage, sourceInfo);
                     if (result && result.isMetaDialogue) {
                         console.log('[BB-Memory] 并行提取：检测到纯元对话，跳过');
+                        await markExchangeMetaSkipped(ex.userIndex, ex.aiIndex, ex.hash, 'auto');
+                        notifyMetaDialogueFloor(ex.aiIndex);
                         return null;
                     }
                     return ex;
@@ -1084,7 +1153,7 @@ async function processLatestExchange(chatId) {
  */
 export async function extractFromContext(chatId, contextText, options = {}) {
     const { onProgress, sourceInfo } = options;
-    const results = { npc: 0, items: 0, timeline: 0, memories: 0 };
+    const results = { npc: 0, items: 0, timeline: 0, locations: 0, memories: 0 };
 
     if (onProgress) onProgress({ stage: 'merged', progress: '正在 AI 提取记忆（合并模式）...' });
 
@@ -1102,25 +1171,46 @@ export async function extractFromContext(chatId, contextText, options = {}) {
             return results;
         }
         const parsed = parseMergedResponse(responseText);
+        const hasEmbedding = settings.embeddingEnabled && settings.embeddingEndpoint;
 
         // v7.7.1 合并提取：一次 API 调用获取全部四柱
         for (const npc of parsed.npc) {
-            await upsertNpcProfile(chatId, { ...npc, ...(sourceInfo || {}) });
+            const embedding = hasEmbedding ? await embedMemoryEntry(npc) : null;
+            await upsertNpcProfile(chatId, { ...npc, embedding, ...(sourceInfo || {}) });
             results.npc++;
         }
         for (const item of parsed.items) {
-            await upsertItem(chatId, { ...item, ...(sourceInfo || {}) });
+            const embedding = hasEmbedding ? await embedMemoryEntry(item) : null;
+            await upsertItem(chatId, { ...item, embedding, ...(sourceInfo || {}) });
             results.items++;
         }
         for (const tl of parsed.timeline) {
-            await upsertTimelineEntry(chatId, { ...tl, ...(sourceInfo || {}) });
+            const embedding = hasEmbedding ? await embedMemoryEntry(tl) : null;
+            await upsertTimelineEntry(chatId, { ...tl, embedding, ...(sourceInfo || {}) });
             results.timeline++;
         }
+        results.locations += await saveExtractedLocations(chatId, parsed.locations, sourceInfo);
+
+        const existingMemories = await getMemories(chatId);
+        const activeMemories = existingMemories.filter(m => m.embedding);
         for (const mem of parsed.memories) {
-            const embedding = (settings.embeddingEnabled && settings.embeddingEndpoint)
+            const embedding = hasEmbedding
                 ? await embedMemoryEntry(mem)
                 : null;
-            await addMemory(chatId, { ...mem, embedding, memoryTier: 'stable', ...(sourceInfo || {}) });
+            if (settings.dedupEnabled && embedding) {
+                const similar = findMostSimilarMemory(embedding, activeMemories);
+                if (similar) {
+                    if (similar.similarity >= getDedupConfig().mergeThreshold) {
+                        await updateMemory(chatId, similar.memory.id, mergeMemoryFields(similar.memory, mem));
+                        results.memories++;
+                        continue;
+                    } else if (similar.similarity >= getDedupConfig().reduceThreshold) {
+                        mem.importance = Math.max(0.3, (mem.importance || 0.5) - 0.15);
+                    }
+                }
+            }
+            const saved = await addMemory(chatId, { ...mem, embedding, memoryTier: 'stable', ...(sourceInfo || {}) });
+            if (embedding) activeMemories.push(saved);
             results.memories++;
         }
     } catch (e) {
@@ -1198,8 +1288,8 @@ export async function saveExtractedMemories(chatId, candidateMemories, onProgres
         }
 
         const sourceInfo = mem._sourceInfo || {};
-        await addMemory(chatId, { ...mem, embedding, memoryTier: 'stable', source: mem.source || 'auto', ...sourceInfo });
-        if (embedding) activeMemories.push({ embedding });
+        const saved = await addMemory(chatId, { ...mem, embedding, memoryTier: 'stable', source: mem.source || 'auto', ...sourceInfo });
+        if (embedding) activeMemories.push(saved);
         count++;
         if (onProgress) onProgress(count, candidateMemories.length);
     }
@@ -1209,13 +1299,55 @@ export async function saveExtractedMemories(chatId, candidateMemories, onProgres
 /**
  * 嵌入现有记忆（批量补 embedding）
  */
-export async function embedExistingMemories(memories, onProgress) {
+async function persistEntryEmbedding(chatId, collection, entry, embedding) {
+    if (!chatId || !entry?.id || !embedding) return;
+    switch (collection) {
+        case 'npc':
+            await updateNpcProfile(chatId, entry.id, { embedding });
+            break;
+        case 'item':
+            await updateItem(chatId, entry.id, { embedding });
+            break;
+        case 'timeline':
+            await updateTimelineEntry(chatId, entry.id, { embedding });
+            break;
+        case 'map': {
+            const { updateLocation } = await import('./map-store.js');
+            await updateLocation(chatId, entry.id, { embedding });
+            break;
+        }
+        case 'mem':
+        default:
+            await updateMemory(chatId, entry.id, { embedding });
+            break;
+    }
+}
+
+export async function embedExistingMemories(chatIdOrMemories, memoriesOrProgress, onProgress, collection = 'mem') {
+    let chatId = null;
+    let memories = chatIdOrMemories;
+    let progress = memoriesOrProgress;
+    if (!Array.isArray(chatIdOrMemories)) {
+        chatId = chatIdOrMemories;
+        memories = Array.isArray(memoriesOrProgress) ? memoriesOrProgress : [];
+        progress = onProgress;
+    }
     let done = 0;
+    let updated = 0;
+    let failed = 0;
     for (const mem of memories) {
         if (!mem.embedding) {
-            mem.embedding = await embedMemoryEntry(mem);
+            const embedding = await embedMemoryEntry(mem);
+            if (embedding) {
+                mem.embedding = embedding;
+                updated++;
+                await persistEntryEmbedding(chatId, collection, mem, embedding);
+            } else {
+                failed++;
+            }
         }
         done++;
-        if (onProgress) onProgress(done, memories.length);
+        if (progress) progress(done, memories.length);
     }
+    return { total: memories.length, updated, failed };
 }

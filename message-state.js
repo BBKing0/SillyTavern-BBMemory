@@ -326,6 +326,44 @@ export async function markExchangeExtracted(userIndex, aiIndex, hash) {
 }
 
 /**
+ * 将 exchange 标记为纯元对话跳过：
+ *   - 不进入提取队列
+ *   - hash 加入已处理集合，避免反复请求 AI
+ *   - 保留元对话标记，用户取消标记后可重新入队
+ */
+export async function markExchangeMetaSkipped(userIndex, aiIndex, hash, reason = 'auto') {
+    const chatId = getChatId();
+    if (!chatId) return;
+
+    const ctx = getContext();
+    const chat = ctx.chat;
+    const settings = getSettings();
+    const displayMode = settings.extractedMsgDisplay || 'hidden';
+
+    if (chat) {
+        if (chat[aiIndex]) {
+            chat[aiIndex]._bbmem_meta_marker = true;
+            chat[aiIndex]._bbmem_meta_reason = reason;
+            chat[aiIndex]._bbmem_skipped = true;
+            chat[aiIndex]._bbmem_extracted = false;
+            delete chat[aiIndex]._bbmem_pendingExtraction;
+            chat[aiIndex]._bbmem_exchangeHash = hash;
+            if (displayMode === 'hidden') {
+                chat[aiIndex].is_hidden = true;
+                chat[aiIndex]._bbmem_hideSource = 'plugin';
+            }
+        }
+        if (chat[userIndex] && displayMode === 'hidden') {
+            chat[userIndex].is_hidden = true;
+            chat[userIndex]._bbmem_hideSource = 'plugin';
+        }
+        saveChat();
+    }
+
+    await markExchangeProcessed(chatId, hash);
+}
+
+/**
  * v2.9.8: 隐藏一个 exchange（用户消息 + AI 回复）
  * 标记为插件隐藏，使其在聊天界面不可见
  * @param {number} userIndex - 用户消息索引
@@ -414,9 +452,22 @@ export function refreshExtractionMarkers() {
                 msg._bbmem_hideSource = undefined;
                 msg._bbmem_pendingExtraction = true;
                 msg._bbmem_extracted = false;
+                msg._bbmem_skipped = false;
+                msg._bbmem_meta_reason = undefined;
+                let userText = '';
+                for (let j = idx - 1; j >= 0; j--) {
+                    if (chat[j].is_user && chat[j].mes) { userText = chat[j].mes; break; }
+                }
+                const hash = msg._bbmem_exchangeHash || computeExchangeHash(userText, msg.mes || '');
+                await unmarkExchangeProcessed(chatId, hash);
+            } else {
+                delete msg._bbmem_pendingExtraction;
+                msg._bbmem_skipped = true;
+                msg._bbmem_extracted = false;
             }
             try { saveChat(); } catch {}
             refreshExtractionMarkers();
+            showInlineToast(block, msg._bbmem_meta_marker ? '已标记为元对话，进入提取窗口后会跳过' : '已恢复为可提取楼层', 'info');
         });
 
         // ── 楼层操作按钮容器 ──
@@ -537,11 +588,11 @@ export function refreshExtractionMarkers() {
                     await showDeleteFloorDialog(chatId, hash, matched, async () => {
                         const removed = await store.deleteByExchange(chatId, hash);
                         await unmarkExchangeProcessed(chatId, hash);
-                        const total = removed.npc + removed.items + removed.timeline + removed.memories;
+                        const total = removed.npc + removed.items + removed.timeline + removed.memories + (removed.map || 0);
                         msg._bbmem_extracted = false;
                         msg._bbmem_pendingExtraction = true;
                         saveChat();
-                        showInlineToast(block, `已删除 ${total} 条记忆（NPC:${removed.npc} 物品:${removed.items} 时间线:${removed.timeline} 记忆:${removed.memories}）`, 'success');
+                        showInlineToast(block, `已删除 ${total} 条记忆（NPC:${removed.npc} 物品:${removed.items} 时间线:${removed.timeline} 地点:${removed.map || 0} 记忆:${removed.memories}）`, 'success');
                         refreshExtractionMarkers();
                     });
                 } catch (err) {

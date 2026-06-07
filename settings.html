@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v8.9.0</b>
+            <b>BB-Memory v8.9.1</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -123,6 +123,11 @@
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_timeline_ended_max">时间线已结束事件上限</label>
                         <input id="bb_timeline_ended_max" type="number" class="bb-input" min="1" max="15" value="3" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_map_injection_max">地图地点注入上限 <small>含命中地点及周边地点</small></label>
+                        <input id="bb_map_injection_max" type="number" class="bb-input" min="1" max="30" value="8" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
@@ -482,7 +487,6 @@
                 </div>
             </div>
 
-            <script src="http://localhost:3001/bridge/bb-memory-sync.js"></script>
             <script>
             (function() {
                 // BBTel 同步按钮事件绑定（在 DOM 就绪后执行）
@@ -503,8 +507,25 @@
                         }
                     }
 
+                    function ensureBridgeLoaded() {
+                        if (window.BBTelSync) return Promise.resolve(true);
+                        if (window.__bbtelSyncLoading) return window.__bbtelSyncLoading;
+                        setStatus('正在加载 BBTel 同步桥接...');
+                        window.__bbtelSyncLoading = new Promise(function(resolve) {
+                            var script = document.createElement('script');
+                            script.src = 'http://127.0.0.1:3001/bridge/bb-memory-sync.js';
+                            script.async = true;
+                            script.onload = function() { resolve(!!window.BBTelSync); };
+                            script.onerror = function() { resolve(false); };
+                            document.head.appendChild(script);
+                        }).finally(function() {
+                            window.__bbtelSyncLoading = null;
+                        });
+                        return window.__bbtelSyncLoading;
+                    }
+
                     fromBtn.addEventListener('click', async function() {
-                        if (!window.BBTelSync) {
+                        if (!await ensureBridgeLoaded()) {
                             setStatus('BBTel 同步桥接未加载，请确认 BBTel 服务已启动', false);
                             return;
                         }
@@ -522,7 +543,7 @@
                     });
 
                     toBtn.addEventListener('click', async function() {
-                        if (!window.BBTelSync) {
+                        if (!await ensureBridgeLoaded()) {
                             setStatus('BBTel 同步桥接未加载，请确认 BBTel 服务已启动', false);
                             return;
                         }

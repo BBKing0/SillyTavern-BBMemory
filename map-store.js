@@ -71,15 +71,23 @@ export async function addLocation(chatId, data) {
         description: data.description || '',
         realWorldRef: data.realWorldRef || '',
         region: data.region || '',
+        embedding: data.embedding ?? null,
         parentId: data.parentId || null,  // v8.7.1 父地点ID（层级）
+        memoryTier: data.memoryTier || 'transient',
+        keepPermanent: data.keepPermanent || false,
+        resident: data.resident || false,
+        category: data.category || null,
         x: typeof data.x === 'number' ? data.x : (0.3 + Math.random() * 0.4),  // v8.8.0 2D坐标
         y: typeof data.y === 'number' ? data.y : (0.2 + Math.random() * 0.6),
         edges: Array.isArray(data.edges) ? data.edges : [],
+        hitCount: data.hitCount || 0,
+        lastHitAt: data.lastHitAt || null,
         createdAt: now,
         updatedAt: now,
         source: data.source || 'manual',
         sourceExchange: data.sourceExchange || '',
         sourceFloor: typeof data.sourceFloor === 'number' ? data.sourceFloor : -1,
+        sourceMessageHash: data.sourceMessageHash || '',
         archived: data.archived || false,  // v8.8.1
     };
     map.locations[id] = entry;

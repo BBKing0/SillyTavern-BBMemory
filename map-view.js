@@ -911,6 +911,10 @@ function showLocationForm(title, defaults, onSave) {
             <div style="flex:1;"><label style="font-size:0.85em;">区域</label><input id="bb_map_f_region" class="bb-input" value="${escapeHtml(d.region || '')}" style="width:100%;margin-bottom:10px;box-sizing:border-box;" /></div>
             <div style="flex:1;"><label style="font-size:0.85em;">父地点</label><select id="bb_map_f_parent" class="bb-input" style="width:100%;margin-bottom:10px;"><option value="">(无)</option></select></div>
         </div>
+        <label style="font-size:0.85em;display:flex;align-items:center;gap:6px;margin-bottom:12px;">
+            <input id="bb_map_f_resident" type="checkbox" ${(d.memoryTier === 'core' || d.memoryTier === 'eternal' || d.keepPermanent || d.resident) ? 'checked' : ''} />
+            常驻地点
+        </label>
         <div style="display:flex;gap:8px;justify-content:flex-end;">
             <button id="bb_map_f_cancel" class="menu_button" style="opacity:0.6;">取消</button>
             <button id="bb_map_f_save" class="menu_button" style="background:var(--SmartThemeQuoteColor,#4caf50);color:#fff;">保存</button>
@@ -925,7 +929,15 @@ function showLocationForm(title, defaults, onSave) {
         const name = nameInput.value.trim();
         if (!name) { showToast('请输入名称', 'warning'); return; }
         overlay.remove();
-        onSave({ name, description: form.querySelector('#bb_map_f_desc').value.trim(), region: form.querySelector('#bb_map_f_region').value.trim(), parentId: form.querySelector('#bb_map_f_parent').value || null });
+        const resident = form.querySelector('#bb_map_f_resident')?.checked || false;
+        onSave({
+            name,
+            description: form.querySelector('#bb_map_f_desc').value.trim(),
+            region: form.querySelector('#bb_map_f_region').value.trim(),
+            parentId: form.querySelector('#bb_map_f_parent').value || null,
+            memoryTier: resident ? 'core' : 'transient',
+            keepPermanent: resident,
+        });
     });
     form.querySelector('#bb_map_f_cancel').addEventListener('click', () => overlay.remove());
     setTimeout(() => nameInput.focus(), 100);

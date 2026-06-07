@@ -258,6 +258,11 @@ function buildEntryItemHTML(e) {
     } else if (pillar === 'timeline') {
         statusBadges += `<span class="bb-item-badge" style="background:${e.isActive ? '#4caf5022' : '#ff980022'};color:${e.isActive ? '#4caf50' : '#ff9800'};border:1px solid ${e.isActive ? '#4caf5044' : '#ff980044'};">${e.isActive ? '进行中' : '已结束'}</span>`;
         if (e.storyTime) statusBadges += `<span style="font-size:0.75em;opacity:0.5;">${escapeHtml(e.storyTime)}</span>`;
+    } else if (pillar === 'map') {
+        if (e.memoryTier === 'core' || e.memoryTier === 'eternal' || e.keepPermanent || e.resident) {
+            statusBadges += '<span class="bb-item-badge" style="background:#ff980022;color:#ffb74d;border:1px solid #ff980044;">常驻</span>';
+        }
+        if (e.region) statusBadges += `<span style="font-size:0.75em;opacity:0.5;">${escapeHtml(e.region)}</span>`;
     } else if (pillar === 'mem') {
         const tierOrder = ['transient', 'stable', 'core', 'eternal'];
         const currentTierIdx = tierOrder.indexOf(e.memoryTier || 'transient');
@@ -492,14 +497,14 @@ function bindManagerEvents(overlay, chatId) {
         overlay.style.display = 'none';
         try {
             const range = await globalThis.bbPromptFloorRange?.();
-            if (range === undefined || range === '') {
+            if (range === undefined || range === null) {
                 overlay.style.display = '';
                 return;
             }
             showToast('正在提取记忆...', 'info');
             const results = await globalThis.bbHandleInitMemory?.(chatId, range);
             if (results) {
-                showToast(`提取完成！NPC ${results.npc}/物品 ${results.items}/时间线 ${results.timeline}/记忆 ${results.memories}`, 'success');
+                showToast(`提取完成！NPC ${results.npc}/物品 ${results.items}/时间线 ${results.timeline}/地点 ${results.locations || 0}/记忆 ${results.memories}`, 'success');
             }
         } catch (e) {
             showToast(`提取失败: ${e.message}`, 'error');
@@ -1083,7 +1088,7 @@ function buildPillarFormFields_inner(p) {
             <label style="font-size:0.85em;">描述</label>
             <textarea class="bb-input bb-f-desc" rows="3" placeholder="地点描述" style="width:100%;margin-bottom:8px;resize:vertical;"></textarea>
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">区域</label><input class="bb-input bb-f-region" placeholder="如：中原" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">父地点</label><select class="bb-input bb-f-parentid" style="width:100%;margin-bottom:8px;"><option value="">(无)</option></select></div></div>
-            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">现实参考</label><input class="bb-input bb-f-realref" placeholder="可选" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"></div></div>`;
+            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">现实参考</label><input class="bb-input bb-f-realref" placeholder="可选" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;display:flex;align-items:flex-end;padding-bottom:8px;"><label style="font-size:0.85em;display:flex;align-items:center;gap:4px;"><input type="checkbox" class="bb-f-mapResident" /> 常驻地点</label></div></div>`;
         case 'mem': default: return `
             <label style="font-size:0.85em;">标题 <span style="color:#f44336;">*</span></label><input class="bb-input bb-f-title" placeholder="记忆标题（3-8字）" style="width:100%;margin-bottom:8px;" />
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">类型</label><select class="bb-input bb-f-type" style="width:100%;margin-bottom:8px;">${Object.values(MEMORY_TYPES).map(t => `<option value="${t.id}" ${t.id === 'event' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div><div style="flex:1;"><label style="font-size:0.85em;">真值状态</label><select class="bb-input bb-f-truthStatus" style="width:100%;margin-bottom:8px;">${Object.entries(TRUTH_STATUS).map(([k,v]) => `<option value="${k}" ${k === 'true' ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div></div>
@@ -1120,6 +1125,8 @@ function collectFormData(formEl, pillar) {
             name: g('bb-f-name'), description: g('bb-f-desc'),
             region: g('bb-f-region'), parentId: formEl.querySelector('.bb-f-parentid')?.value || null,
             realWorldRef: g('bb-f-realref'),
+            memoryTier: formEl.querySelector('.bb-f-mapResident')?.checked ? 'core' : 'transient',
+            keepPermanent: formEl.querySelector('.bb-f-mapResident')?.checked || false,
             source: 'manual',
         };
         case 'timeline': {
@@ -1267,6 +1274,7 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
                     setVal('bb-f-desc', prefill.description);
                     setVal('bb-f-region', prefill.region);
                     setVal('bb-f-realref', prefill.realWorldRef);
+                    setCheck('bb-f-mapResident', prefill.memoryTier === 'core' || prefill.memoryTier === 'eternal' || prefill.keepPermanent || prefill.resident);
                     if (prefill.parentId) {
                         const sel = formOverlay.querySelector('.bb-f-parentid');
                         if (sel) sel.value = prefill.parentId;
