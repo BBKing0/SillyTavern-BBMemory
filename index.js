@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v8.4.1 主入口
+ * index.js —— BB-Memory v8.9.3 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 时间线 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -58,6 +58,7 @@ import { runHealthCheck, buildHealthCheckPanel } from './memory-health-check.js'
 
 import { openAssistant } from './memory-assistant.js';
 import { openMemoryManager } from './memory-manager.js';
+import { openMemoryInitializer } from './memory-initializer.js';
 import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot } from './memory-slots.js';
 
 // ═══ 常量 ═══
@@ -493,11 +494,11 @@ async function handleInitMemory(chatId, rangeStr = '') {
     const results = await extractFromContext(chatId, contextText, { onProgress: updateProgress, sourceInfo });
 
     if (progressEl) {
-        progressEl.textContent = `初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`;
+        progressEl.textContent = `初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 线程 ${results.threads || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`;
         setTimeout(() => progressEl.remove(), 3000);
     }
 
-    showToast(`初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
+    showToast(`初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 线程 ${results.threads || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
     return results;
 }
 
@@ -802,14 +803,7 @@ function bindSidebarEvents() {
     document.querySelector('#bb_init_memory_btn')?.addEventListener('click', async () => {
         const chatId = getChatId();
         if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
-        const range = await promptFloorRange();
-        if (range === null) return;
-        try {
-            const results = await handleInitMemory(chatId, range);
-            showToast(`初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
-        } catch (e) {
-            showToast(`初始化失败: ${e.message}`, 'error');
-        }
+        openMemoryInitializer(chatId);
     });
 
     // v5.5: 记忆管家 → 完整管理器
@@ -828,7 +822,7 @@ function bindSidebarEvents() {
         showToast('正在收集上下文并提取记忆...', 'info');
         try {
             const results = await handleInitMemory(chatId, range);
-            showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
+            showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 线程 ${results.threads || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
         } catch (e) {
             showToast(`提取失败: ${e.message}`, 'error');
         }
@@ -1527,16 +1521,9 @@ function registerSlashCommands() {
     addCmd('bb-init', async (args) => {
         const chatId = getChatId();
         if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
-        // 支持参数传楼层范围，如 /bb-init 0-10；无参数则弹窗
-        const range = (args && args.trim()) ? args.trim() : await promptFloorRange();
-        if (range === null) return;
-        try {
-            const results = await handleInitMemory(chatId, range);
-            showToast(`初始化：NPC${results.npc}/物品${results.items}/时间线${results.timeline}/地点${results.locations || 0}/记忆${results.memories}`, 'success');
-        } catch (e) {
-            showToast(`初始化失败: ${e.message}`, 'error');
-        }
-    }, '初始化 BB-Memory 记忆（可选参数: 楼层范围如 0-10）');
+        const range = (args && args.trim()) ? args.trim() : '';
+        openMemoryInitializer(chatId, { rangeStr: range });
+    }, '打开 BB-Memory 初始化工作台（可选参数: 楼层范围如 0-10）');
 
     addCmd('bb-backup', async () => {
         const chatId = getChatId();
@@ -2110,7 +2097,7 @@ async function handleFloatingMenuAction(action) {
             showToast('正在提取记忆...', 'info');
             try {
                 const results = await handleInitMemory(chatId, range);
-                showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
+                showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 线程 ${results.threads || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
                 refreshSidebar();
             } catch (e) {
                 showToast(`提取失败: ${e.message}`, 'error');
@@ -2212,7 +2199,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v8.4.1 初始化开始...');
+    console.log('[BB-Memory] v8.9.3 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -2348,7 +2335,7 @@ async function init() {
     // v6.1: 监听消息删除，自动清理关联记忆
     initMessageDeletionWatch();
 
-    console.log('[BB-Memory] v8.4.1 初始化完成');
+    console.log('[BB-Memory] v8.9.3 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆

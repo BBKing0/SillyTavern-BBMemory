@@ -536,7 +536,7 @@ function bindManagerEvents(overlay, chatId) {
             showToast('正在提取记忆...', 'info');
             const results = await globalThis.bbHandleInitMemory?.(chatId, range);
             if (results) {
-                showToast(`提取完成！NPC ${results.npc}/物品 ${results.items}/时间线 ${results.timeline}/地点 ${results.locations || 0}/记忆 ${results.memories}`, 'success');
+                showToast(`提取完成！NPC ${results.npc}/物品 ${results.items}/时间线 ${results.timeline}/线程 ${results.threads || 0}/地点 ${results.locations || 0}/记忆 ${results.memories}`, 'success');
             }
         } catch (e) {
             showToast(`提取失败: ${e.message}`, 'error');

@@ -8,6 +8,7 @@
 import {
     getSettings, updateSettings, getMemories, addMemory, updateMemory,
     upsertNpcProfile, upsertItem, upsertTimelineEntry,
+    upsertTimelineThread, getTimelineThreads,
     updateNpcProfile, updateItem, updateTimelineEntry,
     getNpcProfiles, getItems, getTimeline,
     getCalendarDescription,
@@ -237,6 +238,29 @@ function parseTimelineResponse(responseText) {
             }));
     } catch (e) {
         if (getSettings().debugLogging) console.warn('[BB-Memory] 时间线响应解析失败:', e.message);
+        return [];
+    }
+}
+
+function parseTimelineThreadResponse(responseText) {
+    const text = cleanJsonText(responseText);
+    if (!text) return [];
+    try {
+        const parsed = JSON.parse(text);
+        const arr = Array.isArray(parsed) ? parsed : (parsed && parsed.n ? [parsed] : []);
+        return arr
+            .filter(item => item && (item.n || item.name) && typeof (item.n || item.name) === 'string')
+            .map(item => ({
+                name: String(item.n || item.name || '').trim(),
+                type: ['plot', 'emotional', 'side', 'world'].includes(item.tp || item.type) ? (item.tp || item.type) : 'plot',
+                status: ['ongoing', 'paused', 'ended', 'archived', 'resident'].includes(item.st || item.status) ? (item.st || item.status) : 'ongoing',
+                priority: ['high', 'medium', 'low'].includes(item.p || item.priority) ? (item.p || item.priority) : 'medium',
+                summary: typeof (item.s || item.summary) === 'string' ? String(item.s || item.summary).trim() : '',
+                entries: Array.isArray(item.entries) ? item.entries : [],
+                source: 'auto',
+            }));
+    } catch (e) {
+        if (getSettings().debugLogging) console.warn('[BB-Memory] 时间线程响应解析失败:', e.message);
         return [];
     }
 }
@@ -738,11 +762,23 @@ active=true/false, imp(对叙事弧线的影响), g(标签数组含节奏标签[
 若未达里程碑级别，返回空数组。
 
 ═══════════════════════════════════════════════════════
+## 辅助：时间线程（可选，初始化或阶段总结时使用）
+═══════════════════════════════════════════════════════
+
+时间线程用于概括一条持续存在的叙事线，不是单个事件。
+仅当输入中有清晰的主线、感情线、支线或世界观线索时输出。
+
+字段：n(线程名), tp(类型:plot/emotional/side/world), st(状态:ongoing/paused/ended/resident),
+p(优先级:high/medium/low), s(一句话总结), entries(可留空数组)
+
+若无法形成持续线索，返回空数组。
+
+═══════════════════════════════════════════════════════
 ## 输出格式
 ═══════════════════════════════════════════════════════
 
 返回纯JSON对象（不要markdown代码块）：
-{"memories":[...记忆数组，核心输出...], "npc":[...], "items":[...], "timeline":[...], "locations":[...地点数组...]}
+{"memories":[...记忆数组，核心输出...], "npc":[...], "items":[...], "timeline":[...], "locations":[...地点数组...], "threads":[...时间线程数组...]}
 
 {{CALENDAR_REF}}
 {{STYLE_BIAS}}
@@ -754,13 +790,13 @@ active=true/false, imp(对叙事弧线的影响), g(标签数组含节奏标签[
 function parseMergedResponse(responseText) {
     if (!responseText || !responseText.trim()) {
         console.warn('[BB-Memory] 合并提取响应为空');
-        return { npc: [], items: [], timeline: [], memories: [], locations: [] };
+        return { npc: [], items: [], timeline: [], memories: [], locations: [], threads: [] };
     }
     let text = responseText.trim();
     // META_DIALOGUE 检测（安全网：即便 extractMergedStage 已检查，解析阶段也再确认一次）
     if (text.toUpperCase().startsWith('META_DIALOGUE')) {
         console.log('[BB-Memory] parseMergedResponse: 检测到 META_DIALOGUE，返回空数据');
-        return { npc: [], items: [], timeline: [], memories: [], metaDialogue: true };
+        return { npc: [], items: [], timeline: [], memories: [], locations: [], threads: [], metaDialogue: true };
     }
     text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
     // 先尝试匹配 JSON 对象；若失败则尝试数组
@@ -777,11 +813,11 @@ function parseMergedResponse(responseText) {
             match = text.match(/\[[\s\S]*\]/);
             if (!match) {
                 console.warn('[BB-Memory] 合并提取响应未找到JSON，前200字符:', text.slice(0, 200));
-                return { npc: [], items: [], timeline: [], memories: [], locations: [] };
+                return { npc: [], items: [], timeline: [], memories: [], locations: [], threads: [] };
             }
             try { parsed = JSON.parse(match[0]); } catch (e2) {
                 console.warn('[BB-Memory] 合并响应JSON解析失败:', e2.message, '前200字符:', text.slice(0, 200));
-                return { npc: [], items: [], timeline: [], memories: [], locations: [] };
+                return { npc: [], items: [], timeline: [], memories: [], locations: [], threads: [] };
             }
         }
         // 如果解析结果是数组，尝试取第一个对象元素
@@ -790,7 +826,7 @@ function parseMergedResponse(responseText) {
                 parsed = parsed[0];
             } else {
                 console.warn('[BB-Memory] 合并提取响应为数组但无可用的对象元素');
-                return { npc: [], items: [], timeline: [], memories: [], locations: [] };
+                return { npc: [], items: [], timeline: [], memories: [], locations: [], threads: [] };
             }
         }
     }
@@ -801,20 +837,22 @@ function parseMergedResponse(responseText) {
         const itemsArr = parsed.items || [];
         const tlArr = parsed.timeline || [];
         const locArr = parsed.locations || parsed.map || [];  // v8.7.0
+        const threadArr = parsed.threads || parsed.timelineThreads || parsed.timeThreads || [];
         const result = {
             npc: parseNpcResponse(JSON.stringify(npcArr)),
             items: parseItemResponse(JSON.stringify(itemsArr)),
             timeline: parseTimelineResponse(JSON.stringify(tlArr)),
             memories: parseMemoryResponse(JSON.stringify(memArr)),
             locations: parseLocationResponse(JSON.stringify(locArr)),
+            threads: parseTimelineThreadResponse(JSON.stringify(threadArr)),
         };
-        if (memArr.length === 0 && npcArr.length === 0 && itemsArr.length === 0 && tlArr.length === 0 && locArr.length === 0) {
+        if (memArr.length === 0 && npcArr.length === 0 && itemsArr.length === 0 && tlArr.length === 0 && locArr.length === 0 && threadArr.length === 0) {
             console.log('[BB-Memory] 合并提取: 本轮无需提取');
         }
         return result;
     } catch (e) {
         console.warn('[BB-Memory] 合并响应JSON解析失败:', e.message, '前200字符:', text.slice(0, 200));
-        return { npc: [], items: [], timeline: [], memories: [], locations: [] };
+        return { npc: [], items: [], timeline: [], memories: [], locations: [], threads: [] };
     }
 }
 
@@ -854,6 +892,111 @@ function buildMergedPrompt(settings, styleBias, calDesc) {
         : '');
 
     return prompt;
+}
+
+const INITIAL_PILLARS = ['memories', 'npc', 'items', 'timeline', 'locations', 'threads'];
+const INITIAL_PILLAR_LABELS = {
+    memories: '记忆条目',
+    npc: 'NPC角色',
+    items: '物品',
+    timeline: '时间线事件',
+    locations: '地图地点',
+    threads: '时间线程',
+};
+
+function normalizeInitialPillars(pillars) {
+    if (!Array.isArray(pillars) || pillars.length === 0) return new Set(INITIAL_PILLARS);
+    const aliases = {
+        mem: 'memories',
+        memory: 'memories',
+        item: 'items',
+        map: 'locations',
+        location: 'locations',
+        thread: 'threads',
+        timelineThreads: 'threads',
+        timeThreads: 'threads',
+    };
+    const selected = new Set();
+    for (const p of pillars) {
+        const key = aliases[p] || p;
+        if (INITIAL_PILLARS.includes(key)) selected.add(key);
+    }
+    return selected.size ? selected : new Set(INITIAL_PILLARS);
+}
+
+function filterInitialResult(result, selectedSet) {
+    const out = { npc: [], items: [], timeline: [], memories: [], locations: [], threads: [] };
+    for (const key of INITIAL_PILLARS) {
+        out[key] = selectedSet.has(key) && Array.isArray(result?.[key]) ? result[key] : [];
+    }
+    return out;
+}
+
+function markInitialSource(result, source = 'init') {
+    for (const key of INITIAL_PILLARS) {
+        if (!Array.isArray(result?.[key])) continue;
+        for (const entry of result[key]) {
+            if (entry && typeof entry === 'object') entry.source = source;
+        }
+    }
+    return result;
+}
+
+function buildInitializationPrompt(settings, styleBias, calDesc, selectedPillars) {
+    const s = settings || {};
+    const selected = normalizeInitialPillars(selectedPillars);
+    const selectedLines = INITIAL_PILLARS
+        .map(key => `${selected.has(key) ? '需要' : '不要'}输出 ${INITIAL_PILLAR_LABELS[key]}（${key}）`)
+        .join('\n');
+    const calRef = calDesc && calDesc.trim()
+        ? `\n世界历法参考：${calDesc.trim()}\n仅用于判断故事时间和事件顺序，不要机械换算。`
+        : '';
+    const worldRef = (s.worldRealWorldRef || '').trim()
+        ? `\n现实原型参考：${(s.worldRealWorldRef || '').trim()}。地点、距离、方位可参考这个原型推断。`
+        : '';
+
+    return `你是 BB-Memory 初始化提取助手。输入可能包含角色卡、世界书、聊天记录或用户上传资料。
+
+任务：把资料整理成 BB-Memory 可保存的结构化草稿。请只输出 JSON 对象，不要 markdown，不要解释。
+
+读取边界：
+- 角色卡和世界书通常是背景设定，优先提取 NPC、物品、地点、世界观事实、持续时间线程。
+- 聊天记录中已经发生的剧情可以提取为记忆条目和时间线事件。
+- 不要把 OOC/元指令/工具说明当作剧情记忆。
+- 不确定的信息可以用 truthStatus:"unknown" 或时间线程 status:"paused" 标记。
+- 同一人物、物品、地点或事件不要重复输出；必要时合并成更完整的一条。
+
+本次勾选的提取范围：
+${selectedLines}
+
+字段格式：
+1. memories 数组：
+{ "n":"标题", "tp":"event/emotion/habit/fact", "m":"一句话摘要", "c":"完整内容", "v":"重要原话", "s":"主体", "a":"目标", "i":0.6, "e":0.2, "st":"故事时间", "g":["标签"] }
+
+2. npc 数组：
+{ "n":"姓名", "r":"身份/职业", "p":"性格", "a":"外貌", "s":"状态", "l":"所在地", "rt":[{"n":"关联角色","r":"关系","a":"态度"}], "nt":"core/important/minor/background", "ic":"一句话索引卡", "g":["标签"] }
+
+3. items 数组：
+{ "n":"物品名", "o":"持有者", "s":"held/used/lost/destroyed", "l":"所在地点", "sig":"意义与用途", "kp":false, "it":"key/equipped/clue/consumable/background", "g":["标签"] }
+
+4. timeline 数组：
+{ "t":"故事时间", "e":"事件摘要", "p":["参与者"], "l":"地点", "active":true, "imp":"影响", "g":["标签"] }
+status 可通过 active 推断；伏笔类事件请在 g 中加入"伏笔"或"待兑现"。
+
+5. locations 数组：
+{ "n":"地名", "desc":"地点描述", "reg":"区域", "rw":"现实原型参考，可为空", "conn":[{"to":"相邻地名","dist":"距离","type":"路径类型","diff":"easy/normal/hard"}] }
+
+6. threads 数组：
+{ "n":"线程名", "tp":"plot/emotional/side/world", "st":"ongoing/paused/ended/resident", "p":"high/medium/low", "s":"一句话总结", "entries":[] }
+
+返回 JSON：
+{"memories":[],"npc":[],"items":[],"timeline":[],"locations":[],"threads":[]}
+
+${calRef}${worldRef}
+${styleBias || ''}
+
+[初始化资料]
+{{CONTEXT_TEXT}}`;
 }
 
 async function callMergedExtraction(chatId, userMessage, aiMessage) {
@@ -968,6 +1111,9 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
         }
         // v8.7.0 地点提取
         total += await saveExtractedLocations(chatId, results.locations, sourceInfo);
+        const threadSave = { threads: 0, merged: 0, skipped: 0 };
+        await saveInitialThreads(chatId, results.threads || [], sourceInfo, threadSave);
+        total += threadSave.threads + threadSave.merged;
         const maxPerExchange = settings.maxMemoriesPerExchange ?? 3;
         const limited = results.memories.slice(0, maxPerExchange);
         const existingMemories = await getMemories(chatId);
@@ -993,7 +1139,7 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
             total++;
         }
         reportProgress('merged', 4, 5, '正在汇总结果...');
-        console.log('[BB-Memory] 合并提取: NPC' + results.npc.length + '/物品' + results.items.length + '/时间线' + results.timeline.length + '/记忆' + limited.length + ' (保存' + total + '条)');
+        console.log('[BB-Memory] 合并提取: NPC' + results.npc.length + '/物品' + results.items.length + '/时间线' + results.timeline.length + '/线程' + (results.threads || []).length + '/记忆' + limited.length + ' (保存' + total + '条)');
         reportProgress('merged', 5, 5, '提取完成');
         return total;
     } catch (e) {
@@ -1069,6 +1215,7 @@ async function processLatestExchange(chatId) {
                         await upsertTimelineEntry(chatId, { ...tl, embedding, ...sourceInfo });
                     }
                     await saveExtractedLocations(chatId, results.locations, sourceInfo);
+                    await saveInitialThreads(chatId, results.threads || [], sourceInfo, { threads: 0, merged: 0, skipped: 0 });
                     // 记忆条目存入待审核队列
                     if (results.memories.length > 0) {
                         pendingAutoCandidates.push(...results.memories.map(c => ({ ...c, _chatId: chatId, _sourceInfo: sourceInfo })));
@@ -1151,9 +1298,168 @@ async function processLatestExchange(chatId) {
  * @param {string} contextText - 拼接好的上下文文本（角色卡+世界书+对话）
  * @returns {object} { npc, items, timeline, memories }
  */
+export async function extractInitialDataFromContext(chatId, contextText, options = {}) {
+    const { onProgress, selectedPillars } = options;
+    const selected = normalizeInitialPillars(selectedPillars);
+    if (!contextText || !contextText.trim()) {
+        throw new Error('初始化资料为空');
+    }
+
+    if (onProgress) onProgress({ stage: 'prepare', progress: '正在构建初始化提示词...' });
+    const settings = getSettings();
+    const styleBias = getStyleBias();
+    const calDesc = await getCalendarDescription(chatId);
+    const prompt = buildInitializationPrompt(settings, styleBias, calDesc, [...selected])
+        .replace('{{CONTEXT_TEXT}}', contextText.trim());
+
+    if (onProgress) onProgress({ stage: 'ai', progress: '正在调用 AI 生成初始化草稿...' });
+    const responseText = await callApi(prompt, { isMerged: true });
+    if (responseText && responseText.trim().toUpperCase().startsWith('META_DIALOGUE')) {
+        return { npc: [], items: [], timeline: [], memories: [], locations: [], threads: [], metaDialogue: true };
+    }
+
+    if (onProgress) onProgress({ stage: 'parse', progress: '正在解析初始化草稿...' });
+    const parsed = parseMergedResponse(responseText);
+    return markInitialSource(filterInitialResult(parsed, selected), 'init');
+}
+
+function mergeTextField(existingText, incomingText) {
+    const a = String(existingText || '').trim();
+    const b = String(incomingText || '').trim();
+    if (!b) return a;
+    if (!a) return b;
+    if (a.includes(b)) return a;
+    if (b.includes(a)) return b;
+    return `${a}\n[初始化合并] ${b}`;
+}
+
+async function saveInitialThreads(chatId, threads, sourceInfo, result) {
+    if (!Array.isArray(threads) || threads.length === 0) return;
+    const existing = await getTimelineThreads(chatId);
+    const byName = new Map(existing.map(t => [(t.name || '').toLowerCase().trim(), t]).filter(([k]) => k));
+    for (const thread of threads) {
+        if (!thread?.name) continue;
+        const key = thread.name.toLowerCase().trim();
+        const old = byName.get(key);
+        const data = { ...thread, ...sourceInfo };
+        if (old) {
+            data.id = old.id;
+            data.summary = mergeTextField(old.summary, thread.summary);
+            data.entries = Array.isArray(old.entries) && old.entries.length ? old.entries : (Array.isArray(thread.entries) ? thread.entries : []);
+            await upsertTimelineThread(chatId, data);
+            result.merged++;
+        } else {
+            const saved = await upsertTimelineThread(chatId, data);
+            byName.set(key, saved);
+            result.threads++;
+        }
+    }
+}
+
+async function saveInitialMemories(chatId, memories, sourceInfo, result) {
+    if (!Array.isArray(memories) || memories.length === 0) return;
+    const settings = getSettings();
+    const existingMemories = await getMemories(chatId);
+    const activeMemories = existingMemories.filter(m => m.embedding);
+    const exactKeys = new Map();
+    for (const mem of existingMemories) {
+        const key = `${(mem.title || '').toLowerCase().trim()}|${(mem.content || '').toLowerCase().trim().slice(0, 120)}`;
+        if (key !== '|') exactKeys.set(key, mem);
+    }
+
+    for (const mem of memories) {
+        if (!mem || !(mem.content || mem.summary)) continue;
+        const embedding = settings.embeddingEnabled && settings.embeddingEndpoint
+            ? await embedMemoryEntry(mem)
+            : null;
+
+        if (settings.dedupEnabled && embedding) {
+            const similar = findMostSimilarMemory(embedding, activeMemories);
+            if (similar) {
+                if (similar.similarity >= getDedupConfig().mergeThreshold) {
+                    await updateMemory(chatId, similar.memory.id, mergeMemoryFields(similar.memory, mem));
+                    result.merged++;
+                    continue;
+                } else if (similar.similarity >= getDedupConfig().reduceThreshold) {
+                    mem.importance = Math.max(0.3, (mem.importance || 0.5) - 0.15);
+                }
+            }
+        }
+
+        const exactKey = `${(mem.title || '').toLowerCase().trim()}|${(mem.content || '').toLowerCase().trim().slice(0, 120)}`;
+        const exact = exactKeys.get(exactKey);
+        if (exact) {
+            if ((mem.summary || mem.verbatim) && (mem.summary !== exact.summary || mem.verbatim !== exact.verbatim)) {
+                await updateMemory(chatId, exact.id, {
+                    summary: mem.summary || exact.summary,
+                    verbatim: mem.verbatim || exact.verbatim,
+                    importance: Math.max(exact.importance || 0.5, mem.importance || 0.5),
+                });
+                result.merged++;
+            } else {
+                result.skipped++;
+            }
+            continue;
+        }
+
+        const saved = await addMemory(chatId, { ...mem, embedding, memoryTier: mem.memoryTier || 'stable', ...sourceInfo });
+        if (embedding) activeMemories.push(saved);
+        exactKeys.set(exactKey, saved);
+        result.memories++;
+    }
+}
+
+export async function saveInitialExtractionResult(chatId, data, options = {}) {
+    const selected = normalizeInitialPillars(options.selectedPillars);
+    const sourceInfo = {
+        source: 'init',
+        sourceChatId: chatId,
+        ...(options.sourceInfo || {}),
+    };
+    const result = { npc: 0, items: 0, timeline: 0, locations: 0, threads: 0, memories: 0, merged: 0, skipped: 0 };
+    const settings = getSettings();
+    const hasEmbedding = settings.embeddingEnabled && settings.embeddingEndpoint;
+
+    if (selected.has('npc')) {
+        for (const npc of (data?.npc || [])) {
+            if (!npc?.name) continue;
+            const embedding = hasEmbedding ? await embedMemoryEntry(npc) : null;
+            await upsertNpcProfile(chatId, { ...npc, embedding, ...sourceInfo });
+            result.npc++;
+        }
+    }
+    if (selected.has('items')) {
+        for (const item of (data?.items || [])) {
+            if (!item?.name) continue;
+            const embedding = hasEmbedding ? await embedMemoryEntry(item) : null;
+            await upsertItem(chatId, { ...item, embedding, ...sourceInfo });
+            result.items++;
+        }
+    }
+    if (selected.has('timeline')) {
+        for (const tl of (data?.timeline || [])) {
+            if (!tl?.event) continue;
+            const embedding = hasEmbedding ? await embedMemoryEntry(tl) : null;
+            await upsertTimelineEntry(chatId, { ...tl, embedding, ...sourceInfo });
+            result.timeline++;
+        }
+    }
+    if (selected.has('locations')) {
+        result.locations += await saveExtractedLocations(chatId, data?.locations || [], sourceInfo);
+    }
+    if (selected.has('threads')) {
+        await saveInitialThreads(chatId, data?.threads || [], sourceInfo, result);
+    }
+    if (selected.has('memories')) {
+        await saveInitialMemories(chatId, data?.memories || [], sourceInfo, result);
+    }
+
+    return result;
+}
+
 export async function extractFromContext(chatId, contextText, options = {}) {
     const { onProgress, sourceInfo } = options;
-    const results = { npc: 0, items: 0, timeline: 0, locations: 0, memories: 0 };
+    const results = { npc: 0, items: 0, timeline: 0, locations: 0, threads: 0, memories: 0 };
 
     if (onProgress) onProgress({ stage: 'merged', progress: '正在 AI 提取记忆（合并模式）...' });
 
@@ -1190,6 +1496,9 @@ export async function extractFromContext(chatId, contextText, options = {}) {
             results.timeline++;
         }
         results.locations += await saveExtractedLocations(chatId, parsed.locations, sourceInfo);
+        const threadSave = { threads: 0, merged: 0, skipped: 0 };
+        await saveInitialThreads(chatId, parsed.threads || [], sourceInfo || {}, threadSave);
+        results.threads += threadSave.threads + threadSave.merged;
 
         const existingMemories = await getMemories(chatId);
         const activeMemories = existingMemories.filter(m => m.embedding);
