@@ -2062,11 +2062,13 @@ async function renderThreadPanel(overlay, chatId) {
         if (entries.length) {
             for (let ei = 0; ei < entries.length; ei++) {
                 const entry = entries[ei];
+                const entryPeriod = entry.period || entry.storyTime || entry.time || '';
+                const entryEvent = entry.event || entry.title || entry.summary || entry.note || '';
                 html += `
                 <div class="bb-thread-entry">
                     <span class="bb-thread-entry-status">${entryStatusIcon[entry.status] || '·'}</span>
-                    <span class="bb-thread-entry-period">${escapeHtml(entry.period || '')}</span>
-                    <span class="bb-thread-entry-event">${escapeHtml(entry.event || '')}</span>
+                    <span class="bb-thread-entry-period">${escapeHtml(entryPeriod)}</span>
+                    <span class="bb-thread-entry-event">${escapeHtml(entryEvent)}</span>
                     ${entry.status === 'ongoing' ? '<span class="bb-thread-entry-ongoing">进行中</span>' : ''}
                     <button class="bb-thread-entry-edit menu_button" data-thread-idx="${ti}" data-entry-idx="${ei}" title="编辑"><i class="fa-solid fa-pen"></i></button>
                     <button class="bb-thread-entry-del menu_button" data-thread-idx="${ti}" data-entry-idx="${ei}" title="删除"><i class="fa-solid fa-xmark"></i></button>
@@ -2295,7 +2297,7 @@ async function renderThreadPanel(overlay, chatId) {
         const ti = parseInt(btn.dataset.threadIdx);
         const ei = parseInt(btn.dataset.entryIdx);
         const thread = activeThreads[ti];
-        if (thread && thread.entries[ei] && confirm(`确认删除条目「${thread.entries[ei].event}」？`)) {
+        if (thread && thread.entries[ei] && confirm(`确认删除条目「${thread.entries[ei].event || thread.entries[ei].title || thread.entries[ei].summary || thread.entries[ei].note || ''}」？`)) {
             thread.entries.splice(ei, 1);
             await upsertTimelineThread(chatId, thread);
             await renderThreadPanel(overlay, chatId);

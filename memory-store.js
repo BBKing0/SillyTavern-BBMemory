@@ -942,7 +942,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '8.9.3',
+        version: '8.9.5',
         timestamp: Date.now(),
         npc: [],
         items: [],
@@ -1063,7 +1063,7 @@ export async function exportMemoriesToChatMetadata(chatId) {
     ]);
 
     const backup = {
-        version: '8.9.3',
+        version: '8.9.5',
         timestamp: Date.now(),
         npc,
         items,
@@ -1237,16 +1237,17 @@ async function restoreClueBoardBackup(chatId, backupBoard, idMaps = {}) {
 export async function importMemoriesFromChatMetadata(chatId) {
     const ctx = getContext();
     const json = ctx.chatMetadata?.[BACKUP_METADATA_KEY];
-    if (!json) return { restored: 0, skipped: 0 };
+    if (!json) return { restored: 0, skipped: 0, merged: 0 };
 
     let backup;
     try {
         backup = JSON.parse(json);
     } catch {
-        return { restored: 0, skipped: 0, error: 'JSON 解析失败' };
+        return { restored: 0, skipped: 0, merged: 0, error: 'JSON 解析失败' };
     }
 
-    let restored = 0, skipped = 0;
+    let restored = 0, skipped = 0, merged = 0;
+    const importOptions = { externalInit: isExternalInitPayload(backup) };
     const idMaps = {};
     const restorePart = async (type, entries, loader, keyFn, transform = null) => {
         const idMap = new Map();
@@ -1256,6 +1257,7 @@ export async function importMemoriesFromChatMetadata(chatId) {
         const existing = await loader(chatId);
         const next = [...existing];
         const existingIds = new Set(existing.map(e => e.id).filter(Boolean));
+        const existingById = new Map(existing.map(e => [e.id, e]).filter(([id]) => id));
         const existingKeys = new Map();
         for (const entry of existing) {
             const key = keyFn(entry);
@@ -1267,22 +1269,34 @@ export async function importMemoriesFromChatMetadata(chatId) {
             if (!raw || typeof raw !== 'object') continue;
             const oldId = raw.id;
             if (oldId && existingIds.has(oldId)) {
+                const duplicate = existingById.get(oldId);
+                if (duplicate && mergeImportedEntryInPlace(type, duplicate, transform ? transform({ ...raw }) : raw, importOptions)) {
+                    merged++;
+                    changed = true;
+                } else {
+                    skipped++;
+                }
                 idMap.set(oldId, oldId);
-                skipped++;
                 continue;
             }
 
             const key = keyFn(raw);
             const duplicate = key ? existingKeys.get(key) : null;
             if (duplicate) {
+                if (mergeImportedEntryInPlace(type, duplicate, transform ? transform({ ...raw }) : raw, importOptions)) {
+                    merged++;
+                    changed = true;
+                } else {
+                    skipped++;
+                }
                 if (oldId) idMap.set(oldId, duplicate.id);
-                skipped++;
                 continue;
             }
 
-            const entry = transform ? transform({ ...raw }) : { ...raw };
+            const entry = normalizeImportedEntry(type, transform ? transform({ ...raw }) : { ...raw }, importOptions);
             if (!entry.id || existingIds.has(entry.id)) entry.id = generateId();
             existingIds.add(entry.id);
+            existingById.set(entry.id, entry);
             const nextKey = keyFn(entry);
             if (nextKey) existingKeys.set(nextKey, entry);
             next.push(entry);
@@ -1346,7 +1360,7 @@ export async function importMemoriesFromChatMetadata(chatId) {
         }
     }
 
-    return { restored, skipped };
+    return { restored, skipped, merged };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1587,6 +1601,154 @@ function mergeTags(existing, incoming) {
 /**
  * 兼容旧的 exportMemories / importMemories JSON 导出
  */
+function isExternalInitPayload(data) {
+    const version = String(data?.version || '');
+    const generator = String(data?.generator || '');
+    return version.includes('external-init') || generator.includes('bbmemory-initializer.html');
+}
+
+function normalizeStableTier(tier, forceStable = false) {
+    if (!forceStable) return tier || 'transient';
+    if (tier === 'core' || tier === 'eternal') return tier;
+    return 'stable';
+}
+
+function normalizeImportedThreadEntries(entries) {
+    if (!Array.isArray(entries)) return [];
+    return entries.map(entry => {
+        if (typeof entry === 'string') {
+            const event = entry.trim();
+            return event ? { refId: '', period: '', event, status: 'ended', note: '' } : null;
+        }
+        if (!entry || typeof entry !== 'object') return null;
+        const event = String(entry.event || entry.title || entry.summary || entry.note || '').trim();
+        if (!event) return null;
+        const status = ['ongoing', 'ended', 'milestone'].includes(entry.status) ? entry.status : 'ended';
+        return {
+            ...entry,
+            refId: String(entry.refId || '').trim(),
+            period: String(entry.period || entry.storyTime || entry.time || '').trim(),
+            event,
+            status,
+            note: String(entry.note || '').trim(),
+        };
+    }).filter(Boolean);
+}
+
+function normalizeImportedEntry(type, raw, options = {}) {
+    const entry = { ...(raw || {}) };
+    const forceStable = options.externalInit === true;
+    if (Array.isArray(entry.tags)) entry.tags = normalizeTags(entry.tags);
+    if (type === 'mem') {
+        entry.title = entry.title || entry.summary || '';
+        entry.summary = entry.summary || entry.content || entry.title || '';
+        entry.content = (entry.content || entry.summary || entry.title || '').trim();
+        entry.hiddenNotes = Array.isArray(entry.hiddenNotes) ? entry.hiddenNotes : [];
+        entry.memoryTier = normalizeStableTier(entry.memoryTier || entry.tier, forceStable);
+        if (forceStable) {
+            if (entry.status === 'archived' && entry.archived !== true) entry.status = 'active';
+            entry.archived = entry.archived === true ? true : false;
+        }
+    } else if (type === 'threads') {
+        entry.entries = normalizeImportedThreadEntries(entry.entries);
+    } else if (['npc', 'item', 'timeline'].includes(type)) {
+        entry.memoryTier = normalizeStableTier(entry.memoryTier, forceStable);
+        if (forceStable && entry.archived !== true) entry.archived = false;
+    }
+    return entry;
+}
+
+function mergeTextField(base, incoming) {
+    const a = String(base || '').trim();
+    const b = String(incoming || '').trim();
+    if (!a) return b;
+    if (!b || a.includes(b)) return a;
+    if (b.includes(a)) return b;
+    return `${a}\n${b}`;
+}
+
+function mergeUniqueObjects(existing, incoming, keyFn) {
+    const out = Array.isArray(existing) ? [...existing] : [];
+    const seen = new Set(out.map(keyFn).filter(Boolean));
+    for (const item of Array.isArray(incoming) ? incoming : []) {
+        const key = keyFn(item);
+        if (!key || seen.has(key)) continue;
+        out.push(item);
+        seen.add(key);
+    }
+    return out;
+}
+
+function tierRank(tier) {
+    return ({ transient: 0, stable: 1, core: 2, eternal: 3 })[tier] ?? 0;
+}
+
+function mergeImportedEntryInPlace(type, base, incoming, options = {}) {
+    let changed = false;
+    const normalized = normalizeImportedEntry(type, incoming, options);
+    const textFields = {
+        npc: ['role', 'personality', 'appearance', 'status', 'location', 'indexCard'],
+        item: ['owner', 'status', 'location', 'significance'],
+        timeline: ['storyTime', 'event', 'summary', 'location', 'impact'],
+        mem: ['title', 'summary', 'content', 'verbatim', 'subject', 'target', 'storyTime'],
+        threads: ['name', 'type', 'status', 'priority', 'summary'],
+    }[type] || [];
+
+    for (const key of textFields) {
+        if (normalized[key] === undefined || normalized[key] === '') continue;
+        const next = ['summary', 'content', 'significance', 'personality', 'appearance', 'impact'].includes(key)
+            ? mergeTextField(base[key], normalized[key])
+            : (base[key] || normalized[key]);
+        if (next !== base[key]) {
+            base[key] = next;
+            changed = true;
+        }
+    }
+
+    if (Array.isArray(normalized.tags)) {
+        const before = Array.isArray(base.tags) ? base.tags.length : 0;
+        base.tags = mergeTags(Array.isArray(base.tags) ? base.tags : [], normalized.tags);
+        if (base.tags.length !== before) changed = true;
+    }
+    if (type === 'mem') {
+        if (tierRank(normalized.memoryTier) > tierRank(base.memoryTier)) {
+            base.memoryTier = normalized.memoryTier;
+            changed = true;
+        }
+        if (typeof normalized.importance === 'number' && normalized.importance > (base.importance || 0)) {
+            base.importance = normalized.importance;
+            changed = true;
+        }
+        if (typeof normalized.emotionalWeight === 'number' && normalized.emotionalWeight > (base.emotionalWeight || 0)) {
+            base.emotionalWeight = normalized.emotionalWeight;
+            changed = true;
+        }
+        const notes = mergeUniqueObjects(base.hiddenNotes, normalized.hiddenNotes, n => `${n.type || ''}|${n.content || ''}`);
+        if (notes.length !== (base.hiddenNotes || []).length) changed = true;
+        base.hiddenNotes = notes;
+        if (options.externalInit && base.archived && normalized.archived === false) {
+            base.archived = false;
+            if (base.status === 'archived') base.status = 'active';
+            changed = true;
+        }
+    } else if (type === 'threads') {
+        const entries = mergeUniqueObjects(base.entries, normalized.entries, e => `${e.period || ''}|${e.event || ''}|${e.status || ''}`);
+        if (entries.length !== (base.entries || []).length) changed = true;
+        base.entries = entries;
+    } else if (type === 'timeline') {
+        const participants = mergeUniqueObjects(base.participants, normalized.participants, v => String(v));
+        if (participants.length !== (base.participants || []).length) changed = true;
+        base.participants = participants;
+        if (normalized.status === 'ongoing' || normalized.status === 'foreshadow') {
+            if (base.status !== normalized.status) changed = true;
+            base.status = normalized.status;
+            base.isActive = normalized.status === 'ongoing';
+        }
+    }
+    if (changed) base.updatedAt = Date.now();
+    return changed;
+}
+
 export async function exportMemories(chatId) {
     const [{ getMap }, { getClueBoard }] = await Promise.all([
         import('./map-store.js'),
@@ -1596,40 +1758,19 @@ export async function exportMemories(chatId) {
         getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
         getTimelineThreads(chatId), getMap(chatId), getClueBoard(chatId),
     ]);
-    return JSON.stringify({ version: '8.9.3', npc, items, timeline, memories, threads, map, clueBoard }, null, 2);
+    return JSON.stringify({ version: '8.9.5', npc, items, timeline, memories, threads, map, clueBoard }, null, 2);
 }
 
 export async function importMemories(chatId, jsonString) {
-    const data = JSON.parse(jsonString);
-    let count = 0;
-    if (Array.isArray(data.npc)) {
-        for (const e of data.npc) { await addNpcProfile(chatId, e); count++; }
+    let data = JSON.parse(jsonString);
+    if (Array.isArray(data)) {
+        data = { version: 'legacy-array-import', memories: data };
     }
-    if (Array.isArray(data.items)) {
-        for (const e of data.items) { await addItem(chatId, e); count++; }
-    }
-    if (Array.isArray(data.timeline)) {
-        for (const e of data.timeline) { await addTimelineEntry(chatId, e); count++; }
-    }
-    if (Array.isArray(data.memories)) {
-        for (const e of data.memories) { await addMemory(chatId, e); count++; }
-    }
-    if (Array.isArray(data.threads)) {
-        for (const e of data.threads) { await upsertTimelineThread(chatId, e); count++; }
-    }
-    if (data.map || data.mapData) {
-        const result = await restoreMapBackup(chatId, data.map || data.mapData);
-        count += result.restored;
-    }
-    if (data.clueBoard || data.clues) {
-        const result = await restoreClueBoardBackup(chatId, data.clueBoard || data.clues, {});
-        count += result.restored;
-    }
-    // 兼容旧格式（单数组）
-    if (!data.npc && !data.items && !data.timeline && !data.memories && Array.isArray(data)) {
-        for (const e of data) { await addMemory(chatId, e); count++; }
-    }
-    return count;
+    const ctx = getContext();
+    if (!ctx.chatMetadata) ctx.chatMetadata = {};
+    ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify(data);
+    const result = await importMemoriesFromChatMetadata(chatId);
+    return (result.restored || 0) + (result.merged || 0);
 }
 
 /**

@@ -96,7 +96,7 @@ const state = {
 };
 
 function emptyDraft() {
-    return { version: '8.9.3-init-draft', npc: [], items: [], timeline: [], memories: [], locations: [], threads: [] };
+    return { version: '8.9.5-init-draft', npc: [], items: [], timeline: [], memories: [], locations: [], threads: [] };
 }
 
 function $(root, selector) {

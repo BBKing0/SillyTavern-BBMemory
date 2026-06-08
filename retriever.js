@@ -409,7 +409,9 @@ export function getThreadSummaryForInjection(threads, maxActive = 5) {
             const entryStatus = entry.status === 'ongoing' ? '→' :
                                entry.status === 'ended' ? '✓' :
                                entry.status === 'milestone' ? '◆' : '·';
-            lines.push(`  ${entryStatus} ${entry.period || ''} ${entry.event || ''}`);
+            const period = entry.period || entry.storyTime || entry.time || '';
+            const event = entry.event || entry.title || entry.summary || entry.note || '';
+            lines.push(`  ${entryStatus} ${period} ${event}`);
         }
     }
 

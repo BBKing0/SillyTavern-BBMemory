@@ -505,9 +505,9 @@ function renderClueBoardSpatial(body, board, editMode) {
     body.className = 'bb-clue-spatial-body';
     body.style.cssText = '';
 
-    const refColors = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784' };
-    const refIcons = { mem: 'fa-brain', npc: 'fa-user', item: 'fa-box', timeline: 'fa-clock' };
-    const refLabels = { mem: '记忆', npc: 'NPC', item: '物品', timeline: '时间线' };
+    const refColors = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784', map: '#4db6ac' };
+    const refIcons = { mem: 'fa-brain', npc: 'fa-user', item: 'fa-box', timeline: 'fa-clock', map: 'fa-map-location-dot' };
+    const refLabels = { mem: '记忆', npc: 'NPC', item: '物品', timeline: '时间线', map: '地图' };
     const typeColors = { causal: '#ff9800', hint: '#2196f3', contradicts: '#f44336', related: '#9e9e9e', speculation: '#ce93d8' };
 
     if (!nodes.length) {
@@ -832,9 +832,9 @@ function renderClueBoardBody(body, board, chatId, overlay, panel) {
     }
 
     // 颜色定义
-    const refColors = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784' };
-    const refIcons = { mem: 'fa-brain', npc: 'fa-user', item: 'fa-box', timeline: 'fa-clock' };
-    const refLabels = { mem: '记忆', npc: 'NPC', item: '物品', timeline: '时间线' };
+    const refColors = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784', map: '#4db6ac' };
+    const refIcons = { mem: 'fa-brain', npc: 'fa-user', item: 'fa-box', timeline: 'fa-clock', map: 'fa-map-location-dot' };
+    const refLabels = { mem: '记忆', npc: 'NPC', item: '物品', timeline: '时间线', map: '地图' };
     const typeColors = { causal: '#ff9800', hint: '#2196f3', contradicts: '#f44336', related: '#9e9e9e', speculation: '#ce93d8' };
     const typeIcons = { causal: '⚡', hint: '💡', contradicts: '⚠️', related: '🔗', speculation: '❓' };
     const typeOrder = { causal: 0, hint: 1, contradicts: 2, related: 3, speculation: 4 };
@@ -1148,6 +1148,7 @@ function showAddNodeDialog(chatId, onDone) {
             <button class="bb-clue-tab" data-pillar="npc" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">NPC</button>
             <button class="bb-clue-tab" data-pillar="item" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">物品</button>
             <button class="bb-clue-tab" data-pillar="timeline" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">时间线</button>
+            <button class="bb-clue-tab" data-pillar="map" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">地图</button>
         </div>
         <input type="text" id="bb_clue_node_search" class="bb-input" placeholder="搜索条目..." style="margin-bottom:8px;flex-shrink:0;" />
         <div style="margin-bottom:8px;flex-shrink:0;display:flex;align-items:center;gap:6px;">
@@ -1167,11 +1168,19 @@ function showAddNodeDialog(chatId, onDone) {
         const [npc, items, timeline, memories] = await Promise.all([
             getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
         ]);
+        let mapLocations = [];
+        try {
+            const { getLocations } = await import('./map-store.js');
+            mapLocations = (await getLocations(chatId)).filter(loc => !loc.archived);
+        } catch {
+            mapLocations = [];
+        }
         const allEntries = [
             ...memories.map(e => ({ ...e, _pillar: 'mem', _label: e.title || e.summary?.slice(0, 40) || e.id, _preview: (e.content || e.summary || '').slice(0, 80) })),
             ...npc.map(e => ({ ...e, _pillar: 'npc', _label: e.name || e.id, _preview: e.role || e.personality || '' })),
             ...items.map(e => ({ ...e, _pillar: 'item', _label: e.name || e.id, _preview: e.significance || e.status || '' })),
             ...timeline.map(e => ({ ...e, _pillar: 'timeline', _label: e.event || e.summary?.slice(0, 40) || e.id, _preview: e.summary || e.storyTime || '' })),
+            ...mapLocations.map(e => ({ ...e, _pillar: 'map', _label: e.name || e.id, _preview: e.description || e.region || '' })),
         ];
 
         // 按线索潜力排序：unknown/rumor truthStatus 优先
@@ -1191,8 +1200,8 @@ function showAddNodeDialog(chatId, onDone) {
             parentSelect.appendChild(opt);
         }
 
-        const pillarIcon = { mem: 'fa-brain', npc: 'fa-user', item: 'fa-box', timeline: 'fa-clock' };
-        const pillarColor = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784' };
+        const pillarIcon = { mem: 'fa-brain', npc: 'fa-user', item: 'fa-box', timeline: 'fa-clock', map: 'fa-map-location-dot' };
+        const pillarColor = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784', map: '#4db6ac' };
         const truthColor = { unknown: '#9e9e9e', rumor: '#ff9800', misleading: '#f44336', secret_true: '#7c4dff', 'true': '#4caf50', 'false': '#f44336' };
 
         let activePillar = 'all';
