@@ -19,7 +19,7 @@ import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, d
 import { simpleSearch } from './retriever.js';
 import { MEMORY_TYPES, TRUTH_STATUS, HIDDEN_NOTE_TYPES, TIMELINE_STATUS, ITEM_STATUS } from './memory-types.js';
 import { NPC_TIERS, ITEM_TIERS, normalizeNpcTier, normalizeItemTier } from './entity-tiers.js';
-import { extractFromContext, saveExtractedMemories } from './auto-generator.js';
+import { extractFromContext, saveExtractedMemories, attachEntryEmbedding } from './auto-generator.js';
 import { markExchangeExtracted, hideExchange, unmarkExchangeProcessed } from './message-state.js';
 import { fuzzyMemory, archiveMemory, restoreMemory } from './memory-maintainer.js';
 
@@ -895,7 +895,7 @@ function showQuickAddForm(overlay, chatId) {
 
     const formOverlay = document.createElement('div');
     formOverlay.className = 'bb-form-overlay';
-    formOverlay.style.cssText = 'position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
+    formOverlay.style.cssText = 'position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,0.6);display:flex;align-items:flex-start;justify-content:center;padding:clamp(8px,3vh,20px);overflow-y:auto;';
     document.body.appendChild(formOverlay);
 
     function buildFormHTML(pillar) {
@@ -1052,11 +1052,13 @@ function bindFormEvents(formOverlay, chatId, initialPillar) {
         try {
             const data = collectFormData(formOverlay, currentPillar);
             if (!data.name && !data.title) { showToast('请至少填写标题/名称', 'warning'); btn.disabled = false; btn.innerHTML = origHTML; return; }
+            const prepared = await prepareManualEntryData(data, currentPillar);
             switch (currentPillar) {
-                case 'npc': await addNpcProfile(chatId, data); break;
-                case 'item': await addItem(chatId, data); break;
-                case 'timeline': await addTimelineEntry(chatId, data); break;
-                default: await addMemory(chatId, data); break;
+                case 'npc': await addNpcProfile(chatId, prepared); break;
+                case 'item': await addItem(chatId, prepared); break;
+                case 'timeline': await addTimelineEntry(chatId, prepared); break;
+                case 'map': { const { addLocation } = await import('./map-store.js'); await addLocation(chatId, prepared); break; }
+                default: await addMemory(chatId, prepared); break;
             }
             showToast('已添加', 'success');
             formOverlay.remove();
@@ -1199,6 +1201,15 @@ function collectFormData(formEl, pillar) {
     }
 }
 
+async function prepareManualEntryData(data, pillar) {
+    try {
+        return await attachEntryEmbedding(data, { force: true, collection: pillar });
+    } catch (e) {
+        console.warn('[BB-Memory] 手动条目向量化失败:', e.message);
+        return data;
+    }
+}
+
 // ═══ 快速编辑 ═══
 
 async function showQuickEditForm(overlay, chatId, id, pillar) {
@@ -1238,7 +1249,7 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
 
     const formOverlay = document.createElement('div');
     formOverlay.className = 'bb-form-overlay';
-    formOverlay.style.cssText = 'position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
+    formOverlay.style.cssText = 'position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,0.6);display:flex;align-items:flex-start;justify-content:center;padding:clamp(8px,3vh,20px);overflow-y:auto;';
     document.body.appendChild(formOverlay);
 
     const render = () => {
@@ -1387,26 +1398,27 @@ function bindFormEvents_inner(formOverlay, chatId, pillar, editInfo) {
         try {
             const data = collectFormData(formOverlay, pillar);
             if (!data.name && !data.title) { showToast('请至少填写标题/名称', 'warning'); btn.disabled = false; btn.innerHTML = origHTML; return; }
+            const prepared = await prepareManualEntryData(data, pillar);
 
             if (isEdit) {
                 // 更新时间线的 isActive 字段
                 if (pillar === 'timeline') {
-                    data.isActive = data.status === 'ongoing';
+                    prepared.isActive = prepared.status === 'ongoing';
                 }
                 switch (pillar) {
-                    case 'npc': await updateNpcProfile(chatId, editInfo.id, data); break;
-                    case 'item': await updateItem(chatId, editInfo.id, data); break;
-                    case 'timeline': await updateTimelineEntry(chatId, editInfo.id, data); break;
-                    case 'map': { const { updateLocation } = await import('./map-store.js'); await updateLocation(chatId, editInfo.id, data); break; }
-                    default: await updateMemory(chatId, editInfo.id, data); break;
+                    case 'npc': await updateNpcProfile(chatId, editInfo.id, prepared); break;
+                    case 'item': await updateItem(chatId, editInfo.id, prepared); break;
+                    case 'timeline': await updateTimelineEntry(chatId, editInfo.id, prepared); break;
+                    case 'map': { const { updateLocation } = await import('./map-store.js'); await updateLocation(chatId, editInfo.id, prepared); break; }
+                    default: await updateMemory(chatId, editInfo.id, prepared); break;
                 }
             } else {
                 switch (pillar) {
-                    case 'npc': await addNpcProfile(chatId, data); break;
-                    case 'item': await addItem(chatId, data); break;
-                    case 'timeline': await addTimelineEntry(chatId, data); break;
-                    case 'map': { const { addLocation } = await import('./map-store.js'); await addLocation(chatId, data); break; }
-                    default: await addMemory(chatId, data); break;
+                    case 'npc': await addNpcProfile(chatId, prepared); break;
+                    case 'item': await addItem(chatId, prepared); break;
+                    case 'timeline': await addTimelineEntry(chatId, prepared); break;
+                    case 'map': { const { addLocation } = await import('./map-store.js'); await addLocation(chatId, prepared); break; }
+                    default: await addMemory(chatId, prepared); break;
                 }
             }
 

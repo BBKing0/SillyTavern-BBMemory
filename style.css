@@ -14,7 +14,7 @@
 }
 
 /* ═══════════════════════════════════════════════════════
-   v8.9.5 初始化工作台
+   v8.9.6 初始化提示与移动端管理
    ═══════════════════════════════════════════════════════ */
 
 .bb-init-overlay {
@@ -660,6 +660,10 @@
 
 .bb-mem-toolbar-btn {
     white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35em;
 }
 
 /* --- 类型过滤按钮组 --- */
@@ -2219,6 +2223,19 @@
     padding: 20px;
 }
 
+.bb-form-overlay {
+    align-items: flex-start !important;
+    overflow-y: auto !important;
+    padding: clamp(8px, 3vh, 20px) !important;
+    box-sizing: border-box;
+}
+
+.bb-form-overlay .bb-mem-form-popup,
+.bb-floor-select-overlay .bb-floor-select-popup {
+    max-height: calc(100dvh - 16px) !important;
+    margin: 0 auto !important;
+}
+
 .bb-mem-form-popup {
     background: var(--SmartThemeChatTintColor, #1e1e2e);
     color: var(--SmartThemeBodyColor, #e0e0e0);
@@ -2366,8 +2383,18 @@
         gap: 6px;
     }
     .bb-mem-search {
+        flex: 1 1 100%;
         min-width: 100%;
         order: -1;
+    }
+    .bb-mem-toolbar #bb_mgr_sort {
+        flex: 1 1 calc(50% - 6px);
+        min-width: min(12em, 100%);
+    }
+    .bb-mem-toolbar-btn {
+        flex: 1 1 calc(50% - 6px);
+        min-width: 8.5em;
+        min-height: 2.4em;
     }
     .bb-mem-type-filters {
         padding: 0 14px 6px;
@@ -2450,6 +2477,7 @@
 
     /* 添加/编辑记忆表单 & 楼层选择弹窗 */
     .bb-mem-form-overlay,
+    .bb-form-overlay,
     .bb-floor-select-overlay {
         padding: 0;
         align-items: flex-start;
@@ -2460,6 +2488,7 @@
         width: 100%;
         max-width: 100%;
         max-height: 100vh;
+        max-height: 100dvh;
         border-radius: 0;
     }
     .bb-mem-form-header {
@@ -2579,6 +2608,11 @@
     .bb-mem-toolbar .menu_button {
         font-size: 0.8em;
         padding: 4px 8px;
+    }
+    .bb-mem-toolbar #bb_mgr_sort,
+    .bb-mem-toolbar-btn {
+        flex-basis: 100%;
+        min-width: 100%;
     }
     .bb-mem-type-filter {
         font-size: 0.7em !important;

@@ -462,10 +462,20 @@ export async function testApiConnection(endpoint, apiKey, model) {
 let _lastEmbeddingErrorTime = 0;
 async function embedMemoryEntry(mem) {
     const tags = (mem.tags || []).map(t => typeof t === 'string' ? t : t.name).filter(Boolean).join(' ');
+    const threadEntries = Array.isArray(mem.entries)
+        ? mem.entries.map(e => [e.period || e.storyTime || e.time, e.event || e.title || e.summary || e.note, e.status].filter(Boolean).join(' ')).join('\n')
+        : '';
+    const relations = Array.isArray(mem.relationships)
+        ? mem.relationships.map(r => [r.name, r.type, r.attitude].filter(Boolean).join(' ')).join('\n')
+        : '';
+    const edges = Array.isArray(mem.edges)
+        ? mem.edges.map(e => [e.toName || e.toId || e.to, e.distance, e.pathType || e.type, e.difficulty].filter(Boolean).join(' ')).join('\n')
+        : '';
     const text = [
         mem.title, mem.name, mem.summary, mem.content, mem.description,
         mem.event, mem.significance, mem.role, mem.personality,
-        mem.location, mem.region, mem.subject, mem.target, tags,
+        mem.location, mem.region, mem.subject, mem.target, threadEntries,
+        relations, edges, tags,
     ].filter(Boolean).join('\n').slice(0, 1200);
     if (!text) return null;
     try {
@@ -854,6 +864,16 @@ function parseMergedResponse(responseText) {
         console.warn('[BB-Memory] 合并响应JSON解析失败:', e.message, '前200字符:', text.slice(0, 200));
         return { npc: [], items: [], timeline: [], memories: [], locations: [], threads: [] };
     }
+}
+
+export async function attachEntryEmbedding(entry, options = {}) {
+    const settings = getSettings();
+    const force = options.force === true;
+    if (!entry || typeof entry !== 'object') return entry;
+    if (!settings.embeddingEnabled || !settings.embeddingEndpoint) return entry;
+    if (!force && Array.isArray(entry.embedding) && entry.embedding.length) return entry;
+    const embedding = await embedMemoryEntry(entry);
+    return embedding ? { ...entry, embedding } : entry;
 }
 
 function getStyleBias() {
@@ -1337,15 +1357,19 @@ async function saveInitialThreads(chatId, threads, sourceInfo, result) {
     if (!Array.isArray(threads) || threads.length === 0) return;
     const existing = await getTimelineThreads(chatId);
     const byName = new Map(existing.map(t => [(t.name || '').toLowerCase().trim(), t]).filter(([k]) => k));
+    const settings = getSettings();
+    const hasEmbedding = settings.embeddingEnabled && settings.embeddingEndpoint;
     for (const thread of threads) {
         if (!thread?.name) continue;
         const key = thread.name.toLowerCase().trim();
         const old = byName.get(key);
-        const data = { ...thread, ...sourceInfo };
+        const embedding = hasEmbedding ? await embedMemoryEntry(thread) : null;
+        const data = { ...thread, ...(embedding ? { embedding } : {}), ...sourceInfo };
         if (old) {
             data.id = old.id;
             data.summary = mergeTextField(old.summary, thread.summary);
             data.entries = Array.isArray(old.entries) && old.entries.length ? old.entries : (Array.isArray(thread.entries) ? thread.entries : []);
+            if (!data.embedding && old.embedding) data.embedding = old.embedding;
             await upsertTimelineThread(chatId, data);
             result.merged++;
         } else {
@@ -1625,6 +1649,10 @@ async function persistEntryEmbedding(chatId, collection, entry, embedding) {
             await updateLocation(chatId, entry.id, { embedding });
             break;
         }
+        case 'thread':
+        case 'threads':
+            await upsertTimelineThread(chatId, { id: entry.id, embedding });
+            break;
         case 'mem':
         default:
             await updateMemory(chatId, entry.id, { embedding });

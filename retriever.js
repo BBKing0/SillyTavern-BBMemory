@@ -511,8 +511,14 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
     const locById = new Map(locs.map(loc => [loc.id, loc]));
     const incoming = new Map(locs.map(loc => [loc.id, []]));
     const children = new Map(locs.map(loc => [loc.id, []]));
+    const regionGroups = new Map();
     for (const loc of locs) {
         if (loc.parentId && children.has(loc.parentId)) children.get(loc.parentId).push(loc);
+        const regionKey = String(loc.region || '').trim().toLowerCase();
+        if (regionKey) {
+            if (!regionGroups.has(regionKey)) regionGroups.set(regionKey, []);
+            regionGroups.get(regionKey).push(loc);
+        }
         for (const edge of (loc.edges || [])) {
             if (incoming.has(edge.toId)) incoming.get(edge.toId).push({ ...edge, fromId: loc.id });
         }
@@ -560,10 +566,12 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
             ...(children.get(loc.id) || []),
             ...(loc.edges || []).map(e => locById.get(e.toId)),
             ...(incoming.get(loc.id) || []).map(e => locById.get(e.fromId)),
+            ...(regionGroups.get(String(loc.region || '').trim().toLowerCase()) || []).filter(other => other.id !== loc.id),
         ].filter(Boolean);
         for (const neighbor of neighbors) {
             if (selectedMap.size >= maxLocations) break;
-            addSelected(neighbor, 'nearby');
+            const sameRegion = neighbor.region && loc.region && String(neighbor.region).trim().toLowerCase() === String(loc.region).trim().toLowerCase();
+            addSelected(neighbor, sameRegion ? 'same_region' : 'nearby');
         }
     }
 
@@ -590,7 +598,12 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
         const outEdges = (loc.edges || []).filter(e => locById.has(e.toId)).slice(0, 3);
         const inEdges = (incoming.get(loc.id) || []).slice(0, 3);
         const childNames = (children.get(loc.id) || []).slice(0, 4).map(child => child.name || child.id);
+        const sameRegionNames = (regionGroups.get(String(loc.region || '').trim().toLowerCase()) || [])
+            .filter(other => other.id !== loc.id)
+            .slice(0, 5)
+            .map(other => other.name || other.id);
         const mark = loc._bbMapInjectReason === 'resident' ? '★常驻' :
+                     loc._bbMapInjectReason === 'same_region' ? '同区域' :
                      loc._bbMapInjectReason === 'nearby' ? '周边' : '命中';
         const parts = [`◆ [${mark}] ${loc.name || loc.id}`];
         if (loc.region) parts.push(`区域:${loc.region}`);
@@ -606,6 +619,7 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
             relationLines.push('  入口来源: ' + inEdges.map(e => `${locById.get(e.fromId)?.name || e.fromId}${formatMapEdgeMeta(e)}`).join('；'));
         }
         if (childNames.length) relationLines.push('  子地点: ' + childNames.join('、'));
+        if (sameRegionNames.length) relationLines.push('  同区域地点: ' + sameRegionNames.join('、'));
         const chain = chainFor(loc);
         if (chain) relationLines.push('  局部空间链: ' + chain);
 

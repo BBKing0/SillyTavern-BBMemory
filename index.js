@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v8.9.5 主入口
+ * index.js —— BB-Memory v8.9.6 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 时间线 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -58,7 +58,6 @@ import { runHealthCheck, buildHealthCheckPanel } from './memory-health-check.js'
 
 import { openAssistant } from './memory-assistant.js';
 import { openMemoryManager } from './memory-manager.js';
-import { openMemoryInitializer } from './memory-initializer.js';
 import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot } from './memory-slots.js';
 
 // ═══ 常量 ═══
@@ -484,21 +483,21 @@ async function handleInitMemory(chatId, rangeStr = '') {
     }
 
     // 使用分阶段提取
-    const progressEl = createProgressToast('初始化记忆: 准备中...');
+    const progressEl = createProgressToast('手动提取: 准备中...');
 
     const updateProgress = (info) => {
-        if (progressEl) progressEl.textContent = `初始化记忆: ${info.progress || ''}`;
+        if (progressEl) progressEl.textContent = `手动提取: ${info.progress || ''}`;
     };
 
     const sourceInfo = typeof sourceFloor === 'number' ? { sourceFloor } : {};
     const results = await extractFromContext(chatId, contextText, { onProgress: updateProgress, sourceInfo });
 
     if (progressEl) {
-        progressEl.textContent = `初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 线程 ${results.threads || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`;
+        progressEl.textContent = `提取完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 线程 ${results.threads || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`;
         setTimeout(() => progressEl.remove(), 3000);
     }
 
-    showToast(`初始化完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 线程 ${results.threads || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
+    showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 线程 ${results.threads || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
     return results;
 }
 
@@ -529,6 +528,22 @@ function showToast(msg, type = 'info') {
         }
     } catch { /* ignore */ }
     showTopNotification(msg, type);
+}
+
+function showExternalInitializerNotice() {
+    const message = '请使用外置 html 转化工具进行记忆初始化';
+    try {
+        const ctx = SillyTavern.getContext();
+        if (typeof ctx.Popup?.show?.text === 'function') {
+            ctx.Popup.show.text('BB-Memory 初始化', message);
+            return;
+        }
+        if (typeof ctx.Popup?.show?.alert === 'function') {
+            ctx.Popup.show.alert('BB-Memory 初始化', message);
+            return;
+        }
+    } catch { /* ignore */ }
+    showToast(message, 'info');
 }
 
 // v8.0.0 顶部浮动通知（比 toastr 更显眼，用于重要操作反馈）
@@ -801,9 +816,7 @@ function bindSidebarEvents() {
         }
     });
     document.querySelector('#bb_init_memory_btn')?.addEventListener('click', async () => {
-        const chatId = getChatId();
-        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
-        openMemoryInitializer(chatId);
+        showExternalInitializerNotice();
     });
 
     // v5.5: 记忆管家 → 完整管理器
@@ -910,11 +923,12 @@ function bindSidebarEvents() {
         if (!chatId) return;
         if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 重建中...'; }
         try {
-            const [npc, items, timeline, memories, mapData] = await Promise.all([
+            const [npc, items, timeline, memories, threads, mapData] = await Promise.all([
                 getNpcProfiles(chatId),
                 getItems(chatId),
                 getTimeline(chatId),
                 getMemories(chatId),
+                getTimelineThreads(chatId),
                 getMap(chatId),
             ]);
             const collections = [
@@ -922,6 +936,7 @@ function bindSidebarEvents() {
                 { key: 'item', label: '物品', entries: items },
                 { key: 'timeline', label: '时间线', entries: timeline },
                 { key: 'mem', label: '记忆', entries: memories },
+                { key: 'threads', label: '时间线程', entries: threads },
                 { key: 'map', label: '地图', entries: Object.values(mapData?.locations || {}) },
             ];
             const totalResult = { total: 0, updated: 0, failed: 0 };
@@ -1519,11 +1534,8 @@ function registerSlashCommands() {
     };
 
     addCmd('bb-init', async (args) => {
-        const chatId = getChatId();
-        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
-        const range = (args && args.trim()) ? args.trim() : '';
-        openMemoryInitializer(chatId, { rangeStr: range });
-    }, '打开 BB-Memory 初始化工作台（可选参数: 楼层范围如 0-10）');
+        showExternalInitializerNotice();
+    }, '提示使用外置 HTML 转化工具进行 BB-Memory 初始化');
 
     addCmd('bb-backup', async () => {
         const chatId = getChatId();
@@ -2199,7 +2211,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v8.9.5 初始化开始...');
+    console.log('[BB-Memory] v8.9.6 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -2335,7 +2347,7 @@ async function init() {
     // v6.1: 监听消息删除，自动清理关联记忆
     initMessageDeletionWatch();
 
-    console.log('[BB-Memory] v8.9.5 初始化完成');
+    console.log('[BB-Memory] v8.9.6 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆

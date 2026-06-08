@@ -942,7 +942,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '8.9.5',
+        version: '8.9.6',
         timestamp: Date.now(),
         npc: [],
         items: [],
@@ -1063,7 +1063,7 @@ export async function exportMemoriesToChatMetadata(chatId) {
     ]);
 
     const backup = {
-        version: '8.9.5',
+        version: '8.9.6',
         timestamp: Date.now(),
         npc,
         items,
@@ -1758,7 +1758,7 @@ export async function exportMemories(chatId) {
         getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
         getTimelineThreads(chatId), getMap(chatId), getClueBoard(chatId),
     ]);
-    return JSON.stringify({ version: '8.9.5', npc, items, timeline, memories, threads, map, clueBoard }, null, 2);
+    return JSON.stringify({ version: '8.9.6', npc, items, timeline, memories, threads, map, clueBoard }, null, 2);
 }
 
 export async function importMemories(chatId, jsonString) {
