@@ -41,6 +41,7 @@ import {
 import {
     syncMessageVisibility, refreshExtractionMarkers,
     markExchangeExtracted, hideExchange, unmarkExchangeProcessed, computeExchangeHash,
+    getExtractionFloorStatus,
 } from './message-state.js';
 
 import { getClueBoard } from './clue-board.js';
@@ -300,6 +301,48 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+function recordActivity(type = 'info', title = '运行记录', message = '', details = '') {
+    try {
+        const s = getSettings();
+        const current = Array.isArray(s.activityLog) ? s.activityLog : [];
+        const entry = {
+            id: 'act_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6),
+            type,
+            title: String(title || '运行记录').slice(0, 60),
+            message: String(message || '').slice(0, 300),
+            details: details ? String(details).slice(0, 600) : '',
+            timestamp: Date.now(),
+        };
+        updateSettings({ activityLog: [entry, ...current].slice(0, 50) });
+    } catch { /* ignore */ }
+}
+
+globalThis.bbMemoryRecordActivity = recordActivity;
+
+function shouldRecordToast(msg, type) {
+    if (type === 'error' || type === 'warning' || type === 'success') return true;
+    return /提醒|完成|失败|跳过|清理|标记|提取|备份|恢复|维护|连接|初始化/.test(String(msg || ''));
+}
+
+function refreshExtractionFloorStatus() {
+    let status = null;
+    try {
+        status = getExtractionFloorStatus();
+    } catch { return null; }
+
+    const sidebar = document.getElementById('bb_sidebar_floor_status');
+    if (sidebar) {
+        sidebar.innerHTML = `<i class="fa-solid fa-layer-group"></i> 楼层状态：${escapeHtml(status.summary || '暂无可统计楼层')}`;
+    }
+
+    const hubLabel = document.getElementById('bb_hub_extract_label');
+    const hubRow = document.getElementById('bb_hub_extract_progress');
+    if (hubLabel && hubRow && !hubRow.dataset.busy) {
+        hubLabel.textContent = status.total ? status.compact : '空闲';
+    }
+    return status;
+}
+
 function getExtensionFolder() {
     // 从 import.meta.url 解析扩展目录路径，不依赖 ST 核心模块的静态导入
     try {
@@ -519,6 +562,9 @@ function createProgressToast(text) {
 }
 
 function showToast(msg, type = 'info') {
+    if (shouldRecordToast(msg, type)) {
+        recordActivity(type, type === 'error' ? '错误' : type === 'warning' ? '提醒' : type === 'success' ? '完成' : '通知', msg);
+    }
     // v8.2.7 fallback: toastr 不可用时用 showTopNotification
     try {
         const ctx = SillyTavern.getContext();
@@ -582,6 +628,7 @@ function showTopNotification(msg, type = 'info') {
 
 // v8.1.0 错误弹窗（提取/向量化失败时显示详细信息）
 function showErrorPopup(title, message, details = '') {
+    recordActivity('error', title || '错误', message || '未知错误', details);
     // 同时 toast
     try {
         const ctx = SillyTavern.getContext();
@@ -1712,6 +1759,7 @@ async function onChatChanged() {
     setTimeout(() => {
         syncMessageVisibility().catch(() => {});
         refreshExtractionMarkers();
+        refreshExtractionFloorStatus();
     }, 800);
 
     // v7.8.0 加载 per-chat 日历描述到 UI
@@ -1750,7 +1798,10 @@ function onNewMessage() {
     if (!getSettings().autoGenEnabled) {
         syncMessageVisibility().catch(() => {});
     }
-    setTimeout(() => refreshExtractionMarkers(), 300);
+    setTimeout(() => {
+        refreshExtractionMarkers();
+        refreshExtractionFloorStatus();
+    }, 300);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2256,6 +2307,7 @@ async function init() {
             const icon = hubRow.querySelector('i');
             const labelEl = document.getElementById('bb_hub_extract_label');
             if (isDone) {
+                delete hubRow.dataset.busy;
                 if (icon) {
                     icon.className = isFailed ? 'fa-solid fa-exclamation-triangle' : 'fa-solid fa-check-circle';
                     icon.style.color = isFailed ? '#f44336' : '#4caf50';
@@ -2270,10 +2322,12 @@ async function init() {
                     badge.style.borderRadius = isFailed ? '50%' : '';
                 }
             } else if (info.phase) {
+                hubRow.dataset.busy = '1';
                 if (icon) { icon.className = 'fa-solid fa-spinner fa-spin'; icon.style.color = ''; }
                 if (labelEl) labelEl.textContent = label;
                 if (badge) badge.style.display = 'none';
             } else {
+                delete hubRow.dataset.busy;
                 if (icon) { icon.className = 'fa-solid fa-moon'; icon.style.color = ''; }
                 if (labelEl) labelEl.textContent = '空闲';
                 if (badge) badge.style.display = 'none';
@@ -2299,6 +2353,7 @@ async function init() {
                 if (strong) strong.textContent = '空闲';
             }
         }
+        refreshExtractionFloorStatus();
 
         // 同步维护面板进度（如有打开）
         const maintOverlay = document.querySelector('.bb-maint-overlay');
@@ -2405,6 +2460,7 @@ function refreshSidebar() {
             const stats = await getMemoryStats(chatId);
             const el = document.querySelector('#bb_memory_count');
             if (el) el.textContent = stats.memories.total;
+            refreshExtractionFloorStatus();
         } catch { /* ignore */ }
     };
     updateCount();

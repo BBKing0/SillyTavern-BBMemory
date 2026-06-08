@@ -3186,9 +3186,12 @@
     font-size: 0.85em;
     opacity: 0.7;
     margin-top: 8px;
+    margin-bottom: 8px;
     padding: 6px 8px;
     border-radius: 4px;
     background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.05));
+    line-height: 1.45;
+    word-break: break-word;
 }
 
 .bb-floor-status strong {

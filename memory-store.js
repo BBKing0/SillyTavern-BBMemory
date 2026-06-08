@@ -88,6 +88,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // v8.2.3 API 预设配置
     apiProfiles: [],
     activeApiProfile: '',
+    activityLog: [],             // 最近提醒/报错/关键行为，供仪表盘展示
     // v8.6.0 记忆分类
     categories: [],              // 分类名称列表
     enabledCategories: {},       // { name: true/false } 每个分类的注入开关（空=全部显示）

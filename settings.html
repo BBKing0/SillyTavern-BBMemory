@@ -20,6 +20,9 @@
                 <i class="fa-solid fa-moon" style="font-size:0.85em;opacity:0.6;"></i>
                 <span style="font-size:0.85em;">提取状态: <strong>空闲</strong></span>
             </div>
+            <div class="bb-floor-status" id="bb_sidebar_floor_status">
+                楼层状态：暂无可统计楼层
+            </div>
 
             <!-- 快捷按钮 行1：核心操作 -->
             <div class="bb-mem-sidebar-buttons">
@@ -304,7 +307,7 @@
                         <label for="bb_context_window">上下文保留窗口（Exchange数）</label>
                         <input id="bb_context_window" type="number" class="bb-input" min="1" max="20" value="3" />
                     </div>
-                    <div class="bb-mem-hint">保留最近N个AI回复在上下文中，超出窗口的将被提取并隐藏。</div>
+                    <div class="bb-mem-hint">保留最近 N 个尚未提取的 AI 回复；第 N+1 个完整 exchange 会进入提取队列，完成后按显示设置隐藏或淡化。</div>
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_batch_extraction">并行提取数</label>

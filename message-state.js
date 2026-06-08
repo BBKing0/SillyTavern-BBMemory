@@ -52,6 +52,57 @@ function saveChat() {
     }
 }
 
+function isAiMessage(msg) {
+    return msg && !msg.is_user && !msg.is_system;
+}
+
+function findPreviousUser(chat, aiIndex) {
+    for (let j = aiIndex - 1; j >= 0; j--) {
+        if (chat[j]?.is_user && chat[j].mes) {
+            return { userIndex: j, userText: chat[j].mes || '' };
+        }
+    }
+    return { userIndex: -1, userText: '' };
+}
+
+function getOpeningContextIndices(chat, userIndex) {
+    if (userIndex <= 0) return [];
+    const indices = [];
+    for (let i = 0; i < userIndex; i++) {
+        const msg = chat[i];
+        if (!isAiMessage(msg) || !msg.mes) continue;
+        const prev = findPreviousUser(chat, i);
+        if (prev.userIndex === -1) indices.push(i);
+    }
+    return indices;
+}
+
+function formatFloorRanges(floors) {
+    const sorted = [...new Set(floors)]
+        .filter(n => Number.isInteger(n) && n >= 0)
+        .sort((a, b) => a - b);
+    if (!sorted.length) return '无';
+    const parts = [];
+    let start = sorted[0];
+    let prev = sorted[0];
+    for (let i = 1; i < sorted.length; i++) {
+        const n = sorted[i];
+        if (n === prev + 1) {
+            prev = n;
+            continue;
+        }
+        parts.push(start === prev ? String(start) : `${start}-${prev}`);
+        start = prev = n;
+    }
+    parts.push(start === prev ? String(start) : `${start}-${prev}`);
+    return parts.join('、');
+}
+
+function isExtractedLike(msg) {
+    return msg?._bbmem_extracted === true
+        || (msg?.is_hidden && msg?._bbmem_hideSource === 'plugin' && !msg?._bbmem_skipped && !msg?._bbmem_meta_marker);
+}
+
 // ═══════════════════════════════════════════════════════════
 //  Exchange 指纹（Hash）
 // ═══════════════════════════════════════════════════════════
@@ -140,8 +191,8 @@ export async function markExchangeProcessed(chatId, hash) {
  * v2.9.8: 扫描当前聊天，基于 exchange 窗口自动隐藏消息。
  *
  * 规则：
- *   - 从末尾向前数 N 个可见 exchange 保留，其余隐藏
- *   - index 0（角色问候语）永远不隐藏
+ *   - 从末尾向前数 N 个尚未处理的 exchange 保留，其余进入待提取队列
+ *   - 开场白不单独提取，会并入第一个用户+AI exchange 的上下文
  *   - 系统消息(is_system)跳过
  *   - 隐藏来源：_bbmem_hideSource='plugin'（插件隐藏）或 'user'（用户手动隐藏）
  *
@@ -156,12 +207,15 @@ export async function syncMessageVisibility(windowOverride) {
     const settings = getSettings();
     const windowExchanges = windowOverride ?? settings.contextWindowExchanges ?? 5;
 
-    // 从末尾反向计数 exchange（AI 消息），找到窗口截止位置
+    // 从末尾反向计数“尚未处理”的 AI 回复，找到窗口截止位置。
+    // 已提取 / 已跳过 / 元对话不再占用短期窗口，避免窗口被旧楼层卡住。
     let visibleExchangeCount = 0;
-    let cutoff = chat.length;
+    let cutoff = -1;
     for (let i = chat.length - 1; i >= 0; i--) {
         const msg = chat[i];
-        if (msg.is_user || msg.is_hidden) continue;
+        if (!isAiMessage(msg)) continue;
+        if (msg._bbmem_extracted || msg._bbmem_skipped || msg._bbmem_meta_marker) continue;
+        if (msg.is_hidden && msg._bbmem_hideSource === 'plugin') continue;
         visibleExchangeCount++;
         if (visibleExchangeCount >= windowExchanges) {
             cutoff = i;
@@ -169,14 +223,18 @@ export async function syncMessageVisibility(windowOverride) {
         }
     }
 
+    if (cutoff < 0) {
+        return { hiddenCount: 0, pendingCount: 0 };
+    }
+
     let hiddenCount = 0;
+    let pendingCount = 0;
     let changed = false;
 
-    // v6.3.0: 恢复批量标记 — 将窗口外的所有未处理消息标记为待提取
-    // 配合 processLatestExchange 的阈值检查，等攒够窗口数量后才开始提取
+    // 将窗口外的完整 exchange 标记为待提取；开场白不单独提取，会并入首个用户+AI exchange。
     for (let i = 0; i < cutoff; i++) {
         const msg = chat[i];
-        if (msg.is_system || msg.is_user) continue;
+        if (!isAiMessage(msg)) continue;
 
         if (msg._bbmem_skipped && !msg.is_hidden) {
             // 已跳过的消息超出窗口后自动隐藏
@@ -191,8 +249,10 @@ export async function syncMessageVisibility(windowOverride) {
             hiddenCount++;
             changed = true;
         } else if (!msg.is_hidden && !msg._bbmem_extracted && !msg._bbmem_pendingExtraction && !msg._bbmem_skipped) {
+            const prev = findPreviousUser(chat, i);
+            if (prev.userIndex === -1) continue;
             msg._bbmem_pendingExtraction = true;
-            hiddenCount++;
+            pendingCount++;
             changed = true;
         } else if (msg.is_hidden && !msg._bbmem_hideSource) {
             msg._bbmem_hideSource = 'user';
@@ -204,11 +264,11 @@ export async function syncMessageVisibility(windowOverride) {
         saveChat();
     }
 
-    if (hiddenCount > 0) {
-        console.log(`${LOG_TAG} 自动隐藏了 ${hiddenCount} 条消息（保留最近 ${windowExchanges} 个 exchange）`);
+    if (hiddenCount > 0 || pendingCount > 0) {
+        console.log(`${LOG_TAG} 楼层同步：标记待提取 ${pendingCount} 条，隐藏跳过/元对话 ${hiddenCount} 条（保留最近 ${windowExchanges} 个 exchange）`);
     }
 
-    return { hiddenCount };
+    return { hiddenCount, pendingCount };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -219,11 +279,11 @@ export async function syncMessageVisibility(windowOverride) {
  * 查找所有可以进入记忆提取流程的 exchange。
  *
  * 条件：
- *   1. AI 消息的 _bbmem_hideSource === 'plugin'（插件自动隐藏的）
+ *   1. AI 消息已被窗口同步标记为 _bbmem_pendingExtraction
  *   2. AI 消息的 _bbmem_extracted !== true（还没被提取过）
  *   3. exchange 的指纹不在已处理集合中
  *
- * 每个 exchange = AI 回复 + 它前面最近的一条用户消息
+ * 每个 exchange = AI 回复 + 它前面最近的一条用户消息；开场白会作为首个 exchange 的额外上下文。
  *
  * @returns {Promise<Array<{
  *   userMessage: string,
@@ -243,6 +303,7 @@ export async function getExtractableExchanges() {
 
     const processedSet = await getProcessedSet(chatId);
     const exchanges = [];
+    let changed = false;
 
     for (let i = 0; i < chat.length; i++) {
         const msg = chat[i];
@@ -256,16 +317,20 @@ export async function getExtractableExchanges() {
         // v2.9.8: 元标记消息跳过
         if (msg._bbmem_meta_marker) continue;
 
-        // 向前找最近的用户消息，组成 exchange
-        let userText = '';
-        let userIndex = -1;
-        for (let j = i - 1; j >= 0; j--) {
-            if (chat[j].is_user && chat[j].mes) {
-                userText = chat[j].mes;
-                userIndex = j;
-                break;
-            }
+        // 向前找最近的用户消息，组成 exchange；没有用户消息的开场白不单独提取。
+        const { userIndex, userText } = findPreviousUser(chat, i);
+        if (userIndex === -1) {
+            delete msg._bbmem_pendingExtraction;
+            changed = true;
+            continue;
         }
+
+        const openingIndices = getOpeningContextIndices(chat, userIndex)
+            .filter(idx => !chat[idx]?._bbmem_extracted && !chat[idx]?._bbmem_skipped && !chat[idx]?._bbmem_meta_marker);
+        const openingText = openingIndices
+            .map(idx => `【开场白 ${idx}楼】${chat[idx].mes || ''}`)
+            .join('\n');
+        const userMessage = openingText ? `${openingText}\n\n${userText}` : userText;
 
         const aiText = msg.mes || '';
         const hash = computeExchangeHash(userText, aiText);
@@ -273,18 +338,26 @@ export async function getExtractableExchanges() {
         // 指纹已存在 → 跳过（标记为已提取以加速后续扫描）
         if (processedSet.has(hash)) {
             msg._bbmem_extracted = true;
+            delete msg._bbmem_pendingExtraction;
+            if (chat[userIndex]) chat[userIndex]._bbmem_extracted = true;
+            for (const idx of openingIndices) {
+                if (chat[idx]) chat[idx]._bbmem_extracted = true;
+            }
+            changed = true;
             continue;
         }
 
         exchanges.push({
-            userMessage: userText,
+            userMessage,
             aiMessage: aiText,
             hash,
             userIndex,
             aiIndex: i,
+            extraIndices: openingIndices,
         });
     }
 
+    if (changed) saveChat();
     return exchanges;
 }
 
@@ -293,7 +366,7 @@ export async function getExtractableExchanges() {
  *   - 在 AI 消息对象上设置 _bbmem_extracted = true
  *   - 将 hash 加入已处理集合
  */
-export async function markExchangeExtracted(userIndex, aiIndex, hash) {
+export async function markExchangeExtracted(userIndex, aiIndex, hash, extraIndices = []) {
     const chatId = getChatId();
     if (!chatId) return;
 
@@ -304,21 +377,22 @@ export async function markExchangeExtracted(userIndex, aiIndex, hash) {
     const displayMode = settings.extractedMsgDisplay || 'hidden';
 
     if (chat) {
-        if (chat[aiIndex]) {
-            chat[aiIndex]._bbmem_extracted = true;
-            delete chat[aiIndex]._bbmem_pendingExtraction;
-            chat[aiIndex]._bbmem_exchangeHash = hash;
-            if (displayMode === 'hidden' && !chat[aiIndex].is_hidden) {
-                chat[aiIndex].is_hidden = true;
-                chat[aiIndex]._bbmem_hideSource = 'plugin';
-            } else if (displayMode !== 'hidden') {
-                chat[aiIndex].is_hidden = false;
+        const markExtracted = (idx, forceVisibleWhenNeeded = false) => {
+            if (!chat[idx]) return;
+            chat[idx]._bbmem_extracted = true;
+            delete chat[idx]._bbmem_pendingExtraction;
+            delete chat[idx]._bbmem_skipped;
+            chat[idx]._bbmem_exchangeHash = hash;
+            if (displayMode === 'hidden' && !chat[idx].is_hidden) {
+                chat[idx].is_hidden = true;
+                chat[idx]._bbmem_hideSource = 'plugin';
+            } else if (forceVisibleWhenNeeded && displayMode !== 'hidden') {
+                chat[idx].is_hidden = false;
             }
-        }
-        if (chat[userIndex] && displayMode === 'hidden' && !chat[userIndex].is_hidden) {
-            chat[userIndex].is_hidden = true;
-            chat[userIndex]._bbmem_hideSource = 'plugin';
-        }
+        };
+        markExtracted(aiIndex, true);
+        markExtracted(userIndex, false);
+        for (const idx of extraIndices || []) markExtracted(idx, true);
         saveChat();
     }
 
@@ -331,7 +405,7 @@ export async function markExchangeExtracted(userIndex, aiIndex, hash) {
  *   - hash 加入已处理集合，避免反复请求 AI
  *   - 保留元对话标记，用户取消标记后可重新入队
  */
-export async function markExchangeMetaSkipped(userIndex, aiIndex, hash, reason = 'auto') {
+export async function markExchangeMetaSkipped(userIndex, aiIndex, hash, reason = 'auto', extraIndices = []) {
     const chatId = getChatId();
     if (!chatId) return;
 
@@ -341,26 +415,77 @@ export async function markExchangeMetaSkipped(userIndex, aiIndex, hash, reason =
     const displayMode = settings.extractedMsgDisplay || 'hidden';
 
     if (chat) {
-        if (chat[aiIndex]) {
-            chat[aiIndex]._bbmem_meta_marker = true;
-            chat[aiIndex]._bbmem_meta_reason = reason;
-            chat[aiIndex]._bbmem_skipped = true;
-            chat[aiIndex]._bbmem_extracted = false;
-            delete chat[aiIndex]._bbmem_pendingExtraction;
-            chat[aiIndex]._bbmem_exchangeHash = hash;
-            if (displayMode === 'hidden') {
-                chat[aiIndex].is_hidden = true;
-                chat[aiIndex]._bbmem_hideSource = 'plugin';
+        const markSkipped = (idx, markMeta = false) => {
+            if (!chat[idx]) return;
+            if (markMeta) {
+                chat[idx]._bbmem_meta_marker = true;
+                chat[idx]._bbmem_meta_reason = reason;
             }
-        }
-        if (chat[userIndex] && displayMode === 'hidden') {
-            chat[userIndex].is_hidden = true;
-            chat[userIndex]._bbmem_hideSource = 'plugin';
-        }
+            chat[idx]._bbmem_skipped = true;
+            chat[idx]._bbmem_extracted = false;
+            delete chat[idx]._bbmem_pendingExtraction;
+            chat[idx]._bbmem_exchangeHash = hash;
+            if (displayMode === 'hidden') {
+                chat[idx].is_hidden = true;
+                chat[idx]._bbmem_hideSource = 'plugin';
+            }
+        };
+        markSkipped(aiIndex, true);
+        markSkipped(userIndex, false);
+        for (const idx of extraIndices || []) markSkipped(idx, false);
         saveChat();
     }
 
     await markExchangeProcessed(chatId, hash);
+}
+
+export function getExtractionFloorStatus() {
+    const ctx = getContext();
+    const chat = ctx.chat || [];
+    const extracted = [];
+    const pending = [];
+    const skipped = [];
+    const meta = [];
+    const unextracted = [];
+
+    for (let i = 0; i < chat.length; i++) {
+        const msg = chat[i];
+        if (!msg || msg.is_system) continue;
+        if (msg._bbmem_meta_marker) {
+            meta.push(i);
+        } else if (msg._bbmem_skipped) {
+            skipped.push(i);
+        } else if (msg._bbmem_pendingExtraction && !msg._bbmem_extracted) {
+            pending.push(i);
+        } else if (isExtractedLike(msg)) {
+            extracted.push(i);
+        } else {
+            unextracted.push(i);
+        }
+    }
+
+    const parts = [];
+    parts.push(`已提取楼层 ${formatFloorRanges(extracted)}`);
+    if (pending.length) parts.push(`正在提取楼层 ${formatFloorRanges(pending)}`);
+    if (unextracted.length) parts.push(`未提取楼层 ${formatFloorRanges(unextracted)}`);
+    if (meta.length) parts.push(`元对话楼层 ${formatFloorRanges(meta)}`);
+    if (skipped.length) parts.push(`已跳过楼层 ${formatFloorRanges(skipped)}`);
+
+    return {
+        total: extracted.length + pending.length + skipped.length + meta.length + unextracted.length,
+        extracted,
+        pending,
+        skipped,
+        meta,
+        unextracted,
+        extractedText: formatFloorRanges(extracted),
+        pendingText: formatFloorRanges(pending),
+        skippedText: formatFloorRanges(skipped),
+        metaText: formatFloorRanges(meta),
+        unextractedText: formatFloorRanges(unextracted),
+        summary: parts.join('；'),
+        compact: `已提取 ${extracted.length} / 待提取 ${pending.length} / 未提取 ${unextracted.length}`,
+    };
 }
 
 /**

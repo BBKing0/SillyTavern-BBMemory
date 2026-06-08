@@ -554,6 +554,12 @@ function reportProgress(phase, current, total, text) {
     }
 }
 
+function formatFloorList(indices) {
+    return [...new Set(indices.filter(n => Number.isInteger(n) && n >= 0))]
+        .sort((a, b) => a - b)
+        .join(', ');
+}
+
 // ═══ 获取 chatId ═══
 
 function getChatId() {
@@ -1039,6 +1045,11 @@ async function callMergedExtraction(chatId, userMessage, aiMessage) {
 function notifyMetaDialogueFloor(aiIndex) {
     const msg = `[BB-Memory] 检测到第 ${aiIndex} 楼为纯元对话楼层，已选择不提取`;
     try {
+        if (typeof globalThis.bbMemoryRecordActivity === 'function') {
+            globalThis.bbMemoryRecordActivity('warning', '纯元对话跳过', `检测到第 ${aiIndex} 楼为纯元对话楼层，已选择不提取`);
+        }
+    } catch { /* ignore */ }
+    try {
         const ctx = SillyTavern.getContext();
         if (typeof ctx.toastr?.warning === 'function') {
             ctx.toastr.warning(msg, '', { timeOut: 3500 });
@@ -1161,14 +1172,14 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
         reportProgress('merged', 4, 5, '正在汇总结果...');
         console.log('[BB-Memory] 合并提取: NPC' + results.npc.length + '/物品' + results.items.length + '/时间线' + results.timeline.length + '/线程' + (results.threads || []).length + '/记忆' + limited.length + ' (保存' + total + '条)');
         reportProgress('merged', 5, 5, '提取完成');
-        return total;
+        return { total };
     } catch (e) {
         console.warn('[BB-Memory] 合并提取失败:', e.message);
         reportProgress('merged', 5, 5, '提取失败: ' + (e.message || '未知错误'));
         if (typeof globalThis.bbShowErrorPopup === 'function') {
             globalThis.bbShowErrorPopup('AI 提取失败', e.message || '未知错误', '端点: ' + (getSettings().autoGenMode === 'custom' ? (getSettings().autoGenEndpoint || '未配置') : '主 API'));
         }
-        return 0;
+        return { failed: true, error: e.message || '未知错误', total: 0 };
     }
 }
 
@@ -1186,11 +1197,7 @@ async function processLatestExchange(chatId) {
     const exchanges = await getExtractableExchanges();
     if (!exchanges.length) return;
 
-    // v6.3.0: 恢复阈值检查 — 等攒够窗口数量的待提取 exchange 后才开始提取
-    const minPending = settings.contextWindowExchanges ?? 3;
-    if (exchanges.length < minPending) return;
-
-    // v8.0.0 批量提取：每次取 batchExtractionCount 个 exchange，并行请求 API
+    // v8.0.0 批量提取：窗口外有完整 exchange 就立即处理；batchExtractionCount 控制并行数量。
     const batchCount = Math.min(settings.batchExtractionCount || 1, exchanges.length);
     const batch = exchanges.slice(0, batchCount);
 
@@ -1209,7 +1216,7 @@ async function processLatestExchange(chatId) {
                     const { isMetaDialogue, results } = await callMergedExtraction(chatId, ex.userMessage, ex.aiMessage);
                     if (isMetaDialogue || !results) {
                         console.log('[BB-Memory] Active模式检测到纯元对话，跳过');
-                        await markExchangeMetaSkipped(ex.userIndex, ex.aiIndex, ex.hash, 'auto');
+                        await markExchangeMetaSkipped(ex.userIndex, ex.aiIndex, ex.hash, 'auto', ex.extraIndices);
                         notifyMetaDialogueFloor(ex.aiIndex);
                         continue;
                     }
@@ -1244,6 +1251,9 @@ async function processLatestExchange(chatId) {
                 } catch (e) {
                     console.warn('[BB-Memory] Active模式单个 exchange 提取失败:', e.message);
                     lastExtractFailedFloor = ex.aiIndex;
+                    if (typeof globalThis.bbMemoryRecordActivity === 'function') {
+                        globalThis.bbMemoryRecordActivity('error', '自动提取失败', `第 ${ex.aiIndex} 楼提取失败：${e.message || '未知错误'}`);
+                    }
                 }
             }
         } else {
@@ -1260,14 +1270,24 @@ async function processLatestExchange(chatId) {
                     const result = await extractMergedStage(chatId, ex.userMessage, ex.aiMessage, sourceInfo);
                     if (result && result.isMetaDialogue) {
                         console.log('[BB-Memory] 并行提取：检测到纯元对话，跳过');
-                        await markExchangeMetaSkipped(ex.userIndex, ex.aiIndex, ex.hash, 'auto');
+                        await markExchangeMetaSkipped(ex.userIndex, ex.aiIndex, ex.hash, 'auto', ex.extraIndices);
                         notifyMetaDialogueFloor(ex.aiIndex);
+                        return null;
+                    }
+                    if (result && result.failed) {
+                        lastExtractFailedFloor = ex.aiIndex;
+                        if (typeof globalThis.bbMemoryRecordActivity === 'function') {
+                            globalThis.bbMemoryRecordActivity('error', '自动提取失败', `第 ${ex.aiIndex} 楼提取失败：${result.error || '未知错误'}`);
+                        }
                         return null;
                     }
                     return ex;
                 } catch (e) {
                     console.warn('[BB-Memory] 并行提取单个 exchange 失败:', e.message);
                     lastExtractFailedFloor = ex.aiIndex;  // v8.2.1 记录失败楼层供悬浮球重试
+                    if (typeof globalThis.bbMemoryRecordActivity === 'function') {
+                        globalThis.bbMemoryRecordActivity('error', '自动提取失败', `第 ${ex.aiIndex} 楼提取失败：${e.message || '未知错误'}`);
+                    }
                     return null;
                 }
             });
@@ -1287,7 +1307,11 @@ async function processLatestExchange(chatId) {
 
     // v8.0.0 批量标记所有成功处理的 exchange
     for (const ex of succeeded) {
-        await markExchangeExtracted(ex.userIndex, ex.aiIndex, ex.hash);
+        await markExchangeExtracted(ex.userIndex, ex.aiIndex, ex.hash, ex.extraIndices);
+    }
+    if (succeeded.length && typeof globalThis.bbMemoryRecordActivity === 'function') {
+        const floors = succeeded.flatMap(ex => [...(ex.extraIndices || []), ex.userIndex, ex.aiIndex]);
+        globalThis.bbMemoryRecordActivity('success', '自动提取完成', `已处理楼层 ${formatFloorList(floors)}，共 ${succeeded.length} 个 exchange`);
     }
 
     // v6.7.0: 线程自动更新检测（按成功处理的 exchange 数计数）

@@ -20,7 +20,7 @@ import { simpleSearch } from './retriever.js';
 import { MEMORY_TYPES, TRUTH_STATUS, HIDDEN_NOTE_TYPES, TIMELINE_STATUS, ITEM_STATUS } from './memory-types.js';
 import { NPC_TIERS, ITEM_TIERS, normalizeNpcTier, normalizeItemTier } from './entity-tiers.js';
 import { extractFromContext, saveExtractedMemories, attachEntryEmbedding } from './auto-generator.js';
-import { markExchangeExtracted, hideExchange, unmarkExchangeProcessed } from './message-state.js';
+import { markExchangeExtracted, hideExchange, unmarkExchangeProcessed, getExtractionFloorStatus } from './message-state.js';
 import { fuzzyMemory, archiveMemory, restoreMemory } from './memory-maintainer.js';
 
 // ═══ 全局状态 ═══
@@ -1866,6 +1866,16 @@ async function renderDashboardPanel(overlay, chatId) {
             return `${Math.floor(diff / 86400000)}天前`;
         };
 
+        let floorStatus = null;
+        try { floorStatus = getExtractionFloorStatus(); } catch { /* ignore */ }
+        const activityLog = (getSettings().activityLog || []).slice(0, 8);
+        const activityMeta = {
+            error: { icon: 'fa-circle-exclamation', color: '#f44336', label: '错误' },
+            warning: { icon: 'fa-triangle-exclamation', color: '#ff9800', label: '提醒' },
+            success: { icon: 'fa-circle-check', color: '#4caf50', label: '完成' },
+            info: { icon: 'fa-circle-info', color: '#4fc3f7', label: '通知' },
+        };
+
         contentEl.innerHTML = `
             <div style="padding:12px 18px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:12px;">
                 <div class="bb-dash-stat-card" style="background:var(--SmartThemeBlurTintColor, rgba(255,255,255,0.04));border-radius:8px;padding:10px;text-align:center;border-left:3px solid #ba68c8;">
@@ -1888,6 +1898,31 @@ async function renderDashboardPanel(overlay, chatId) {
                     <div style="font-size:0.8em;opacity:0.7;">记忆条目</div>
                     <div style="font-size:0.7em;opacity:0.5;">核心${stats.memories?.byTier?.core || 0} / 稳固${stats.memories?.byTier?.stable || 0}</div>
                 </div>
+            </div>
+
+            <div style="padding:0 18px;margin-bottom:12px;">
+                <h4 style="margin:0 0 8px;font-size:0.9em;"><i class="fa-solid fa-layer-group"></i> 提取状态</h4>
+                <div style="padding:8px 10px;background:var(--SmartThemeBlurTintColor, rgba(255,255,255,0.04));border:1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.08));border-radius:8px;font-size:0.82em;line-height:1.5;">
+                    ${floorStatus ? escapeHtml(floorStatus.summary) : '暂无可统计楼层'}
+                </div>
+            </div>
+
+            <div style="padding:0 18px;margin-bottom:12px;">
+                <h4 style="margin:0 0 8px;font-size:0.9em;"><i class="fa-solid fa-clipboard-list"></i> 运行记录</h4>
+                ${activityLog.length ? activityLog.map(e => {
+                    const meta = activityMeta[e.type] || activityMeta.info;
+                    return `<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;font-size:0.82em;border-bottom:1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.05));">
+                        <i class="fa-solid ${meta.icon}" style="color:${meta.color};font-size:0.85em;margin-top:2px;"></i>
+                        <div style="flex:1;min-width:0;">
+                            <div style="display:flex;gap:6px;align-items:center;">
+                                <span style="font-size:0.72em;color:${meta.color};">${meta.label}</span>
+                                <strong style="font-size:0.9em;">${escapeHtml(e.title || meta.label)}</strong>
+                                <span style="margin-left:auto;opacity:0.4;font-size:0.78em;white-space:nowrap;">${timeAgo(e.timestamp)}</span>
+                            </div>
+                            ${e.message ? `<div style="opacity:0.68;word-break:break-word;">${escapeHtml(e.message)}</div>` : ''}
+                        </div>
+                    </div>`;
+                }).join('') : '<div style="opacity:0.4;font-size:0.8em;">暂无提醒或错误</div>'}
             </div>
 
             <div style="padding:0 18px;">

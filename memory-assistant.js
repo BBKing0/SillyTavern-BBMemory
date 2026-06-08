@@ -10,9 +10,10 @@ import {
     getNpcProfiles, getItems, getTimeline, getMemories,
     removeNpcProfile, removeItem, removeTimelineEntry, removeMemory,
     updateNpcProfile, updateItem, updateTimelineEntry, updateMemory,
-    addTimelineEntry, getMemoryStats,
+    addTimelineEntry, getMemoryStats, getSettings,
 } from './memory-store.js';
 import { simpleSearch } from './retriever.js';
+import { getExtractionFloorStatus } from './message-state.js';
 
 // ═══════════════════════════════════════════════════════════
 //  窗口管理
@@ -98,6 +99,18 @@ function buildDashboardHTML(npc, items, timeline, memories) {
     const itemTiers = byTier(items);
     const tlTiers = byTier(timeline);
     const memTiers = byTier(memories);
+    let floorStatus = null;
+    try { floorStatus = getExtractionFloorStatus(); } catch { /* ignore */ }
+    const activityLog = (getSettings().activityLog || []).slice(0, 5);
+    const timeAgo = (ts) => {
+        if (!ts) return '';
+        const diff = Date.now() - ts;
+        if (diff < 60000) return '刚刚';
+        if (diff < 3600000) return `${Math.floor(diff / 60000)}分钟前`;
+        if (diff < 86400000) return `${Math.floor(diff / 3600000)}小时前`;
+        return `${Math.floor(diff / 86400000)}天前`;
+    };
+    const activityColor = { error: '#f44336', warning: '#ff9800', success: '#4caf50', info: '#4fc3f7' };
 
     return `<div class="bb-dashboard">
         <div class="bb-dash-cards">
@@ -117,6 +130,20 @@ function buildDashboardHTML(npc, items, timeline, memories) {
                 <div class="bb-dash-num">${memories.length}</div><div>记忆条目</div>
                 <div class="bb-dash-detail">核心:${memTiers.core} 稳定:${memTiers.stable} 瞬时:${memTiers.transient}</div>
             </div>
+        </div>
+        <div class="bb-dash-recent">
+            <h4>提取状态</h4>
+            <div class="bb-dash-mem-item">
+                <span>${escapeHtml(floorStatus?.summary || '暂无可统计楼层')}</span>
+            </div>
+        </div>
+        <div class="bb-dash-recent">
+            <h4>运行记录</h4>
+            ${activityLog.length ? activityLog.map(e => `<div class="bb-dash-mem-item">
+                <span style="color:${activityColor[e.type] || activityColor.info}">${escapeHtml(e.title || '记录')}</span>
+                <span>${escapeHtml(e.message || '').slice(0, 80)}</span>
+                <span class="bb-dash-mem-tier">${timeAgo(e.timestamp)}</span>
+            </div>`).join('') : '<div class="bb-dash-mem-item"><span>暂无提醒或错误</span></div>'}
         </div>
         <div class="bb-dash-recent">
             <h4>最近记忆</h4>
