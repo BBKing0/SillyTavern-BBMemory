@@ -14,7 +14,7 @@ import {
     getTimelineThreads, saveTimelineThreads, upsertTimelineThread, removeTimelineThread,
     getMemories, addMemory, updateMemory, removeMemory,
     clearAllData, deleteByExchange, getMemoryStats, refreshAllSourceFloors,
-    exportMemoriesToChatMetadata, importMemoriesFromChatMetadata,
+    exportMemoriesToChatMetadata, importMemoriesFromChatMetadata, cleanupChatMetadataBloat,
     migrateV4ToV5, recordHits, checkDemotions,
     exportMemories, importMemories, updateFactContent, addHiddenNote, removeHiddenNote,
     scheduleAutoBackup,
@@ -724,7 +724,7 @@ function bindSidebarEvents() {
         if (!el) return;
         const enabled = getSettings().autoBackupEnabled;
         el.innerHTML = enabled
-            ? '<i class="fa-solid fa-circle" style="color:#4caf50;"></i> 自动备份已开启（5秒防抖）'
+            ? '<i class="fa-solid fa-circle" style="color:#4caf50;"></i> 自动备份已开启（30秒防抖，超限会跳过）'
             : '<i class="fa-solid fa-circle" style="color:#ff9800;"></i> 自动备份已关闭';
     };
     document.querySelector('#bb_auto_backup_enabled')?.addEventListener('change', updateAutoBackupStatus);
@@ -795,6 +795,7 @@ function bindSidebarEvents() {
     bindSelect('#bb_maintenance_mode', 'maintenanceMode');
     bindInput('#bb_diversity_limit', 'diversityLimitPerTag', 'number');
     bindInput('#bb_max_active_threads', 'maxActiveThreads', 'number');
+    bindInput('#bb_chat_metadata_backup_max_kb', 'chatMetadataBackupMaxKb', 'number');
     bindInput('#bb_health_check_duplicate_threshold', 'healthCheckDuplicateThreshold', 'number');
     bindInput('#bb_health_check_isolation_threshold', 'healthCheckIsolationThreshold', 'number');
     bindInput('#bb_health_check_stale_days', 'healthCheckStaleDays', 'number');
@@ -834,7 +835,11 @@ function bindSidebarEvents() {
         this.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 备份中...';
         try {
             const result = await exportMemoriesToChatMetadata(chatId);
-            showToast(`备份完成：${result.count} 条 (${(result.size/1024).toFixed(1)}KB) → 已保存到服务器`, 'success');
+            if (result.skipped) {
+                showToast(`备份已跳过：${(result.size / 1024).toFixed(1)}KB 超过上限 ${(result.limit / 1024).toFixed(0)}KB，请使用本地 JSON 导出`, 'warning');
+            } else {
+                showToast(`备份完成：${result.count} 条 (${(result.size / 1024).toFixed(1)}KB) → 已保存到服务器`, 'success');
+            }
         } catch (e) {
             showToast(`备份失败: ${e.message}`, 'error');
         } finally {
@@ -1588,7 +1593,11 @@ function registerSlashCommands() {
         const chatId = getChatId();
         if (!chatId) return;
         const result = await exportMemoriesToChatMetadata(chatId);
-        showToast(`备份完成：${result.count} 条 (${(result.size/1024).toFixed(1)}KB)`, 'success');
+        if (result.skipped) {
+            showToast(`备份已跳过：${(result.size / 1024).toFixed(1)}KB 超过上限 ${(result.limit / 1024).toFixed(0)}KB，请使用本地 JSON 导出`, 'warning');
+        } else {
+            showToast(`备份完成：${result.count} 条 (${(result.size / 1024).toFixed(1)}KB)`, 'success');
+        }
     }, '手动备份记忆到服务器');
 
     addCmd('bb-restore', async () => {
@@ -2227,7 +2236,7 @@ async function handleFloatingMenuAction(action) {
                 const slotName = getSettings().currentSlotName || 'default';
                 const result = await saveToSlot(charId, chatId, slotName);
                 const count = typeof result === 'object' ? result.count : result;
-                const cloudTip = result?.cloudSynced ? '，云端同步已提交' : '（本地已保存，云端同步不可用）';
+                const cloudTip = result?.cloudSynced ? '，云端索引已更新（完整数据保留在本地）' : '（本地已保存，云端索引不可用）';
                 showTopNotification(`已保存 ${count} 条到「${slotName}」${cloudTip}`, result?.cloudSynced ? 'success' : 'warning');
                 setTimeout(() => refreshFloatingHubData(), 300);
             } catch (e) {
@@ -2279,6 +2288,11 @@ async function init() {
 
     // 确保默认设置
     getSettings();
+    cleanupChatMetadataBloat().then(result => {
+        if (result?.removed && getSettings().debugLogging) {
+            console.log(`[BB-Memory] Cleaned ${result.removed} legacy slot payload(s) from chatMetadata (${(result.size / 1024).toFixed(1)}KB).`);
+        }
+    }).catch(() => {});
 
     // 挂载设置面板
     try {

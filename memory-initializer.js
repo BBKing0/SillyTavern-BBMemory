@@ -888,7 +888,7 @@ function stripDraftIds(draft) {
 }
 
 function exportDraft() {
-    const json = JSON.stringify(stripDraftIds(state.draft), null, 2);
+    const json = JSON.stringify(stripDraftIds(state.draft));
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');

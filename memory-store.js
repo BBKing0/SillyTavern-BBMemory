@@ -84,6 +84,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     maxActiveThreads: 5,               // v6.7.0 活跃线程最大注入数
     // 自动备份
     autoBackupEnabled: false,
+    chatMetadataBackupMaxKb: 2048,
     lastBackupTimestamp: 0,
     // v8.2.3 API 预设配置
     apiProfiles: [],
@@ -953,8 +954,7 @@ export async function clearAllData(chatId) {
         map: { locations: {} },
         clueBoard: { nodes: [], connections: [] },
     });
-    if (typeof ctx.saveChatDebounced === 'function') ctx.saveChatDebounced();
-    else if (typeof ctx.saveChat === 'function') ctx.saveChat();
+    await saveChatMetadata(ctx);
 }
 
 /**
@@ -1047,6 +1047,98 @@ export async function getMemoryStats(chatId) {
 // ═══════════════════════════════════════════════════════════
 
 const BACKUP_METADATA_KEY = 'bb_memory_v5_backup';
+const LEGACY_SLOT_DATA_PREFIX = 'bb_memory_slot_data_';
+const MIN_CHAT_METADATA_BACKUP_KB = 128;
+const MAX_CHAT_METADATA_BACKUP_KB = 8192;
+
+function getChatMetadataBackupLimit() {
+    const configured = Number(getSettings().chatMetadataBackupMaxKb);
+    const kb = Number.isFinite(configured) && configured > 0 ? configured : 2048;
+    return Math.max(MIN_CHAT_METADATA_BACKUP_KB, Math.min(MAX_CHAT_METADATA_BACKUP_KB, kb)) * 1024;
+}
+
+function countBackupEntries(backup) {
+    const mapCount = Object.keys(backup.map?.locations || {}).length;
+    const clueCount = Array.isArray(backup.clueBoard?.nodes) ? backup.clueBoard.nodes.length : 0;
+    return (backup.npc?.length || 0)
+        + (backup.items?.length || 0)
+        + (backup.timeline?.length || 0)
+        + (backup.memories?.length || 0)
+        + (backup.threads?.length || 0)
+        + mapCount
+        + clueCount;
+}
+
+function stripEmbedding(entry) {
+    if (!entry || typeof entry !== 'object') return entry;
+    const copy = { ...entry };
+    delete copy.embedding;
+    return copy;
+}
+
+function stripEmbeddings(entries) {
+    return Array.isArray(entries) ? entries.map(stripEmbedding) : [];
+}
+
+function stripMapEmbeddings(map) {
+    if (!map || typeof map !== 'object') return map;
+    if (!map.locations || typeof map.locations !== 'object') return map;
+    const locations = {};
+    for (const [id, loc] of Object.entries(map.locations)) {
+        locations[id] = stripEmbedding(loc);
+    }
+    return { ...map, locations };
+}
+
+function purgeLegacySlotDataFromChatMetadata(ctx) {
+    if (!ctx?.chatMetadata) return { removed: 0, size: 0 };
+    let removed = 0;
+    let size = 0;
+    for (const key of Object.keys(ctx.chatMetadata)) {
+        if (!key.startsWith(LEGACY_SLOT_DATA_PREFIX)) continue;
+        const raw = ctx.chatMetadata[key];
+        size += typeof raw === 'string' ? raw.length : 0;
+        delete ctx.chatMetadata[key];
+        removed++;
+    }
+    return { removed, size };
+}
+
+async function saveChatMetadata(ctx) {
+    if (!ctx) return false;
+    if (typeof ctx.saveMetadataDebounced === 'function') {
+        ctx.saveMetadataDebounced();
+        return true;
+    }
+    if (typeof ctx.saveMetadata === 'function') {
+        await Promise.resolve(ctx.saveMetadata());
+        return true;
+    }
+    if (typeof ctx.saveChatDebounced === 'function') {
+        ctx.saveChatDebounced();
+        return true;
+    }
+    if (typeof ctx.saveChat === 'function') {
+        await Promise.resolve(ctx.saveChat());
+        return true;
+    }
+    return false;
+}
+
+export async function cleanupChatMetadataBloat() {
+    const ctx = getContext();
+    const cleanup = purgeLegacySlotDataFromChatMetadata(ctx);
+    const backup = ctx.chatMetadata?.[BACKUP_METADATA_KEY];
+    const limit = getChatMetadataBackupLimit();
+    if (typeof backup === 'string' && backup.length > limit) {
+        cleanup.removed++;
+        cleanup.size += backup.length;
+        cleanup.backupRemoved = true;
+        delete ctx.chatMetadata[BACKUP_METADATA_KEY];
+    }
+    if (cleanup.removed > 0) await saveChatMetadata(ctx);
+    return cleanup;
+}
 
 export async function exportMemoriesToChatMetadata(chatId) {
     const [{ getMap }, { getClueBoard }] = await Promise.all([
@@ -1066,12 +1158,12 @@ export async function exportMemoriesToChatMetadata(chatId) {
     const backup = {
         version: '8.9.6',
         timestamp: Date.now(),
-        npc,
-        items,
-        timeline,
-        memories,
-        threads,
-        map,
+        npc: stripEmbeddings(npc),
+        items: stripEmbeddings(items),
+        timeline: stripEmbeddings(timeline),
+        memories: stripEmbeddings(memories),
+        threads: stripEmbeddings(threads),
+        map: stripMapEmbeddings(map),
         clueBoard,
     };
 
@@ -1079,22 +1171,32 @@ export async function exportMemoriesToChatMetadata(chatId) {
     const ctx = getContext();
 
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
+    const cleanup = purgeLegacySlotDataFromChatMetadata(ctx);
+    const limit = getChatMetadataBackupLimit();
+    const count = countBackupEntries(backup);
+
+    if (json.length > limit) {
+        if (ctx.chatMetadata[BACKUP_METADATA_KEY]) delete ctx.chatMetadata[BACKUP_METADATA_KEY];
+        await saveChatMetadata(ctx);
+        return {
+            count,
+            size: json.length,
+            limit,
+            skipped: true,
+            reason: 'size-limit',
+            cleanup,
+        };
+    }
+
     ctx.chatMetadata[BACKUP_METADATA_KEY] = json;
 
-    // v8.2.0 优先使用防抖保存，减少聊天文件写入频率
-    if (typeof ctx.saveChatDebounced === 'function') {
-        ctx.saveChatDebounced();
-    } else if (typeof ctx.saveChat === 'function') {
-        ctx.saveChat();
-    }
+    await saveChatMetadata(ctx);
 
     const settings = getSettings();
     settings.lastBackupTimestamp = Date.now();
     updateSettings({ lastBackupTimestamp: settings.lastBackupTimestamp });
 
-    const mapCount = Object.keys(map?.locations || {}).length;
-    const clueCount = Array.isArray(clueBoard?.nodes) ? clueBoard.nodes.length : 0;
-    return { count: npc.length + items.length + timeline.length + memories.length + threads.length + mapCount + clueCount, size: json.length };
+    return { count, size: json.length, limit, skipped: false, cleanup };
 }
 
 async function restoreMapBackup(chatId, backupMap) {
@@ -1235,18 +1337,8 @@ async function restoreClueBoardBackup(chatId, backupBoard, idMaps = {}) {
     return { restored, skipped, idMap: nodeIdMap };
 }
 
-export async function importMemoriesFromChatMetadata(chatId) {
-    const ctx = getContext();
-    const json = ctx.chatMetadata?.[BACKUP_METADATA_KEY];
-    if (!json) return { restored: 0, skipped: 0, merged: 0 };
-
-    let backup;
-    try {
-        backup = JSON.parse(json);
-    } catch {
-        return { restored: 0, skipped: 0, merged: 0, error: 'JSON 解析失败' };
-    }
-
+async function restoreBackupPayload(chatId, backup) {
+    if (!backup || typeof backup !== 'object') return { restored: 0, skipped: 0, merged: 0 };
     let restored = 0, skipped = 0, merged = 0;
     const importOptions = { externalInit: isExternalInitPayload(backup) };
     const idMaps = {};
@@ -1351,17 +1443,30 @@ export async function importMemoriesFromChatMetadata(chatId) {
     restored += clueResult.restored;
     skipped += clueResult.skipped;
 
+    return { restored, skipped, merged };
+}
+
+export async function importMemoriesFromChatMetadata(chatId) {
+    const ctx = getContext();
+    const json = ctx.chatMetadata?.[BACKUP_METADATA_KEY];
+    if (!json) return { restored: 0, skipped: 0, merged: 0 };
+
+    let backup;
+    try {
+        backup = JSON.parse(json);
+    } catch {
+        return { restored: 0, skipped: 0, merged: 0, error: 'JSON 解析失败' };
+    }
+
+    const result = await restoreBackupPayload(chatId, backup);
+
     // v8.2.7 恢复后清除 chatMetadata 中的备份数据，避免聊天文件持续膨胀
     if (ctx.chatMetadata?.[BACKUP_METADATA_KEY]) {
         delete ctx.chatMetadata[BACKUP_METADATA_KEY];
-        if (typeof ctx.saveChatDebounced === 'function') {
-            ctx.saveChatDebounced();
-        } else if (typeof ctx.saveChat === 'function') {
-            ctx.saveChat();
-        }
+        await saveChatMetadata(ctx);
     }
 
-    return { restored, skipped, merged };
+    return result;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1711,6 +1816,10 @@ function mergeImportedEntryInPlace(type, base, incoming, options = {}) {
         base.tags = mergeTags(Array.isArray(base.tags) ? base.tags : [], normalized.tags);
         if (base.tags.length !== before) changed = true;
     }
+    if ((!Array.isArray(base.embedding) || base.embedding.length === 0) && Array.isArray(normalized.embedding) && normalized.embedding.length > 0) {
+        base.embedding = normalized.embedding;
+        changed = true;
+    }
     if (type === 'mem') {
         if (tierRank(normalized.memoryTier) > tierRank(base.memoryTier)) {
             base.memoryTier = normalized.memoryTier;
@@ -1759,7 +1868,16 @@ export async function exportMemories(chatId) {
         getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
         getTimelineThreads(chatId), getMap(chatId), getClueBoard(chatId),
     ]);
-    return JSON.stringify({ version: '8.9.6', npc, items, timeline, memories, threads, map, clueBoard }, null, 2);
+    return JSON.stringify({
+        version: '8.9.6',
+        npc,
+        items,
+        timeline,
+        memories,
+        threads,
+        map,
+        clueBoard,
+    });
 }
 
 export async function importMemories(chatId, jsonString) {
@@ -1767,10 +1885,7 @@ export async function importMemories(chatId, jsonString) {
     if (Array.isArray(data)) {
         data = { version: 'legacy-array-import', memories: data };
     }
-    const ctx = getContext();
-    if (!ctx.chatMetadata) ctx.chatMetadata = {};
-    ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify(data);
-    const result = await importMemoriesFromChatMetadata(chatId);
+    const result = await restoreBackupPayload(chatId, data);
     return (result.restored || 0) + (result.merged || 0);
 }
 

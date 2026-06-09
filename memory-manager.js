@@ -1479,7 +1479,7 @@ async function renderSlotsPanel(overlay, chatId, cachedData = null) {
         slotsEl.innerHTML = `
             <div class="bb-slots-info">
                 <i class="fa-solid fa-circle-info"></i>
-                记忆 <strong>${memories.length}</strong> 条 · NPC ${npc.length} / 物品 ${items.length} / 时间线 ${timeline.length} · 云端存档 ${remoteSlotCount} 个 · 角色ID: ${escapeHtml(charId)}
+                记忆 <strong>${memories.length}</strong> 条 · NPC ${npc.length} / 物品 ${items.length} / 时间线 ${timeline.length} · 云端索引 ${remoteSlotCount} 个 · 角色ID: ${escapeHtml(charId)}
             </div>
 
             <div class="bb-slots-create" style="margin-bottom:10px;">
@@ -1509,7 +1509,7 @@ async function renderSlotsPanel(overlay, chatId, cachedData = null) {
                         <div class="bb-slot-info">
                             <span class="bb-slot-name">
                                 <i class="fa-solid fa-floppy-disk"></i> ${escapeHtml(s.name)}
-                                ${s.name === currentSlot ? '<span class="bb-slot-default-badge">当前</span>' : ''}${s.remote ? '<span class="bb-slot-default-badge" style="background:#2196f3;"><i class="fa-solid fa-cloud"></i> 云端可拉取</span>' : (s.remoteAvailable ? '<span class="bb-slot-default-badge" style="background:#2196f3;"><i class="fa-solid fa-cloud"></i> 已同步</span>' : '')}
+                                ${s.name === currentSlot ? '<span class="bb-slot-default-badge">当前</span>' : ''}${s.remoteIndexOnly ? '<span class="bb-slot-default-badge" style="background:#607d8b;"><i class="fa-solid fa-cloud"></i> 仅索引</span>' : (s.remoteAvailable ? '<span class="bb-slot-default-badge" style="background:#2196f3;"><i class="fa-solid fa-cloud"></i> 索引已同步</span>' : '')}
                             </span>
                             <span class="bb-slot-count">${s.count} 条记忆${s.remote && s.localCount === 0 ? ' · 来自云端' : ''}</span>
                         </div>
@@ -1517,13 +1517,9 @@ async function renderSlotsPanel(overlay, chatId, cachedData = null) {
                             <button class="menu_button bb-slot-btn-save" data-slot="${escapeHtml(s.name)}" title="将当前数据保存到此槽">
                                 <i class="fa-solid fa-arrow-up"></i> 保存
                             </button>
-                            <button class="menu_button bb-slot-btn-load" data-slot="${escapeHtml(s.name)}" data-remote="${s.remote ? 'true' : 'false'}" title="${s.remote ? '从云端拉取后加载（覆盖当前）' : '从此槽加载数据（覆盖当前）'}">
+                            <button class="menu_button bb-slot-btn-load" data-slot="${escapeHtml(s.name)}" data-remote="false" ${s.remoteIndexOnly ? 'disabled' : ''} title="${s.remoteIndexOnly ? '云端仅保留轻量索引，完整槽数据请使用本地 JSON 导出/导入迁移' : '从此槽加载数据（覆盖当前）'}">
                                 <i class="fa-solid fa-arrow-down"></i> 加载
                             </button>
-                            ${s.remoteAvailable && !s.remote ? `
-                            <button class="menu_button bb-slot-btn-pull-cloud" data-slot="${escapeHtml(s.name)}" title="从云端拉取此存档并覆盖当前聊天">
-                                <i class="fa-solid fa-cloud-arrow-down"></i>
-                            </button>` : ''}
                             <button class="menu_button bb-slot-btn-export" data-slot="${escapeHtml(s.name)}" title="导出此存档为JSON文件">
                                 <i class="fa-solid fa-download"></i>
                             </button>
@@ -1555,7 +1551,8 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
             const slotName = btn.dataset.slot;
             try {
                 const result = await saveToSlot(charId, chatId, slotName);
-                showToast(`已保存 ${result.count} 条到「${slotName}」${result.cloudSynced ? '，云端同步已提交' : '（本地已保存，云端同步不可用）'}`, result.cloudSynced ? 'success' : 'warning');
+                const syncTip = result.cloudSynced ? '，云端索引已更新（完整数据保留在本地）' : '（本地已保存，云端索引不可用）';
+                showToast(`已保存 ${result.count} 条到「${slotName}」${syncTip}`, result.cloudSynced ? 'success' : 'warning');
                 updateSettings({ currentSlotName: slotName });
                 await renderSlotsPanel(overlay, chatId, result.data);
                 updateCurrentSlotBar(overlay, chatId, result.data);
@@ -1566,27 +1563,9 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
     slotsEl.querySelectorAll('.bb-slot-btn-load').forEach(btn => {
         btn.addEventListener('click', async () => {
             const slotName = btn.dataset.slot;
-            const isRemote = btn.dataset.remote === 'true';
             const ok = confirm(`确定从「${slotName}」加载吗？当前数据将被覆盖！`);
             if (!ok) return;
             try {
-                // v8.5.1 远程槽先从 chatMetadata 拉取数据到本地
-                if (isRemote) {
-                    btn.disabled = true;
-                    const origHTML = btn.innerHTML;
-                    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 拉取中...';
-                    const { pullSlotFromChatMetadata } = await import('./memory-slots.js');
-                    const pulled = await pullSlotFromChatMetadata(charId, slotName);
-                    if (pulled === null) {
-                        btn.disabled = false;
-                        btn.innerHTML = origHTML;
-                        showToast(`远程槽「${slotName}」数据不可用，请先在源设备上保存此槽`, 'error');
-                        return;
-                    }
-                    showToast(`已从云端拉取 ${pulled} 条`, 'info');
-                    btn.disabled = false;
-                    btn.innerHTML = origHTML;
-                }
                 const result = await loadFromSlot(charId, chatId, slotName);
                 showToast(`已从「${slotName}」加载 ${result.count} 条`, 'success');
                 updateSettings({ currentSlotName: slotName });
@@ -1600,36 +1579,6 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
                 const threadContent = overlay.querySelector('#bb_thread_panel_content');
                 if (threadContent) threadContent.innerHTML = '<div class="bb-mem-empty"><i class="fa-solid fa-spinner fa-spin"></i> 加载中...</div>';
             } catch (err) { showToast(`加载失败: ${err.message}`, 'error'); }
-        });
-    });
-
-    slotsEl.querySelectorAll('.bb-slot-btn-pull-cloud').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            const slotName = btn.dataset.slot;
-            const ok = confirm(`确定从云端拉取「${slotName}」并加载吗？当前数据将被覆盖！`);
-            if (!ok) return;
-            const origHTML = btn.innerHTML;
-            try {
-                btn.disabled = true;
-                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
-                const { pullSlotFromChatMetadata } = await import('./memory-slots.js');
-                const pulled = await pullSlotFromChatMetadata(charId, slotName);
-                if (pulled === null) {
-                    showToast(`云端槽「${slotName}」数据不可用，请先在源设备上重新保存此槽`, 'error');
-                    return;
-                }
-                const result = await loadFromSlot(charId, chatId, slotName);
-                showToast(`已从云端拉取并加载「${slotName}」：${result.count} 条`, 'success');
-                updateSettings({ currentSlotName: slotName });
-                await renderSlotsPanel(overlay, chatId, result.data);
-                updateCurrentSlotBar(overlay, chatId, result.data);
-                await rerenderManagerList(overlay, chatId, result.data);
-            } catch (err) {
-                showToast(`拉取云端失败: ${err.message}`, 'error');
-            } finally {
-                btn.disabled = false;
-                btn.innerHTML = origHTML;
-            }
         });
     });
 
@@ -1662,7 +1611,8 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
         if (!name) { showToast('请输入存档名称', 'warning'); return; }
         try {
             const result = await createEmptySlot(charId, name);
-            showToast(`已创建存档「${name}」${result.cloudSynced ? '，云端同步已提交' : '（本地已创建，云端同步不可用）'}`, result.cloudSynced ? 'success' : 'warning');
+            const syncTip = result.cloudSynced ? '，云端索引已更新（完整数据保留在本地）' : '（本地已创建，云端索引不可用）';
+            showToast(`已创建存档「${name}」${syncTip}`, result.cloudSynced ? 'success' : 'warning');
             input.value = '';
             await renderSlotsPanel(overlay, chatId);
         } catch (err) { showToast(`创建失败: ${err.message}`, 'error'); }

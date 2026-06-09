@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v8.9.8</b>
+            <b>BB-Memory v8.9.15</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -211,6 +211,12 @@
                         <input id="bb_auto_backup_enabled" type="checkbox" />
                         <span>启用自动备份（跨设备同步）</span>
                     </label>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_chat_metadata_backup_max_kb">聊天元数据备份上限（KB）</label>
+                        <small class="bb-mem-hint">超过此大小会跳过云端备份，避免聊天文件膨胀；大存档请用本地 JSON 导出。</small>
+                        <input id="bb_chat_metadata_backup_max_kb" type="number" class="bb-input" min="128" max="8192" step="128" value="2048" />
+                    </div>
 
                 </div>
             </div>

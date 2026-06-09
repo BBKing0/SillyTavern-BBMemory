@@ -174,7 +174,7 @@ export async function listSlots(charId) {
         localByName.set('default', defaultSlot);
     }
 
-    // v8.5.1 合并 chatMetadata 远程槽
+    // v8.9.15 keep chatMetadata slot sync index-only. Full slot payloads stay in localforage.
     const remoteIndex = getRemoteSlotIndex(charId);
     for (const [name, meta] of Object.entries(remoteIndex.slots || {})) {
         const total = (meta.npc || 0) + (meta.items || 0) + (meta.timeline || 0) + (meta.mem || 0) + (meta.threads || 0) + (meta.map || 0) + (meta.clues || 0);
@@ -183,19 +183,14 @@ export async function listSlots(charId) {
             local.remoteAvailable = true;
             local.remoteCount = total;
             local.remoteTs = meta.ts || 0;
-            // 新设备会自动出现一个本地 default 空槽；这里让云端 default 覆盖展示并触发拉取。
-            if ((local.virtualLocal || (local.localCount || 0) === 0) && total > 0) {
-                local.remote = true;
-                local.count = total;
-                local.needsCloudPull = true;
-            }
             continue;
         }
         slots.push({
             name,
             count: total,
             key: slotKey(charId, name),
-            remote: true,
+            remote: false,
+            remoteIndexOnly: true,
             remoteAvailable: true,
             remoteCount: total,
             remoteTs: meta.ts || 0,
@@ -211,7 +206,7 @@ export async function listSlots(charId) {
 async function updateSlotIndex(charId, slots) {
     try {
         const names = slots
-            .filter(s => !s.remote || !s.needsCloudPull)
+            .filter(s => !s.remoteIndexOnly)
             .map(s => s.name);
         await getLocalForage().setItem('bb_memory_slot_list_' + charId, names);
     } catch { /* ignore */ }
@@ -233,11 +228,10 @@ export async function saveToSlot(charId, chatId, slotName) {
     const slots = await listSlots(charId);
     await updateSlotIndex(charId, slots);
 
-    // v8.9.13 等待云端同步完成后再向 UI 报告，避免跨设备打开时看不到刚保存的槽。
-    const dataSynced = await syncSlotDataToChatMetadata(charId, slotName);
+    await removeSlotDataFromChatMetadata(slotName);
     const indexSynced = await syncSlotIndexToChatMetadata(charId);
 
-    return { count: totalCount(data), data, cloudSynced: dataSynced && indexSynced };
+    return { count: totalCount(data), data, cloudSynced: indexSynced, cloudDataSynced: false };
 }
 
 /**
@@ -342,11 +336,10 @@ export async function createEmptySlot(charId, slotName) {
     }
     await updateSlotIndex(charId, slots);
 
-    // v8.9.13 新建空槽也写入完整槽数据，否则另一台设备只能看到索引但无法拉取。
-    const dataSynced = await syncSlotDataToChatMetadata(charId, name);
+    await removeSlotDataFromChatMetadata(name);
     const indexSynced = await syncSlotIndexToChatMetadata(charId);
 
-    return { name, cloudSynced: dataSynced && indexSynced };
+    return { name, cloudSynced: indexSynced, cloudDataSynced: false };
 }
 
 /**
@@ -365,11 +358,7 @@ export async function deleteSlot(charId, slotName) {
 
     // v8.5.1 同步到 chatMetadata + 清理远程槽数据
     await syncSlotIndexToChatMetadata(charId, { removeSlotName: slotName });
-    const ctx = getSTContext();
-    if (ctx?.chatMetadata) {
-        delete ctx.chatMetadata[SLOT_DATA_PREFIX + slotName];
-        await saveChatMeta(ctx);
-    }
+    await removeSlotDataFromChatMetadata(slotName);
 }
 
 /**
@@ -392,7 +381,7 @@ export async function exportSlot(charId, slotName) {
     const raw = await lf.getItem(slotKey(charId, slotName));
     const data = normalizeSlotData(raw);
 
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -467,12 +456,14 @@ async function syncSlotIndexToChatMetadata(charId, options = {}) {
     if (!ctx) return false;
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
 
+    await removeSlotDataFromChatMetadata(null, ctx);
+
     const previousIndex = getRemoteSlotIndex(charId);
     const slots = await listSlots(charId);
     const index = { charId, slots: { ...(previousIndex.slots || {}) } };
     if (options.removeSlotName) delete index.slots[options.removeSlotName];
     for (const s of slots) {
-        if (s.remote) continue;
+        if (s.remoteIndexOnly) continue;
         const counts = await getSlotPillarCounts(charId, s.name);
         index.slots[s.name] = { ts: Date.now(), ...counts };
     }
@@ -481,21 +472,21 @@ async function syncSlotIndexToChatMetadata(charId, options = {}) {
 }
 
 /**
- * 将单个槽的完整数据同步到 chatMetadata
+ * Remove legacy full slot payloads from chatMetadata. Slot sync is index-only now.
  */
-async function syncSlotDataToChatMetadata(charId, slotName) {
-    const ctx = getSTContext();
+async function removeSlotDataFromChatMetadata(slotName = null, context = null) {
+    const ctx = context || getSTContext();
     if (!ctx) return false;
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
 
-    const lf = getLocalForage();
-    const data = await lf.getItem(slotKey(charId, slotName));
-    if (data) {
-        ctx.chatMetadata[SLOT_DATA_PREFIX + slotName] = JSON.stringify(data);
-    } else {
-        delete ctx.chatMetadata[SLOT_DATA_PREFIX + slotName];
+    let changed = false;
+    for (const key of Object.keys(ctx.chatMetadata)) {
+        if (!key.startsWith(SLOT_DATA_PREFIX)) continue;
+        if (slotName && key !== SLOT_DATA_PREFIX + slotName) continue;
+        delete ctx.chatMetadata[key];
+        changed = true;
     }
-    return saveChatMeta(ctx);
+    return changed ? saveChatMeta(ctx) : true;
 }
 
 /**
