@@ -15,7 +15,7 @@ import {
     exportMemories, importMemories, updateFactContent, addHiddenNote, removeHiddenNote,
     isArchived, archiveEntry, restoreEntry,
 } from './memory-store.js';
-import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot, exportSlot } from './memory-slots.js';
+import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot, exportSlot, getRemoteSlotIndex } from './memory-slots.js';
 import { simpleSearch } from './retriever.js';
 import { MEMORY_TYPES, TRUTH_STATUS, HIDDEN_NOTE_TYPES, TIMELINE_STATUS, ITEM_STATUS } from './memory-types.js';
 import { NPC_TIERS, ITEM_TIERS, normalizeNpcTier, normalizeItemTier } from './entity-tiers.js';
@@ -1444,6 +1444,8 @@ async function renderSlotsPanel(overlay, chatId, cachedData = null) {
 
     try {
         const slots = await listSlots(charId);
+        const remoteIndex = getRemoteSlotIndex(charId);
+        const remoteSlotCount = Object.keys(remoteIndex.slots || {}).length;
         const [npc, items, timeline, memories] = cachedData
             ? [cachedData.npc || [], cachedData.items || [], cachedData.timeline || [], cachedData.memories || []]
             : await Promise.all([
@@ -1477,7 +1479,7 @@ async function renderSlotsPanel(overlay, chatId, cachedData = null) {
         slotsEl.innerHTML = `
             <div class="bb-slots-info">
                 <i class="fa-solid fa-circle-info"></i>
-                记忆 <strong>${memories.length}</strong> 条 · NPC ${npc.length} / 物品 ${items.length} / 时间线 ${timeline.length} · 角色ID: ${escapeHtml(charId)}
+                记忆 <strong>${memories.length}</strong> 条 · NPC ${npc.length} / 物品 ${items.length} / 时间线 ${timeline.length} · 云端存档 ${remoteSlotCount} 个 · 角色ID: ${escapeHtml(charId)}
             </div>
 
             <div class="bb-slots-create" style="margin-bottom:10px;">
@@ -1553,7 +1555,7 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
             const slotName = btn.dataset.slot;
             try {
                 const result = await saveToSlot(charId, chatId, slotName);
-                showToast(`已保存 ${result.count} 条到「${slotName}」${result.cloudSynced ? '，云端已同步' : '（本地已保存，云端同步不可用）'}`, result.cloudSynced ? 'success' : 'warning');
+                showToast(`已保存 ${result.count} 条到「${slotName}」${result.cloudSynced ? '，云端同步已提交' : '（本地已保存，云端同步不可用）'}`, result.cloudSynced ? 'success' : 'warning');
                 updateSettings({ currentSlotName: slotName });
                 await renderSlotsPanel(overlay, chatId, result.data);
                 updateCurrentSlotBar(overlay, chatId, result.data);
@@ -1660,7 +1662,7 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
         if (!name) { showToast('请输入存档名称', 'warning'); return; }
         try {
             const result = await createEmptySlot(charId, name);
-            showToast(`已创建存档「${name}」${result.cloudSynced ? '，云端已同步' : '（本地已创建，云端同步不可用）'}`, result.cloudSynced ? 'success' : 'warning');
+            showToast(`已创建存档「${name}」${result.cloudSynced ? '，云端同步已提交' : '（本地已创建，云端同步不可用）'}`, result.cloudSynced ? 'success' : 'warning');
             input.value = '';
             await renderSlotsPanel(overlay, chatId);
         } catch (err) { showToast(`创建失败: ${err.message}`, 'error'); }

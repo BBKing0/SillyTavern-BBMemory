@@ -1741,6 +1741,14 @@ function registerSlashCommands() {
 //  事件处理
 // ═══════════════════════════════════════════════════════════
 
+function runWhenIdle(task, timeout = 10000) {
+    if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(() => task(), { timeout });
+        return;
+    }
+    setTimeout(task, 0);
+}
+
 async function onChatChanged() {
     clearInjection();
     lastRetrievalResult = null;
@@ -1771,26 +1779,30 @@ async function onChatChanged() {
         }
     })();
 
-    // 维护提醒（3秒后）
+    // 维护提醒：延后到空闲时段，避免聊天刚加载时抢主线程。
     setTimeout(async () => {
-        try {
-            const result = await checkMaintenanceNeeded(chatId);
-            if (result.needed) {
-                showToast(`记忆维护提醒：${result.issueCount} 条待处理。输入 /bb-maintenance 查看`, 'warning');
-            }
-        } catch { /* ignore */ }
-    }, 3000);
-
-    // 跨设备恢复（5秒后）
-    if (settings.autoBackupEnabled) {
-        setTimeout(async () => {
+        runWhenIdle(async () => {
             try {
-                const result = await importMemoriesFromChatMetadata(chatId);
-                if (result.restored > 0 && settings.debugLogging) {
-                    console.log(`[BB-Memory] 自动恢复: ${result.restored} 条`);
+                const result = await checkMaintenanceNeeded(chatId);
+                if (result.needed) {
+                    showToast(`记忆维护提醒：${result.issueCount} 条待处理。输入 /bb-maintenance 查看`, 'warning');
                 }
             } catch { /* ignore */ }
-        }, 5000);
+        });
+    }, 10000);
+
+    // 跨设备恢复：延后到空闲时段，避免大备份解析影响聊天加载。
+    if (settings.autoBackupEnabled) {
+        setTimeout(async () => {
+            runWhenIdle(async () => {
+                try {
+                    const result = await importMemoriesFromChatMetadata(chatId);
+                    if (result.restored > 0 && settings.debugLogging) {
+                        console.log(`[BB-Memory] 自动恢复: ${result.restored} 条`);
+                    }
+                } catch { /* ignore */ }
+            }, 15000);
+        }, 15000);
     }
 }
 
@@ -2215,7 +2227,7 @@ async function handleFloatingMenuAction(action) {
                 const slotName = getSettings().currentSlotName || 'default';
                 const result = await saveToSlot(charId, chatId, slotName);
                 const count = typeof result === 'object' ? result.count : result;
-                const cloudTip = result?.cloudSynced ? '，云端已同步' : '（本地已保存，云端同步不可用）';
+                const cloudTip = result?.cloudSynced ? '，云端同步已提交' : '（本地已保存，云端同步不可用）';
                 showTopNotification(`已保存 ${count} 条到「${slotName}」${cloudTip}`, result?.cloudSynced ? 'success' : 'warning');
                 setTimeout(() => refreshFloatingHubData(), 300);
             } catch (e) {

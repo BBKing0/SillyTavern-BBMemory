@@ -418,15 +418,24 @@ function getSTContext() {
 
 async function saveChatMeta(ctx) {
     if (!ctx) return false;
-    if (typeof ctx.saveChat === 'function') {
-        await Promise.resolve(ctx.saveChat());
-        return true;
+    let requested = false;
+    if (typeof ctx.saveMetadataDebounced === 'function') {
+        ctx.saveMetadataDebounced();
+        requested = true;
+    }
+    if (!requested && typeof ctx.saveMetadata === 'function') {
+        await Promise.resolve(ctx.saveMetadata());
+        requested = true;
     }
     if (typeof ctx.saveChatDebounced === 'function') {
         ctx.saveChatDebounced();
-        return true;
+        requested = true;
     }
-    return false;
+    if (!requested && typeof ctx.saveChat === 'function') {
+        await Promise.resolve(ctx.saveChat());
+        requested = true;
+    }
+    return requested;
 }
 
 /**
