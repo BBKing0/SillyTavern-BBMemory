@@ -2215,7 +2215,8 @@ async function handleFloatingMenuAction(action) {
                 const slotName = getSettings().currentSlotName || 'default';
                 const result = await saveToSlot(charId, chatId, slotName);
                 const count = typeof result === 'object' ? result.count : result;
-                showTopNotification(`已保存 ${count} 条到「${slotName}」`, 'success');
+                const cloudTip = result?.cloudSynced ? '，云端已同步' : '（本地已保存，云端同步不可用）';
+                showTopNotification(`已保存 ${count} 条到「${slotName}」${cloudTip}`, result?.cloudSynced ? 'success' : 'warning');
                 setTimeout(() => refreshFloatingHubData(), 300);
             } catch (e) {
                 showTopNotification(`快速保存失败: ${e.message}`, 'error');

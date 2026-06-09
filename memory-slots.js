@@ -141,15 +141,16 @@ export async function listSlots(charId) {
     if (!charId) return [];
     const lf = getLocalForage();
     const slots = [];
-    const localNames = new Set();
+    const localByName = new Map();
 
     // 优先从索引读取（O(1) 查询），避免 lf.iterate 全库扫描
     const known = await lf.getItem('bb_memory_slot_list_' + charId);
     if (Array.isArray(known) && known.length > 0) {
         for (const name of known) {
             const data = await lf.getItem(slotKey(charId, name));
-            slots.push({ name, count: totalCount(data), key: slotKey(charId, name), remote: false });
-            localNames.add(name);
+            const slot = { name, count: totalCount(data), key: slotKey(charId, name), remote: false, localCount: totalCount(data) };
+            slots.push(slot);
+            localByName.set(name, slot);
         }
     } else {
         // 索引缺失时回退到全库扫描
@@ -159,28 +160,44 @@ export async function listSlots(charId) {
                 if (key.startsWith(prefix)) {
                     const slotName = key.slice(prefix.length);
                     const count = totalCount(value);
-                    slots.push({ name: slotName, count, key, remote: false });
-                    localNames.add(slotName);
+                    const slot = { name: slotName, count, key, remote: false, localCount: count };
+                    slots.push(slot);
+                    localByName.set(slotName, slot);
                 }
             });
         } catch { /* ignore */ }
     }
 
     if (!slots.find(s => s.name === 'default')) {
-        slots.unshift({ name: 'default', count: 0, key: slotKey(charId, 'default'), remote: false });
-        localNames.add('default');
+        const defaultSlot = { name: 'default', count: 0, key: slotKey(charId, 'default'), remote: false, localCount: 0, virtualLocal: true };
+        slots.unshift(defaultSlot);
+        localByName.set('default', defaultSlot);
     }
 
     // v8.5.1 合并 chatMetadata 远程槽
     const remoteIndex = getRemoteSlotIndex(charId);
     for (const [name, meta] of Object.entries(remoteIndex.slots || {})) {
-        if (localNames.has(name)) continue; // 本地已有，跳过
         const total = (meta.npc || 0) + (meta.items || 0) + (meta.timeline || 0) + (meta.mem || 0) + (meta.threads || 0) + (meta.map || 0) + (meta.clues || 0);
+        const local = localByName.get(name);
+        if (local) {
+            local.remoteAvailable = true;
+            local.remoteCount = total;
+            local.remoteTs = meta.ts || 0;
+            // 新设备会自动出现一个本地 default 空槽；这里让云端 default 覆盖展示并触发拉取。
+            if ((local.virtualLocal || (local.localCount || 0) === 0) && total > 0) {
+                local.remote = true;
+                local.count = total;
+                local.needsCloudPull = true;
+            }
+            continue;
+        }
         slots.push({
             name,
             count: total,
             key: slotKey(charId, name),
             remote: true,
+            remoteAvailable: true,
+            remoteCount: total,
             remoteTs: meta.ts || 0,
         });
     }
@@ -193,7 +210,9 @@ export async function listSlots(charId) {
  */
 async function updateSlotIndex(charId, slots) {
     try {
-        const names = slots.map(s => s.name);
+        const names = slots
+            .filter(s => !s.remote || !s.needsCloudPull)
+            .map(s => s.name);
         await getLocalForage().setItem('bb_memory_slot_list_' + charId, names);
     } catch { /* ignore */ }
 }
@@ -214,11 +233,11 @@ export async function saveToSlot(charId, chatId, slotName) {
     const slots = await listSlots(charId);
     await updateSlotIndex(charId, slots);
 
-    // v8.5.1 同步到 chatMetadata（后台执行，不阻塞返回）
-    syncSlotIndexToChatMetadata(charId).catch(() => {});
-    syncSlotDataToChatMetadata(charId, slotName).catch(() => {});
+    // v8.9.13 等待云端同步完成后再向 UI 报告，避免跨设备打开时看不到刚保存的槽。
+    const dataSynced = await syncSlotDataToChatMetadata(charId, slotName);
+    const indexSynced = await syncSlotIndexToChatMetadata(charId);
 
-    return { count: totalCount(data), data };
+    return { count: totalCount(data), data, cloudSynced: dataSynced && indexSynced };
 }
 
 /**
@@ -310,6 +329,10 @@ export async function createEmptySlot(charId, slotName) {
     if (existing !== null) {
         throw new Error(`存档 "${name}" 已存在`);
     }
+    const remoteIndex = getRemoteSlotIndex(charId);
+    if (remoteIndex.slots?.[name]) {
+        throw new Error(`云端已存在同名存档 "${name}"，请先拉取云端存档`);
+    }
 
     await lf.setItem(slotKey(charId, name), []);
     const slots = await listSlots(charId);
@@ -319,10 +342,11 @@ export async function createEmptySlot(charId, slotName) {
     }
     await updateSlotIndex(charId, slots);
 
-    // v8.5.1 同步到 chatMetadata
-    syncSlotIndexToChatMetadata(charId).catch(() => {});
+    // v8.9.13 新建空槽也写入完整槽数据，否则另一台设备只能看到索引但无法拉取。
+    const dataSynced = await syncSlotDataToChatMetadata(charId, name);
+    const indexSynced = await syncSlotIndexToChatMetadata(charId);
 
-    return name;
+    return { name, cloudSynced: dataSynced && indexSynced };
 }
 
 /**
@@ -340,14 +364,12 @@ export async function deleteSlot(charId, slotName) {
     await updateSlotIndex(charId, slots.filter(s => s.name !== slotName));
 
     // v8.5.1 同步到 chatMetadata + 清理远程槽数据
-    syncSlotIndexToChatMetadata(charId).catch(() => {});
-    (async () => {
-        const ctx = getSTContext();
-        if (ctx?.chatMetadata) {
-            delete ctx.chatMetadata[SLOT_DATA_PREFIX + slotName];
-            saveChatMeta(ctx);
-        }
-    })().catch(() => {});
+    await syncSlotIndexToChatMetadata(charId, { removeSlotName: slotName });
+    const ctx = getSTContext();
+    if (ctx?.chatMetadata) {
+        delete ctx.chatMetadata[SLOT_DATA_PREFIX + slotName];
+        await saveChatMeta(ctx);
+    }
 }
 
 /**
@@ -394,13 +416,17 @@ function getSTContext() {
     try { return SillyTavern.getContext(); } catch { return null; }
 }
 
-function saveChatMeta(ctx) {
-    if (!ctx) return;
+async function saveChatMeta(ctx) {
+    if (!ctx) return false;
+    if (typeof ctx.saveChat === 'function') {
+        await Promise.resolve(ctx.saveChat());
+        return true;
+    }
     if (typeof ctx.saveChatDebounced === 'function') {
         ctx.saveChatDebounced();
-    } else if (typeof ctx.saveChat === 'function') {
-        ctx.saveChat();
+        return true;
     }
+    return false;
 }
 
 /**
@@ -427,20 +453,22 @@ async function getSlotPillarCounts(charId, slotName) {
 /**
  * 将槽索引元数据同步到 chatMetadata（轻量，仅名称+计数+时间戳）
  */
-async function syncSlotIndexToChatMetadata(charId) {
+async function syncSlotIndexToChatMetadata(charId, options = {}) {
     const ctx = getSTContext();
-    if (!ctx) return;
+    if (!ctx) return false;
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
 
+    const previousIndex = getRemoteSlotIndex(charId);
     const slots = await listSlots(charId);
-    const index = { slots: {} };
+    const index = { charId, slots: { ...(previousIndex.slots || {}) } };
+    if (options.removeSlotName) delete index.slots[options.removeSlotName];
     for (const s of slots) {
         if (s.remote) continue;
         const counts = await getSlotPillarCounts(charId, s.name);
         index.slots[s.name] = { ts: Date.now(), ...counts };
     }
     ctx.chatMetadata[SLOT_INDEX_KEY] = JSON.stringify(index);
-    saveChatMeta(ctx);
+    return saveChatMeta(ctx);
 }
 
 /**
@@ -448,7 +476,7 @@ async function syncSlotIndexToChatMetadata(charId) {
  */
 async function syncSlotDataToChatMetadata(charId, slotName) {
     const ctx = getSTContext();
-    if (!ctx) return;
+    if (!ctx) return false;
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
 
     const lf = getLocalForage();
@@ -458,7 +486,7 @@ async function syncSlotDataToChatMetadata(charId, slotName) {
     } else {
         delete ctx.chatMetadata[SLOT_DATA_PREFIX + slotName];
     }
-    saveChatMeta(ctx);
+    return saveChatMeta(ctx);
 }
 
 /**
