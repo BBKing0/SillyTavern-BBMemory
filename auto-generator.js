@@ -265,6 +265,75 @@ function parseTimelineThreadResponse(responseText) {
     }
 }
 
+function normalizeTimelineFingerprintText(value) {
+    return String(value || '')
+        .toLowerCase()
+        .replace(/[\s"'“”‘’.,，。:：;；!?！？、()[\]【】{}<>《》·\-—_/\\]+/g, '')
+        .trim();
+}
+
+function getTimelineFingerprint(entry) {
+    const period = normalizeTimelineFingerprintText(entry?.storyTime || entry?.period || entry?.time || entry?.t || '');
+    const event = normalizeTimelineFingerprintText(entry?.event || entry?.title || entry?.summary || entry?.note || entry?.e || '');
+    if (!event) return null;
+    return { full: `${period}|${event}`, event, hasPeriod: Boolean(period) };
+}
+
+function buildThreadTimelineIndex(threads = []) {
+    const full = new Set();
+    const eventWithoutPeriod = new Set();
+    for (const thread of threads || []) {
+        for (const entry of (thread.entries || [])) {
+            const fp = getTimelineFingerprint(entry);
+            if (!fp) continue;
+            full.add(fp.full);
+            if (!fp.hasPeriod) eventWithoutPeriod.add(fp.event);
+        }
+    }
+    return { full, eventWithoutPeriod };
+}
+
+function isForeshadowTimeline(entry) {
+    const tagText = (entry?.tags || [])
+        .map(tag => typeof tag === 'string' ? tag : tag?.name)
+        .filter(Boolean)
+        .join(' ');
+    return entry?.status === 'foreshadow' || /伏笔|待兑现|待揭示/.test(tagText);
+}
+
+function isImportantTimeline(entry) {
+    return entry?.resident === true
+        || entry?.keepPermanent === true
+        || entry?.memoryTier === 'core'
+        || entry?.memoryTier === 'eternal'
+        || isForeshadowTimeline(entry);
+}
+
+function isTimelineCoveredByThread(entry, threadIndex) {
+    const fp = getTimelineFingerprint(entry);
+    if (!fp) return false;
+    if (threadIndex.full.has(fp.full)) return true;
+    if (!fp.hasPeriod && [...threadIndex.full].some(key => key.endsWith(`|${fp.event}`))) return true;
+    return threadIndex.eventWithoutPeriod.has(fp.event);
+}
+
+function filterTimelineCoveredByThreads(result) {
+    if (!result || !Array.isArray(result.timeline) || !result.timeline.length) return result;
+    const threadIndex = buildThreadTimelineIndex(result.threads || []);
+    if (!threadIndex.full.size && !threadIndex.eventWithoutPeriod.size) return result;
+    let skipped = 0;
+    const timeline = result.timeline.filter(entry => {
+        if (isImportantTimeline(entry)) return true;
+        if (!isTimelineCoveredByThread(entry, threadIndex)) return true;
+        skipped++;
+        return false;
+    });
+    if (skipped && getSettings().debugLogging) {
+        console.log(`[BB-Memory] 时间线降噪：${skipped} 条已由时间线程覆盖，跳过保存/注入`);
+    }
+    return { ...result, timeline };
+}
+
 // v8.7.0 地点解析器
 function parseLocationResponse(responseText) {
     const text = cleanJsonText(responseText);
@@ -771,6 +840,7 @@ it=分级(key/equipped/clue/consumable/background) | g=标签数组
 
 时间线是故事里程碑，不是日记流水账。
 记录门槛：时间跨越一天以上 / 故事阶段转换 / 重大冲突起止 / 核心关系质变 / 剧情关键揭示 / 叙事节奏明显变化
+如果同一事件已经写入 threads.entries，除非它是伏笔、常驻或阶段转折，否则不要重复输出为 timeline。
 
 字段：t(故事时间), e(事件摘要), p(参与者数组), l(地点),
 active=true/false, imp(对叙事弧线的影响), g(标签数组含节奏标签[起点/转折/高潮/收束/承上启下])
@@ -783,6 +853,7 @@ active=true/false, imp(对叙事弧线的影响), g(标签数组含节奏标签[
 
 时间线程用于概括一条持续存在的叙事线，不是单个事件。
 仅当输入中有清晰的主线、感情线、支线或世界观线索时输出。
+持续叙事线下的普通节点优先放入 entries，而不是另建 timeline。
 
 字段：n(线程名), tp(类型:plot/emotional/side/world), st(状态:ongoing/paused/ended/resident),
 p(优先级:high/medium/low), s(一句话总结), entries(可留空数组)
@@ -991,6 +1062,8 @@ function buildInitializationPrompt(settings, styleBias, calDesc, selectedPillars
 - 不要把 OOC/元指令/工具说明当作剧情记忆。
 - 不确定的信息可以用 truthStatus:"unknown" 或时间线程 status:"paused" 标记。
 - 同一人物、物品、地点或事件不要重复输出；必要时合并成更完整的一条。
+- 时间线程 threads 是持续叙事线地图；普通线索节点优先放进 threads.entries。
+- 时间线 timeline 只输出未被 threads.entries 覆盖的关键里程碑、伏笔或阶段转折。
 
 本次勾选的提取范围：
 ${selectedLines}
@@ -1008,6 +1081,7 @@ ${selectedLines}
 4. timeline 数组：
 { "t":"故事时间", "e":"事件摘要", "p":["参与者"], "l":"地点", "active":true, "imp":"影响", "g":["标签"] }
 status 可通过 active 推断；伏笔类事件请在 g 中加入"伏笔"或"待兑现"。
+如果同一事件已经作为 threads.entries 输出，普通事件不要再放入 timeline。
 
 5. locations 数组：
 { "n":"地名", "desc":"地点描述", "reg":"区域", "rw":"现实原型参考，可为空", "conn":[{"to":"相邻地名","dist":"距离","type":"路径类型","diff":"easy/normal/hard"}] }
@@ -1038,7 +1112,7 @@ async function callMergedExtraction(chatId, userMessage, aiMessage) {
         console.log('[BB-Memory] 检测到纯元对话，跳过提取');
         return { isMetaDialogue: true, results: null };
     }
-    const results = parseMergedResponse(responseText);
+    const results = filterTimelineCoveredByThreads(parseMergedResponse(responseText));
     return { isMetaDialogue: false, results };
 }
 
@@ -1364,7 +1438,8 @@ export async function extractInitialDataFromContext(chatId, contextText, options
 
     if (onProgress) onProgress({ stage: 'parse', progress: '正在解析初始化草稿...' });
     const parsed = parseMergedResponse(responseText);
-    return markInitialSource(filterInitialResult(parsed, selected), 'init');
+    const scoped = filterInitialResult(parsed, selected);
+    return markInitialSource(selected.has('threads') ? filterTimelineCoveredByThreads(scoped) : scoped, 'init');
 }
 
 function mergeTextField(existingText, incomingText) {
@@ -1459,6 +1534,7 @@ async function saveInitialMemories(chatId, memories, sourceInfo, result) {
 
 export async function saveInitialExtractionResult(chatId, data, options = {}) {
     const selected = normalizeInitialPillars(options.selectedPillars);
+    const dataForSave = selected.has('threads') ? filterTimelineCoveredByThreads(data) : data;
     const sourceInfo = {
         source: 'init',
         sourceChatId: chatId,
@@ -1469,7 +1545,7 @@ export async function saveInitialExtractionResult(chatId, data, options = {}) {
     const hasEmbedding = settings.embeddingEnabled && settings.embeddingEndpoint;
 
     if (selected.has('npc')) {
-        for (const npc of (data?.npc || [])) {
+        for (const npc of (dataForSave?.npc || [])) {
             if (!npc?.name) continue;
             const embedding = hasEmbedding ? await embedMemoryEntry(npc) : null;
             await upsertNpcProfile(chatId, { ...npc, embedding, ...sourceInfo });
@@ -1477,7 +1553,7 @@ export async function saveInitialExtractionResult(chatId, data, options = {}) {
         }
     }
     if (selected.has('items')) {
-        for (const item of (data?.items || [])) {
+        for (const item of (dataForSave?.items || [])) {
             if (!item?.name) continue;
             const embedding = hasEmbedding ? await embedMemoryEntry(item) : null;
             await upsertItem(chatId, { ...item, embedding, ...sourceInfo });
@@ -1485,7 +1561,7 @@ export async function saveInitialExtractionResult(chatId, data, options = {}) {
         }
     }
     if (selected.has('timeline')) {
-        for (const tl of (data?.timeline || [])) {
+        for (const tl of (dataForSave?.timeline || [])) {
             if (!tl?.event) continue;
             const embedding = hasEmbedding ? await embedMemoryEntry(tl) : null;
             await upsertTimelineEntry(chatId, { ...tl, embedding, ...sourceInfo });
@@ -1493,13 +1569,13 @@ export async function saveInitialExtractionResult(chatId, data, options = {}) {
         }
     }
     if (selected.has('locations')) {
-        result.locations += await saveExtractedLocations(chatId, data?.locations || [], sourceInfo);
+        result.locations += await saveExtractedLocations(chatId, dataForSave?.locations || [], sourceInfo);
     }
     if (selected.has('threads')) {
-        await saveInitialThreads(chatId, data?.threads || [], sourceInfo, result);
+        await saveInitialThreads(chatId, dataForSave?.threads || [], sourceInfo, result);
     }
     if (selected.has('memories')) {
-        await saveInitialMemories(chatId, data?.memories || [], sourceInfo, result);
+        await saveInitialMemories(chatId, dataForSave?.memories || [], sourceInfo, result);
     }
 
     return result;
@@ -1524,7 +1600,7 @@ export async function extractFromContext(chatId, contextText, options = {}) {
             console.log('[BB-Memory] 批量提取检测到纯元对话，跳过');
             return results;
         }
-        const parsed = parseMergedResponse(responseText);
+        const parsed = filterTimelineCoveredByThreads(parseMergedResponse(responseText));
         const hasEmbedding = settings.embeddingEnabled && settings.embeddingEndpoint;
 
         // v7.7.1 合并提取：一次 API 调用获取全部四柱

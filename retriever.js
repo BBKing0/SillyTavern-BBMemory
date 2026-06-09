@@ -73,6 +73,50 @@ function isResidentEntry(entry) {
         || entry.status === 'resident';
 }
 
+function normalizeTimelineFingerprintText(value) {
+    return String(value || '')
+        .toLowerCase()
+        .replace(/[\s"'“”‘’.,，。:：;；!?！？、()[\]【】{}<>《》·\-—_/\\]+/g, '')
+        .trim();
+}
+
+function timelineFingerprint(entry) {
+    const period = normalizeTimelineFingerprintText(entry?.storyTime || entry?.period || entry?.time || '');
+    const event = normalizeTimelineFingerprintText(entry?.event || entry?.title || entry?.summary || entry?.note || '');
+    if (!event) return null;
+    return { full: `${period}|${event}`, event, hasPeriod: Boolean(period) };
+}
+
+function buildThreadTimelineIndex(threads = []) {
+    const full = new Set();
+    const eventWithoutPeriod = new Set();
+    for (const thread of threads || []) {
+        for (const entry of (thread.entries || [])) {
+            const fp = timelineFingerprint(entry);
+            if (!fp) continue;
+            full.add(fp.full);
+            if (!fp.hasPeriod) eventWithoutPeriod.add(fp.event);
+        }
+    }
+    return { full, eventWithoutPeriod };
+}
+
+function isForeshadowTimeline(entry) {
+    const tagText = (entry?.tags || [])
+        .map(tag => typeof tag === 'string' ? tag : tag?.name)
+        .filter(Boolean)
+        .join(' ');
+    return entry?.status === 'foreshadow' || /伏笔|待兑现|待揭示/.test(tagText);
+}
+
+function isTimelineCoveredByThread(entry, threadIndex) {
+    const fp = timelineFingerprint(entry);
+    if (!fp) return false;
+    if (threadIndex.full.has(fp.full)) return true;
+    if (!fp.hasPeriod && [...threadIndex.full].some(key => key.endsWith(`|${fp.event}`))) return true;
+    return threadIndex.eventWithoutPeriod.has(fp.event);
+}
+
 function cloneForInjection(entry, mode, reason = '') {
     return { ...entry, _bbInjectMode: mode, _bbInjectReason: reason };
 }
@@ -708,7 +752,10 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline,
     // ── 区块 3：故事时间线 ──
     if (timeline) {
         const { ongoing, ended, foreshadow } = timeline;
-        const all = [...foreshadow, ...ongoing, ...ended];
+        const threadIndex = buildThreadTimelineIndex(threadSummary?.threads || []);
+        const all = [...foreshadow, ...ongoing, ...ended].filter(t =>
+            isResidentEntry(t) || isForeshadowTimeline(t) || !isTimelineCoveredByThread(t, threadIndex)
+        );
         if (all.length) {
             const lines = ['【故事时间线】'];
             let sectionTokens = 0;
