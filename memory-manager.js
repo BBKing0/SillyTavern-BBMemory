@@ -1491,7 +1491,7 @@ async function renderSlotsPanel(overlay, chatId, cachedData = null) {
                             <button class="menu_button bb-slot-btn-save" data-slot="${escapeHtml(s.name)}" title="将当前数据保存到此槽">
                                 <i class="fa-solid fa-arrow-up"></i> 保存
                             </button>
-                            <button class="menu_button bb-slot-btn-load" data-slot="${escapeHtml(s.name)}" data-remote="false" ${s.remoteIndexOnly ? 'disabled' : ''} title="${s.remoteIndexOnly ? '云端仅保留轻量索引，完整槽数据请使用本地 JSON 导出/导入迁移' : '从此槽加载数据（覆盖当前）'}">
+                            <button class="menu_button bb-slot-btn-load" data-slot="${escapeHtml(s.name)}" data-remote="${s.remoteIndexOnly ? 'true' : 'false'}" title="${s.remoteIndexOnly ? '从云端拉取存档数据并加载（覆盖当前）' : '从此槽加载数据（覆盖当前）'}">
                                 <i class="fa-solid fa-arrow-down"></i> 加载
                             </button>
                             <button class="menu_button bb-slot-btn-export" data-slot="${escapeHtml(s.name)}" title="导出此存档为JSON文件">
@@ -1525,7 +1525,7 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
             const slotName = btn.dataset.slot;
             try {
                 const result = await saveToSlot(charId, chatId, slotName);
-                const syncTip = result.cloudSynced ? '，云端索引已更新（完整数据保留在本地）' : '（本地已保存，云端索引不可用）';
+                const syncTip = result.cloudDataSynced ? '，已同步到云端' : (result.cloudSynced ? '，云端索引已更新（数据同步失败）' : '（本地已保存，云端不可用）');
                 showToast(`已保存 ${result.count} 条到「${slotName}」${syncTip}`, result.cloudSynced ? 'success' : 'warning');
                 updateSettings({ currentSlotName: slotName });
                 await renderSlotsPanel(overlay, chatId, result.data);

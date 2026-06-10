@@ -228,10 +228,10 @@ export async function saveToSlot(charId, chatId, slotName) {
     const slots = await listSlots(charId);
     await updateSlotIndex(charId, slots);
 
-    await removeSlotDataFromChatMetadata(slotName);
+    const dataSynced = await pushSlotDataToChatMetadata(slotName, data);
     const indexSynced = await syncSlotIndexToChatMetadata(charId);
 
-    return { count: totalCount(data), data, cloudSynced: indexSynced, cloudDataSynced: false };
+    return { count: totalCount(data), data, cloudSynced: indexSynced, cloudDataSynced: dataSynced };
 }
 
 /**
@@ -243,6 +243,14 @@ export async function loadFromSlot(charId, chatId, slotName) {
 
     const lf = getLocalForage();
     let raw = await lf.getItem(slotKey(charId, slotName));
+
+    // v9.0.2: 本地数据为空时尝试从 chatMetadata 拉取（跨设备同步）
+    if (!raw || totalCount(raw) === 0) {
+        const pulled = await pullSlotFromChatMetadata(charId, slotName);
+        if (pulled && pulled > 0) {
+            raw = await lf.getItem(slotKey(charId, slotName));
+        }
+    }
 
     // 兼容旧格式（扁平记忆数组）和新格式（五柱对象，v8.9.0 含地图/线索板）
     let data = normalizeSlotData(raw);
@@ -378,10 +386,17 @@ export async function exportSlot(charId, slotName) {
     if (!charId) throw new Error('无法获取角色ID');
 
     const lf = getLocalForage();
-    const raw = await lf.getItem(slotKey(charId, slotName));
-    const data = normalizeSlotData(raw);
+    let raw = await lf.getItem(slotKey(charId, slotName));
 
-    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    // v9.0.2: 本地数据为空时尝试从 chatMetadata 拉取（跨设备同步）
+    if (!raw || totalCount(raw) === 0) {
+        const pulled = await pullSlotFromChatMetadata(charId, slotName);
+        if (pulled && pulled > 0) {
+            raw = await lf.getItem(slotKey(charId, slotName));
+        }
+    }
+
+    const data = normalizeSlotData(raw);
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -456,8 +471,6 @@ async function syncSlotIndexToChatMetadata(charId, options = {}) {
     if (!ctx) return false;
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
 
-    await removeSlotDataFromChatMetadata(null, ctx);
-
     const previousIndex = getRemoteSlotIndex(charId);
     const slots = await listSlots(charId);
     const index = { charId, slots: { ...(previousIndex.slots || {}) } };
@@ -487,6 +500,38 @@ async function removeSlotDataFromChatMetadata(slotName = null, context = null) {
         changed = true;
     }
     return changed ? saveChatMeta(ctx) : true;
+}
+
+/**
+ * 将槽完整数据推送到 chatMetadata（跨设备共享）
+ * v9.0.2 恢复数据同步，去除 embedding 向量以控制体积
+ */
+async function pushSlotDataToChatMetadata(slotName, data, context = null) {
+    const ctx = context || getSTContext();
+    if (!ctx) return false;
+    if (!ctx.chatMetadata) ctx.chatMetadata = {};
+
+    const stripped = stripSlotEmbeddings(data);
+    ctx.chatMetadata[SLOT_DATA_PREFIX + slotName] = JSON.stringify(stripped);
+    return saveChatMeta(ctx);
+}
+
+function stripSlotEmbeddings(data) {
+    if (!data || typeof data !== 'object') return data;
+    const strip = (entry) => {
+        if (!entry || typeof entry !== 'object') return entry;
+        const { embedding, ...rest } = entry;
+        return rest;
+    };
+    return {
+        npc: Array.isArray(data.npc) ? data.npc.map(strip) : [],
+        items: Array.isArray(data.items) ? data.items.map(strip) : [],
+        timeline: Array.isArray(data.timeline) ? data.timeline.map(strip) : [],
+        memories: Array.isArray(data.memories) ? data.memories.map(strip) : [],
+        threads: Array.isArray(data.threads) ? data.threads.map(strip) : [],
+        map: data.map && typeof data.map === 'object' ? data.map : { locations: {} },
+        clueBoard: data.clueBoard || { nodes: [], connections: [], updatedAt: 0 },
+    };
 }
 
 /**
