@@ -233,6 +233,7 @@ export async function saveToSlot(charId, chatId, slotName) {
     const jsonSize = JSON.stringify(stripSlotEmbeddings(data)).length;
 
     return { count: totalCount(data), data, cloudSynced: indexSynced, cloudDataSynced: dataSynced, cloudDataSize: jsonSize };
+}
 
 /**
  * 从指定槽加载数据到当前聊天（覆盖当前聊天数据）
