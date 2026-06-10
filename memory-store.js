@@ -49,7 +49,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     contextWindowExchanges: 3,
     batchExtractionCount: 2,         // v8.0.0 每次并行请求的 exchange 数
     sourceRollbackFloorWindow: 10,   // 更新回滚快照保留的最近楼层数
-    extractedMsgDisplay: 'transparent', // 'hidden' | 'transparent' | 'visible'
+    extractedMsgDisplay: 'hidden', // 'hidden' | 'transparent' | 'visible'
     extractionStyle: 'auto',             // 'auto' | 'daily' | 'drama' | 'custom'
     customExtractionBias: '',            // 自定义风格偏置（extractionStyle=custom 时生效）
     // 自定义提示词（v7.7.1）
