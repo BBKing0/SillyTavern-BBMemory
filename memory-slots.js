@@ -230,9 +230,9 @@ export async function saveToSlot(charId, chatId, slotName) {
 
     const dataSynced = await pushSlotDataToChatMetadata(slotName, data);
     const indexSynced = await syncSlotIndexToChatMetadata(charId);
+    const jsonSize = JSON.stringify(stripSlotEmbeddings(data)).length;
 
-    return { count: totalCount(data), data, cloudSynced: indexSynced, cloudDataSynced: dataSynced };
-}
+    return { count: totalCount(data), data, cloudSynced: indexSynced, cloudDataSynced: dataSynced, cloudDataSize: jsonSize };
 
 /**
  * 从指定槽加载数据到当前聊天（覆盖当前聊天数据）
@@ -245,10 +245,12 @@ export async function loadFromSlot(charId, chatId, slotName) {
     let raw = await lf.getItem(slotKey(charId, slotName));
 
     // v9.0.2: 本地数据为空时尝试从 chatMetadata 拉取（跨设备同步）
+    let pulledFromCloud = false;
     if (!raw || totalCount(raw) === 0) {
         const pulled = await pullSlotFromChatMetadata(charId, slotName);
         if (pulled && pulled > 0) {
             raw = await lf.getItem(slotKey(charId, slotName));
+            pulledFromCloud = true;
         }
     }
 
@@ -315,7 +317,12 @@ export async function loadFromSlot(charId, chatId, slotName) {
 
     await writeAllPillarData(chatId, data);
 
-    return { count: totalCount(data), data };
+    // v9.0.3: 从云端拉取的数据缺少 embedding，后台补全
+    if (pulledFromCloud) {
+        scheduleSlotReembed(chatId);
+    }
+
+    return { count: totalCount(data), data, pulledFromCloud };
 }
 
 /**
@@ -505,6 +512,7 @@ async function removeSlotDataFromChatMetadata(slotName = null, context = null) {
 /**
  * 将槽完整数据推送到 chatMetadata（跨设备共享）
  * v9.0.2 恢复数据同步，去除 embedding 向量以控制体积
+ * v9.0.3 添加大小上限守卫，超过 chatMetadataBackupMaxKb 限制则跳过
  */
 async function pushSlotDataToChatMetadata(slotName, data, context = null) {
     const ctx = context || getSTContext();
@@ -512,8 +520,82 @@ async function pushSlotDataToChatMetadata(slotName, data, context = null) {
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
 
     const stripped = stripSlotEmbeddings(data);
-    ctx.chatMetadata[SLOT_DATA_PREFIX + slotName] = JSON.stringify(stripped);
+    const json = JSON.stringify(stripped);
+    const limit = getSlotDataSizeLimit();
+    if (json.length > limit) {
+        console.warn(`[BB-Memory] 槽 "${slotName}" 数据大小 ${(json.length / 1024).toFixed(1)}KB 超过上限 ${(limit / 1024).toFixed(0)}KB，跳过云端同步`);
+        return false;
+    }
+    ctx.chatMetadata[SLOT_DATA_PREFIX + slotName] = json;
     return saveChatMeta(ctx);
+}
+
+function getSlotDataSizeLimit() {
+    try {
+        const ctx = getSTContext();
+        const kb = Number(ctx?.extensionSettings?.bb_memory?.chatMetadataBackupMaxKb) || 2048;
+        return Math.max(128, Math.min(8192, kb)) * 1024;
+    } catch { return 2048 * 1024; }
+}
+
+/**
+ * v9.0.3 后台补全从云端拉取的存档缺失的 embedding 向量
+ * fire-and-forget：不阻塞 loadFromSlot 返回
+ */
+async function scheduleSlotReembed(chatId) {
+    try {
+        const ctx = getSTContext();
+        const s = ctx?.extensionSettings?.bb_memory || {};
+        if (!s.embeddingEnabled || !s.embeddingEndpoint) return;
+
+        const data = await readAllPillarData(chatId);
+        const pillars = [
+            { key: 'npc', entries: data.npc, collection: 'npc', label: 'NPC' },
+            { key: 'items', entries: data.items, collection: 'item', label: '物品' },
+            { key: 'timeline', entries: data.timeline, collection: 'timeline', label: '时间线' },
+            { key: 'memories', entries: data.memories, collection: 'mem', label: '记忆' },
+            { key: 'threads', entries: data.threads, collection: 'threads', label: '线程' },
+        ];
+
+        const needs = pillars.map(p => ({
+            ...p,
+            missing: p.entries.filter(e => e && !e.embedding),
+        }));
+        const total = needs.reduce((sum, n) => sum + n.missing.length, 0);
+        if (total === 0) return;
+
+        console.log(`[BB-Memory] 后台补向量：共 ${total} 条需要向量化`);
+
+        // fire-and-forget
+        (async () => {
+            let done = 0;
+            let failed = 0;
+            try {
+                const ag = await import('./auto-generator.js');
+                for (const n of needs) {
+                    if (n.missing.length === 0) continue;
+                    const result = await ag.embedExistingMemories(chatId, n.missing, null, n.collection);
+                    done += result.updated || 0;
+                    failed += result.failed || 0;
+                }
+            } catch (e) {
+                console.warn('[BB-Memory] 后台补向量异常:', e.message);
+                failed += total - done;
+            }
+            if (done > 0) {
+                const msg = `存档向量补全完成：成功 ${done} 条` + (failed > 0 ? `，失败 ${failed} 条` : '');
+                console.log(`[BB-Memory] ${msg}`);
+                try {
+                    const ctx2 = getSTContext();
+                    if (typeof ctx2?.toastr?.success === 'function') {
+                        ctx2.toastr.success(msg, 'BB-Memory 存档同步');
+                    }
+                } catch { /* ignore */ }
+            }
+        })();
+    } catch (e) {
+        console.warn('[BB-Memory] scheduleSlotReembed 启动失败:', e.message);
+    }
 }
 
 function stripSlotEmbeddings(data) {

@@ -1525,7 +1525,15 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
             const slotName = btn.dataset.slot;
             try {
                 const result = await saveToSlot(charId, chatId, slotName);
-                const syncTip = result.cloudDataSynced ? '，已同步到云端' : (result.cloudSynced ? '，云端索引已更新（数据同步失败）' : '（本地已保存，云端不可用）');
+                let syncTip;
+                if (result.cloudDataSynced) {
+                    syncTip = `，已同步到云端 (${(result.cloudDataSize / 1024).toFixed(0)}KB)`;
+                } else if (result.cloudSynced) {
+                    const sizeInfo = result.cloudDataSize ? ` (${(result.cloudDataSize / 1024).toFixed(0)}KB 超过上限)` : '';
+                    syncTip = `，云端索引已更新，数据同步跳过${sizeInfo}`;
+                } else {
+                    syncTip = '（本地已保存，云端不可用）';
+                }
                 showToast(`已保存 ${result.count} 条到「${slotName}」${syncTip}`, result.cloudSynced ? 'success' : 'warning');
                 updateSettings({ currentSlotName: slotName });
                 await renderSlotsPanel(overlay, chatId, result.data);
