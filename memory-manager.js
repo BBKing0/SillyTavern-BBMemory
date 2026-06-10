@@ -19,7 +19,7 @@ import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, d
 import { simpleSearch } from './retriever.js';
 import { MEMORY_TYPES, TRUTH_STATUS, HIDDEN_NOTE_TYPES, TIMELINE_STATUS, ITEM_STATUS } from './memory-types.js';
 import { NPC_TIERS, ITEM_TIERS, normalizeNpcTier, normalizeItemTier } from './entity-tiers.js';
-import { extractFromContext, saveExtractedMemories, attachEntryEmbedding } from './auto-generator.js';
+import { attachEntryEmbedding } from './auto-generator.js';
 import { markExchangeExtracted, hideExchange, unmarkExchangeProcessed, getExtractionFloorStatus } from './message-state.js';
 import { fuzzyMemory, archiveMemory, restoreMemory } from './memory-maintainer.js';
 
@@ -119,9 +119,6 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) 
                 </select>
                 <button class="menu_button bb-mem-toolbar-btn" id="bb_mgr_add">
                     <i class="fa-solid fa-plus"></i> 添加
-                </button>
-                <button class="menu_button bb-mem-toolbar-btn" id="bb_mgr_ai_extract">
-                    <i class="fa-solid fa-wand-magic-sparkles"></i> 手动提取
                 </button>
             </div>
 
@@ -521,29 +518,6 @@ function bindManagerEvents(overlay, chatId) {
     // 添加
     overlay.querySelector('#bb_mgr_add')?.addEventListener('click', () => {
         showQuickAddForm(overlay, chatId);
-    });
-
-    // v8.2.3 手动提取（改为楼层范围提取，与悬浮球/侧边栏一致）
-    overlay.querySelector('#bb_mgr_ai_extract')?.addEventListener('click', async () => {
-        // 先收起记忆管家遮罩
-        overlay.style.display = 'none';
-        try {
-            const range = await globalThis.bbPromptFloorRange?.();
-            if (range === undefined || range === null) {
-                overlay.style.display = '';
-                return;
-            }
-            showToast('正在提取记忆...', 'info');
-            const results = await globalThis.bbHandleInitMemory?.(chatId, range);
-            if (results) {
-                showToast(`提取完成！NPC ${results.npc}/物品 ${results.items}/时间线 ${results.timeline}/线程 ${results.threads || 0}/地点 ${results.locations || 0}/记忆 ${results.memories}`, 'success');
-            }
-        } catch (e) {
-            showToast(`提取失败: ${e.message}`, 'error');
-        }
-        // 重新渲染列表
-        overlay.style.display = '';
-        await rerenderManagerList(overlay, chatId);
     });
 
     // 导出

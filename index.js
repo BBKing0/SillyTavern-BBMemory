@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v8.9.6 主入口
+ * index.js —— BB-Memory v9.0.0 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 时间线 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -783,6 +783,7 @@ function bindSidebarEvents() {
     // 数字/文本输入
     bindInput('#bb_context_window', 'contextWindowExchanges', 'number');
     bindInput('#bb_batch_extraction', 'batchExtractionCount', 'number');
+    bindInput('#bb_source_rollback_floor_window', 'sourceRollbackFloorWindow', 'number');
     bindInput('#bb_token_budget', 'tokenBudget', 'number');
     bindInput('#bb_max_results', 'maxResults', 'number');
     bindInput('#bb_npc_injection_max', 'npcInjectionMax', 'number');
@@ -1670,12 +1671,14 @@ function registerSlashCommands() {
         const exchangeHash = computeExchangeHash(userMsg, msg.mes || '');
         const result = await deleteByExchange(chatId, exchangeHash);
         await unmarkExchangeProcessed(chatId, exchangeHash);
+        const deletedTotal = Object.values(result.deleted || {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
+        const restoredTotal = Object.values(result.restored || {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
         msg._bbmem_extracted = false;
         msg._bbmem_skipped = false;
         msg._bbmem_pendingExtraction = true;
         try { ctx2.saveChatDebounced(); } catch {}
         refreshExtractionMarkers();
-        showToast(`已删除: NPC${result.npc}/物品${result.items}/时间线${result.timeline}/地点${result.map || 0}/记忆${result.memories}`, 'success');
+        showToast(`已处理楼层关联数据：删除 ${deletedTotal} / 回滚 ${restoredTotal}（NPC${result.npc}/物品${result.items}/时间线${result.timeline}/地点${result.map || 0}/记忆${result.memories}）`, 'success');
     }, '删除指定楼层的所有关联记忆');
 
     addCmd('bb-re-extract', async (args) => {
@@ -2284,7 +2287,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v8.9.6 初始化开始...');
+    console.log('[BB-Memory] v9.0.0 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -2429,7 +2432,7 @@ async function init() {
     // v6.1: 监听消息删除，自动清理关联记忆
     initMessageDeletionWatch();
 
-    console.log('[BB-Memory] v8.9.6 初始化完成');
+    console.log('[BB-Memory] v9.0.0 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
@@ -2470,8 +2473,10 @@ async function handleMessageDeletedByExchange(exchangeHash) {
         const removed = await deleteByExchange(chatId, exchangeHash);
         const total = removed.npc + removed.items + removed.timeline + removed.memories + (removed.map || 0);
         if (total > 0) {
-            console.log(`[BB-Memory] 自动清理已删除楼层的关联记忆: NPC${removed.npc}/物品${removed.items}/时间线${removed.timeline}/地点${removed.map || 0}/记忆${removed.memories}`);
-            showToast(`已自动清理 ${total} 条关联记忆`, 'info');
+            const deletedTotal = Object.values(removed.deleted || {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
+            const restoredTotal = Object.values(removed.restored || {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
+            console.log(`[BB-Memory] 自动清理已删除楼层的关联数据: 删除${deletedTotal}/回滚${restoredTotal} NPC${removed.npc}/物品${removed.items}/时间线${removed.timeline}/地点${removed.map || 0}/记忆${removed.memories}`);
+            showToast(`已自动清理 ${total} 条关联数据（删除 ${deletedTotal} / 回滚 ${restoredTotal}）`, 'info');
         }
     } catch (e) {
         console.warn('[BB-Memory] 自动清理失败:', e.message);

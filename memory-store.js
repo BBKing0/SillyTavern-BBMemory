@@ -48,6 +48,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     activeConfirmStyle: 'popup',   // 'popup' | 'toast'
     contextWindowExchanges: 3,
     batchExtractionCount: 2,         // v8.0.0 每次并行请求的 exchange 数
+    sourceRollbackFloorWindow: 10,   // 更新回滚快照保留的最近楼层数
     extractedMsgDisplay: 'transparent', // 'hidden' | 'transparent' | 'visible'
     extractionStyle: 'auto',             // 'auto' | 'daily' | 'drama' | 'custom'
     customExtractionBias: '',            // 自定义风格偏置（extractionStyle=custom 时生效）
@@ -163,6 +164,120 @@ async function saveCollection(type, chatId, data) {
     await lf.setItem(storageKey(type, chatId), data);
 }
 
+const SOURCE_ROLLBACK_KEY = '_bbmemSourceRollback';
+
+function deepClonePlain(value) {
+    if (!value || typeof value !== 'object') return value;
+    try {
+        return JSON.parse(JSON.stringify(value));
+    } catch {
+        return { ...value };
+    }
+}
+
+function cloneForSourceRollback(entry) {
+    const copy = deepClonePlain(entry);
+    if (!copy || typeof copy !== 'object') return null;
+    delete copy.embedding;
+    delete copy[SOURCE_ROLLBACK_KEY];
+    return copy;
+}
+
+function getSourceRollbackFloorWindow() {
+    const value = Number(getSettings().sourceRollbackFloorWindow);
+    if (!Number.isFinite(value)) return 10;
+    return Math.max(0, Math.min(200, Math.floor(value)));
+}
+
+function normalizeSourceFloor(value) {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function stripUpdateSourceAttribution(patch) {
+    const next = { ...patch };
+    delete next.source;
+    delete next.sourceExchange;
+    delete next.sourceFloor;
+    delete next.creationFloor;
+    delete next.sourceMessageHash;
+    delete next.sourceChatId;
+    return next;
+}
+
+function pruneStaleSourceRollback(entry, currentFloor) {
+    const rollback = entry?.[SOURCE_ROLLBACK_KEY];
+    const rollbackFloor = normalizeSourceFloor(rollback?.sourceFloor);
+    if (!rollback || rollbackFloor === null || currentFloor === null) return;
+    const windowFloors = getSourceRollbackFloorWindow();
+    if (rollbackFloor > currentFloor - windowFloors) return;
+
+    const previous = rollback.previous || {};
+    if (entry.sourceExchange === rollback.exchange) {
+        entry.source = previous.source || entry.source;
+        entry.sourceExchange = previous.sourceExchange || '';
+        entry.sourceFloor = normalizeSourceFloor(previous.sourceFloor) ?? -1;
+        entry.creationFloor = normalizeSourceFloor(previous.creationFloor) ?? entry.creationFloor;
+        entry.sourceMessageHash = previous.sourceMessageHash || '';
+        entry.sourceChatId = previous.sourceChatId || entry.sourceChatId || '';
+    }
+    delete entry[SOURCE_ROLLBACK_KEY];
+}
+
+function attachSourceRollback(entry, patch) {
+    const exchange = patch?.sourceExchange;
+    if (!entry || !exchange) return patch;
+    const currentFloor = normalizeSourceFloor(patch.sourceFloor);
+    pruneStaleSourceRollback(entry, currentFloor);
+    if (getSourceRollbackFloorWindow() <= 0) return stripUpdateSourceAttribution(patch);
+    if (entry[SOURCE_ROLLBACK_KEY]?.exchange === exchange) return patch;
+    return {
+        ...patch,
+        [SOURCE_ROLLBACK_KEY]: {
+            exchange,
+            sourceFloor: currentFloor,
+            createdAt: Date.now(),
+            previous: cloneForSourceRollback(entry),
+        },
+    };
+}
+
+function restoreSourceRollback(current, rollback) {
+    const previous = deepClonePlain(rollback?.previous);
+    if (!previous || typeof previous !== 'object') return null;
+    previous.id = previous.id || current.id;
+    previous.embedding = previous.embedding ?? null;
+    delete previous[SOURCE_ROLLBACK_KEY];
+    return previous;
+}
+
+function rollbackCollectionByExchange(entries, exchangeHash) {
+    let removed = 0;
+    let restored = 0;
+    let changed = false;
+    const next = [];
+
+    for (const entry of entries) {
+        const rollback = entry?.[SOURCE_ROLLBACK_KEY];
+        if (rollback?.exchange === exchangeHash) {
+            const restoredEntry = restoreSourceRollback(entry, rollback);
+            if (restoredEntry) {
+                next.push(restoredEntry);
+                restored++;
+                changed = true;
+                continue;
+            }
+        }
+        if (entry?.sourceExchange === exchangeHash) {
+            removed++;
+            changed = true;
+            continue;
+        }
+        next.push(entry);
+    }
+
+    return { entries: next, removed, restored, changed };
+}
+
 // ═══ v7.8.0 按聊天存储的日历描述 ═══
 
 const CALENDAR_KEY = 'bb_calendar_chat_';
@@ -251,6 +366,7 @@ export async function updateNpcProfile(chatId, id, patch) {
     const profiles = await getNpcProfiles(chatId);
     const entry = profiles.find(p => p.id === id);
     if (!entry) return null;
+    patch = attachSourceRollback(entry, patch);
     const { id: _id, createdAt: _ca, ...safe } = patch;
     Object.assign(entry, safe);
     entry.updatedAt = Date.now();
@@ -329,6 +445,7 @@ export async function updateItem(chatId, id, patch) {
     const items = await getItems(chatId);
     const entry = items.find(i => i.id === id);
     if (!entry) return null;
+    patch = attachSourceRollback(entry, patch);
     const { id: _id, createdAt: _ca, ...safe } = patch;
     Object.assign(entry, safe);
     entry.updatedAt = Date.now();
@@ -421,6 +538,7 @@ export async function updateTimelineEntry(chatId, id, patch) {
     const timeline = await getTimeline(chatId);
     const entry = timeline.find(t => t.id === id);
     if (!entry) return null;
+    patch = attachSourceRollback(entry, patch);
     const { id: _id, createdAt: _ca, ...safe } = patch;
     Object.assign(entry, safe);
     entry.updatedAt = Date.now();
@@ -571,6 +689,7 @@ export async function updateMemory(chatId, id, patch) {
     const memories = await getMemories(chatId);
     const entry = memories.find(m => m.id === id);
     if (!entry) return null;
+    patch = attachSourceRollback(entry, patch);
     const { id: _id, createdAt: _ca, ...safe } = patch;
     Object.assign(entry, safe);
     entry.updatedAt = Date.now();
@@ -961,6 +1080,90 @@ export async function clearAllData(chatId) {
  * 按 exchange hash 删除关联的记忆条目（支持 ROLL 后清理）
  */
 export async function deleteByExchange(chatId, exchangeHash) {
+    if (!exchangeHash) return { npc: 0, items: 0, timeline: 0, memories: 0, map: 0 };
+    const [npc, items, timeline, memories] = await Promise.all([
+        getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+    ]);
+    const npcResult = rollbackCollectionByExchange(npc, exchangeHash);
+    const itemResult = rollbackCollectionByExchange(items, exchangeHash);
+    const timelineResult = rollbackCollectionByExchange(timeline, exchangeHash);
+    const memoryResult = rollbackCollectionByExchange(memories, exchangeHash);
+    const removed = {
+        npc: npcResult.removed + npcResult.restored,
+        items: itemResult.removed + itemResult.restored,
+        timeline: timelineResult.removed + timelineResult.restored,
+        memories: memoryResult.removed + memoryResult.restored,
+        map: 0,
+        deleted: {
+            npc: npcResult.removed,
+            items: itemResult.removed,
+            timeline: timelineResult.removed,
+            memories: memoryResult.removed,
+            map: 0,
+        },
+        restored: {
+            npc: npcResult.restored,
+            items: itemResult.restored,
+            timeline: timelineResult.restored,
+            memories: memoryResult.restored,
+            map: 0,
+        },
+    };
+
+    try {
+        const { getMap, setMap } = await import('./map-store.js');
+        const map = await getMap(chatId);
+        const locations = map?.locations || {};
+        const removedIds = new Set();
+        let mapChanged = false;
+
+        for (const [id, loc] of Object.entries(locations)) {
+            const rollback = loc?.[SOURCE_ROLLBACK_KEY];
+            if (rollback?.exchange === exchangeHash) {
+                const restoredLoc = restoreSourceRollback(loc, rollback);
+                if (restoredLoc) {
+                    restoredLoc.id = id;
+                    locations[id] = restoredLoc;
+                    removed.map++;
+                    removed.restored.map++;
+                    mapChanged = true;
+                    continue;
+                }
+            }
+            if (loc?.sourceExchange === exchangeHash) {
+                delete locations[id];
+                removedIds.add(id);
+                removed.map++;
+                removed.deleted.map++;
+                mapChanged = true;
+            }
+        }
+
+        if (removedIds.size) {
+            for (const loc of Object.values(locations)) {
+                if (!Array.isArray(loc.edges)) continue;
+                const nextEdges = loc.edges.filter(edge => !removedIds.has(edge.toId));
+                if (nextEdges.length !== loc.edges.length) {
+                    loc.edges = nextEdges;
+                    mapChanged = true;
+                }
+            }
+        }
+
+        if (mapChanged) await setMap(chatId, map, { skipBackup: true });
+    } catch { /* ignore map rollback when map module is unavailable */ }
+
+    const saves = [];
+    if (npcResult.changed) saves.push(saveCollection('npc', chatId, npcResult.entries));
+    if (itemResult.changed) saves.push(saveCollection('item', chatId, itemResult.entries));
+    if (timelineResult.changed) saves.push(saveCollection('timeline', chatId, timelineResult.entries));
+    if (memoryResult.changed) saves.push(saveCollection('mem', chatId, memoryResult.entries));
+    if (saves.length) await Promise.all(saves);
+    if (saves.length || removed.map) scheduleAutoBackup(chatId);
+    return removed;
+}
+
+async function deleteByExchangeLegacy(chatId, exchangeHash) {
     if (!exchangeHash) return { npc: 0, items: 0, timeline: 0, memories: 0, map: 0 };
     const [npc, items, timeline, memories] = await Promise.all([
         getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),

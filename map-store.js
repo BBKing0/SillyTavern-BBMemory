@@ -5,8 +5,11 @@
  * 支持地点 CRUD、边管理、BFS 路径查找、区域查询。
  */
 
+import { getSettings } from './memory-store.js';
+
 // ═══ 存储键 ═══
 const MAP_KEY = 'bb_map_chat_';
+const SOURCE_ROLLBACK_KEY = '_bbmemSourceRollback';
 
 // ═══ SillyTavern 接口 ═══
 function getLocalForage() {
@@ -19,6 +22,79 @@ function getLocalForage() {
 
 function generateId() {
     return 'loc_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+}
+
+function deepClonePlain(value) {
+    if (!value || typeof value !== 'object') return value;
+    try {
+        return JSON.parse(JSON.stringify(value));
+    } catch {
+        return { ...value };
+    }
+}
+
+function normalizeSourceFloor(value) {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function getSourceRollbackFloorWindow() {
+    const value = Number(getSettings().sourceRollbackFloorWindow);
+    if (!Number.isFinite(value)) return 10;
+    return Math.max(0, Math.min(200, Math.floor(value)));
+}
+
+function stripUpdateSourceAttribution(patch) {
+    const next = { ...patch };
+    delete next.source;
+    delete next.sourceExchange;
+    delete next.sourceFloor;
+    delete next.sourceMessageHash;
+    delete next.sourceChatId;
+    return next;
+}
+
+function cloneForSourceRollback(entry) {
+    const copy = deepClonePlain(entry);
+    if (!copy || typeof copy !== 'object') return null;
+    delete copy.embedding;
+    delete copy[SOURCE_ROLLBACK_KEY];
+    return copy;
+}
+
+function pruneStaleSourceRollback(entry, currentFloor) {
+    const rollback = entry?.[SOURCE_ROLLBACK_KEY];
+    const rollbackFloor = normalizeSourceFloor(rollback?.sourceFloor);
+    if (!rollback || rollbackFloor === null || currentFloor === null) return;
+    const windowFloors = getSourceRollbackFloorWindow();
+    if (rollbackFloor > currentFloor - windowFloors) return;
+
+    const previous = rollback.previous || {};
+    if (entry.sourceExchange === rollback.exchange) {
+        entry.source = previous.source || entry.source;
+        entry.sourceExchange = previous.sourceExchange || '';
+        entry.sourceFloor = normalizeSourceFloor(previous.sourceFloor) ?? -1;
+        entry.sourceMessageHash = previous.sourceMessageHash || '';
+        entry.sourceChatId = previous.sourceChatId || entry.sourceChatId || '';
+    }
+    delete entry[SOURCE_ROLLBACK_KEY];
+}
+
+function attachSourceRollback(entry, patch) {
+    const exchange = patch?.sourceExchange;
+    if (!entry || !exchange) return patch;
+    const currentFloor = normalizeSourceFloor(patch.sourceFloor);
+    pruneStaleSourceRollback(entry, currentFloor);
+    if (getSourceRollbackFloorWindow() <= 0) return stripUpdateSourceAttribution(patch);
+    if (entry[SOURCE_ROLLBACK_KEY]?.exchange === exchange) return patch;
+    return {
+        ...patch,
+        [SOURCE_ROLLBACK_KEY]: {
+            exchange,
+            sourceFloor: currentFloor,
+            createdAt: Date.now(),
+            previous: cloneForSourceRollback(entry),
+        },
+    };
 }
 
 // ═══ 数据加载/保存 ═══
@@ -87,7 +163,9 @@ export async function addLocation(chatId, data) {
         source: data.source || 'manual',
         sourceExchange: data.sourceExchange || '',
         sourceFloor: typeof data.sourceFloor === 'number' ? data.sourceFloor : -1,
+        creationFloor: typeof data.creationFloor === 'number' ? data.creationFloor : (typeof data.sourceFloor === 'number' ? data.sourceFloor : -1),
         sourceMessageHash: data.sourceMessageHash || '',
+        sourceChatId: data.sourceChatId || '',
         archived: data.archived || false,  // v8.8.1
     };
     map.locations[id] = entry;
@@ -117,6 +195,7 @@ export async function updateLocation(chatId, id, patch) {
     const map = await loadMap(chatId);
     const loc = map.locations[id];
     if (!loc) return null;
+    patch = attachSourceRollback(loc, patch);
     const { id: _id, createdAt: _ca, ...safe } = patch;
     Object.assign(loc, safe);
     loc.updatedAt = Date.now();

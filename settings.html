@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v8.9.15</b>
+            <b>BB-Memory v9.0.0</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -320,6 +320,12 @@
                         <input id="bb_batch_extraction" type="number" class="bb-input" min="1" max="5" value="2" />
                     </div>
                     <div class="bb-mem-hint">同时发送的API请求数，每个exchange独立调用（增大可提速，默认2）。</div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_source_rollback_floor_window">更新回滚快照保留楼层数</label>
+                        <input id="bb_source_rollback_floor_window" type="number" class="bb-input" min="0" max="200" value="10" />
+                    </div>
+                    <div class="bb-mem-hint">只为最近 N 楼的“更新旧条目”保留回滚快照；设为 0 时不保存更新快照，避免存档增大。</div>
 
                     <!-- v8.2.3 API 预设快速切换 -->
                     <div class="bb-mem-sidebar-section" style="margin-bottom:6px;">

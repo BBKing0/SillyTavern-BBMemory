@@ -714,10 +714,12 @@ export function refreshExtractionMarkers() {
                         const removed = await store.deleteByExchange(chatId, hash);
                         await unmarkExchangeProcessed(chatId, hash);
                         const total = removed.npc + removed.items + removed.timeline + removed.memories + (removed.map || 0);
+                        const deletedTotal = Object.values(removed.deleted || {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
+                        const restoredTotal = Object.values(removed.restored || {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
                         msg._bbmem_extracted = false;
                         msg._bbmem_pendingExtraction = true;
                         saveChat();
-                        showInlineToast(block, `已删除 ${total} 条记忆（NPC:${removed.npc} 物品:${removed.items} 时间线:${removed.timeline} 地点:${removed.map || 0} 记忆:${removed.memories}）`, 'success');
+                        showInlineToast(block, `已处理 ${total} 条关联数据（删除 ${deletedTotal} / 回滚 ${restoredTotal}；NPC:${removed.npc} 物品:${removed.items} 时间线:${removed.timeline} 地点:${removed.map || 0} 记忆:${removed.memories}）`, 'success');
                         refreshExtractionMarkers();
                     });
                 } catch (err) {

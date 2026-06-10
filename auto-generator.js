@@ -1159,7 +1159,7 @@ async function saveExtractedLocations(chatId, locations, sourceInfo = {}) {
                 if (loc.realWorldRef && loc.realWorldRef !== existing.realWorldRef) patch.realWorldRef = loc.realWorldRef;
                 if (embedding && !existing.embedding) patch.embedding = embedding;
                 if (Object.keys(patch).length) {
-                    const updated = await updateLocation(chatId, locId, patch);
+                    const updated = await updateLocation(chatId, locId, { ...patch, ...(sourceInfo || {}) });
                     Object.assign(existing, updated || patch);
                 }
             } else {
@@ -1232,7 +1232,7 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
                 const similar = findMostSimilarMemory(embedding, activeMemories);
                 if (similar) {
                     if (similar.similarity >= getDedupConfig().mergeThreshold) {
-                        await updateMemory(chatId, similar.memory.id, mergeMemoryFields(similar.memory, mem));
+                        await updateMemory(chatId, similar.memory.id, { ...mergeMemoryFields(similar.memory, mem), ...(sourceInfo || {}) });
                         continue;
                     } else if (similar.similarity >= getDedupConfig().reduceThreshold) {
                         mem.importance = Math.max(0.3, (mem.importance || 0.5) - 0.15);
@@ -1500,7 +1500,7 @@ async function saveInitialMemories(chatId, memories, sourceInfo, result) {
             const similar = findMostSimilarMemory(embedding, activeMemories);
             if (similar) {
                 if (similar.similarity >= getDedupConfig().mergeThreshold) {
-                    await updateMemory(chatId, similar.memory.id, mergeMemoryFields(similar.memory, mem));
+                    await updateMemory(chatId, similar.memory.id, { ...mergeMemoryFields(similar.memory, mem), ...sourceInfo });
                     result.merged++;
                     continue;
                 } else if (similar.similarity >= getDedupConfig().reduceThreshold) {
@@ -1517,6 +1517,7 @@ async function saveInitialMemories(chatId, memories, sourceInfo, result) {
                     summary: mem.summary || exact.summary,
                     verbatim: mem.verbatim || exact.verbatim,
                     importance: Math.max(exact.importance || 0.5, mem.importance || 0.5),
+                    ...sourceInfo,
                 });
                 result.merged++;
             } else {
@@ -1634,7 +1635,7 @@ export async function extractFromContext(chatId, contextText, options = {}) {
                 const similar = findMostSimilarMemory(embedding, activeMemories);
                 if (similar) {
                     if (similar.similarity >= getDedupConfig().mergeThreshold) {
-                        await updateMemory(chatId, similar.memory.id, mergeMemoryFields(similar.memory, mem));
+                        await updateMemory(chatId, similar.memory.id, { ...mergeMemoryFields(similar.memory, mem), ...(sourceInfo || {}) });
                         results.memories++;
                         continue;
                     } else if (similar.similarity >= getDedupConfig().reduceThreshold) {
@@ -1701,6 +1702,7 @@ export async function saveExtractedMemories(chatId, candidateMemories, onProgres
 
     for (const mem of candidateMemories) {
         if (mem._selected === false) continue;
+        const sourceInfo = mem._sourceInfo || {};
 
         const embedding = getSettings().embeddingEnabled && getSettings().embeddingEndpoint
             ? await embedMemoryEntry(mem)
@@ -1711,7 +1713,7 @@ export async function saveExtractedMemories(chatId, candidateMemories, onProgres
             if (similar) {
                 if (similar.similarity >= getDedupConfig().mergeThreshold) {
                     const updates = mergeMemoryFields(similar.memory, mem);
-                    await updateMemory(chatId, similar.memory.id, updates);
+                    await updateMemory(chatId, similar.memory.id, { ...updates, ...sourceInfo });
                     count++;
                     continue;
                 } else if (similar.similarity >= getDedupConfig().reduceThreshold) {
@@ -1720,7 +1722,6 @@ export async function saveExtractedMemories(chatId, candidateMemories, onProgres
             }
         }
 
-        const sourceInfo = mem._sourceInfo || {};
         const saved = await addMemory(chatId, { ...mem, embedding, memoryTier: 'stable', source: mem.source || 'auto', ...sourceInfo });
         if (embedding) activeMemories.push(saved);
         count++;

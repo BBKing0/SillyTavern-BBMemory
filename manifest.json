@@ -4,9 +4,9 @@
     "js": "index.js",
     "css": "style.css",
     "author": "BB-Memory Dev",
-    "version": "8.9.15",
+    "version": "9.0.0",
     "homePage": "https://github.com/BBKing0/SillyTavern-BBMemory",
     "auto_update": true,
     "generate_interceptor": "bbMemoryInterceptor",
-    "description": "Smart long-term memory extension v8.9.15 - chatMetadata slimming and export size fixes"
+    "description": "Smart long-term memory extension v9.0.0 - floor rollback cleanup and manager UI slimming"
 }
