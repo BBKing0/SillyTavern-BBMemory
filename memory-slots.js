@@ -35,6 +35,31 @@ function slotKey(charId, slotName) {
     return `${SLOT_PREFIX}${charId}_${slotName}`;
 }
 
+function clonePlain(value) {
+    if (!value || typeof value !== 'object') return value;
+    try {
+        return JSON.parse(JSON.stringify(value));
+    } catch {
+        return Array.isArray(value) ? [...value] : { ...value };
+    }
+}
+
+function createEmptySlotData() {
+    const now = Date.now();
+    return {
+        npc: [],
+        items: [],
+        timeline: [],
+        memories: [],
+        threads: [],
+        map: { locations: {} },
+        clueBoard: { nodes: [], connections: [], updatedAt: 0 },
+        _slotEmpty: true,
+        _slotCreatedAt: now,
+        _slotUpdatedAt: now,
+    };
+}
+
 // ═══ v5 四柱数据读写 ═══
 
 async function readAllPillarData(chatId) {
@@ -71,32 +96,35 @@ async function writeAllPillarData(chatId, data) {
 }
 
 function normalizeMapData(map) {
-    return (map && typeof map === 'object' && map.locations && typeof map.locations === 'object')
-        ? { ...map, locations: map.locations }
+    const safe = (map && typeof map === 'object' && map.locations && typeof map.locations === 'object')
+        ? map
         : { locations: {} };
+    const cloned = clonePlain(safe) || { locations: {} };
+    if (!cloned.locations || typeof cloned.locations !== 'object') cloned.locations = {};
+    return cloned;
 }
 
 function normalizeClueBoardData(board) {
-    return {
+    return clonePlain({
         nodes: Array.isArray(board?.nodes) ? board.nodes : [],
         connections: Array.isArray(board?.connections) ? board.connections : [],
         updatedAt: board?.updatedAt || 0,
-    };
+    });
 }
 
 function normalizeSlotData(raw) {
     if (Array.isArray(raw)) {
-        return { npc: [], items: [], timeline: [], memories: raw, threads: [], map: { locations: {} }, clueBoard: { nodes: [], connections: [], updatedAt: 0 } };
+        return { ...createEmptySlotData(), memories: clonePlain(raw), _slotEmpty: raw.length === 0 };
     }
     if (!raw || typeof raw !== 'object') {
-        return { npc: [], items: [], timeline: [], memories: [], threads: [], map: { locations: {} }, clueBoard: { nodes: [], connections: [], updatedAt: 0 } };
+        return createEmptySlotData();
     }
     return {
-        npc: Array.isArray(raw.npc) ? raw.npc : [],
-        items: Array.isArray(raw.items) ? raw.items : [],
-        timeline: Array.isArray(raw.timeline) ? raw.timeline : [],
-        memories: Array.isArray(raw.memories) ? raw.memories : [],
-        threads: Array.isArray(raw.threads) ? raw.threads : [],
+        npc: Array.isArray(raw.npc) ? clonePlain(raw.npc) : [],
+        items: Array.isArray(raw.items) ? clonePlain(raw.items) : [],
+        timeline: Array.isArray(raw.timeline) ? clonePlain(raw.timeline) : [],
+        memories: Array.isArray(raw.memories) ? clonePlain(raw.memories) : [],
+        threads: Array.isArray(raw.threads) ? clonePlain(raw.threads) : [],
         map: normalizeMapData(raw.map || raw.mapData),
         clueBoard: normalizeClueBoardData(raw.clueBoard || raw.clues),
     };
@@ -228,7 +256,7 @@ export async function saveToSlot(charId, chatId, slotName) {
     const slots = await listSlots(charId);
     await updateSlotIndex(charId, slots);
 
-    const dataSynced = await pushSlotDataToChatMetadata(slotName, data);
+    const dataSynced = await pushSlotDataToChatMetadata(charId, slotName, data);
     const indexSynced = await syncSlotIndexToChatMetadata(charId);
     const jsonSize = JSON.stringify(stripSlotEmbeddings(data)).length;
 
@@ -245,9 +273,10 @@ export async function loadFromSlot(charId, chatId, slotName) {
     const lf = getLocalForage();
     let raw = await lf.getItem(slotKey(charId, slotName));
 
-    // v9.0.2: 本地数据为空时尝试从 chatMetadata 拉取（跨设备同步）
+    // Pull cloud data only when there is no local slot. A deliberate local empty
+    // slot must stay empty, otherwise stale cloud data can leak maps/threads into it.
     let pulledFromCloud = false;
-    if (!raw || totalCount(raw) === 0) {
+    if (raw === null || raw === undefined) {
         const pulled = await pullSlotFromChatMetadata(charId, slotName);
         if (pulled && pulled > 0) {
             raw = await lf.getItem(slotKey(charId, slotName));
@@ -344,7 +373,7 @@ export async function createEmptySlot(charId, slotName) {
         throw new Error(`云端已存在同名存档 "${name}"，请先拉取云端存档`);
     }
 
-    await lf.setItem(slotKey(charId, name), []);
+    await lf.setItem(slotKey(charId, name), createEmptySlotData());
     const slots = await listSlots(charId);
     // v8.2.5 修复：listSlots 优先走索引读取，新槽尚未入索引，需手动补入
     if (!slots.find(s => s.name === name)) {
@@ -352,7 +381,7 @@ export async function createEmptySlot(charId, slotName) {
     }
     await updateSlotIndex(charId, slots);
 
-    await removeSlotDataFromChatMetadata(name);
+    await removeSlotDataFromChatMetadata(name, null, charId);
     const indexSynced = await syncSlotIndexToChatMetadata(charId);
 
     return { name, cloudSynced: indexSynced, cloudDataSynced: false };
@@ -374,7 +403,7 @@ export async function deleteSlot(charId, slotName) {
 
     // v8.5.1 同步到 chatMetadata + 清理远程槽数据
     await syncSlotIndexToChatMetadata(charId, { removeSlotName: slotName });
-    await removeSlotDataFromChatMetadata(slotName);
+    await removeSlotDataFromChatMetadata(slotName, null, charId);
 }
 
 /**
@@ -396,8 +425,7 @@ export async function exportSlot(charId, slotName) {
     const lf = getLocalForage();
     let raw = await lf.getItem(slotKey(charId, slotName));
 
-    // v9.0.2: 本地数据为空时尝试从 chatMetadata 拉取（跨设备同步）
-    if (!raw || totalCount(raw) === 0) {
+    if (raw === null || raw === undefined) {
         const pulled = await pullSlotFromChatMetadata(charId, slotName);
         if (pulled && pulled > 0) {
             raw = await lf.getItem(slotKey(charId, slotName));
@@ -405,6 +433,7 @@ export async function exportSlot(charId, slotName) {
     }
 
     const data = normalizeSlotData(raw);
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -423,6 +452,25 @@ export async function exportSlot(charId, slotName) {
 
 const SLOT_INDEX_KEY = 'bb_memory_slot_index';
 const SLOT_DATA_PREFIX = 'bb_memory_slot_data_';
+
+function encodeSlotPart(value) {
+    return encodeURIComponent(String(value ?? ''));
+}
+
+function scopedSlotDataKey(charId, slotName) {
+    return `${SLOT_DATA_PREFIX}${encodeSlotPart(charId)}__${encodeSlotPart(slotName)}`;
+}
+
+function legacySlotDataKey(slotName) {
+    return SLOT_DATA_PREFIX + slotName;
+}
+
+function getSlotDataKeys(charId, slotName) {
+    const keys = [];
+    if (charId !== null && charId !== undefined) keys.push(scopedSlotDataKey(charId, slotName));
+    keys.push(legacySlotDataKey(slotName));
+    return [...new Set(keys)];
+}
 
 function getSTContext() {
     try { return SillyTavern.getContext(); } catch { return null; }
@@ -456,7 +504,10 @@ async function saveChatMeta(ctx) {
 async function getSlotPillarCounts(charId, slotName) {
     const lf = getLocalForage();
     const data = await lf.getItem(slotKey(charId, slotName));
-    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    if (Array.isArray(data)) {
+        return { npc: 0, items: 0, timeline: 0, mem: data.length, threads: 0, map: 0, clues: 0 };
+    }
+    if (!data || typeof data !== 'object') {
         return { npc: 0, items: 0, timeline: 0, mem: 0, threads: 0, map: 0, clues: 0 };
     }
     const normalized = normalizeSlotData(data);
@@ -495,15 +546,16 @@ async function syncSlotIndexToChatMetadata(charId, options = {}) {
 /**
  * Remove legacy full slot payloads from chatMetadata. Slot sync is index-only now.
  */
-async function removeSlotDataFromChatMetadata(slotName = null, context = null) {
+async function removeSlotDataFromChatMetadata(slotName = null, context = null, charId = null) {
     const ctx = context || getSTContext();
     if (!ctx) return false;
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
 
     let changed = false;
+    const allowedKeys = slotName ? new Set(getSlotDataKeys(charId, slotName)) : null;
     for (const key of Object.keys(ctx.chatMetadata)) {
         if (!key.startsWith(SLOT_DATA_PREFIX)) continue;
-        if (slotName && key !== SLOT_DATA_PREFIX + slotName) continue;
+        if (allowedKeys && !allowedKeys.has(key)) continue;
         delete ctx.chatMetadata[key];
         changed = true;
     }
@@ -515,7 +567,7 @@ async function removeSlotDataFromChatMetadata(slotName = null, context = null) {
  * v9.0.2 恢复数据同步，去除 embedding 向量以控制体积
  * v9.0.3 添加大小上限守卫，超过 chatMetadataBackupMaxKb 限制则跳过
  */
-async function pushSlotDataToChatMetadata(slotName, data, context = null) {
+async function pushSlotDataToChatMetadata(charId, slotName, data, context = null) {
     const ctx = context || getSTContext();
     if (!ctx) return false;
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
@@ -527,7 +579,10 @@ async function pushSlotDataToChatMetadata(slotName, data, context = null) {
         console.warn(`[BB-Memory] 槽 "${slotName}" 数据大小 ${(json.length / 1024).toFixed(1)}KB 超过上限 ${(limit / 1024).toFixed(0)}KB，跳过云端同步`);
         return false;
     }
-    ctx.chatMetadata[SLOT_DATA_PREFIX + slotName] = json;
+    const key = scopedSlotDataKey(charId, slotName);
+    ctx.chatMetadata[key] = json;
+    const legacyKey = legacySlotDataKey(slotName);
+    if (legacyKey !== key && ctx.chatMetadata[legacyKey]) delete ctx.chatMetadata[legacyKey];
     return saveChatMeta(ctx);
 }
 
@@ -556,6 +611,7 @@ async function scheduleSlotReembed(chatId) {
             { key: 'timeline', entries: data.timeline, collection: 'timeline', label: '时间线' },
             { key: 'memories', entries: data.memories, collection: 'mem', label: '记忆' },
             { key: 'threads', entries: data.threads, collection: 'threads', label: '线程' },
+            { key: 'map', entries: Object.values(data.map?.locations || {}), collection: 'map', label: '地图' },
         ];
 
         const needs = pillars.map(p => ({
@@ -606,13 +662,21 @@ function stripSlotEmbeddings(data) {
         const { embedding, ...rest } = entry;
         return rest;
     };
+    const stripMap = (map) => {
+        const normalized = normalizeMapData(map);
+        const locations = {};
+        for (const [id, loc] of Object.entries(normalized.locations || {})) {
+            locations[id] = strip(loc);
+        }
+        return { ...normalized, locations };
+    };
     return {
         npc: Array.isArray(data.npc) ? data.npc.map(strip) : [],
         items: Array.isArray(data.items) ? data.items.map(strip) : [],
         timeline: Array.isArray(data.timeline) ? data.timeline.map(strip) : [],
         memories: Array.isArray(data.memories) ? data.memories.map(strip) : [],
         threads: Array.isArray(data.threads) ? data.threads.map(strip) : [],
-        map: data.map && typeof data.map === 'object' ? data.map : { locations: {} },
+        map: stripMap(data.map),
         clueBoard: data.clueBoard || { nodes: [], connections: [], updatedAt: 0 },
     };
 }
@@ -627,6 +691,9 @@ export function getRemoteSlotIndex(charId) {
     if (!raw) return { slots: {} };
     try {
         const parsed = JSON.parse(raw);
+        if (parsed?.charId !== undefined && charId !== undefined && String(parsed.charId) !== String(charId)) {
+            return { slots: {} };
+        }
         return parsed && parsed.slots ? parsed : { slots: {} };
     } catch {
         return { slots: {} };
@@ -641,7 +708,13 @@ export async function pullSlotFromChatMetadata(charId, slotName) {
     const ctx = getSTContext();
     if (!ctx || !ctx.chatMetadata) return null;
 
-    const raw = ctx.chatMetadata[SLOT_DATA_PREFIX + slotName];
+    let raw = null;
+    for (const key of getSlotDataKeys(charId, slotName)) {
+        if (ctx.chatMetadata[key]) {
+            raw = ctx.chatMetadata[key];
+            break;
+        }
+    }
     if (!raw) return null;
 
     let data;

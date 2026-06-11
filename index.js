@@ -2431,6 +2431,10 @@ async function init() {
 
     // v6.1: 监听消息删除，自动清理关联记忆
     initMessageDeletionWatch();
+    setTimeout(() => {
+        refreshExtractionMarkers();
+        refreshExtractionFloorStatus();
+    }, 500);
 
     console.log('[BB-Memory] v9.0.0 初始化完成');
 }
@@ -2454,8 +2458,9 @@ function initMessageDeletionWatch() {
                     }
                     for (const mesEl of mesEls) {
                         const hash = mesEl.getAttribute('data-bb-exchange-hash');
+                        const messageUid = mesEl.getAttribute('data-bb-message-uid');
                         if (hash) {
-                            handleMessageDeletedByExchange(hash);
+                            queueMessageDeletionCheck(hash, { messageUid });
                         }
                     }
                 }
@@ -2466,9 +2471,39 @@ function initMessageDeletionWatch() {
     setup();
 }
 
-async function handleMessageDeletedByExchange(exchangeHash) {
+const pendingDeletionChecks = new Map();
+
+function queueMessageDeletionCheck(exchangeHash, details = {}) {
+    if (!exchangeHash) return;
+    const key = details.messageUid || exchangeHash;
+    if (pendingDeletionChecks.has(key)) clearTimeout(pendingDeletionChecks.get(key));
+    const timer = setTimeout(() => {
+        pendingDeletionChecks.delete(key);
+        handleMessageDeletedByExchange(exchangeHash, details);
+    }, 350);
+    pendingDeletionChecks.set(key, timer);
+}
+
+function isMessageUidStillLive(messageUid) {
+    if (!messageUid) return false;
+    try {
+        const ctx = SillyTavern.getContext();
+        const chat = ctx.chat || [];
+        return chat.some(msg => msg?._bbmem_messageUid === messageUid);
+    } catch {
+        return false;
+    }
+}
+
+async function handleMessageDeletedByExchange(exchangeHash, details = {}) {
     const chatId = getChatId();
     if (!chatId || !exchangeHash) return;
+    if (details.messageUid && isMessageUidStillLive(details.messageUid)) {
+        if (getSettings().debugLogging) {
+            console.log(`[BB-Memory] 忽略 DOM 重绘导致的楼层移除事件: ${exchangeHash}`);
+        }
+        return;
+    }
     try {
         const removed = await deleteByExchange(chatId, exchangeHash);
         const total = removed.npc + removed.items + removed.timeline + removed.memories + (removed.map || 0);

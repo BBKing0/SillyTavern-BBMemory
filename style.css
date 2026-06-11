@@ -688,6 +688,21 @@
     border-color: var(--SmartThemeQuoteColor, #888);
 }
 
+.bb-mobile-controls-toggle {
+    display: none;
+    padding: 0 18px 8px;
+    flex-shrink: 0;
+}
+
+.bb-mobile-controls-toggle .menu_button {
+    width: 100%;
+    justify-content: center;
+}
+
+.bb-mgr-controls-collapsed .bb-mem-controls {
+    display: none;
+}
+
 /* --- 统计 --- */
 
 .bb-mem-stats {
@@ -2376,6 +2391,14 @@
     }
     .bb-mem-popup-header h3 {
         font-size: 1em;
+    }
+    .bb-mobile-controls-toggle {
+        display: flex;
+        padding: 6px 10px;
+    }
+    .bb-mobile-controls-toggle .menu_button {
+        min-height: 2.3em;
+        font-size: 0.82em;
     }
     .bb-mem-toolbar {
         padding: 8px 14px;

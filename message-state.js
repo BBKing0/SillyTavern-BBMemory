@@ -12,6 +12,7 @@ import { getSettings } from './memory-store.js';
 
 const EXCHANGE_STORE_PREFIX = 'bb_memory_exchanges_';
 const LOG_TAG = '[BB-Memory]';
+const MESSAGE_UID_KEY = '_bbmem_messageUid';
 
 // ═══════════════════════════════════════════════════════════
 //  SillyTavern API 辅助
@@ -50,6 +51,15 @@ function saveChat() {
     } catch (e) {
         console.warn(`${LOG_TAG} 保存聊天失败:`, e);
     }
+}
+
+function ensureMessageUid(msg) {
+    if (!msg || typeof msg !== 'object') return { uid: '', changed: false };
+    if (!msg[MESSAGE_UID_KEY]) {
+        msg[MESSAGE_UID_KEY] = 'bbm_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+        return { uid: msg[MESSAGE_UID_KEY], changed: true };
+    }
+    return { uid: msg[MESSAGE_UID_KEY], changed: false };
 }
 
 function isAiMessage(msg) {
@@ -770,9 +780,13 @@ export function refreshExtractionMarkers() {
 
         // v6.1: 存储 exchange hash 到 DOM 用于删除检测
         if (msg._bbmem_exchangeHash) {
+            const uidResult = ensureMessageUid(msg);
+            if (uidResult.changed) changed = true;
             block.setAttribute('data-bb-exchange-hash', msg._bbmem_exchangeHash);
+            if (uidResult.uid) block.setAttribute('data-bb-message-uid', uidResult.uid);
         } else {
             block.removeAttribute('data-bb-exchange-hash');
+            block.removeAttribute('data-bb-message-uid');
         }
     });
 

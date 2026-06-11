@@ -107,6 +107,13 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) 
                 <span>记忆: <strong id="bb_current_slot_count">0</strong> 条</span>
             </div>
 
+            <div class="bb-mobile-controls-toggle">
+                <button class="menu_button" id="bb_mgr_controls_toggle" type="button" aria-expanded="true" title="折叠或展开搜索和筛选">
+                    <i class="fa-solid fa-chevron-up"></i> <span>折叠操作</span>
+                </button>
+            </div>
+
+            <div class="bb-mem-controls" id="bb_mgr_controls">
             <div class="bb-mem-toolbar">
                 <input type="text" class="bb-mem-search bb-input" placeholder="搜索..." id="bb_mgr_search" />
                 <select id="bb_mgr_sort" class="bb-input" style="width:auto;min-width:120px;">
@@ -162,6 +169,8 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) 
                         </button>
                     </div>
                 </div>
+            </div>
+
             </div>
 
             <div class="bb-mem-stats">
@@ -454,10 +463,34 @@ function parseHiddenNotesFromEditor(text) {
 
 // ═══ 事件绑定 ═══
 
+function setManagerControlsCollapsed(overlay, collapsed) {
+    overlay.classList.toggle('bb-mgr-controls-collapsed', collapsed);
+    const btn = overlay.querySelector('#bb_mgr_controls_toggle');
+    if (!btn) return;
+    btn.setAttribute('aria-expanded', String(!collapsed));
+    const icon = btn.querySelector('i');
+    const label = btn.querySelector('span');
+    if (icon) icon.className = collapsed ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-up';
+    if (label) label.textContent = collapsed ? '展开操作' : '折叠操作';
+}
+
+function bindManagerControlsToggle(overlay) {
+    const btn = overlay.querySelector('#bb_mgr_controls_toggle');
+    if (!btn) return;
+    const shouldCollapse = typeof window.matchMedia === 'function'
+        ? window.matchMedia('(max-width: 480px)').matches
+        : false;
+    setManagerControlsCollapsed(overlay, shouldCollapse);
+    btn.addEventListener('click', () => {
+        setManagerControlsCollapsed(overlay, !overlay.classList.contains('bb-mgr-controls-collapsed'));
+    });
+}
+
 function bindManagerEvents(overlay, chatId) {
     // 关闭
     overlay.querySelector('.bb-mem-close')?.addEventListener('click', () => overlay.remove());
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    bindManagerControlsToggle(overlay);
 
     // 标签页切换
     overlay.querySelectorAll('.bb-mgr-tabs > .bb-mgr-tab').forEach(tab => {
@@ -2526,8 +2559,13 @@ async function rerenderManagerList(overlay, chatId, cachedData = null) {
         ]);
 
     // v8.7.1 加载地图数据
-    let mapLocations = (cachedData && cachedData.mapLocations) ? cachedData.mapLocations : [];
-    if (!cachedData || !cachedData.mapLocations) {
+    let mapLocations = [];
+    if (cachedData?.mapLocations) {
+        mapLocations = cachedData.mapLocations;
+    } else if (cachedData?.map?.locations) {
+        mapLocations = Object.values(cachedData.map.locations || {});
+    }
+    if (!cachedData || (!cachedData.mapLocations && !cachedData.map?.locations)) {
         try {
             const { getLocations } = await import('./map-store.js');
             mapLocations = await getLocations(chatId);
