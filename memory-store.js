@@ -69,6 +69,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // 升降格与维护
     diversityLimitPerTag: 5,       // 同一标签最多 N 条 core
     promotionCooldownRounds: 15,   // 升格冷却轮数
+    hitScorePromoteThreshold: 20,  // 模糊/稳固记忆升级所需命中计数
+    hitScoreEternalThreshold: 40,  // 核心记忆升级为永恒所需命中计数
+    hitScoreDemoteThreshold: 20,   // 稳固/核心记忆降级所需未命中计数
+    entityTierPromoteThreshold: 20,// NPC/物品等级升级所需命中计数
+    entityTierDemoteThreshold: 20, // NPC/物品等级降级所需未命中计数
     maintenanceMode: 'semi',       // 'auto' | 'semi' | 'manual'
     maintenanceMemThreshold: 20,   // 记忆维护阈值
     maintenanceNpcThreshold: 5,    // NPC 维护阈值
@@ -142,6 +147,16 @@ export function updateSettings(patch) {
 
 function generateId() {
     return 'bb_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+}
+
+function normalizeHitScore(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(-999, Math.min(999, Math.trunc(n)));
+}
+
+function defaultActiveTier(value) {
+    return value || 'stable';
 }
 
 function storageKey(type, chatId) {
@@ -332,7 +347,8 @@ export async function addNpcProfile(chatId, data) {
         category: data.category || null,
         tags: Array.isArray(data.tags) ? data.tags : [],
         hitCount: data.hitCount || 0,
-        memoryTier: data.memoryTier || 'transient',
+        hitScore: normalizeHitScore(data.hitScore),
+        memoryTier: defaultActiveTier(data.memoryTier),
         archived: data.archived || false,
         createdAt: now,
         updatedAt: now,
@@ -411,7 +427,8 @@ export async function addItem(chatId, data) {
         category: data.category || null,
         tags: Array.isArray(data.tags) ? data.tags : [],
         hitCount: data.hitCount || 0,
-        memoryTier: data.memoryTier || 'transient',
+        hitScore: normalizeHitScore(data.hitScore),
+        memoryTier: defaultActiveTier(data.memoryTier),
         archived: data.archived || false,
         createdAt: now,
         updatedAt: now,
@@ -491,7 +508,8 @@ export async function addTimelineEntry(chatId, data) {
         impact: data.impact || '',
         tags: Array.isArray(data.tags) ? data.tags : [],
         hitCount: data.hitCount || 0,
-        memoryTier: data.memoryTier || 'transient',
+        hitScore: normalizeHitScore(data.hitScore),
+        memoryTier: defaultActiveTier(data.memoryTier),
         archived: data.archived || false,
         relatedEventIds: Array.isArray(data.relatedEventIds) ? data.relatedEventIds : [],
         subEntries: Array.isArray(data.subEntries) ? data.subEntries : [],  // v8.0.0 子条目
@@ -661,7 +679,8 @@ export async function addMemory(chatId, data) {
         hiddenNotes: Array.isArray(data.hiddenNotes) ? data.hiddenNotes : [],
         truthStatus: data.truthStatus || 'true',
         hitCount: data.hitCount || 0,
-        memoryTier: data.memoryTier || 'transient',
+        hitScore: normalizeHitScore(data.hitScore),
+        memoryTier: defaultActiveTier(data.memoryTier),
         category: data.category || null,
         archived: data.archived || false,
         relatedMemoryIds: Array.isArray(data.relatedMemoryIds) ? data.relatedMemoryIds : [],
@@ -884,7 +903,7 @@ const PROMOTION_COOLDOWN_MS = 15 * 60 * 1000;            // 15 分钟冷却（�
  * 记录命中（interceptor 检索到某条记忆/NPC/物品时调用）
  * 自动处理升格。
  */
-export async function recordHit(chatId, collection, id) {
+async function legacyRecordHit(chatId, collection, id) {
     let items;
     switch (collection) {
         case 'npc': items = await getNpcProfiles(chatId); break;
@@ -947,10 +966,174 @@ export async function recordHit(chatId, collection, id) {
 /**
  * 批量记录命中
  */
-export async function recordHits(chatId, hits) {
+async function legacyRecordHits(chatId, hits) {
     for (const hit of hits) {
-        await recordHit(chatId, hit.collection, hit.id);
+        await legacyRecordHit(chatId, hit.collection, hit.id);
     }
+}
+
+const MEMORY_TIER_ORDER_V905 = ['transient', 'stable', 'core', 'eternal'];
+const NPC_TIER_ORDER_V905 = ['background', 'minor', 'important', 'core'];
+const ITEM_TIER_ORDER_V905 = ['background', 'consumable', 'clue', 'equipped', 'key'];
+
+function getPositiveSetting(key, fallback) {
+    const n = Number(getSettings()[key]);
+    return Number.isFinite(n) && n > 0 ? Math.trunc(n) : fallback;
+}
+
+function isEntryActiveForHitCycle(entry) {
+    return entry && !isArchived(entry) && entry.status !== 'deleted';
+}
+
+function bumpHitScore(entry, delta, now) {
+    const before = normalizeHitScore(entry.hitScore);
+    entry.hitScore = normalizeHitScore(before + delta);
+    if (delta > 0) {
+        entry.hitCount = (entry.hitCount || 0) + 1;
+        entry.lastHitAt = now;
+    }
+    entry.updatedAt = now;
+    return entry.hitScore !== before || delta > 0;
+}
+
+async function applyMemoryTierScore(chatId, collection, entry, delta, now) {
+    if (!isEntryActiveForHitCycle(entry)) return false;
+    const tier = entry.memoryTier || 'stable';
+    if (tier === 'transient' && delta < 0) return false;
+    let changed = bumpHitScore(entry, delta, now);
+    if (tier === 'eternal') return changed;
+
+    const promoteThreshold = getPositiveSetting('hitScorePromoteThreshold', 20);
+    const eternalThreshold = getPositiveSetting('hitScoreEternalThreshold', 40);
+    const demoteThreshold = getPositiveSetting('hitScoreDemoteThreshold', 20);
+
+    if (delta > 0) {
+        let nextTier = '';
+        const threshold = tier === 'core' ? eternalThreshold : promoteThreshold;
+        if (entry.hitScore >= threshold) {
+            const idx = MEMORY_TIER_ORDER_V905.indexOf(tier);
+            if (idx >= 0 && idx < MEMORY_TIER_ORDER_V905.length - 1) {
+                nextTier = MEMORY_TIER_ORDER_V905[idx + 1];
+            }
+        }
+        if (nextTier && await checkDiversityLimit(chatId, collection, entry, nextTier)) {
+            entry.memoryTier = nextTier;
+            entry.hitScore = 0;
+            entry.lastPromotedAt = now;
+            entry.updatedAt = now;
+            changed = true;
+            if (getSettings().debugLogging) {
+                console.log(`[BB-Memory] tier up: ${entry.name || entry.title || entry.id} -> ${nextTier}`);
+            }
+        }
+    } else if (delta < 0 && entry.hitScore <= -demoteThreshold) {
+        const idx = MEMORY_TIER_ORDER_V905.indexOf(tier);
+        if (idx > 0) {
+            entry.memoryTier = MEMORY_TIER_ORDER_V905[idx - 1];
+            entry.hitScore = 0;
+            entry.updatedAt = now;
+            changed = true;
+            if (getSettings().debugLogging) {
+                console.log(`[BB-Memory] tier down: ${entry.name || entry.title || entry.id} -> ${entry.memoryTier}`);
+            }
+        }
+    }
+    return changed;
+}
+
+function applyOrderedEntityTierScore(entry, delta, tierKey, order, now) {
+    if (!isEntryActiveForHitCycle(entry)) return false;
+    if (entry.keepPermanent && delta < 0) return false;
+    const current = entry[tierKey] || order[1];
+    const idx = order.indexOf(current);
+    if (idx < 0) return false;
+    if (idx === 0 && delta < 0) return false;
+    let changed = bumpHitScore(entry, delta, now);
+
+    const promoteThreshold = getPositiveSetting('entityTierPromoteThreshold', 20);
+    const demoteThreshold = getPositiveSetting('entityTierDemoteThreshold', 20);
+
+    if (delta > 0 && entry.hitScore >= promoteThreshold && idx < order.length - 1) {
+        entry[tierKey] = order[idx + 1];
+        entry.hitScore = 0;
+        entry.updatedAt = now;
+        changed = true;
+    } else if (delta < 0 && entry.hitScore <= -demoteThreshold && idx > 0) {
+        entry[tierKey] = order[idx - 1];
+        entry.hitScore = 0;
+        entry.updatedAt = now;
+        changed = true;
+    }
+    return changed;
+}
+
+async function recordMapHits(chatId, ids, now) {
+    if (!ids.size) return;
+    const { getMap, setMap } = await import('./map-store.js');
+    const map = await getMap(chatId);
+    let changed = false;
+    for (const id of ids) {
+        const entry = map?.locations?.[id];
+        if (!entry || entry.archived) continue;
+        entry.hitCount = (entry.hitCount || 0) + 1;
+        entry.lastHitAt = now;
+        entry.updatedAt = now;
+        changed = true;
+    }
+    if (changed) await setMap(chatId, map);
+}
+
+export async function recordHit(chatId, collection, id) {
+    const result = await recordHits(chatId, [{ collection, id }], { countMisses: false });
+    return result?.updated?.find(e => e.collection === collection && e.id === id)?.entry || null;
+}
+
+export async function recordHits(chatId, hits, options = {}) {
+    const now = Date.now();
+    const countMisses = options.countMisses === true;
+    const hitSets = {
+        npc: new Set(),
+        item: new Set(),
+        timeline: new Set(),
+        mem: new Set(),
+        map: new Set(),
+    };
+
+    for (const hit of hits || []) {
+        if (!hit?.id || !hitSets[hit.collection]) continue;
+        hitSets[hit.collection].add(hit.id);
+    }
+
+    const collections = [
+        { name: 'npc', loader: getNpcProfiles, saver: (d) => saveCollection('npc', chatId, d), apply: (entry, delta) => applyOrderedEntityTierScore(entry, delta, 'npcTier', NPC_TIER_ORDER_V905, now) },
+        { name: 'item', loader: getItems, saver: (d) => saveCollection('item', chatId, d), apply: (entry, delta) => applyOrderedEntityTierScore(entry, delta, 'itemTier', ITEM_TIER_ORDER_V905, now) },
+        { name: 'timeline', loader: getTimeline, saver: (d) => saveCollection('timeline', chatId, d), apply: (entry, delta) => applyMemoryTierScore(chatId, 'timeline', entry, delta, now) },
+        { name: 'mem', loader: getMemories, saver: (d) => saveCollection('mem', chatId, d), apply: (entry, delta) => applyMemoryTierScore(chatId, 'mem', entry, delta, now) },
+    ];
+
+    const updated = [];
+    for (const cfg of collections) {
+        const items = await cfg.loader(chatId);
+        let changed = false;
+        const ids = hitSets[cfg.name];
+        if (!countMisses && ids.size === 0) continue;
+
+        for (const entry of items) {
+            if (!isEntryActiveForHitCycle(entry)) continue;
+            const isHit = ids.has(entry.id);
+            if (!isHit && !countMisses) continue;
+            const delta = isHit ? 1 : -1;
+            if (await cfg.apply(entry, delta)) {
+                changed = true;
+                updated.push({ collection: cfg.name, id: entry.id, entry });
+            }
+        }
+        if (changed) await cfg.saver(items);
+    }
+
+    await recordMapHits(chatId, hitSets.map, now);
+    if (updated.length) scheduleAutoBackup(chatId);
+    return { updated, skipped: false };
 }
 
 /**
@@ -995,7 +1178,7 @@ async function checkDiversityLimit(chatId, collection, entry, targetTier) {
  * 检查降格（在拦截器中每轮调用）
  * 长期未命中 → 自动降格
  */
-export async function checkDemotions(chatId) {
+async function legacyCheckDemotions(chatId) {
     const settings = getSettings();
     const now = Date.now();
     const roundMs = 60 * 1000; // 近似每轮 1 分钟
@@ -1041,6 +1224,10 @@ export async function checkDemotions(chatId) {
     }
 
     return results;
+}
+
+export async function checkDemotions(chatId) {
+    return { demoted: [], maintenanceCandidates: [], mode: 'hitScore', chatId };
 }
 
 // ═══════════════════════════════════════════════════════════

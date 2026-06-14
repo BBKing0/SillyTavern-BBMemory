@@ -53,6 +53,18 @@ function saveChat() {
     }
 }
 
+function clearHitFrameMetadata(msg) {
+    if (!msg || typeof msg !== 'object') return false;
+    let changed = false;
+    for (const key of ['_bbmem_hitFrameKey', '_bbmem_hitRecords', '_bbmem_hitRecordedAt']) {
+        if (Object.prototype.hasOwnProperty.call(msg, key)) {
+            delete msg[key];
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 function ensureMessageUid(msg) {
     if (!msg || typeof msg !== 'object') return { uid: '', changed: false };
     if (!msg[MESSAGE_UID_KEY]) {
@@ -349,9 +361,16 @@ export async function getExtractableExchanges() {
         if (processedSet.has(hash)) {
             msg._bbmem_extracted = true;
             delete msg._bbmem_pendingExtraction;
-            if (chat[userIndex]) chat[userIndex]._bbmem_extracted = true;
+            clearHitFrameMetadata(msg);
+            if (chat[userIndex]) {
+                chat[userIndex]._bbmem_extracted = true;
+                clearHitFrameMetadata(chat[userIndex]);
+            }
             for (const idx of openingIndices) {
-                if (chat[idx]) chat[idx]._bbmem_extracted = true;
+                if (chat[idx]) {
+                    chat[idx]._bbmem_extracted = true;
+                    clearHitFrameMetadata(chat[idx]);
+                }
             }
             changed = true;
             continue;
@@ -393,6 +412,7 @@ export async function markExchangeExtracted(userIndex, aiIndex, hash, extraIndic
             delete chat[idx]._bbmem_pendingExtraction;
             delete chat[idx]._bbmem_skipped;
             chat[idx]._bbmem_exchangeHash = hash;
+            clearHitFrameMetadata(chat[idx]);
             if (displayMode === 'hidden' && !chat[idx].is_hidden) {
                 chat[idx].is_hidden = true;
                 chat[idx]._bbmem_hideSource = 'plugin';
@@ -554,6 +574,9 @@ export function refreshExtractionMarkers() {
         if (isNaN(idx) || idx < 0 || idx >= chat.length) return;
 
         const msg = chat[idx];
+        if (msg._bbmem_extracted && clearHitFrameMetadata(msg)) {
+            changed = true;
+        }
 
         // ── 元标记按钮（所有消息都添加）──
         const metaBtn = document.createElement('button');

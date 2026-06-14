@@ -196,6 +196,36 @@
                         <input id="bb_diversity_limit" type="number" class="bb-input" min="2" max="20" value="5" />
                     </div>
 
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_hit_score_promote_threshold">记忆升级命中计数</label>
+                        <small class="bb-mem-hint">模糊→稳固、稳固→核心所需净命中计数（默认20）</small>
+                        <input id="bb_hit_score_promote_threshold" type="number" class="bb-input" min="1" max="200" value="20" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_hit_score_eternal_threshold">核心升永恒命中计数</label>
+                        <small class="bb-mem-hint">核心记忆升为永恒所需净命中计数（默认40）</small>
+                        <input id="bb_hit_score_eternal_threshold" type="number" class="bb-input" min="1" max="300" value="40" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_hit_score_demote_threshold">记忆降级未命中计数</label>
+                        <small class="bb-mem-hint">稳固/核心降级所需净未命中计数（默认20）</small>
+                        <input id="bb_hit_score_demote_threshold" type="number" class="bb-input" min="1" max="200" value="20" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_entity_tier_promote_threshold">实体升级命中计数</label>
+                        <small class="bb-mem-hint">NPC/物品等级向核心或关键方向提升所需净命中计数（默认20）</small>
+                        <input id="bb_entity_tier_promote_threshold" type="number" class="bb-input" min="1" max="200" value="20" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_entity_tier_demote_threshold">实体降级未命中计数</label>
+                        <small class="bb-mem-hint">NPC/物品等级向路人或背景方向下降所需净未命中计数（默认20）</small>
+                        <input id="bb_entity_tier_demote_threshold" type="number" class="bb-input" min="1" max="200" value="20" />
+                    </div>
+
                     <label class="checkbox_label" style="margin: 8px 0;">
                         <input id="bb_timeline_summary_enabled" type="checkbox" checked />
                         <span>启用时间线总结</span>

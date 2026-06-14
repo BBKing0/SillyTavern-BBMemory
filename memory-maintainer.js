@@ -56,18 +56,7 @@ export async function autoMaintainSilent(chatId) {
     const results = { actions: 0, details: [] };
     const log = (msg) => { results.details.push(msg); results.actions++; };
 
-    // 1. 自动归档瞬时记忆（30轮未命中）
-    const memories = await getMemories(chatId);
-    for (const m of memories) {
-        if (m.memoryTier !== 'transient' || m.memoryTier === 'eternal') continue;
-        const roundsSinceHit = Math.floor((now - (m.lastHitAt || m.createdAt)) / roundMs);
-        if (roundsSinceHit >= 30) {
-            await updateMemory(chatId, m.id, { archived: true });
-            if (settings.debugLogging) log(`归档瞬时记忆: ${(m.title || m.id).slice(0, 30)}`);
-        }
-    }
-
-    // 2. 自动降级状态变更物品
+    // 1. 自动降级状态变更物品
     const items = await getItems(chatId);
     for (const item of items) {
         if (item.keepPermanent || item.itemTier === 'background') continue;
@@ -77,7 +66,7 @@ export async function autoMaintainSilent(chatId) {
         }
     }
 
-    // 3. 自动压缩已结束的时间线
+    // 2. 自动压缩已结束的时间线
     const timeline = await getTimeline(chatId);
     for (const t of timeline) {
         if (t.memoryTier === 'eternal' || t.isActive || t.status === 'ongoing') continue;
@@ -85,17 +74,6 @@ export async function autoMaintainSilent(chatId) {
         if (roundsSinceEnd >= 60) {
             await updateTimelineEntry(chatId, t.id, { isActive: false, status: 'ended' });
             if (settings.debugLogging) log(`压缩时间线: ${(t.event || t.id).slice(0, 30)}`);
-        }
-    }
-
-    // 4. 自动清理 background NPC（长期未命中）
-    const npcs = await getNpcProfiles(chatId);
-    for (const n of npcs) {
-        if (n.memoryTier === 'eternal' || n.npcTier !== 'background') continue;
-        const roundsSinceHit = Math.floor((now - (n.lastHitAt || n.createdAt)) / roundMs);
-        if (roundsSinceHit >= 90) {
-            await updateNpcProfile(chatId, n.id, { archived: true });
-            if (settings.debugLogging) log(`归档路人NPC: ${(n.name || n.id).slice(0, 30)}`);
         }
     }
 
@@ -281,7 +259,7 @@ export function dismissMaintenanceRemind() {
 }
 
 export async function fuzzyMemory(chatId, memoryId) {
-    const updates = { memoryTier: 'transient' };
+    const updates = { memoryTier: 'transient', hitScore: 0, archived: false, status: 'active' };
     // 若无 summary，从 content 截取前 50 字作为摘要
     const memories = await getMemories(chatId);
     const mem = memories.find(m => m.id === memoryId);

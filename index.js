@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.0.0 主入口
+ * index.js —— BB-Memory v9.0.5 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 时间线 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -70,6 +70,20 @@ const ROLE_SYSTEM = 0;
 let lastRetrievalResult = null;
 let settingsPanelMounted = false;
 
+function hashHitFrameText(text) {
+    let h = 2166136261;
+    const s = String(text || '');
+    for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0).toString(36);
+}
+
+function buildHitFrameKey(chatId, userFloor, userMessage) {
+    return `${chatId || 'chat'}:${userFloor}:${hashHitFrameText(userMessage)}`;
+}
+
 // ═══════════════════════════════════════════════════════════
 //  拦截器（核心）
 // ═══════════════════════════════════════════════════════════
@@ -93,9 +107,11 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
 
     // 1. 提取最后一条用户消息
     let userMessage = '';
+    let userFloor = -1;
     for (let i = chat.length - 1; i >= 0; i--) {
         if (chat[i].is_user && chat[i].mes?.trim()) {
             userMessage = chat[i].mes.trim();
+            userFloor = i;
             break;
         }
     }
@@ -202,7 +218,24 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     for (const t of [...tlForInjection.foreshadow, ...tlForInjection.ongoing, ...tlForInjection.ended]) hitRecords.push({ collection: 'timeline', id: t.id });
     for (const r of merged) hitRecords.push({ collection: 'mem', id: r.memory.id });
     for (const id of stats.mapLocationIds || []) hitRecords.push({ collection: 'map', id });
-    recordHits(chatId, hitRecords).catch(() => {});
+    const hitFrameKey = buildHitFrameKey(chatId, userFloor, userMessage);
+    const hitFrameMsg = userFloor >= 0 ? chat[userFloor] : null;
+    if (hitFrameMsg && hitFrameMsg._bbmem_hitFrameKey === hitFrameKey) {
+        if (settings.debugLogging) console.log(`[BB-Memory] skip repeated hit frame: ${hitFrameKey}`);
+    } else {
+        if (hitFrameMsg) {
+            hitFrameMsg._bbmem_hitFrameKey = hitFrameKey;
+            hitFrameMsg._bbmem_hitRecords = hitRecords.map(h => `${h.collection}:${h.id}`);
+            hitFrameMsg._bbmem_hitRecordedAt = Date.now();
+            try {
+                if (typeof ctx.saveChatDebounced === 'function') ctx.saveChatDebounced();
+                else if (typeof ctx.saveChat === 'function') ctx.saveChat();
+            } catch {}
+        }
+        recordHits(chatId, hitRecords, { countMisses: true, frameKey: hitFrameKey }).catch((err) => {
+            console.warn('[BB-Memory] hit score update failed:', err?.message || err);
+        });
+    }
 
     // 10. 注入
     const injectionText = (settings.injectionTemplate || '[BB-Memory 长期记忆]\n{{memories}}')
@@ -795,6 +828,11 @@ function bindSidebarEvents() {
     bindInput('#bb_maintenance_item_threshold', 'maintenanceItemThreshold', 'number');
     bindSelect('#bb_maintenance_mode', 'maintenanceMode');
     bindInput('#bb_diversity_limit', 'diversityLimitPerTag', 'number');
+    bindInput('#bb_hit_score_promote_threshold', 'hitScorePromoteThreshold', 'number');
+    bindInput('#bb_hit_score_eternal_threshold', 'hitScoreEternalThreshold', 'number');
+    bindInput('#bb_hit_score_demote_threshold', 'hitScoreDemoteThreshold', 'number');
+    bindInput('#bb_entity_tier_promote_threshold', 'entityTierPromoteThreshold', 'number');
+    bindInput('#bb_entity_tier_demote_threshold', 'entityTierDemoteThreshold', 'number');
     bindInput('#bb_max_active_threads', 'maxActiveThreads', 'number');
     bindInput('#bb_chat_metadata_backup_max_kb', 'chatMetadataBackupMaxKb', 'number');
     bindInput('#bb_health_check_duplicate_threshold', 'healthCheckDuplicateThreshold', 'number');
@@ -2287,7 +2325,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.0.0 初始化开始...');
+    console.log('[BB-Memory] v9.0.5 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -2428,19 +2466,74 @@ async function init() {
 
     // 注入可拖拽悬浮球
     injectFloatingHub();
+    initMessageDeletionWatch();
+    initExtractionMarkerWatch();
 
     // v6.1: 监听消息删除，自动清理关联记忆
-    initMessageDeletionWatch();
     setTimeout(() => {
         refreshExtractionMarkers();
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.0.0 初始化完成');
+    console.log('[BB-Memory] v9.0.5 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
+let extractionMarkerWatchStarted = false;
+let extractionMarkerRefreshTimer = null;
+
+function isBbMarkerNode(node) {
+    if (!node || node.nodeType !== 1) return true;
+    const ownClasses = ['bb-meta-toggle-btn', 'bb-extract-marker', 'bb-floor-actions', 'bb-floor-btn'];
+    if (ownClasses.some(cls => node.classList?.contains(cls))) return true;
+    return ownClasses.some(cls => typeof node.querySelector === 'function' && node.querySelector(`.${cls}`));
+}
+
+function nodeNeedsMarkerRefresh(node) {
+    if (!node || node.nodeType !== 1 || isBbMarkerNode(node)) return false;
+    if (node.classList?.contains('mes') || node.classList?.contains('mes_buttons')) return true;
+    return typeof node.querySelector === 'function' && !!node.querySelector('.mes, .mes_buttons');
+}
+
+function scheduleExtractionMarkerRefresh() {
+    if (extractionMarkerRefreshTimer) clearTimeout(extractionMarkerRefreshTimer);
+    extractionMarkerRefreshTimer = setTimeout(() => {
+        extractionMarkerRefreshTimer = null;
+        refreshExtractionMarkers();
+        refreshExtractionFloorStatus();
+    }, 120);
+}
+
+function initExtractionMarkerWatch() {
+    if (extractionMarkerWatchStarted) return;
+    extractionMarkerWatchStarted = true;
+    const setup = () => {
+        const chatArea = document.querySelector('#chat');
+        if (!chatArea) {
+            setTimeout(setup, 1500);
+            return;
+        }
+        const observer = new MutationObserver((mutations) => {
+            for (const m of mutations) {
+                const nodes = [...m.addedNodes, ...m.removedNodes];
+                if (nodes.length && nodes.every(node => node.nodeType !== 1 || isBbMarkerNode(node))) continue;
+                if (nodes.some(nodeNeedsMarkerRefresh) || nodeNeedsMarkerRefresh(m.target)) {
+                    scheduleExtractionMarkerRefresh();
+                    return;
+                }
+            }
+        });
+        observer.observe(chatArea, { childList: true, subtree: true });
+        scheduleExtractionMarkerRefresh();
+    };
+    setup();
+}
+
+let messageDeletionWatchStarted = false;
+
 function initMessageDeletionWatch() {
+    if (messageDeletionWatchStarted) return;
+    messageDeletionWatchStarted = true;
     const setup = () => {
         const chatArea = document.querySelector('#chat');
         if (!chatArea) {

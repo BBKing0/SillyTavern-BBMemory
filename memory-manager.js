@@ -361,6 +361,10 @@ function buildEntryItemHTML(e) {
         ? `<span title="命中次数"><i class="fa-solid fa-bullseye"></i> ${e.hitCount || 0}</span>`
         : (e.hitCount ? `<span title="命中次数"><i class="fa-solid fa-bullseye"></i> ${e.hitCount}</span>` : '');
 
+    const hitScore = Number.isFinite(Number(e.hitScore)) ? Number(e.hitScore) : 0;
+    const hitScoreText = `${hitScore > 0 ? '+' : ''}${hitScore}`;
+    const hitScoreHTML = `<span title="升降计数"><i class="fa-solid fa-scale-balanced"></i> ${hitScoreText}</span>`;
+
     return `
     <div class="bb-mem-item" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}">
         <div style="display:flex;align-items:center;margin-bottom:6px;">
@@ -385,6 +389,7 @@ function buildEntryItemHTML(e) {
             ${storyTimeHTML}
             ${sourceFloorHTML}
             ${hitCountHTML}
+            ${hitScoreHTML}
             ${createdDate ? `<span><i class="fa-regular fa-calendar-plus"></i> ${escapeHtml(createdDate)}</span>` : ''}
             ${updatedDate ? `<span><i class="fa-solid fa-pen"></i> ${escapeHtml(updatedDate)}</span>` : ''}
             <span style="flex:1;"></span>

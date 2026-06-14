@@ -225,6 +225,7 @@ export function calculateMemoryScore(memory, query, context = {}, queryEmbedding
 // ═══════════════════════════════════════════════════════════
 
 export function chooseInjectionLevel(memory, score, queryMatched = false) {
+    if (memory.memoryTier === 'transient') return 'L2';
     if (memory.memoryTier === 'eternal' || memory.memoryTier === 'core') return 'L4';
     if (score >= 0.55 || (memory.verbatim && queryMatched)) return 'L3';
     if (score >= 0.30) return 'L2';
@@ -522,9 +523,12 @@ function formatMemoryLine(m, chatLength = 0, level = 'L2') {
         if (ts) parts.push(`{${ts.label}}`);
     }
     const isResident = isResidentEntry(m);
-    const shouldUseFull = isResident || level === 'L3' || level === 'L4';
+    const isFuzzy = m.memoryTier === 'transient' && !isResident;
+    const shouldUseFull = !isFuzzy && (isResident || level === 'L3' || level === 'L4');
 
-    if (level === 'L1' && !shouldUseFull) {
+    if (isFuzzy) {
+        parts.push(m.summary || buildDefaultIndexCard(m) || (m.content || '').slice(0, 120));
+    } else if (level === 'L1' && !shouldUseFull) {
         parts.push(buildDefaultIndexCard(m));
     } else if (shouldUseFull && m.content) {
         parts.push(m.content);
