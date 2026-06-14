@@ -1521,13 +1521,16 @@ async function renderSlotsPanel(overlay, chatId, cachedData = null) {
                         <div class="bb-slot-info">
                             <span class="bb-slot-name">
                                 <i class="fa-solid fa-floppy-disk"></i> ${escapeHtml(s.name)}
-                                ${s.name === currentSlot ? '<span class="bb-slot-default-badge">当前</span>' : ''}${s.remoteIndexOnly ? '<span class="bb-slot-default-badge" style="background:#607d8b;"><i class="fa-solid fa-cloud"></i> 仅索引</span>' : (s.remoteAvailable ? '<span class="bb-slot-default-badge" style="background:#2196f3;"><i class="fa-solid fa-cloud"></i> 索引已同步</span>' : '')}
+                                ${s.name === currentSlot ? '<span class="bb-slot-default-badge">当前</span>' : ''}${s.remoteIndexOnly ? '<span class="bb-slot-default-badge" style="background:#607d8b;"><i class="fa-solid fa-cloud"></i> 仅索引</span>' : (s.remoteAvailable ? '<span class="bb-slot-default-badge" style="background:#2196f3;"><i class="fa-solid fa-cloud"></i> 索引已同步</span>' : '')}${s.remoteEmbeddings || s.embeddingCount ? '<span class="bb-slot-default-badge" style="background:#4caf50;color:#fff;"><i class="fa-solid fa-vector-square"></i> 向量</span>' : ''}
                             </span>
-                            <span class="bb-slot-count">${s.count} 条记忆${s.remote && s.localCount === 0 ? ' · 来自云端' : ''}</span>
+                            <span class="bb-slot-count">${s.count} 条记忆${s.remote && s.localCount === 0 ? ' · 来自云端' : ''}${s.embeddingCount ? ` · 本地向量 ${s.embeddingCount}` : ''}${s.remoteEmbeddings ? ` · 云端向量 ${s.remoteEmbeddings}` : ''}</span>
                         </div>
                         <div class="bb-slot-actions">
-                            <button class="menu_button bb-slot-btn-save" data-slot="${escapeHtml(s.name)}" title="将当前数据保存到此槽">
+                            <button class="menu_button bb-slot-btn-save" data-slot="${escapeHtml(s.name)}" title="将当前数据保存到此槽（云端同步不含向量）">
                                 <i class="fa-solid fa-arrow-up"></i> 保存
+                            </button>
+                            <button class="menu_button bb-slot-btn-save-vector" data-slot="${escapeHtml(s.name)}" title="将当前数据保存到此槽，并把向量也上传到云端（可能很大）">
+                                <i class="fa-solid fa-cloud-arrow-up"></i> 含向量
                             </button>
                             <button class="menu_button bb-slot-btn-load" data-slot="${escapeHtml(s.name)}" data-remote="${s.remoteIndexOnly ? 'true' : 'false'}" title="${s.remoteIndexOnly ? '从云端拉取存档数据并加载（覆盖当前）' : '从此槽加载数据（覆盖当前）'}">
                                 <i class="fa-solid fa-arrow-down"></i> 加载
@@ -1580,6 +1583,33 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
         });
     });
 
+    slotsEl.querySelectorAll('.bb-slot-btn-save-vector').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const slotName = btn.dataset.slot;
+            const ok = confirm(`确定将「${slotName}」上传到云端并包含向量吗？\n这会显著增加聊天元数据体积，建议只在换设备前手动执行。`);
+            if (!ok) return;
+            const origHTML = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 上传中...';
+            try {
+                const result = await saveToSlot(charId, chatId, slotName, { includeEmbeddings: true });
+                if (result.cloudDataSynced) {
+                    showToast(`已保存并上传「${slotName}」：${result.count} 条，向量 ${result.embeddingCount || 0} 条，${(result.cloudDataSize / 1024).toFixed(0)}KB`, 'success');
+                } else {
+                    showToast(`已本地保存，但含向量云同步被跳过：${(result.cloudDataSize / 1024).toFixed(0)}KB 超过上限`, 'warning');
+                }
+                updateSettings({ currentSlotName: slotName });
+                await renderSlotsPanel(overlay, chatId, result.data);
+                updateCurrentSlotBar(overlay, chatId, result.data);
+            } catch (err) {
+                showToast(`含向量上传失败: ${err.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = origHTML;
+            }
+        });
+    });
+
     slotsEl.querySelectorAll('.bb-slot-btn-load').forEach(btn => {
         btn.addEventListener('click', async () => {
             const slotName = btn.dataset.slot;
@@ -1587,7 +1617,8 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
             if (!ok) return;
             try {
                 const result = await loadFromSlot(charId, chatId, slotName);
-                showToast(`已从「${slotName}」加载 ${result.count} 条`, 'success');
+                const vectorTip = result.embeddingCount ? `，含向量 ${result.embeddingCount} 条` : (result.pulledFromCloud ? '，无向量则后台补全' : '');
+                showToast(`已从「${slotName}」加载 ${result.count} 条${vectorTip}`, 'success');
                 updateSettings({ currentSlotName: slotName });
                 // v8.0.0 传入缓存数据，避免重复读 localforage
                 await renderSlotsPanel(overlay, chatId, result.data);

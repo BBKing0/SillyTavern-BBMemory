@@ -3660,6 +3660,119 @@
     box-shadow: 0 8px 32px rgba(244, 67, 54, 0.2);
 }
 
+/* v9.0.6 聊天窗口切换存档弹窗 */
+.bb-slot-switch-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000003;
+    background: rgba(0, 0, 0, 0.62);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: clamp(10px, 3vh, 24px);
+}
+
+.bb-slot-switch-dialog {
+    width: min(94vw, 520px);
+    max-height: min(86vh, 620px);
+    overflow-y: auto;
+    background: var(--SmartThemeChatTintColor, #1e1e2e);
+    color: var(--SmartThemeBodyColor, #e0e0e0);
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 10px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.42);
+}
+
+.bb-slot-switch-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #444);
+}
+
+.bb-slot-switch-header > i {
+    color: var(--SmartThemeQuoteColor, #4caf50);
+    font-size: 1.2em;
+}
+
+.bb-slot-switch-header strong,
+.bb-slot-switch-header small {
+    display: block;
+}
+
+.bb-slot-switch-header small {
+    margin-top: 2px;
+    opacity: 0.55;
+    font-size: 0.78em;
+    word-break: break-all;
+}
+
+.bb-slot-switch-close {
+    margin-left: auto;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font-size: 1.5em;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.65;
+}
+
+.bb-slot-switch-body {
+    padding: 14px 16px;
+}
+
+.bb-slot-switch-note {
+    font-size: 0.9em;
+    line-height: 1.5;
+    margin-bottom: 10px;
+}
+
+.bb-slot-switch-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+    font-size: 0.8em;
+    opacity: 0.78;
+}
+
+.bb-slot-switch-stats span {
+    padding: 4px 8px;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 6px;
+    background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.04));
+}
+
+.bb-slot-switch-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin: 10px 0;
+    font-size: 0.84em;
+}
+
+.bb-slot-switch-warning {
+    font-size: 0.78em;
+    color: #ffb74d;
+    line-height: 1.45;
+    margin: 6px 0;
+}
+
+.bb-slot-switch-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 16px 14px;
+    border-top: 1px solid var(--SmartThemeBorderColor, #444);
+    flex-wrap: wrap;
+}
+
+.bb-slot-switch-actions .menu_button {
+    min-height: 32px;
+}
+
 /* ═══════════════════════════════════════════════════════
    v2.9.9: 管理面板移动端覆盖（flex 布局已提取为基类）
    ═══════════════════════════════════════════════════════ */
@@ -3758,6 +3871,24 @@
         border-radius: 0;
         margin: 0;
         width: 100%;
+    }
+    .bb-slot-switch-overlay {
+        align-items: flex-start;
+        padding: 0;
+        overflow-y: auto;
+    }
+    .bb-slot-switch-dialog {
+        width: 100%;
+        max-height: 100dvh;
+        border-radius: 0;
+        border-left: 0;
+        border-right: 0;
+    }
+    .bb-slot-switch-actions {
+        justify-content: stretch;
+    }
+    .bb-slot-switch-actions .menu_button {
+        flex: 1 1 9rem;
     }
 }
 

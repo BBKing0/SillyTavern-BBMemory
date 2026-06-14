@@ -113,13 +113,14 @@ function normalizeClueBoardData(board) {
 }
 
 function normalizeSlotData(raw) {
+    const now = Date.now();
     if (Array.isArray(raw)) {
         return { ...createEmptySlotData(), memories: clonePlain(raw), _slotEmpty: raw.length === 0 };
     }
     if (!raw || typeof raw !== 'object') {
         return createEmptySlotData();
     }
-    return {
+    const normalized = {
         npc: Array.isArray(raw.npc) ? clonePlain(raw.npc) : [],
         items: Array.isArray(raw.items) ? clonePlain(raw.items) : [],
         timeline: Array.isArray(raw.timeline) ? clonePlain(raw.timeline) : [],
@@ -127,7 +128,14 @@ function normalizeSlotData(raw) {
         threads: Array.isArray(raw.threads) ? clonePlain(raw.threads) : [],
         map: normalizeMapData(raw.map || raw.mapData),
         clueBoard: normalizeClueBoardData(raw.clueBoard || raw.clues),
+        _slotEmpty: raw._slotEmpty === true,
+        _slotCreatedAt: raw._slotCreatedAt || raw.createdAt || now,
+        _slotUpdatedAt: raw._slotUpdatedAt || raw.updatedAt || now,
     };
+    normalized._slotEmpty =
+        normalized.npc.length + normalized.items.length + normalized.timeline.length + normalized.memories.length +
+        normalized.threads.length + Object.keys(normalized.map.locations || {}).length + normalized.clueBoard.nodes.length === 0;
+    return normalized;
 }
 
 function totalCount(data) {
@@ -142,6 +150,32 @@ function totalCount(data) {
         + normalized.threads.length
         + Object.keys(normalized.map.locations || {}).length
         + normalized.clueBoard.nodes.length;
+}
+
+function countSlotEmbeddings(data) {
+    if (!data || typeof data !== 'object') return 0;
+    const normalized = normalizeSlotData(data);
+    const hasEmbedding = (entry) => Array.isArray(entry?.embedding) && entry.embedding.length > 0;
+    let count = 0;
+    for (const key of ['npc', 'items', 'timeline', 'memories', 'threads']) {
+        count += normalized[key].filter(hasEmbedding).length;
+    }
+    count += Object.values(normalized.map.locations || {}).filter(hasEmbedding).length;
+    return count;
+}
+
+function buildCloudSlotPayload(data, includeEmbeddings = false) {
+    const normalized = normalizeSlotData(data);
+    return includeEmbeddings ? clonePlain(normalized) : stripSlotEmbeddings(normalized);
+}
+
+export async function getChatSlotDataSummary(chatId) {
+    const data = await readAllPillarData(chatId);
+    return {
+        count: totalCount(data),
+        embeddingCount: countSlotEmbeddings(data),
+        data,
+    };
 }
 
 // ═══ 角色ID获取 ═══
@@ -176,7 +210,16 @@ export async function listSlots(charId) {
     if (Array.isArray(known) && known.length > 0) {
         for (const name of known) {
             const data = await lf.getItem(slotKey(charId, name));
-            const slot = { name, count: totalCount(data), key: slotKey(charId, name), remote: false, localCount: totalCount(data) };
+            const slot = {
+                name,
+                count: totalCount(data),
+                key: slotKey(charId, name),
+                remote: false,
+                localCount: totalCount(data),
+                embeddingCount: countSlotEmbeddings(data),
+                createdAt: data?._slotCreatedAt || data?.createdAt || 0,
+                updatedAt: data?._slotUpdatedAt || data?.updatedAt || 0,
+            };
             slots.push(slot);
             localByName.set(name, slot);
         }
@@ -188,7 +231,16 @@ export async function listSlots(charId) {
                 if (key.startsWith(prefix)) {
                     const slotName = key.slice(prefix.length);
                     const count = totalCount(value);
-                    const slot = { name: slotName, count, key, remote: false, localCount: count };
+                    const slot = {
+                        name: slotName,
+                        count,
+                        key,
+                        remote: false,
+                        localCount: count,
+                        embeddingCount: countSlotEmbeddings(value),
+                        createdAt: value?._slotCreatedAt || value?.createdAt || 0,
+                        updatedAt: value?._slotUpdatedAt || value?.updatedAt || 0,
+                    };
                     slots.push(slot);
                     localByName.set(slotName, slot);
                 }
@@ -202,7 +254,7 @@ export async function listSlots(charId) {
         localByName.set('default', defaultSlot);
     }
 
-    // v8.9.15 keep chatMetadata slot sync index-only. Full slot payloads stay in localforage.
+    // v9.0.6 slot payloads may exist in chatMetadata; embeddings are included only by explicit user action.
     const remoteIndex = getRemoteSlotIndex(charId);
     for (const [name, meta] of Object.entries(remoteIndex.slots || {})) {
         const total = (meta.npc || 0) + (meta.items || 0) + (meta.timeline || 0) + (meta.mem || 0) + (meta.threads || 0) + (meta.map || 0) + (meta.clues || 0);
@@ -211,6 +263,7 @@ export async function listSlots(charId) {
             local.remoteAvailable = true;
             local.remoteCount = total;
             local.remoteTs = meta.ts || 0;
+            local.remoteEmbeddings = meta.embeddings || 0;
             continue;
         }
         slots.push({
@@ -221,6 +274,7 @@ export async function listSlots(charId) {
             remoteIndexOnly: true,
             remoteAvailable: true,
             remoteCount: total,
+            remoteEmbeddings: meta.embeddings || 0,
             remoteTs: meta.ts || 0,
         });
     }
@@ -246,21 +300,109 @@ async function updateSlotIndex(charId, slots) {
  * 将当前聊天记忆保存到指定槽（覆盖式）
  * v8.5.1 同步槽数据到 chatMetadata 实现跨设备共享
  */
-export async function saveToSlot(charId, chatId, slotName) {
+export async function saveToSlot(charId, chatId, slotName, options = {}) {
     if (!charId || !chatId) throw new Error('无法获取角色或聊天ID');
 
     const data = await readAllPillarData(chatId);
     const lf = getLocalForage();
+    const existing = await lf.getItem(slotKey(charId, slotName));
+    const now = Date.now();
+    data._slotEmpty = totalCount(data) === 0;
+    data._slotCreatedAt = existing?._slotCreatedAt || existing?.createdAt || now;
+    data._slotUpdatedAt = now;
     await lf.setItem(slotKey(charId, slotName), data);
 
     const slots = await listSlots(charId);
+    if (!slots.find(s => s.name === slotName)) {
+        slots.push({ name: slotName, count: totalCount(data), key: slotKey(charId, slotName) });
+    }
     await updateSlotIndex(charId, slots);
 
-    const dataSynced = await pushSlotDataToChatMetadata(charId, slotName, data);
-    const indexSynced = await syncSlotIndexToChatMetadata(charId);
-    const jsonSize = JSON.stringify(stripSlotEmbeddings(data)).length;
+    const includeEmbeddings = options.includeEmbeddings === true;
+    const syncCloud = options.syncCloud !== false;
+    let dataSynced = false;
+    let indexSynced = false;
+    let jsonSize = 0;
+    if (syncCloud) {
+        dataSynced = await pushSlotDataToChatMetadata(charId, slotName, data, options.context || null, { includeEmbeddings });
+        indexSynced = await syncSlotIndexToChatMetadata(charId);
+        jsonSize = JSON.stringify(buildCloudSlotPayload(data, includeEmbeddings)).length;
+    }
 
-    return { count: totalCount(data), data, cloudSynced: indexSynced, cloudDataSynced: dataSynced, cloudDataSize: jsonSize };
+    return {
+        count: totalCount(data),
+        data,
+        cloudSynced: indexSynced,
+        cloudDataSynced: dataSynced,
+        cloudDataSize: jsonSize,
+        embeddingsIncluded: includeEmbeddings,
+        embeddingCount: countSlotEmbeddings(data),
+    };
+}
+
+export async function cloneSlot(charId, sourceSlotName, targetSlotName, options = {}) {
+    if (!charId) throw new Error('无法获取角色ID');
+    const sourceName = String(sourceSlotName || '').trim();
+    const targetName = String(targetSlotName || '').trim();
+    if (!sourceName) throw new Error('来源存档名不能为空');
+    if (!targetName) throw new Error('新存档名不能为空');
+    if (sourceName === targetName) throw new Error('新存档名不能与来源存档相同');
+
+    const lf = getLocalForage();
+    const existing = await lf.getItem(slotKey(charId, targetName));
+    if (existing !== null && existing !== undefined) {
+        throw new Error(`存档 "${targetName}" 已存在`);
+    }
+    const remoteIndex = getRemoteSlotIndex(charId);
+    if (remoteIndex.slots?.[targetName]) {
+        throw new Error(`云端已存在同名存档 "${targetName}"，请换一个名称`);
+    }
+
+    let raw = await lf.getItem(slotKey(charId, sourceName));
+    if (raw === null || raw === undefined) {
+        const pulled = await pullSlotFromChatMetadata(charId, sourceName);
+        if (pulled && pulled > 0) raw = await lf.getItem(slotKey(charId, sourceName));
+    }
+    if (raw === null || raw === undefined) {
+        throw new Error(`未找到来源存档 "${sourceName}"`);
+    }
+
+    const now = Date.now();
+    const data = normalizeSlotData(raw);
+    data._slotEmpty = totalCount(data) === 0;
+    data._slotCreatedAt = now;
+    data._slotUpdatedAt = now;
+    data._slotBranchedFrom = sourceName;
+    await lf.setItem(slotKey(charId, targetName), data);
+
+    const slots = await listSlots(charId);
+    if (!slots.find(s => s.name === targetName)) {
+        slots.push({ name: targetName, count: totalCount(data), key: slotKey(charId, targetName) });
+    }
+    await updateSlotIndex(charId, slots);
+
+    const includeEmbeddings = options.includeEmbeddings === true;
+    const syncCloud = options.syncCloud !== false;
+    let dataSynced = false;
+    let indexSynced = false;
+    let jsonSize = 0;
+    if (syncCloud) {
+        dataSynced = await pushSlotDataToChatMetadata(charId, targetName, data, options.context || null, { includeEmbeddings });
+        indexSynced = await syncSlotIndexToChatMetadata(charId);
+        jsonSize = JSON.stringify(buildCloudSlotPayload(data, includeEmbeddings)).length;
+    }
+
+    return {
+        name: targetName,
+        source: sourceName,
+        count: totalCount(data),
+        data,
+        cloudSynced: indexSynced,
+        cloudDataSynced: dataSynced,
+        cloudDataSize: jsonSize,
+        embeddingsIncluded: includeEmbeddings,
+        embeddingCount: countSlotEmbeddings(data),
+    };
 }
 
 /**
@@ -352,7 +494,7 @@ export async function loadFromSlot(charId, chatId, slotName) {
         scheduleSlotReembed(chatId);
     }
 
-    return { count: totalCount(data), data, pulledFromCloud };
+    return { count: totalCount(data), data, pulledFromCloud, embeddingCount: countSlotEmbeddings(data) };
 }
 
 /**
@@ -365,7 +507,7 @@ export async function createEmptySlot(charId, slotName) {
     const name = slotName.trim();
     const lf = getLocalForage();
     const existing = await lf.getItem(slotKey(charId, name));
-    if (existing !== null) {
+    if (existing !== null && existing !== undefined) {
         throw new Error(`存档 "${name}" 已存在`);
     }
     const remoteIndex = getRemoteSlotIndex(charId);
@@ -505,10 +647,10 @@ async function getSlotPillarCounts(charId, slotName) {
     const lf = getLocalForage();
     const data = await lf.getItem(slotKey(charId, slotName));
     if (Array.isArray(data)) {
-        return { npc: 0, items: 0, timeline: 0, mem: data.length, threads: 0, map: 0, clues: 0 };
+        return { npc: 0, items: 0, timeline: 0, mem: data.length, threads: 0, map: 0, clues: 0, embeddings: countSlotEmbeddings(data) };
     }
     if (!data || typeof data !== 'object') {
-        return { npc: 0, items: 0, timeline: 0, mem: 0, threads: 0, map: 0, clues: 0 };
+        return { npc: 0, items: 0, timeline: 0, mem: 0, threads: 0, map: 0, clues: 0, embeddings: 0 };
     }
     const normalized = normalizeSlotData(data);
     return {
@@ -519,6 +661,7 @@ async function getSlotPillarCounts(charId, slotName) {
         threads: normalized.threads.length,
         map: Object.keys(normalized.map.locations || {}).length,
         clues: normalized.clueBoard.nodes.length,
+        embeddings: countSlotEmbeddings(normalized),
     };
 }
 
@@ -564,16 +707,21 @@ async function removeSlotDataFromChatMetadata(slotName = null, context = null, c
 
 /**
  * 将槽完整数据推送到 chatMetadata（跨设备共享）
- * v9.0.2 恢复数据同步，去除 embedding 向量以控制体积
+ * v9.0.2 恢复数据同步，默认去除 embedding 向量以控制体积
  * v9.0.3 添加大小上限守卫，超过 chatMetadataBackupMaxKb 限制则跳过
+ * v9.0.6 支持用户显式选择 includeEmbeddings
  */
-async function pushSlotDataToChatMetadata(charId, slotName, data, context = null) {
+async function pushSlotDataToChatMetadata(charId, slotName, data, context = null, options = {}) {
     const ctx = context || getSTContext();
     if (!ctx) return false;
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
 
-    const stripped = stripSlotEmbeddings(data);
-    const json = JSON.stringify(stripped);
+    const includeEmbeddings = options.includeEmbeddings === true;
+    const payload = buildCloudSlotPayload(data, includeEmbeddings);
+    payload._cloudEmbeddingsIncluded = includeEmbeddings;
+    payload._cloudEmbeddingCount = includeEmbeddings ? countSlotEmbeddings(data) : 0;
+    payload._cloudUpdatedAt = Date.now();
+    const json = JSON.stringify(payload);
     const limit = getSlotDataSizeLimit();
     if (json.length > limit) {
         console.warn(`[BB-Memory] 槽 "${slotName}" 数据大小 ${(json.length / 1024).toFixed(1)}KB 超过上限 ${(limit / 1024).toFixed(0)}KB，跳过云端同步`);
@@ -678,6 +826,9 @@ function stripSlotEmbeddings(data) {
         threads: Array.isArray(data.threads) ? data.threads.map(strip) : [],
         map: stripMap(data.map),
         clueBoard: data.clueBoard || { nodes: [], connections: [], updatedAt: 0 },
+        _slotEmpty: data._slotEmpty === true,
+        _slotCreatedAt: data._slotCreatedAt || data.createdAt || Date.now(),
+        _slotUpdatedAt: data._slotUpdatedAt || data.updatedAt || Date.now(),
     };
 }
 

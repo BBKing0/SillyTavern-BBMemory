@@ -91,6 +91,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // 自动备份
     autoBackupEnabled: false,
     chatMetadataBackupMaxKb: 2048,
+    cloudBackupIncludeEmbeddings: false,
     lastBackupTimestamp: 0,
     // v8.2.3 API 预设配置
     apiProfiles: [],
@@ -1250,7 +1251,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '8.9.6',
+        version: '9.0.6',
         timestamp: Date.now(),
         npc: [],
         items: [],
@@ -1480,12 +1481,28 @@ function stripMapEmbeddings(map) {
     return { ...map, locations };
 }
 
+function countBackupEmbeddings(backup) {
+    const hasEmbedding = (entry) => Array.isArray(entry?.embedding) && entry.embedding.length > 0;
+    let count = 0;
+    for (const key of ['npc', 'items', 'timeline', 'memories', 'threads']) {
+        count += (backup[key] || []).filter(hasEmbedding).length;
+    }
+    count += Object.values(backup.map?.locations || {}).filter(hasEmbedding).length;
+    return count;
+}
+
+function isLegacySlotDataKey(key) {
+    if (!key.startsWith(LEGACY_SLOT_DATA_PREFIX)) return false;
+    const rest = key.slice(LEGACY_SLOT_DATA_PREFIX.length);
+    return !rest.includes('__');
+}
+
 function purgeLegacySlotDataFromChatMetadata(ctx) {
     if (!ctx?.chatMetadata) return { removed: 0, size: 0 };
     let removed = 0;
     let size = 0;
     for (const key of Object.keys(ctx.chatMetadata)) {
-        if (!key.startsWith(LEGACY_SLOT_DATA_PREFIX)) continue;
+        if (!isLegacySlotDataKey(key)) continue;
         const raw = ctx.chatMetadata[key];
         size += typeof raw === 'string' ? raw.length : 0;
         delete ctx.chatMetadata[key];
@@ -1530,7 +1547,7 @@ export async function cleanupChatMetadataBloat() {
     return cleanup;
 }
 
-export async function exportMemoriesToChatMetadata(chatId) {
+export async function exportMemoriesToChatMetadata(chatId, options = {}) {
     const [{ getMap }, { getClueBoard }] = await Promise.all([
         import('./map-store.js'),
         import('./clue-board.js'),
@@ -1545,17 +1562,20 @@ export async function exportMemoriesToChatMetadata(chatId) {
         getClueBoard(chatId),
     ]);
 
+    const includeEmbeddings = options.includeEmbeddings === true;
     const backup = {
-        version: '8.9.6',
+        version: '9.0.6',
         timestamp: Date.now(),
-        npc: stripEmbeddings(npc),
-        items: stripEmbeddings(items),
-        timeline: stripEmbeddings(timeline),
-        memories: stripEmbeddings(memories),
-        threads: stripEmbeddings(threads),
-        map: stripMapEmbeddings(map),
+        embeddingsIncluded: includeEmbeddings,
+        npc: includeEmbeddings ? npc : stripEmbeddings(npc),
+        items: includeEmbeddings ? items : stripEmbeddings(items),
+        timeline: includeEmbeddings ? timeline : stripEmbeddings(timeline),
+        memories: includeEmbeddings ? memories : stripEmbeddings(memories),
+        threads: includeEmbeddings ? threads : stripEmbeddings(threads),
+        map: includeEmbeddings ? map : stripMapEmbeddings(map),
         clueBoard,
     };
+    backup.embeddingCount = includeEmbeddings ? countBackupEmbeddings(backup) : 0;
 
     const json = JSON.stringify(backup);
     const ctx = getContext();
@@ -1575,6 +1595,8 @@ export async function exportMemoriesToChatMetadata(chatId) {
             skipped: true,
             reason: 'size-limit',
             cleanup,
+            embeddingsIncluded: includeEmbeddings,
+            embeddingCount: backup.embeddingCount,
         };
     }
 
@@ -1586,7 +1608,7 @@ export async function exportMemoriesToChatMetadata(chatId) {
     settings.lastBackupTimestamp = Date.now();
     updateSettings({ lastBackupTimestamp: settings.lastBackupTimestamp });
 
-    return { count, size: json.length, limit, skipped: false, cleanup };
+    return { count, size: json.length, limit, skipped: false, cleanup, embeddingsIncluded: includeEmbeddings, embeddingCount: backup.embeddingCount };
 }
 
 async function restoreMapBackup(chatId, backupMap) {
@@ -1849,6 +1871,8 @@ export async function importMemoriesFromChatMetadata(chatId) {
     }
 
     const result = await restoreBackupPayload(chatId, backup);
+    result.embeddingsIncluded = backup.embeddingsIncluded === true;
+    result.embeddingCount = countBackupEmbeddings(backup);
 
     // v8.2.7 恢复后清除 chatMetadata 中的备份数据，避免聊天文件持续膨胀
     if (ctx.chatMetadata?.[BACKUP_METADATA_KEY]) {
@@ -2259,7 +2283,7 @@ export async function exportMemories(chatId) {
         getTimelineThreads(chatId), getMap(chatId), getClueBoard(chatId),
     ]);
     return JSON.stringify({
-        version: '8.9.6',
+        version: '9.0.6',
         npc,
         items,
         timeline,

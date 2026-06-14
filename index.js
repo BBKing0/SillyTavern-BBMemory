@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.0.5 主入口
+ * index.js —— BB-Memory v9.0.6 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 时间线 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -59,7 +59,10 @@ import { runHealthCheck, buildHealthCheckPanel } from './memory-health-check.js'
 
 import { openAssistant } from './memory-assistant.js';
 import { openMemoryManager } from './memory-manager.js';
-import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot } from './memory-slots.js';
+import {
+    getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot,
+    cloneSlot, getChatSlotDataSummary,
+} from './memory-slots.js';
 
 // ═══ 常量 ═══
 const INJECTION_KEY = 'bb_memory_injection';
@@ -69,6 +72,10 @@ const ROLE_SYSTEM = 0;
 // ═══ 全局状态 ═══
 let lastRetrievalResult = null;
 let settingsPanelMounted = false;
+let lastObservedChatId = null;
+let lastObservedCharId = null;
+let chatSwitchPromptOpen = false;
+const handledChatSwitchPrompts = new Set();
 
 function hashHitFrameText(text) {
     let h = 2166136261;
@@ -750,6 +757,7 @@ function bindSidebarEvents() {
     bindCheckbox('#bb_timeline_summary_enabled', 'timelineSummaryEnabled');
     bindCheckbox('#bb_clue_board_injection_enabled', 'clueBoardInjectionEnabled');
     bindCheckbox('#bb_auto_backup_enabled', 'autoBackupEnabled');
+    bindCheckbox('#bb_backup_include_embeddings', 'cloudBackupIncludeEmbeddings');
 
     // v7.9.0 自动备份状态指示器
     const updateAutoBackupStatus = () => {
@@ -873,11 +881,14 @@ function bindSidebarEvents() {
         this.disabled = true;
         this.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 备份中...';
         try {
-            const result = await exportMemoriesToChatMetadata(chatId);
+            const includeEmbeddings = getSettings().cloudBackupIncludeEmbeddings === true;
+            const result = await exportMemoriesToChatMetadata(chatId, { includeEmbeddings });
             if (result.skipped) {
-                showToast(`备份已跳过：${(result.size / 1024).toFixed(1)}KB 超过上限 ${(result.limit / 1024).toFixed(0)}KB，请使用本地 JSON 导出`, 'warning');
+                const vectorTip = result.embeddingsIncluded ? '（本次包含向量）' : '';
+                showToast(`备份已跳过${vectorTip}：${(result.size / 1024).toFixed(1)}KB 超过上限 ${(result.limit / 1024).toFixed(0)}KB，请提高上限或使用本地 JSON 导出`, 'warning');
             } else {
-                showToast(`备份完成：${result.count} 条 (${(result.size / 1024).toFixed(1)}KB) → 已保存到服务器`, 'success');
+                const vectorTip = result.embeddingsIncluded ? `，含向量 ${result.embeddingCount || 0} 条` : '';
+                showToast(`备份完成：${result.count} 条${vectorTip} (${(result.size / 1024).toFixed(1)}KB) → 已保存到服务器`, 'success');
             }
         } catch (e) {
             showToast(`备份失败: ${e.message}`, 'error');
@@ -897,7 +908,8 @@ function bindSidebarEvents() {
             if (result.restored === 0 && result.skipped === 0) {
                 showToast('暂无备份数据可恢复', 'info');
             } else {
-                showToast(`恢复完成：${result.restored} 条新增，${result.skipped} 条跳过`, 'success');
+                const vectorTip = result.embeddingsIncluded ? `，恢复向量 ${result.embeddingCount || 0} 条` : '';
+                showToast(`恢复完成：${result.restored} 条新增，${result.skipped} 条跳过${vectorTip}`, 'success');
             }
         } catch (e) {
             showToast(`恢复失败: ${e.message}`, 'error');
@@ -1302,6 +1314,176 @@ function getChatId() {
     } catch { return null; }
 }
 
+function buildDefaultSlotName(prefix, base = '') {
+    const d = new Date();
+    const stamp = [
+        String(d.getMonth() + 1).padStart(2, '0'),
+        String(d.getDate()).padStart(2, '0'),
+        String(d.getHours()).padStart(2, '0'),
+        String(d.getMinutes()).padStart(2, '0'),
+    ].join('');
+    const safeBase = String(base || '').trim().replace(/[\\/:*?"<>|]/g, '').slice(0, 18);
+    return safeBase ? `${safeBase}-${prefix}-${stamp}` : `${prefix}-${stamp}`;
+}
+
+function showChatSwitchSlotDialog({ sourceSlot, sourceCount, sourceEmbeddingCount, currentChatId }) {
+    return new Promise((resolve) => {
+        document.querySelector('.bb-slot-switch-overlay')?.remove();
+
+        const canBranch = Number(sourceCount || 0) > 0;
+        const branchDefault = buildDefaultSlotName('if', sourceSlot);
+        const emptyDefault = buildDefaultSlotName('new');
+        const overlay = document.createElement('div');
+        overlay.className = 'bb-slot-switch-overlay';
+        overlay.innerHTML = `
+            <div class="bb-slot-switch-dialog">
+                <div class="bb-slot-switch-header">
+                    <i class="fa-solid fa-code-branch"></i>
+                    <div>
+                        <strong>检测到更换窗口</strong>
+                        <small>当前聊天：${escapeHtml(String(currentChatId || '').slice(0, 24))}</small>
+                    </div>
+                    <button class="bb-slot-switch-close" type="button" title="稍后处理">&times;</button>
+                </div>
+                <div class="bb-slot-switch-body">
+                    <div class="bb-slot-switch-note">
+                        是否以 <strong>「${escapeHtml(sourceSlot || 'default')}」</strong> 存档为基础新增 if 分支，或新建一个空存档并切换过去？
+                    </div>
+                    <div class="bb-slot-switch-stats">
+                        <span><i class="fa-solid fa-layer-group"></i> 基础条目：<strong>${Number(sourceCount || 0)}</strong></span>
+                        <span><i class="fa-solid fa-vector-square"></i> 本地向量：<strong>${Number(sourceEmbeddingCount || 0)}</strong></span>
+                    </div>
+                    <label class="bb-slot-switch-field">
+                        <span>新增 if 分支名称</span>
+                        <input class="bb-input" id="bb_slot_switch_branch_name" value="${escapeHtml(branchDefault)}" ${canBranch ? '' : 'disabled'} />
+                    </label>
+                    ${canBranch ? '' : '<div class="bb-slot-switch-warning"><i class="fa-solid fa-triangle-exclamation"></i> 当前基础存档为空，无法复制为 if 分支；可以先新建空存档。</div>'}
+                    <label class="bb-slot-switch-field">
+                        <span>新建空存档名称</span>
+                        <input class="bb-input" id="bb_slot_switch_empty_name" value="${escapeHtml(emptyDefault)}" />
+                    </label>
+                </div>
+                <div class="bb-slot-switch-actions">
+                    <button class="menu_button" id="bb_slot_switch_cancel" type="button">稍后处理</button>
+                    <button class="menu_button" id="bb_slot_switch_empty" type="button">
+                        <i class="fa-solid fa-file-circle-plus"></i> 新建空存档
+                    </button>
+                    <button class="menu_button" id="bb_slot_switch_branch" type="button" ${canBranch ? '' : 'disabled'}>
+                        <i class="fa-solid fa-code-branch"></i> 新增 if 分支
+                    </button>
+                </div>
+            </div>`;
+
+        const done = (value) => {
+            overlay.remove();
+            resolve(value);
+        };
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) done(null); });
+        document.body.appendChild(overlay);
+
+        const branchInput = overlay.querySelector('#bb_slot_switch_branch_name');
+        const emptyInput = overlay.querySelector('#bb_slot_switch_empty_name');
+        overlay.querySelector('.bb-slot-switch-close')?.addEventListener('click', () => done(null));
+        overlay.querySelector('#bb_slot_switch_cancel')?.addEventListener('click', () => done(null));
+        overlay.querySelector('#bb_slot_switch_branch')?.addEventListener('click', () => {
+            const slotName = branchInput?.value?.trim();
+            if (!slotName) { showToast('请输入 if 分支存档名称', 'warning'); return; }
+            done({ action: 'branch', slotName });
+        });
+        overlay.querySelector('#bb_slot_switch_empty')?.addEventListener('click', () => {
+            const slotName = emptyInput?.value?.trim();
+            if (!slotName) { showToast('请输入新存档名称', 'warning'); return; }
+            done({ action: 'new', slotName });
+        });
+        [branchInput, emptyInput].forEach(input => {
+            input?.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') done(null);
+                if (e.key === 'Enter') {
+                    const action = input === branchInput ? 'branch' : 'new';
+                    const slotName = input.value.trim();
+                    if (!slotName) return;
+                    if (action === 'branch' && !canBranch) return;
+                    done({ action, slotName });
+                }
+            });
+        });
+        setTimeout(() => (canBranch ? branchInput : emptyInput)?.focus(), 80);
+    });
+}
+
+async function maybePromptChatSwitchSlot({ prevChatId, prevCharId, chatId, charId }) {
+    if (!prevChatId || !chatId || prevChatId === chatId) return;
+    if (!prevCharId || !charId || String(prevCharId) !== String(charId)) return;
+
+    const promptKey = `${charId}:${prevChatId}->${chatId}`;
+    if (handledChatSwitchPrompts.has(promptKey) || chatSwitchPromptOpen) return;
+    handledChatSwitchPrompts.add(promptKey);
+
+    try {
+        const currentSummary = await getChatSlotDataSummary(chatId);
+        if (currentSummary.count > 0) return;
+
+        const sourceSlot = getSettings().currentSlotName || 'default';
+        let sourceCount = 0;
+        let sourceEmbeddingCount = 0;
+
+        try {
+            const previousSummary = await getChatSlotDataSummary(prevChatId);
+            if (previousSummary.count > 0) {
+                const saved = await saveToSlot(charId, prevChatId, sourceSlot, { syncCloud: false });
+                sourceCount = saved.count || 0;
+                sourceEmbeddingCount = saved.embeddingCount || 0;
+            }
+        } catch (e) {
+            console.warn('[BB-Memory] 切换窗口前置保存失败:', e.message || e);
+        }
+
+        if (sourceCount === 0) {
+            const slots = await listSlots(charId);
+            const source = slots.find(s => s.name === sourceSlot);
+            sourceCount = source?.count || 0;
+            sourceEmbeddingCount = source?.embeddingCount || source?.remoteEmbeddings || 0;
+        }
+
+        chatSwitchPromptOpen = true;
+        const choice = await showChatSwitchSlotDialog({
+            sourceSlot,
+            sourceCount,
+            sourceEmbeddingCount,
+            currentChatId: chatId,
+        });
+        chatSwitchPromptOpen = false;
+        if (!choice) return;
+
+        const progress = createProgressToast('正在切换 BB-Memory 存档...');
+        try {
+            if (choice.action === 'branch') {
+                progress && (progress.textContent = '正在复制当前存档为 if 分支...');
+                await cloneSlot(charId, sourceSlot, choice.slotName, { syncCloud: false });
+                const loaded = await loadFromSlot(charId, chatId, choice.slotName);
+                updateSettings({ currentSlotName: choice.slotName });
+                showTopNotification(`已基于「${sourceSlot}」创建 if 分支「${choice.slotName}」，复制 ${loaded.count} 条`, 'success');
+            } else if (choice.action === 'new') {
+                progress && (progress.textContent = '正在创建空存档...');
+                await createEmptySlot(charId, choice.slotName);
+                const loaded = await loadFromSlot(charId, chatId, choice.slotName);
+                updateSettings({ currentSlotName: choice.slotName });
+                showTopNotification(`已新建并切换到存档「${choice.slotName}」 (${loaded.count} 条)`, 'success');
+            }
+            refreshSidebar();
+            refreshFloatingHubData();
+        } finally {
+            if (progress) {
+                progress.textContent = '存档切换完成';
+                setTimeout(() => progress.remove(), 1200);
+            }
+        }
+    } catch (e) {
+        chatSwitchPromptOpen = false;
+        showTopNotification(`窗口存档处理失败: ${e.message}`, 'error');
+    }
+}
+
 // ═══ 反馈包装器 ═══
 
 function withFeedback(btn, fn, { loadingText, successText, errorText } = {}) {
@@ -1628,22 +1810,27 @@ function registerSlashCommands() {
         showExternalInitializerNotice();
     }, '提示使用外置 HTML 转化工具进行 BB-Memory 初始化');
 
-    addCmd('bb-backup', async () => {
+    addCmd('bb-backup', async (args = '') => {
         const chatId = getChatId();
         if (!chatId) return;
-        const result = await exportMemoriesToChatMetadata(chatId);
+        const includeEmbeddings = getSettings().cloudBackupIncludeEmbeddings === true
+            || /\b(vector|vectors|embedding|embeddings)\b|向量/.test(String(args || '').toLowerCase());
+        const result = await exportMemoriesToChatMetadata(chatId, { includeEmbeddings });
         if (result.skipped) {
-            showToast(`备份已跳过：${(result.size / 1024).toFixed(1)}KB 超过上限 ${(result.limit / 1024).toFixed(0)}KB，请使用本地 JSON 导出`, 'warning');
+            const vectorTip = result.embeddingsIncluded ? '（本次包含向量）' : '';
+            showToast(`备份已跳过${vectorTip}：${(result.size / 1024).toFixed(1)}KB 超过上限 ${(result.limit / 1024).toFixed(0)}KB，请使用本地 JSON 导出`, 'warning');
         } else {
-            showToast(`备份完成：${result.count} 条 (${(result.size / 1024).toFixed(1)}KB)`, 'success');
+            const vectorTip = result.embeddingsIncluded ? `，含向量 ${result.embeddingCount || 0} 条` : '';
+            showToast(`备份完成：${result.count} 条${vectorTip} (${(result.size / 1024).toFixed(1)}KB)`, 'success');
         }
-    }, '手动备份记忆到服务器');
+    }, '手动备份记忆到服务器；传入 vector/向量 可临时包含向量');
 
     addCmd('bb-restore', async () => {
         const chatId = getChatId();
         if (!chatId) return;
         const result = await importMemoriesFromChatMetadata(chatId);
-        showToast(`恢复：${result.restored} 新增，${result.skipped} 跳过`, 'success');
+        const vectorTip = result.embeddingsIncluded ? `，向量 ${result.embeddingCount || 0} 条` : '';
+        showToast(`恢复：${result.restored} 新增，${result.skipped} 跳过${vectorTip}`, 'success');
     }, '从服务器恢复记忆');
 
     addCmd('bb-stats', async () => {
@@ -1805,6 +1992,11 @@ async function onChatChanged() {
 
     const chatId = getChatId();
     if (!chatId) return;
+    const charId = getCharacterId();
+    const prevChatId = lastObservedChatId;
+    const prevCharId = lastObservedCharId;
+    lastObservedChatId = chatId;
+    lastObservedCharId = charId;
 
     const settings = getSettings();
 
@@ -1854,6 +2046,12 @@ async function onChatChanged() {
             }, 15000);
         }, 15000);
     }
+
+    setTimeout(() => {
+        maybePromptChatSwitchSlot({ prevChatId, prevCharId, chatId, charId }).catch((e) => {
+            console.warn('[BB-Memory] 切换窗口存档提示失败:', e.message || e);
+        });
+    }, 1200);
 }
 
 function onNewMessage() {
@@ -2325,10 +2523,12 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.0.5 初始化开始...');
+    console.log('[BB-Memory] v9.0.6 初始化开始...');
 
     // 确保默认设置
     getSettings();
+    lastObservedChatId = getChatId();
+    lastObservedCharId = getCharacterId();
     cleanupChatMetadataBloat().then(result => {
         if (result?.removed && getSettings().debugLogging) {
             console.log(`[BB-Memory] Cleaned ${result.removed} legacy slot payload(s) from chatMetadata (${(result.size / 1024).toFixed(1)}KB).`);
@@ -2475,7 +2675,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.0.5 初始化完成');
+    console.log('[BB-Memory] v9.0.6 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆

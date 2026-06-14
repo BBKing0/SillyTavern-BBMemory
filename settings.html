@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.0.4</b>
+            <b>BB-Memory v9.0.6</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -81,6 +81,10 @@
             <div style="font-size:0.7em;opacity:0.5;margin-bottom:2px;">
                 备份将记忆数据保存到服务器（跨设备同步）。开启下方"自动备份"后可自动执行，无需手动操作。
             </div>
+            <label class="checkbox_label" style="margin: 4px 0 2px;">
+                <input id="bb_backup_include_embeddings" type="checkbox" />
+                <span>手动云备份包含当前存档向量 <small>仅手动备份生效，可能显著增大聊天文件</small></span>
+            </label>
             <div id="bb_auto_backup_status" style="font-size:0.7em;margin-bottom:6px;color:#ff9800;">
                 <i class="fa-solid fa-circle"></i> 自动备份已关闭
             </div>
