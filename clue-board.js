@@ -320,7 +320,7 @@ export async function openClueBoard(chatId) {
 
     const overlay = document.createElement('div');
     overlay.className = 'bb-clue-overlay';
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:99990;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:1000010;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
     overlay.addEventListener('click', (e) => { if (e.target === overlay) closeOverlay(); });
 
     const panel = document.createElement('div');
@@ -1131,7 +1131,7 @@ function showAddNodeDialog(chatId, onDone) {
 
     const overlay = document.createElement('div');
     overlay.className = 'bb-clue-add-overlay';
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:99995;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:1000011;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;';
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
 
     const dialog = document.createElement('div');
@@ -1271,7 +1271,7 @@ function showAddConnectionDialog(nodes, onConfirm) {
 
     const overlay = document.createElement('div');
     overlay.className = 'bb-clue-conn-overlay';
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:99995;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:1000011;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;';
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
 
     const dialog = document.createElement('div');

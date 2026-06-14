@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.0.6 主入口
+ * index.js —— BB-Memory v9.0.7 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 时间线 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -2523,7 +2523,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.0.6 初始化开始...');
+    console.log('[BB-Memory] v9.0.7 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -2675,7 +2675,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.0.6 初始化完成');
+    console.log('[BB-Memory] v9.0.7 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
