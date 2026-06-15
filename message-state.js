@@ -65,6 +65,40 @@ function clearHitFrameMetadata(msg) {
     return changed;
 }
 
+function hideAsPlugin(msg) {
+    if (!msg || typeof msg !== 'object') return false;
+    if (msg.is_hidden && msg._bbmem_hideSource === 'plugin') return false;
+    msg.is_hidden = true;
+    msg._bbmem_hideSource = 'plugin';
+    return true;
+}
+
+function applyExtractedDisplay(msg, displayMode, options = {}) {
+    if (!msg || typeof msg !== 'object') return false;
+    const { forceHide = false, forceVisible = false } = options;
+    if (forceHide || displayMode === 'hidden') {
+        return hideAsPlugin(msg);
+    }
+    if (forceVisible && msg.is_hidden && msg._bbmem_hideSource === 'plugin') {
+        msg.is_hidden = false;
+        return true;
+    }
+    return false;
+}
+
+function setPairedUserMetaFlag(chat, aiIndex, enabled) {
+    if (!Array.isArray(chat)) return { userIndex: -1, userText: '' };
+    const prev = findPreviousUser(chat, aiIndex);
+    if (prev.userIndex >= 0 && chat[prev.userIndex]) {
+        if (enabled) {
+            chat[prev.userIndex]._bbmem_meta_pair = true;
+        } else {
+            delete chat[prev.userIndex]._bbmem_meta_pair;
+        }
+    }
+    return prev;
+}
+
 function ensureMessageUid(msg) {
     if (!msg || typeof msg !== 'object') return { uid: '', changed: false };
     if (!msg[MESSAGE_UID_KEY]) {
@@ -258,16 +292,24 @@ export async function syncMessageVisibility(windowOverride) {
         const msg = chat[i];
         if (!isAiMessage(msg)) continue;
 
-        if (msg._bbmem_skipped && !msg.is_hidden) {
+        if (msg._bbmem_meta_marker) {
+            // 元对话在短期窗口内保留可见；一旦进入提取窗口，直接标记为已跳过并隐藏整组 exchange。
+            if (!msg._bbmem_skipped || !msg.is_hidden) {
+                const prev = findPreviousUser(chat, i);
+                const hash = msg._bbmem_exchangeHash || computeExchangeHash(prev.userText || '', msg.mes || '');
+                if (prev.userIndex >= 0) {
+                    await markExchangeMetaSkipped(prev.userIndex, i, hash, msg._bbmem_meta_reason || 'manual');
+                    hiddenCount++;
+                } else {
+                    msg._bbmem_skipped = true;
+                    if (hideAsPlugin(msg)) hiddenCount++;
+                    changed = true;
+                }
+                changed = true;
+            }
+        } else if (msg._bbmem_skipped && !msg.is_hidden) {
             // 已跳过的消息超出窗口后自动隐藏
-            msg.is_hidden = true;
-            msg._bbmem_hideSource = 'plugin';
-            hiddenCount++;
-            changed = true;
-        } else if (msg._bbmem_meta_marker && !msg.is_hidden) {
-            // 元标记消息超出窗口后自动隐藏（不提取）
-            msg.is_hidden = true;
-            msg._bbmem_hideSource = 'plugin';
+            hideAsPlugin(msg);
             hiddenCount++;
             changed = true;
         } else if (!msg.is_hidden && !msg._bbmem_extracted && !msg._bbmem_pendingExtraction && !msg._bbmem_skipped) {
@@ -359,16 +401,20 @@ export async function getExtractableExchanges() {
 
         // 指纹已存在 → 跳过（标记为已提取以加速后续扫描）
         if (processedSet.has(hash)) {
+            const displayMode = getSettings().extractedMsgDisplay || 'hidden';
             msg._bbmem_extracted = true;
             delete msg._bbmem_pendingExtraction;
+            applyExtractedDisplay(msg, displayMode);
             clearHitFrameMetadata(msg);
             if (chat[userIndex]) {
                 chat[userIndex]._bbmem_extracted = true;
+                applyExtractedDisplay(chat[userIndex], displayMode);
                 clearHitFrameMetadata(chat[userIndex]);
             }
             for (const idx of openingIndices) {
                 if (chat[idx]) {
                     chat[idx]._bbmem_extracted = true;
+                    applyExtractedDisplay(chat[idx], displayMode);
                     clearHitFrameMetadata(chat[idx]);
                 }
             }
@@ -413,12 +459,7 @@ export async function markExchangeExtracted(userIndex, aiIndex, hash, extraIndic
             delete chat[idx]._bbmem_skipped;
             chat[idx]._bbmem_exchangeHash = hash;
             clearHitFrameMetadata(chat[idx]);
-            if (displayMode === 'hidden' && !chat[idx].is_hidden) {
-                chat[idx].is_hidden = true;
-                chat[idx]._bbmem_hideSource = 'plugin';
-            } else if (forceVisibleWhenNeeded && displayMode !== 'hidden') {
-                chat[idx].is_hidden = false;
-            }
+            applyExtractedDisplay(chat[idx], displayMode, { forceVisible: forceVisibleWhenNeeded });
         };
         markExtracted(aiIndex, true);
         markExtracted(userIndex, false);
@@ -441,8 +482,6 @@ export async function markExchangeMetaSkipped(userIndex, aiIndex, hash, reason =
 
     const ctx = getContext();
     const chat = ctx.chat;
-    const settings = getSettings();
-    const displayMode = settings.extractedMsgDisplay || 'hidden';
 
     if (chat) {
         const markSkipped = (idx, markMeta = false) => {
@@ -450,15 +489,15 @@ export async function markExchangeMetaSkipped(userIndex, aiIndex, hash, reason =
             if (markMeta) {
                 chat[idx]._bbmem_meta_marker = true;
                 chat[idx]._bbmem_meta_reason = reason;
+            } else {
+                chat[idx]._bbmem_meta_pair = true;
             }
             chat[idx]._bbmem_skipped = true;
             chat[idx]._bbmem_extracted = false;
             delete chat[idx]._bbmem_pendingExtraction;
             chat[idx]._bbmem_exchangeHash = hash;
-            if (displayMode === 'hidden') {
-                chat[idx].is_hidden = true;
-                chat[idx]._bbmem_hideSource = 'plugin';
-            }
+            clearHitFrameMetadata(chat[idx]);
+            hideAsPlugin(chat[idx]);
         };
         markSkipped(aiIndex, true);
         markSkipped(userIndex, false);
@@ -481,7 +520,7 @@ export function getExtractionFloorStatus() {
     for (let i = 0; i < chat.length; i++) {
         const msg = chat[i];
         if (!msg || msg.is_system) continue;
-        if (msg._bbmem_meta_marker) {
+        if (msg._bbmem_meta_marker || msg._bbmem_meta_pair) {
             meta.push(i);
         } else if (msg._bbmem_skipped) {
             skipped.push(i);
@@ -608,6 +647,7 @@ export function refreshExtractionMarkers() {
                 // 取消元标记：恢复消息为待提取状态
                 msg.is_hidden = false;
                 msg._bbmem_hideSource = undefined;
+                delete msg._bbmem_meta_pair;
                 msg._bbmem_pendingExtraction = true;
                 msg._bbmem_extracted = false;
                 msg._bbmem_skipped = false;
@@ -618,10 +658,22 @@ export function refreshExtractionMarkers() {
                 }
                 const hash = msg._bbmem_exchangeHash || computeExchangeHash(userText, msg.mes || '');
                 await unmarkExchangeProcessed(chatId, hash);
+                const prev = setPairedUserMetaFlag(chat, idx, false);
+                if (prev.userIndex >= 0 && chat[prev.userIndex]) {
+                    if (chat[prev.userIndex].is_hidden && chat[prev.userIndex]._bbmem_hideSource === 'plugin') {
+                        chat[prev.userIndex].is_hidden = false;
+                        chat[prev.userIndex]._bbmem_hideSource = undefined;
+                    }
+                    chat[prev.userIndex]._bbmem_skipped = false;
+                }
             } else {
                 delete msg._bbmem_pendingExtraction;
-                msg._bbmem_skipped = true;
                 msg._bbmem_extracted = false;
+                msg._bbmem_skipped = false;
+                const prev = setPairedUserMetaFlag(chat, idx, true);
+                if (prev.userIndex >= 0) {
+                    msg._bbmem_exchangeHash = msg._bbmem_exchangeHash || computeExchangeHash(prev.userText || '', msg.mes || '');
+                }
             }
             try { saveChat(); } catch {}
             refreshExtractionMarkers();
@@ -772,15 +824,15 @@ export function refreshExtractionMarkers() {
 
         // ── 根据 extractedMsgDisplay 设置显示状态 ──
         const displayMode = getSettings().extractedMsgDisplay || 'hidden';
-        if (msg._bbmem_extracted || (msg._bbmem_meta_marker && msg.is_hidden)) {
+        const forceMetaHidden = (msg._bbmem_meta_marker || msg._bbmem_meta_pair) && msg._bbmem_skipped;
+        if (msg._bbmem_extracted || forceMetaHidden) {
             block.classList.remove('bb-extracted-transparent');
-            if (displayMode === 'hidden') {
+            if (forceMetaHidden || displayMode === 'hidden') {
                 if (!block.classList.contains('bb-extracted-hidden')) {
                     block.classList.add('bb-extracted-hidden');
                 }
                 if (!msg.is_hidden) {
-                    msg.is_hidden = true;
-                    msg._bbmem_hideSource = 'plugin';
+                    hideAsPlugin(msg);
                     changed = true;
                 }
             } else if (displayMode === 'transparent') {

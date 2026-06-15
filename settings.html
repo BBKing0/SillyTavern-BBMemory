@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.0.8</b>
+            <b>BB-Memory v9.0.9</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -456,12 +456,17 @@
                         <i class="fa-solid fa-rotate"></i> 重建语义索引
                     </button>
 
+                    <label class="checkbox_label" style="margin: 8px 0;">
+                        <input id="bb_dedup_enabled" type="checkbox" checked />
+                        <span>启用语义去重</span>
+                    </label>
+
                 </div>
             </div>
 
             <hr />
 
-            <!-- 故事日历 & 去重 -->
+            <!-- 故事日历 -->
             <div class="bb-settings-section">
                 <div class="bb-settings-section-header" data-section="calendar">
                     <span><i class="fa-solid fa-calendar-days"></i> 故事日历</span>
@@ -472,11 +477,6 @@
                         <label for="bb_calendar_description">日历描述 <small>描述你的奇幻世界日历规则</small></label>
                         <textarea id="bb_calendar_description" class="bb-input" rows="2" placeholder="留空使用默认时间推断..."></textarea>
                     </div>
-
-                    <label class="checkbox_label" style="margin: 8px 0;">
-                        <input id="bb_dedup_enabled" type="checkbox" checked />
-                        <span>启用语义去重</span>
-                    </label>
                 </div>
             </div>
 
@@ -502,6 +502,18 @@
                     <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
                 </div>
                 <div class="bb-settings-section-body">
+                    <div class="bb-mem-hint" style="margin-bottom:8px;">
+                        <i class="fa-solid fa-circle-info"></i> 导入/导出注入、AI 自动提取、语义向量、维护阈值等设置；API Key 不会写入导出文件。
+                    </div>
+                    <div style="display:flex;gap:6px;margin:6px 0 10px;">
+                        <button id="bb_export_extract_settings_btn" class="menu_button" style="flex:1;font-size:0.82em;">
+                            <i class="fa-solid fa-file-export"></i> 导出提取设置
+                        </button>
+                        <button id="bb_import_extract_settings_btn" class="menu_button" style="flex:1;font-size:0.82em;">
+                            <i class="fa-solid fa-file-import"></i> 导入提取设置
+                        </button>
+                        <input id="bb_import_extract_settings_file" type="file" accept="application/json,.json" style="display:none;" />
+                    </div>
                     <div class="bb-mem-hint" style="margin-bottom:8px;">
                         <i class="fa-solid fa-circle-info"></i> 自定义 AI 提取的核心提示词。留空则使用默认值。
                     </div>

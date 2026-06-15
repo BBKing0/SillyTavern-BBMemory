@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.0.8 主入口
+ * index.js —— BB-Memory v9.0.9 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 时间线 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -78,6 +78,77 @@ let chatSwitchFallbackTimer = null;
 let chatSwitchFallbackRunning = false;
 let chatSwitchPromptOpen = false;
 const handledChatSwitchPrompts = new Set();
+
+const SETTINGS_EXPORT_VERSION = '9.0.9';
+const SETTINGS_EXPORT_KEYS = [
+    'enabled',
+    'injectionTemplate', 'tokenBudget', 'maxResults', 'npcInjectionMax', 'itemInjectionMax', 'timelineEndedMax',
+    'mapInjectionMax', 'clueBoardInjectionEnabled',
+    'autoGenEnabled', 'autoGenMode', 'autoGenEndpoint', 'autoGenModel', 'autoGenMaxExchanges',
+    'maxMemoriesPerExchange', 'extractionConfirmMode', 'activeConfirmStyle', 'contextWindowExchanges',
+    'batchExtractionCount', 'sourceRollbackFloorWindow', 'extractedMsgDisplay', 'extractionStyle',
+    'customExtractionBias', 'customCorePrinciples', 'customExtractionDimensions',
+    'embeddingEnabled', 'embeddingEndpoint', 'embeddingModel', 'dedupEnabled', 'mergeSimilarityThreshold',
+    'reduceSimilarityThreshold',
+    'diversityLimitPerTag', 'promotionCooldownRounds', 'hitScorePromoteThreshold', 'hitScoreEternalThreshold',
+    'hitScoreDemoteThreshold', 'entityTierPromoteThreshold', 'entityTierDemoteThreshold',
+    'maintenanceMode', 'maintenanceMemThreshold', 'maintenanceNpcThreshold', 'maintenanceItemThreshold',
+    'healthCheckDuplicateThreshold', 'healthCheckIsolationThreshold', 'healthCheckStaleDays',
+    'healthCheckStaleHitThreshold', 'healthCheckThreadStaleDays', 'healthCheckClueStaleDays',
+    'timelineSummaryEnabled', 'maxActiveThreads', 'autoBackupEnabled', 'chatMetadataBackupMaxKb',
+    'cloudBackupIncludeEmbeddings', 'apiProfiles', 'activeApiProfile', 'categories', 'enabledCategories',
+    'debugLogging',
+];
+
+const SETTING_CONTROL_BINDINGS = {
+    enabled: ['#bb_memory_enabled', 'checkbox'],
+    autoGenEnabled: ['#bb_auto_gen_enabled', 'checkbox'],
+    embeddingEnabled: ['#bb_embedding_enabled', 'checkbox'],
+    dedupEnabled: ['#bb_dedup_enabled', 'checkbox'],
+    debugLogging: ['#bb_debug_logging', 'checkbox'],
+    timelineSummaryEnabled: ['#bb_timeline_summary_enabled', 'checkbox'],
+    clueBoardInjectionEnabled: ['#bb_clue_board_injection_enabled', 'checkbox'],
+    autoBackupEnabled: ['#bb_auto_backup_enabled', 'checkbox'],
+    cloudBackupIncludeEmbeddings: ['#bb_backup_include_embeddings', 'checkbox'],
+    autoGenMode: ['#bb_auto_gen_mode', 'value'],
+    extractionConfirmMode: ['#bb_extraction_confirm_mode', 'value'],
+    activeConfirmStyle: ['#bb_active_confirm_style', 'value'],
+    extractionStyle: ['#bb_extraction_style', 'value'],
+    contextWindowExchanges: ['#bb_context_window', 'value'],
+    batchExtractionCount: ['#bb_batch_extraction', 'value'],
+    sourceRollbackFloorWindow: ['#bb_source_rollback_floor_window', 'value'],
+    tokenBudget: ['#bb_token_budget', 'value'],
+    maxResults: ['#bb_max_results', 'value'],
+    npcInjectionMax: ['#bb_npc_injection_max', 'value'],
+    itemInjectionMax: ['#bb_item_injection_max', 'value'],
+    timelineEndedMax: ['#bb_timeline_ended_max', 'value'],
+    mapInjectionMax: ['#bb_map_injection_max', 'value'],
+    maintenanceMemThreshold: ['#bb_maintenance_mem_threshold', 'value'],
+    maintenanceNpcThreshold: ['#bb_maintenance_npc_threshold', 'value'],
+    maintenanceItemThreshold: ['#bb_maintenance_item_threshold', 'value'],
+    maintenanceMode: ['#bb_maintenance_mode', 'value'],
+    diversityLimitPerTag: ['#bb_diversity_limit', 'value'],
+    hitScorePromoteThreshold: ['#bb_hit_score_promote_threshold', 'value'],
+    hitScoreEternalThreshold: ['#bb_hit_score_eternal_threshold', 'value'],
+    hitScoreDemoteThreshold: ['#bb_hit_score_demote_threshold', 'value'],
+    entityTierPromoteThreshold: ['#bb_entity_tier_promote_threshold', 'value'],
+    entityTierDemoteThreshold: ['#bb_entity_tier_demote_threshold', 'value'],
+    maxActiveThreads: ['#bb_max_active_threads', 'value'],
+    chatMetadataBackupMaxKb: ['#bb_chat_metadata_backup_max_kb', 'value'],
+    healthCheckDuplicateThreshold: ['#bb_health_check_duplicate_threshold', 'value'],
+    healthCheckIsolationThreshold: ['#bb_health_check_isolation_threshold', 'value'],
+    healthCheckStaleDays: ['#bb_health_check_stale_days', 'value'],
+    healthCheckStaleHitThreshold: ['#bb_health_check_stale_hit_threshold', 'value'],
+    healthCheckClueStaleDays: ['#bb_health_check_clue_stale_days', 'value'],
+    injectionTemplate: ['#bb_injection_template', 'value'],
+    autoGenEndpoint: ['#bb_auto_gen_endpoint', 'value'],
+    autoGenModel: ['#bb_auto_gen_model', 'value'],
+    embeddingEndpoint: ['#bb_embedding_endpoint', 'value'],
+    embeddingModel: ['#bb_embedding_model', 'value'],
+    customExtractionBias: ['#bb_custom_extraction_bias', 'value'],
+    customCorePrinciples: ['#bb_custom_core_principles', 'value'],
+    customExtractionDimensions: ['#bb_custom_extraction_dimensions', 'value'],
+};
 
 function hashHitFrameText(text) {
     let h = 2166136261;
@@ -229,7 +300,11 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     for (const id of stats.mapLocationIds || []) hitRecords.push({ collection: 'map', id });
     const hitFrameKey = buildHitFrameKey(chatId, userFloor, userMessage);
     const hitFrameMsg = userFloor >= 0 ? chat[userFloor] : null;
-    if (hitFrameMsg && hitFrameMsg._bbmem_hitFrameKey === hitFrameKey) {
+    const suppressHitScore = isMetaDialogueHitFrame(chat, userFloor);
+    if (suppressHitScore) {
+        clearHitFrameMetadataLocal(hitFrameMsg);
+        if (settings.debugLogging) console.log(`[BB-Memory] skip meta-dialogue hit frame: ${hitFrameKey}`);
+    } else if (hitFrameMsg && hitFrameMsg._bbmem_hitFrameKey === hitFrameKey) {
         if (settings.debugLogging) console.log(`[BB-Memory] skip repeated hit frame: ${hitFrameKey}`);
     } else {
         if (hitFrameMsg) {
@@ -361,9 +436,138 @@ function recordActivity(type = 'info', title = '运行记录', message = '', det
 
 globalThis.bbMemoryRecordActivity = recordActivity;
 
+function sanitizeApiProfilesForExport(profiles) {
+    if (!Array.isArray(profiles)) return [];
+    return profiles.map(p => ({
+        name: p?.name || '',
+        endpoint: p?.endpoint || '',
+        model: p?.model || '',
+        embeddingEndpoint: p?.embeddingEndpoint || '',
+        embeddingModel: p?.embeddingModel || '',
+    })).filter(p => p.name);
+}
+
+function mergeImportedApiProfiles(importedProfiles, existingProfiles = []) {
+    if (!Array.isArray(importedProfiles)) return existingProfiles;
+    const existingByName = new Map((existingProfiles || []).map(p => [p.name, p]));
+    return importedProfiles
+        .map(p => {
+            const old = existingByName.get(p?.name);
+            return {
+                name: p?.name || '',
+                endpoint: p?.endpoint || '',
+                key: old?.key || '',
+                model: p?.model || '',
+                embeddingEndpoint: p?.embeddingEndpoint || '',
+                embeddingKey: old?.embeddingKey || '',
+                embeddingModel: p?.embeddingModel || '',
+            };
+        })
+        .filter(p => p.name);
+}
+
+function buildSettingsExportPayload() {
+    const settings = getSettings();
+    const exported = {};
+    for (const key of SETTINGS_EXPORT_KEYS) {
+        if (!(key in settings)) continue;
+        if (key === 'apiProfiles') {
+            exported.apiProfiles = sanitizeApiProfilesForExport(settings.apiProfiles);
+        } else {
+            exported[key] = structuredClone(settings[key]);
+        }
+    }
+    return {
+        type: 'bb-memory-settings',
+        version: SETTINGS_EXPORT_VERSION,
+        exportedAt: new Date().toISOString(),
+        note: 'API keys are intentionally excluded.',
+        settings: exported,
+    };
+}
+
+function normalizeImportedSettingsPayload(payload) {
+    const source = payload?.settings && typeof payload.settings === 'object' ? payload.settings : payload;
+    if (!source || typeof source !== 'object') throw new Error('不是有效的 BB-Memory 设置文件');
+    const current = getSettings();
+    const patch = {};
+    for (const key of SETTINGS_EXPORT_KEYS) {
+        if (!(key in source)) continue;
+        if (key === 'apiProfiles') {
+            patch.apiProfiles = mergeImportedApiProfiles(source.apiProfiles, current.apiProfiles || []);
+        } else {
+            patch[key] = structuredClone(source[key]);
+        }
+    }
+    delete patch.autoGenApiKey;
+    delete patch.embeddingApiKey;
+    return patch;
+}
+
+function downloadTextFile(filename, text) {
+    const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function syncSettingsControls(settings = getSettings()) {
+    for (const [key, [selector, mode]] of Object.entries(SETTING_CONTROL_BINDINGS)) {
+        const el = document.querySelector(selector);
+        if (!el || !(key in settings)) continue;
+        if (mode === 'checkbox') el.checked = !!settings[key];
+        else el.value = settings[key] ?? '';
+    }
+    const styleSelect = document.querySelector('#bb_extraction_style');
+    const customBiasSection = document.querySelector('#bb_custom_bias_section');
+    if (styleSelect && customBiasSection) {
+        customBiasSection.style.display = styleSelect.value === 'custom' ? '' : 'none';
+    }
+}
+
+function isMetaDialogueHitFrame(chat, userFloor) {
+    if (!Array.isArray(chat) || userFloor < 0 || userFloor >= chat.length) return false;
+    const userMsg = chat[userFloor];
+    if (userMsg?._bbmem_meta_marker || userMsg?._bbmem_meta_pair || userMsg?._bbmem_skipped) return true;
+    for (let i = userFloor + 1; i < chat.length; i++) {
+        const msg = chat[i];
+        if (!msg) continue;
+        if (msg.is_user) break;
+        if (msg._bbmem_meta_marker || msg._bbmem_meta_pair || msg._bbmem_skipped) return true;
+    }
+    return false;
+}
+
+function clearHitFrameMetadataLocal(msg) {
+    if (!msg || typeof msg !== 'object') return;
+    delete msg._bbmem_hitFrameKey;
+    delete msg._bbmem_hitRecords;
+    delete msg._bbmem_hitRecordedAt;
+}
+
 function shouldRecordToast(msg, type) {
     if (type === 'error' || type === 'warning' || type === 'success') return true;
     return /提醒|完成|失败|跳过|清理|标记|提取|备份|恢复|维护|连接|初始化/.test(String(msg || ''));
+}
+
+function formatHubIdleStatus(status) {
+    if (!status || !status.total) return '提取状态：空闲';
+    const parts = [];
+    parts.push(`已提取楼层 ${status.extractedText}`);
+    if (status.unextracted?.length) parts.push(`未提取楼层 ${status.unextractedText}`);
+    if (status.meta?.length) parts.push(`元对话楼层 ${status.metaText}`);
+    if (status.skipped?.length) parts.push(`已跳过楼层 ${status.skippedText}`);
+    return `提取状态：空闲-${parts.join('；')}`;
+}
+
+function formatHubBusyStatus(status, fallback = '') {
+    if (status?.pending?.length) return `提取状态：提取中-正在提取${status.pendingText}层`;
+    return `提取状态：提取中-${fallback || '正在提取'}`;
 }
 
 function refreshExtractionFloorStatus() {
@@ -380,7 +584,7 @@ function refreshExtractionFloorStatus() {
     const hubLabel = document.getElementById('bb_hub_extract_label');
     const hubRow = document.getElementById('bb_hub_extract_progress');
     if (hubLabel && hubRow && !hubRow.dataset.busy) {
-        hubLabel.textContent = status.total ? status.compact : '空闲';
+        hubLabel.textContent = formatHubIdleStatus(status);
     }
     return status;
 }
@@ -491,24 +695,38 @@ async function toggleMetaMarkerForMessage(chat, aiIdx) {
     const msg = chat[aiIdx];
     msg._bbmem_meta_marker = !msg._bbmem_meta_marker;
     let userText = '';
+    let userIndex = -1;
     for (let j = aiIdx - 1; j >= 0; j--) {
-        if (chat[j].is_user && chat[j].mes) { userText = chat[j].mes; break; }
+        if (chat[j].is_user && chat[j].mes) { userText = chat[j].mes; userIndex = j; break; }
     }
     const hash = msg._bbmem_exchangeHash || computeExchangeHash(userText, msg.mes || '');
 
     if (!msg._bbmem_meta_marker) {
         msg.is_hidden = false;
         msg._bbmem_hideSource = undefined;
+        delete msg._bbmem_meta_pair;
         msg._bbmem_pendingExtraction = true;
         msg._bbmem_extracted = false;
         msg._bbmem_skipped = false;
         msg._bbmem_meta_reason = undefined;
+        if (userIndex >= 0 && chat[userIndex]) {
+            delete chat[userIndex]._bbmem_meta_pair;
+            chat[userIndex]._bbmem_skipped = false;
+            if (chat[userIndex].is_hidden && chat[userIndex]._bbmem_hideSource === 'plugin') {
+                chat[userIndex].is_hidden = false;
+                chat[userIndex]._bbmem_hideSource = undefined;
+            }
+        }
         await unmarkExchangeProcessed(getChatId(), hash);
     } else {
         delete msg._bbmem_pendingExtraction;
         msg._bbmem_extracted = false;
-        msg._bbmem_skipped = true;
+        msg._bbmem_skipped = false;
         msg._bbmem_exchangeHash = hash;
+        if (userIndex >= 0 && chat[userIndex]) {
+            chat[userIndex]._bbmem_meta_pair = true;
+            clearHitFrameMetadataLocal(chat[userIndex]);
+        }
     }
 
     try { SillyTavern.getContext().saveChatDebounced?.(); } catch {}
@@ -730,6 +948,43 @@ async function mountExtensionSettingsHtml(html, maxAttempts = 50, delayMs = 100)
     return false;
 }
 
+function reorderSettingsSections() {
+    const root = document.querySelector('#bb_memory_root .inline-drawer-content');
+    if (!root) return;
+    const order = [
+        'bbtel_sync',
+        'hits',
+        'autogen',
+        'embedding',
+        'injection',
+        'tier',
+        'healthcheck',
+        'calendar',
+        'custom',
+        'experimental',
+    ];
+    const sections = new Map();
+    root.querySelectorAll('.bb-settings-section-header[data-section]').forEach(header => {
+        const section = header.closest('.bb-settings-section');
+        if (section) sections.set(header.dataset.section, section);
+    });
+    const anchor = document.querySelector('#bb_auto_backup_status') || root.querySelector('.bb-mem-sidebar-info:last-of-type');
+    if (!anchor) return;
+
+    let insertAfter = anchor;
+    for (const key of order) {
+        const section = sections.get(key);
+        if (!section) continue;
+        const prev = section.previousElementSibling;
+        const separator = prev?.tagName === 'HR' ? prev : document.createElement('hr');
+        if (prev?.tagName !== 'HR') separator.dataset.bbGenerated = '1';
+
+        insertAfter.after(separator);
+        separator.after(section);
+        insertAfter = section;
+    }
+}
+
 function restoreApiSettings(settings) {
     const fields = {
         '#bb_auto_gen_endpoint': 'autoGenEndpoint',
@@ -821,6 +1076,43 @@ function bindSidebarEvents() {
         const ta = document.querySelector('#bb_custom_extraction_dimensions');
         if (ta) ta.value = '';
         showToast('提取维度已恢复为默认', 'info');
+    });
+
+    document.querySelector('#bb_export_extract_settings_btn')?.addEventListener('click', () => {
+        try {
+            const payload = buildSettingsExportPayload();
+            const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+            downloadTextFile(`bb-memory-settings-v${SETTINGS_EXPORT_VERSION}-${stamp}.json`, JSON.stringify(payload, null, 2));
+            showToast('提取/注入设置已导出（不含 API Key）', 'success');
+        } catch (e) {
+            showToast(`设置导出失败: ${e.message}`, 'error');
+        }
+    });
+
+    const importSettingsInput = document.querySelector('#bb_import_extract_settings_file');
+    document.querySelector('#bb_import_extract_settings_btn')?.addEventListener('click', () => {
+        importSettingsInput?.click();
+    });
+    importSettingsInput?.addEventListener('change', async (ev) => {
+        const file = ev.target.files?.[0];
+        ev.target.value = '';
+        if (!file) return;
+        try {
+            const text = await file.text();
+            const payload = JSON.parse(text);
+            const patch = normalizeImportedSettingsPayload(payload);
+            updateSettings(patch);
+            syncSettingsControls(getSettings());
+            restoreApiSettings(getSettings());
+            refreshProfileDropdown?.();
+            refreshEmbeddingProfileDropdown?.();
+            if (patch.autoGenEnabled !== undefined) {
+                if (getSettings().autoGenEnabled) initAutoGenerator(); else stopAutoGenerator();
+            }
+            showToast(`设置导入完成：${Object.keys(patch).length} 项已更新（API Key 保持本机现有值）`, 'success');
+        } catch (e) {
+            showToast(`设置导入失败: ${e.message}`, 'error');
+        }
     });
 
     // 数字/文本输入
@@ -2104,17 +2396,79 @@ function renderHubHitItem(h, typeIcons, levelColors, dimmed) {
     </div>`;
 }
 
+function getRetrievalHitTotal(result = lastRetrievalResult) {
+    if (!result) return 0;
+    const tlCount = (result.timelineHits?.foreshadow?.length || 0)
+        + (result.timelineHits?.ongoing?.length || 0)
+        + (result.timelineHits?.ended?.length || 0);
+    return (result.hits?.length || 0)
+        + (result.npcHits?.length || 0)
+        + (result.itemHits?.length || 0)
+        + (result.mapHits?.length || 0)
+        + tlCount;
+}
+
+function renderHubGroup(label, icon, countLabel, html) {
+    return `<div class="bb-hit-section-label"><i class="fa-solid ${icon}"></i> ${label} <span style="font-size:0.75em;opacity:0.6;">${countLabel}</span></div>`
+        + (html || '<div class="bb-hub-hit-item bb-hub-hit-empty">暂无</div>');
+}
+
 async function renderHubHitList(listEl, chatId) {
     const result = lastRetrievalResult;
     const typeIcons = { fact: 'fa-lightbulb', event: 'fa-film', emotion: 'fa-heart', habit: 'fa-repeat' };
     const levelColors = { L4: '#ce93d8', L3: '#4fc3f7', L2: '#ffb74d', L1: '#9e9e9e' };
+    const tierColors = { core: '#ce93d8', important: '#4fc3f7', minor: '#ffb74d', background: '#9e9e9e', key: '#ce93d8', equipped: '#4fc3f7', clue: '#ffb74d', consumable: '#9e9e9e' };
 
-    if (!result || !result.hits || !result.hits.length) {
-        listEl.innerHTML = '<div class="bb-hub-hit-item" style="opacity:0.5;justify-content:center;">暂无命中记忆</div>';
+    if (!result) {
+        listEl.innerHTML = '<div class="bb-hub-hit-item bb-hub-hit-empty">暂无本轮命中</div>';
         return;
     }
 
-    listEl.innerHTML = result.hits.map(h => renderHubHitItem(h, typeIcons, levelColors, false)).join('');
+    const memoryHtml = (result.hits || []).map(h => renderHubHitItem(h, typeIcons, levelColors, false)).join('');
+    const npcHtml = (result.npcHits || []).map(n => {
+        const color = tierColors[n.npcTier] || '#888';
+        return `<div class="bb-hub-hit-item" title="${escapeHtml(n.name)}">
+            <i class="fa-solid fa-user" style="color:${color};font-size:0.7em;"></i>
+            <span class="bb-hub-hit-title">${escapeHtml(n.name)}</span>
+            <span class="bb-hub-hit-level" style="color:${color}">${n.npcTier || ''}</span>
+        </div>`;
+    }).join('');
+    const itemHtml = (result.itemHits || []).map(i => {
+        const color = tierColors[i.itemTier] || '#888';
+        return `<div class="bb-hub-hit-item" title="${escapeHtml(i.name)}">
+            <i class="fa-solid fa-box" style="color:${color};font-size:0.7em;"></i>
+            <span class="bb-hub-hit-title">${escapeHtml(i.name)}</span>
+            <span class="bb-hub-hit-level" style="color:${color}">${i.itemTier || ''}</span>
+        </div>`;
+    }).join('');
+    const mapHtml = (result.mapHits || []).map(loc => `<div class="bb-hub-hit-item" title="${escapeHtml(loc.name)}">
+        <i class="fa-solid fa-location-dot" style="color:#4fc3f7;font-size:0.7em;"></i>
+        <span class="bb-hub-hit-title">${escapeHtml(loc.name || loc.id)}</span>
+        <span class="bb-hub-hit-level" style="color:#4fc3f7">${escapeHtml(loc.region || '')}</span>
+    </div>`).join('');
+    const timelineAll = [
+        ...(result.timelineHits?.foreshadow || []),
+        ...(result.timelineHits?.ongoing || []),
+        ...(result.timelineHits?.ended || []),
+    ];
+    const timelineHtml = timelineAll.map(t => {
+        const isOngoing = t.status === 'ongoing';
+        const isForeshadow = t.status === 'foreshadow';
+        const color = isForeshadow ? '#ffb74d' : (isOngoing ? '#4fc3f7' : '#9e9e9e');
+        return `<div class="bb-hub-hit-item" title="${escapeHtml(t.title)}">
+            <i class="fa-solid ${isForeshadow ? 'fa-eye' : (isOngoing ? 'fa-play' : 'fa-check')}" style="color:${color};font-size:0.7em;"></i>
+            <span class="bb-hub-hit-title">${escapeHtml((t.title || '').length > 14 ? t.title.slice(0, 14) + '...' : (t.title || ''))}</span>
+            <span class="bb-hub-hit-level" style="color:${color}">${isForeshadow ? '伏笔' : (isOngoing ? '进行中' : '已结束')}</span>
+        </div>`;
+    }).join('');
+
+    listEl.innerHTML = [
+        renderHubGroup('记忆', 'fa-brain', `${result.hits?.length || 0}条`, memoryHtml),
+        renderHubGroup('NPC', 'fa-user', `${result.npcHits?.length || 0}条`, npcHtml),
+        renderHubGroup('物品', 'fa-box', `${result.itemHits?.length || 0}条`, itemHtml),
+        renderHubGroup('地图', 'fa-map', `${result.mapHits?.length || 0}处`, mapHtml),
+        renderHubGroup('时间条目', 'fa-timeline', `${timelineAll.length}条`, timelineHtml),
+    ].join('');
 }
 
 function injectFloatingHub() {
@@ -2137,7 +2491,7 @@ function injectFloatingHub() {
         <div class="bb-floating-menu-body">
             <div class="bb-floating-menu-item" id="bb_hub_slot_info">
                 <i class="fa-solid fa-floppy-disk"></i>
-                <span>存档: <strong>default</strong> · <strong>0</strong> 条</span>
+                <span>存档：<strong>default</strong> · <strong>0</strong> 条记忆</span>
             </div>
             <div class="bb-floating-menu-item bb-floating-menu-action" data-action="quick_save">
                 <i class="fa-solid fa-floppy-disk"></i>
@@ -2145,21 +2499,13 @@ function injectFloatingHub() {
             </div>
             <div class="bb-floating-menu-item bb-floating-menu-action" id="bb_hub_hit_info" data-action="toggle_hit_list">
                 <i class="fa-solid fa-bullseye"></i>
-                <span>命中: <strong id="bb_hub_hit_count">-</strong> 条</span>
+                <span>本轮命中：<strong id="bb_hub_hit_count">-</strong> 条</span>
                 <i class="fa-solid fa-chevron-down" style="margin-left:auto;font-size:0.7em;opacity:0.5;"></i>
             </div>
             <div id="bb_hub_hit_list" style="display:none;"></div>
             <div class="bb-floating-menu-item" id="bb_hub_extract_progress" style="display:flex;">
                 <i class="fa-solid fa-moon"></i>
-                <span id="bb_hub_extract_label">空闲</span>
-            </div>
-            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="toggle_visibility">
-                <i class="fa-solid fa-eye-slash"></i>
-                <span>切换楼层可见</span>
-            </div>
-            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="meta_last">
-                <i class="fa-solid fa-tag"></i>
-                <span>标记最后消息</span>
+                <span id="bb_hub_extract_label">提取状态：空闲</span>
             </div>
             <div class="bb-floating-menu-item bb-floating-menu-action" data-action="manual_extract">
                 <i class="fa-solid fa-wand-magic-sparkles"></i>
@@ -2177,9 +2523,9 @@ function injectFloatingHub() {
                 <i class="fa-solid fa-magnifying-glass"></i>
                 <span>线索板</span>
             </div>
-            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_agent">
-                <i class="fa-solid fa-robot"></i>
-                <span>记忆管家</span>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_map">
+                <i class="fa-solid fa-map"></i>
+                <span>地图</span>
             </div>
             <div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_manager">
                 <i class="fa-solid fa-gear"></i>
@@ -2326,9 +2672,7 @@ async function refreshFloatingHubData() {
         // v8.2.3 显示当次检索实时命中数，而非历史累积 hitCount
         const r = lastRetrievalResult;
         if (r && r.timestamp) {
-            const tlCount = (r.timelineHits?.ongoing?.length || 0) + (r.timelineHits?.ended?.length || 0);
-            const total = (r.hits?.length || 0) + (r.npcHits?.length || 0) + (r.itemHits?.length || 0) + tlCount;
-            hitCountEl.textContent = String(total);
+            hitCountEl.textContent = String(getRetrievalHitTotal(r));
         } else {
             hitCountEl.textContent = '-';
         }
@@ -2337,6 +2681,7 @@ async function refreshFloatingHubData() {
     const retryItem = document.getElementById('bb_hub_retry_extract');
     const retryFloor = document.getElementById('bb_hub_retry_floor');
     const extractLabel = document.getElementById('bb_hub_extract_label');
+    const extractRow = document.getElementById('bb_hub_extract_progress');
     // 需要动态 import 获取最新 lastExtractFailedFloor 值
     try {
         const { lastExtractFailedFloor: failedFloor } = await import('./auto-generator.js');
@@ -2348,10 +2693,10 @@ async function refreshFloatingHubData() {
                 retryItem.style.display = 'none';
             }
         }
-        if (extractLabel) {
+        if (extractLabel && !extractRow?.dataset.busy) {
             extractLabel.textContent = (failedFloor !== null && failedFloor !== undefined)
-                ? `提取失败: 第${failedFloor}层`
-                : '空闲';
+                ? `提取状态：失败-第${failedFloor}层`
+                : formatHubIdleStatus(getExtractionFloorStatus());
         }
     } catch { /* ignore */ }
 
@@ -2366,7 +2711,7 @@ async function refreshFloatingHubData() {
                 const mems = await getMemories(chatId);
                 const settings = getSettings();
                 const slotName = settings.currentSlotName || 'default';
-                slotInfo.innerHTML = `<i class="fa-solid fa-floppy-disk"></i> <span>存档: <strong>${escapeHtml(slotName)}</strong> · <strong>${mems.length}</strong> 条</span>`;
+                slotInfo.innerHTML = `<i class="fa-solid fa-floppy-disk"></i> <span>存档：<strong>${escapeHtml(slotName)}</strong> · <strong>${mems.length}</strong> 条记忆</span>`;
             }
         } catch { /* ignore */ }
     }
@@ -2477,9 +2822,9 @@ async function handleFloatingMenuAction(action) {
             }
             break;
         }
-        case 'open_agent': {
+        case 'open_map': {
             if (chatId) {
-                import('./memory-agent.js').then(m => m.openAgent(chatId));
+                import('./map-view.js').then(m => m.openMapView(chatId));
             }
             break;
         }
@@ -2543,7 +2888,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.0.8 初始化开始...');
+    console.log('[BB-Memory] v9.0.9 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -2565,6 +2910,7 @@ async function init() {
                 new Promise((_, reject) => setTimeout(() => reject(new Error('模板加载超时(8s)')), 8000))
             ]);
             await mountExtensionSettingsHtml(html);
+            reorderSettingsSections();
             restoreApiSettings(getSettings());
             bindSidebarEvents();
             initCollapsibleSettings();
@@ -2600,7 +2946,7 @@ async function init() {
                     icon.className = isFailed ? 'fa-solid fa-exclamation-triangle' : 'fa-solid fa-check-circle';
                     icon.style.color = isFailed ? '#f44336' : '#4caf50';
                 }
-                if (labelEl) labelEl.textContent = info.text || '完成';
+                if (labelEl) labelEl.textContent = isFailed ? `提取状态：失败-${info.text || '未知错误'}` : (info.text ? `提取状态：完成-${info.text}` : '提取状态：完成');
                 // 失败时显示红点
                 if (badge) {
                     badge.textContent = '';
@@ -2612,12 +2958,12 @@ async function init() {
             } else if (info.phase) {
                 hubRow.dataset.busy = '1';
                 if (icon) { icon.className = 'fa-solid fa-spinner fa-spin'; icon.style.color = ''; }
-                if (labelEl) labelEl.textContent = label;
+                if (labelEl) labelEl.textContent = formatHubBusyStatus(getExtractionFloorStatus(), label);
                 if (badge) badge.style.display = 'none';
             } else {
                 delete hubRow.dataset.busy;
                 if (icon) { icon.className = 'fa-solid fa-moon'; icon.style.color = ''; }
-                if (labelEl) labelEl.textContent = '空闲';
+                if (labelEl) labelEl.textContent = formatHubIdleStatus(getExtractionFloorStatus());
                 if (badge) badge.style.display = 'none';
             }
         }
@@ -2696,7 +3042,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.0.8 初始化完成');
+    console.log('[BB-Memory] v9.0.9 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
@@ -2878,6 +3224,25 @@ function updateSidebarHitList() {
 
     let html = '';
 
+    // 记忆命中
+    if (result.hits && result.hits.length) {
+        html += `<div class="bb-hit-section-label"><i class="fa-solid fa-brain"></i> 记忆 <span style="font-size:0.75em;opacity:0.6;">${result.hits.length}条</span></div>`;
+        html += result.hits.map(h => {
+            const icon = typeIcons[h.type] || 'fa-circle';
+            const color = levelColors[h.level] || '#888';
+            const scorePct = Math.round(h.score * 100);
+            const shortTitle = (h.title || '').length > 18
+                ? escapeHtml(h.title.slice(0, 18)) + '...'
+                : escapeHtml(h.title);
+            return `<div class="bb-hub-hit-item" title="${escapeHtml(h.title)}" style="cursor:default;">
+                <i class="fa-solid ${icon}" style="color:${color};font-size:0.7em;"></i>
+                <span class="bb-hub-hit-title">${shortTitle}</span>
+                <span class="bb-hub-hit-level" style="color:${color}">${h.level}</span>
+                <span class="bb-hub-hit-score">${scorePct}%</span>
+            </div>`;
+        }).join('');
+    }
+
     // NPC 命中
     if (result.npcHits && result.npcHits.length) {
         html += `<div class="bb-hit-section-label"><i class="fa-solid fa-user"></i> NPC <span style="font-size:0.75em;opacity:0.6;">${result.npcHits.length}条</span></div>`;
@@ -2904,11 +3269,21 @@ function updateSidebarHitList() {
         }).join('');
     }
 
+    // 地图命中
+    if (result.mapHits && result.mapHits.length) {
+        html += `<div class="bb-hit-section-label"><i class="fa-solid fa-map"></i> 地图 <span style="font-size:0.75em;opacity:0.6;">${result.mapHits.length}处</span></div>`;
+        html += result.mapHits.map(loc => `<div class="bb-hub-hit-item" title="${escapeHtml(loc.name)}" style="cursor:default;">
+            <i class="fa-solid fa-location-dot" style="color:#4fc3f7;font-size:0.7em;"></i>
+            <span class="bb-hub-hit-title">${escapeHtml(loc.name || loc.id)}</span>
+            <span class="bb-hub-hit-level" style="color:#4fc3f7">${escapeHtml(loc.region || '')}</span>
+        </div>`).join('');
+    }
+
     // 时间线命中
     if (result.timelineHits) {
         const tlAll = [...(result.timelineHits.foreshadow || []), ...(result.timelineHits.ongoing || []), ...(result.timelineHits.ended || [])];
         if (tlAll.length) {
-            html += `<div class="bb-hit-section-label"><i class="fa-solid fa-timeline"></i> 时间线 <span style="font-size:0.75em;opacity:0.6;">${tlAll.length}条</span></div>`;
+            html += `<div class="bb-hit-section-label"><i class="fa-solid fa-timeline"></i> 时间条目 <span style="font-size:0.75em;opacity:0.6;">${tlAll.length}条</span></div>`;
             html += tlAll.map(t => {
                 const isOngoing = t.status === 'ongoing';
                 const isForeshadow = t.status === 'foreshadow';
@@ -2920,35 +3295,6 @@ function updateSidebarHitList() {
                 </div>`;
             }).join('');
         }
-    }
-
-    // 地图命中
-    if (result.mapHits && result.mapHits.length) {
-        html += `<div class="bb-hit-section-label"><i class="fa-solid fa-map"></i> 地图 <span style="font-size:0.75em;opacity:0.6;">${result.mapHits.length}处</span></div>`;
-        html += result.mapHits.map(loc => `<div class="bb-hub-hit-item" title="${escapeHtml(loc.name)}" style="cursor:default;">
-            <i class="fa-solid fa-location-dot" style="color:#4fc3f7;font-size:0.7em;"></i>
-            <span class="bb-hub-hit-title">${escapeHtml(loc.name || loc.id)}</span>
-            <span class="bb-hub-hit-level" style="color:#4fc3f7">${escapeHtml(loc.region || '')}</span>
-        </div>`).join('');
-    }
-
-    // 记忆命中
-    if (result.hits && result.hits.length) {
-        html += `<div class="bb-hit-section-label"><i class="fa-solid fa-brain"></i> 记忆 <span style="font-size:0.75em;opacity:0.6;">${result.hits.length}条</span></div>`;
-        html += result.hits.map(h => {
-            const icon = typeIcons[h.type] || 'fa-circle';
-            const color = levelColors[h.level] || '#888';
-            const scorePct = Math.round(h.score * 100);
-            const shortTitle = (h.title || '').length > 18
-                ? escapeHtml(h.title.slice(0, 18)) + '...'
-                : escapeHtml(h.title);
-            return `<div class="bb-hub-hit-item" title="${escapeHtml(h.title)}" style="cursor:default;">
-                <i class="fa-solid ${icon}" style="color:${color};font-size:0.7em;"></i>
-                <span class="bb-hub-hit-title">${shortTitle}</span>
-                <span class="bb-hub-hit-level" style="color:${color}">${h.level}</span>
-                <span class="bb-hub-hit-score">${scorePct}%</span>
-            </div>`;
-        }).join('');
     }
 
     listEl.innerHTML = html;

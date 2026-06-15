@@ -3999,10 +3999,11 @@
     bottom: 56px;
     right: 0;
     z-index: 99999;
-    width: 260px;
+    width: min(30rem, calc(100vw - 2rem));
+    max-width: 30rem;
     background: var(--SmartThemeChatTintColor, #1e1e2e);
     border: 1px solid var(--SmartThemeBorderColor, #444);
-    border-radius: 12px;
+    border-radius: 8px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
     overflow: hidden;
 }
@@ -4023,6 +4024,14 @@
     padding: 8px 14px;
     font-size: 0.82em;
     cursor: default;
+}
+.bb-floating-menu-item span {
+    min-width: 0;
+}
+#bb_hub_extract_label {
+    white-space: normal;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
 }
 .bb-floating-menu-item i {
     width: 16px;
@@ -4065,6 +4074,11 @@
 }
 .bb-hub-hit-item:last-child {
     border-bottom: none;
+}
+.bb-hub-hit-empty {
+    justify-content: center;
+    padding-left: 14px;
+    opacity: 0.5;
 }
 .bb-hub-hit-title {
     flex: 1;
