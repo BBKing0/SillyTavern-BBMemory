@@ -4016,6 +4016,8 @@
 }
 .bb-floating-menu-body {
     padding: 6px 0;
+    max-height: min(70vh, 34rem);
+    overflow-y: auto;
 }
 .bb-floating-menu-item {
     display: flex;
@@ -4029,9 +4031,14 @@
     min-width: 0;
 }
 #bb_hub_extract_label {
-    white-space: normal;
+    white-space: pre-line;
     line-height: 1.35;
     overflow-wrap: anywhere;
+}
+#bb_hub_hit_list {
+    max-height: min(48vh, 22rem);
+    overflow-y: auto;
+    padding: 2px 0 4px;
 }
 .bb-floating-menu-item i {
     width: 16px;
@@ -4060,6 +4067,64 @@
     padding: 6px 14px 2px 14px;
     letter-spacing: 0.5px;
     text-transform: uppercase;
+}
+
+.bb-hit-group {
+    margin: 2px 0;
+}
+
+.bb-hit-group-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 14px;
+    font-size: 0.76em;
+    font-weight: 700;
+    cursor: pointer;
+    list-style: none;
+    color: var(--SmartThemeTextColor, #ddd);
+    opacity: 0.82;
+    user-select: none;
+}
+
+.bb-hit-group-summary::-webkit-details-marker {
+    display: none;
+}
+
+.bb-hit-group-summary::after {
+    content: "\f078";
+    font-family: "Font Awesome 6 Free";
+    font-weight: 900;
+    font-size: 0.72em;
+    opacity: 0.45;
+    transition: transform 0.15s;
+}
+
+.bb-hit-group[open] > .bb-hit-group-summary::after {
+    transform: rotate(180deg);
+}
+
+.bb-hit-group-summary:hover {
+    background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.06));
+}
+
+.bb-hit-group-summary span:first-child {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.bb-hit-group-count {
+    margin-left: auto;
+    font-size: 0.84em;
+    opacity: 0.62;
+    white-space: nowrap;
+}
+
+.bb-hit-group-list {
+    padding-bottom: 2px;
 }
 
 /* 浮窗命中记忆子列表 */

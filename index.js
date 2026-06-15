@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.0.9 主入口
+ * index.js —— BB-Memory v9.1.0 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 时间线 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -15,7 +15,7 @@ import {
     getMemories, addMemory, updateMemory, removeMemory,
     clearAllData, deleteByExchange, getMemoryStats, refreshAllSourceFloors,
     exportMemoriesToChatMetadata, importMemoriesFromChatMetadata, cleanupChatMetadataBloat,
-    migrateV4ToV5, recordHits, checkDemotions,
+    migrateV4ToV5, checkDemotions,
     exportMemories, importMemories, updateFactContent, addHiddenNote, removeHiddenNote,
     scheduleAutoBackup,
     getCalendarDescription, setCalendarDescription,
@@ -79,7 +79,7 @@ let chatSwitchFallbackRunning = false;
 let chatSwitchPromptOpen = false;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.0.9';
+const SETTINGS_EXPORT_VERSION = '9.1.0';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'maxResults', 'npcInjectionMax', 'itemInjectionMax', 'timelineEndedMax',
@@ -202,6 +202,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         if (msg._bbmem_extracted && !msg.is_hidden) {
             msg.is_hidden = true;
             msg._bbmem_hideSource = 'plugin';
+            msg._bbmem_autoHidden = true;
         }
     }
 
@@ -316,9 +317,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
                 else if (typeof ctx.saveChat === 'function') ctx.saveChat();
             } catch {}
         }
-        recordHits(chatId, hitRecords, { countMisses: true, frameKey: hitFrameKey }).catch((err) => {
-            console.warn('[BB-Memory] hit score update failed:', err?.message || err);
-        });
+        if (settings.debugLogging) console.log(`[BB-Memory] queued hit frame until extraction: ${hitFrameKey}`);
     }
 
     // 10. 注入
@@ -550,24 +549,44 @@ function clearHitFrameMetadataLocal(msg) {
     delete msg._bbmem_hitRecordedAt;
 }
 
+function formatCompactFloorRange(floors = []) {
+    const sorted = [...new Set(floors)]
+        .filter(n => Number.isInteger(n) && n >= 0)
+        .sort((a, b) => a - b);
+    if (!sorted.length) return '无';
+    const parts = [];
+    let start = sorted[0];
+    let prev = sorted[0];
+    for (let i = 1; i < sorted.length; i++) {
+        const n = sorted[i];
+        if (n === prev + 1) {
+            prev = n;
+            continue;
+        }
+        parts.push(start === prev ? String(start) : `${start}-${prev}`);
+        start = prev = n;
+    }
+    parts.push(start === prev ? String(start) : `${start}-${prev}`);
+    return parts.join('、');
+}
+
 function shouldRecordToast(msg, type) {
     if (type === 'error' || type === 'warning' || type === 'success') return true;
     return /提醒|完成|失败|跳过|清理|标记|提取|备份|恢复|维护|连接|初始化/.test(String(msg || ''));
 }
 
 function formatHubIdleStatus(status) {
-    if (!status || !status.total) return '提取状态：空闲';
-    const parts = [];
-    parts.push(`已提取楼层 ${status.extractedText}`);
-    if (status.unextracted?.length) parts.push(`未提取楼层 ${status.unextractedText}`);
-    if (status.meta?.length) parts.push(`元对话楼层 ${status.metaText}`);
-    if (status.skipped?.length) parts.push(`已跳过楼层 ${status.skippedText}`);
-    return `提取状态：空闲-${parts.join('；')}`;
+    if (!status || !status.total) return '空闲';
+    const latest = status.latestExtracted?.length
+        ? (status.latestExtractedText || formatCompactFloorRange(status.latestExtracted))
+        : '';
+    return latest ? `空闲\n最新提取楼层 ${latest}` : '空闲';
 }
 
 function formatHubBusyStatus(status, fallback = '') {
-    if (status?.pending?.length) return `提取状态：提取中-正在提取${status.pendingText}层`;
-    return `提取状态：提取中-${fallback || '正在提取'}`;
+    if (status?.pending?.length) return `正在提取${formatCompactFloorRange(status.pending)}层`;
+    const text = String(fallback || '').replace(/^提取状态[:：]?\s*/, '').replace(/^提取中[-：:]?\s*/, '');
+    return text || '正在提取';
 }
 
 function refreshExtractionFloorStatus() {
@@ -587,6 +606,15 @@ function refreshExtractionFloorStatus() {
         hubLabel.textContent = formatHubIdleStatus(status);
     }
     return status;
+}
+
+function applyExtractedVisibilityClass(mode = getSettings().extractedMsgDisplay || 'hidden') {
+    document.body.classList.remove('bb-show-extracted', 'bb-show-extracted-clear');
+    if (mode === 'transparent') {
+        document.body.classList.add('bb-show-extracted');
+    } else if (mode === 'visible') {
+        document.body.classList.add('bb-show-extracted-clear');
+    }
 }
 
 function getExtensionFolder() {
@@ -709,9 +737,11 @@ async function toggleMetaMarkerForMessage(chat, aiIdx) {
         msg._bbmem_extracted = false;
         msg._bbmem_skipped = false;
         msg._bbmem_meta_reason = undefined;
+        delete msg._bbmem_autoHidden;
         if (userIndex >= 0 && chat[userIndex]) {
             delete chat[userIndex]._bbmem_meta_pair;
             chat[userIndex]._bbmem_skipped = false;
+            delete chat[userIndex]._bbmem_autoHidden;
             if (chat[userIndex].is_hidden && chat[userIndex]._bbmem_hideSource === 'plugin') {
                 chat[userIndex].is_hidden = false;
                 chat[userIndex]._bbmem_hideSource = undefined;
@@ -2408,9 +2438,16 @@ function getRetrievalHitTotal(result = lastRetrievalResult) {
         + tlCount;
 }
 
-function renderHubGroup(label, icon, countLabel, html) {
-    return `<div class="bb-hit-section-label"><i class="fa-solid ${icon}"></i> ${label} <span style="font-size:0.75em;opacity:0.6;">${countLabel}</span></div>`
-        + (html || '<div class="bb-hub-hit-item bb-hub-hit-empty">暂无</div>');
+function renderHitGroup(label, icon, countLabel, html, options = {}) {
+    const openAttr = options.open ? ' open' : '';
+    const emptyText = options.emptyText || '暂无';
+    return `<details class="bb-hit-group"${openAttr}>
+        <summary class="bb-hit-group-summary">
+            <span><i class="fa-solid ${icon}"></i> ${escapeHtml(label)}</span>
+            <span class="bb-hit-group-count">${escapeHtml(countLabel)}</span>
+        </summary>
+        <div class="bb-hit-group-list">${html || `<div class="bb-hub-hit-item bb-hub-hit-empty">${escapeHtml(emptyText)}</div>`}</div>
+    </details>`;
 }
 
 async function renderHubHitList(listEl, chatId) {
@@ -2463,11 +2500,11 @@ async function renderHubHitList(listEl, chatId) {
     }).join('');
 
     listEl.innerHTML = [
-        renderHubGroup('记忆', 'fa-brain', `${result.hits?.length || 0}条`, memoryHtml),
-        renderHubGroup('NPC', 'fa-user', `${result.npcHits?.length || 0}条`, npcHtml),
-        renderHubGroup('物品', 'fa-box', `${result.itemHits?.length || 0}条`, itemHtml),
-        renderHubGroup('地图', 'fa-map', `${result.mapHits?.length || 0}处`, mapHtml),
-        renderHubGroup('时间条目', 'fa-timeline', `${timelineAll.length}条`, timelineHtml),
+        renderHitGroup('记忆', 'fa-brain', `${result.hits?.length || 0}条`, memoryHtml),
+        renderHitGroup('NPC', 'fa-user', `${result.npcHits?.length || 0}条`, npcHtml),
+        renderHitGroup('物品', 'fa-box', `${result.itemHits?.length || 0}条`, itemHtml),
+        renderHitGroup('地图', 'fa-map', `${result.mapHits?.length || 0}处`, mapHtml),
+        renderHitGroup('时间条目', 'fa-timeline', `${timelineAll.length}条`, timelineHtml),
     ].join('');
 }
 
@@ -2505,7 +2542,7 @@ function injectFloatingHub() {
             <div id="bb_hub_hit_list" style="display:none;"></div>
             <div class="bb-floating-menu-item" id="bb_hub_extract_progress" style="display:flex;">
                 <i class="fa-solid fa-moon"></i>
-                <span id="bb_hub_extract_label">提取状态：空闲</span>
+                <span id="bb_hub_extract_label">空闲</span>
             </div>
             <div class="bb-floating-menu-item bb-floating-menu-action" data-action="manual_extract">
                 <i class="fa-solid fa-wand-magic-sparkles"></i>
@@ -2695,7 +2732,7 @@ async function refreshFloatingHubData() {
         }
         if (extractLabel && !extractRow?.dataset.busy) {
             extractLabel.textContent = (failedFloor !== null && failedFloor !== undefined)
-                ? `提取状态：失败-第${failedFloor}层`
+                ? `失败-第${failedFloor}层`
                 : formatHubIdleStatus(getExtractionFloorStatus());
         }
     } catch { /* ignore */ }
@@ -2740,6 +2777,7 @@ function cycleExtractedVisibility() {
 
     // 更新设置
     updateSettings({ extractedMsgDisplay: next });
+    applyExtractedVisibilityClass(next);
 
     // 刷新 DOM 标记以应用新模式
     refreshExtractionMarkers();
@@ -2888,10 +2926,11 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.0.9 初始化开始...');
+    console.log('[BB-Memory] v9.1.0 初始化开始...');
 
     // 确保默认设置
     getSettings();
+    applyExtractedVisibilityClass();
     lastObservedChatId = getChatId();
     lastObservedCharId = getCharacterId();
     cleanupChatMetadataBloat().then(result => {
@@ -2946,7 +2985,7 @@ async function init() {
                     icon.className = isFailed ? 'fa-solid fa-exclamation-triangle' : 'fa-solid fa-check-circle';
                     icon.style.color = isFailed ? '#f44336' : '#4caf50';
                 }
-                if (labelEl) labelEl.textContent = isFailed ? `提取状态：失败-${info.text || '未知错误'}` : (info.text ? `提取状态：完成-${info.text}` : '提取状态：完成');
+                if (labelEl) labelEl.textContent = isFailed ? `失败-${info.text || '未知错误'}` : formatHubIdleStatus(getExtractionFloorStatus());
                 // 失败时显示红点
                 if (badge) {
                     badge.textContent = '';
@@ -3042,7 +3081,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.0.9 初始化完成');
+    console.log('[BB-Memory] v9.1.0 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
@@ -3222,82 +3261,68 @@ function updateSidebarHitList() {
     const levelColors = { L4: '#ce93d8', L3: '#4fc3f7', L2: '#ffb74d', L1: '#9e9e9e' };
     const tierColors = { core: '#ce93d8', important: '#4fc3f7', minor: '#ffb74d', background: '#9e9e9e', key: '#ce93d8', equipped: '#4fc3f7', clue: '#ffb74d', consumable: '#9e9e9e' };
 
-    let html = '';
+    const memoryHtml = (result.hits || []).map(h => {
+        const icon = typeIcons[h.type] || 'fa-circle';
+        const color = levelColors[h.level] || '#888';
+        const scorePct = Math.round(h.score * 100);
+        const shortTitle = (h.title || '').length > 18
+            ? escapeHtml(h.title.slice(0, 18)) + '...'
+            : escapeHtml(h.title);
+        return `<div class="bb-hub-hit-item" title="${escapeHtml(h.title)}" style="cursor:default;">
+            <i class="fa-solid ${icon}" style="color:${color};font-size:0.7em;"></i>
+            <span class="bb-hub-hit-title">${shortTitle}</span>
+            <span class="bb-hub-hit-level" style="color:${color}">${h.level}</span>
+            <span class="bb-hub-hit-score">${scorePct}%</span>
+        </div>`;
+    }).join('');
 
-    // 记忆命中
-    if (result.hits && result.hits.length) {
-        html += `<div class="bb-hit-section-label"><i class="fa-solid fa-brain"></i> 记忆 <span style="font-size:0.75em;opacity:0.6;">${result.hits.length}条</span></div>`;
-        html += result.hits.map(h => {
-            const icon = typeIcons[h.type] || 'fa-circle';
-            const color = levelColors[h.level] || '#888';
-            const scorePct = Math.round(h.score * 100);
-            const shortTitle = (h.title || '').length > 18
-                ? escapeHtml(h.title.slice(0, 18)) + '...'
-                : escapeHtml(h.title);
-            return `<div class="bb-hub-hit-item" title="${escapeHtml(h.title)}" style="cursor:default;">
-                <i class="fa-solid ${icon}" style="color:${color};font-size:0.7em;"></i>
-                <span class="bb-hub-hit-title">${shortTitle}</span>
-                <span class="bb-hub-hit-level" style="color:${color}">${h.level}</span>
-                <span class="bb-hub-hit-score">${scorePct}%</span>
-            </div>`;
-        }).join('');
-    }
+    const npcHtml = (result.npcHits || []).map(n => {
+        const color = tierColors[n.npcTier] || '#888';
+        return `<div class="bb-hub-hit-item" title="${escapeHtml(n.name)}" style="cursor:default;">
+            <i class="fa-solid fa-user" style="color:${color};font-size:0.7em;"></i>
+            <span class="bb-hub-hit-title">${escapeHtml(n.name)}</span>
+            <span class="bb-hub-hit-level" style="color:${color}">${n.npcTier || ''}</span>
+        </div>`;
+    }).join('');
 
-    // NPC 命中
-    if (result.npcHits && result.npcHits.length) {
-        html += `<div class="bb-hit-section-label"><i class="fa-solid fa-user"></i> NPC <span style="font-size:0.75em;opacity:0.6;">${result.npcHits.length}条</span></div>`;
-        html += result.npcHits.map(n => {
-            const color = tierColors[n.npcTier] || '#888';
-            return `<div class="bb-hub-hit-item" title="${escapeHtml(n.name)}" style="cursor:default;">
-                <i class="fa-solid fa-user" style="color:${color};font-size:0.7em;"></i>
-                <span class="bb-hub-hit-title">${escapeHtml(n.name)}</span>
-                <span class="bb-hub-hit-level" style="color:${color}">${n.npcTier || ''}</span>
-            </div>`;
-        }).join('');
-    }
+    const itemHtml = (result.itemHits || []).map(i => {
+        const color = tierColors[i.itemTier] || '#888';
+        return `<div class="bb-hub-hit-item" title="${escapeHtml(i.name)}" style="cursor:default;">
+            <i class="fa-solid fa-box" style="color:${color};font-size:0.7em;"></i>
+            <span class="bb-hub-hit-title">${escapeHtml(i.name)}</span>
+            <span class="bb-hub-hit-level" style="color:${color}">${i.itemTier || ''}</span>
+        </div>`;
+    }).join('');
 
-    // 物品命中
-    if (result.itemHits && result.itemHits.length) {
-        html += `<div class="bb-hit-section-label"><i class="fa-solid fa-box"></i> 物品 <span style="font-size:0.75em;opacity:0.6;">${result.itemHits.length}条</span></div>`;
-        html += result.itemHits.map(i => {
-            const color = tierColors[i.itemTier] || '#888';
-            return `<div class="bb-hub-hit-item" title="${escapeHtml(i.name)}" style="cursor:default;">
-                <i class="fa-solid fa-box" style="color:${color};font-size:0.7em;"></i>
-                <span class="bb-hub-hit-title">${escapeHtml(i.name)}</span>
-                <span class="bb-hub-hit-level" style="color:${color}">${i.itemTier || ''}</span>
-            </div>`;
-        }).join('');
-    }
+    const mapHtml = (result.mapHits || []).map(loc => `<div class="bb-hub-hit-item" title="${escapeHtml(loc.name)}" style="cursor:default;">
+        <i class="fa-solid fa-location-dot" style="color:#4fc3f7;font-size:0.7em;"></i>
+        <span class="bb-hub-hit-title">${escapeHtml(loc.name || loc.id)}</span>
+        <span class="bb-hub-hit-level" style="color:#4fc3f7">${escapeHtml(loc.region || '')}</span>
+    </div>`).join('');
 
-    // 地图命中
-    if (result.mapHits && result.mapHits.length) {
-        html += `<div class="bb-hit-section-label"><i class="fa-solid fa-map"></i> 地图 <span style="font-size:0.75em;opacity:0.6;">${result.mapHits.length}处</span></div>`;
-        html += result.mapHits.map(loc => `<div class="bb-hub-hit-item" title="${escapeHtml(loc.name)}" style="cursor:default;">
-            <i class="fa-solid fa-location-dot" style="color:#4fc3f7;font-size:0.7em;"></i>
-            <span class="bb-hub-hit-title">${escapeHtml(loc.name || loc.id)}</span>
-            <span class="bb-hub-hit-level" style="color:#4fc3f7">${escapeHtml(loc.region || '')}</span>
-        </div>`).join('');
-    }
+    const tlAll = [
+        ...(result.timelineHits?.foreshadow || []),
+        ...(result.timelineHits?.ongoing || []),
+        ...(result.timelineHits?.ended || []),
+    ];
+    const timelineHtml = tlAll.map(t => {
+        const isOngoing = t.status === 'ongoing';
+        const isForeshadow = t.status === 'foreshadow';
+        const color = isForeshadow ? '#ffb74d' : (isOngoing ? '#4fc3f7' : '#9e9e9e');
+        return `<div class="bb-hub-hit-item" title="${escapeHtml(t.title)}" style="cursor:default;">
+            <i class="fa-solid ${isForeshadow ? 'fa-eye' : (isOngoing ? 'fa-play' : 'fa-check')}" style="color:${color};font-size:0.7em;"></i>
+            <span class="bb-hub-hit-title">${escapeHtml((t.title || '').length > 18 ? t.title.slice(0, 18) + '...' : (t.title || ''))}</span>
+            <span class="bb-hub-hit-level" style="color:${color}">${isForeshadow ? '伏笔' : (isOngoing ? '进行中' : '已结束')}</span>
+        </div>`;
+    }).join('');
 
-    // 时间线命中
-    if (result.timelineHits) {
-        const tlAll = [...(result.timelineHits.foreshadow || []), ...(result.timelineHits.ongoing || []), ...(result.timelineHits.ended || [])];
-        if (tlAll.length) {
-            html += `<div class="bb-hit-section-label"><i class="fa-solid fa-timeline"></i> 时间条目 <span style="font-size:0.75em;opacity:0.6;">${tlAll.length}条</span></div>`;
-            html += tlAll.map(t => {
-                const isOngoing = t.status === 'ongoing';
-                const isForeshadow = t.status === 'foreshadow';
-                const color = isForeshadow ? '#ffb74d' : (isOngoing ? '#4fc3f7' : '#9e9e9e');
-                return `<div class="bb-hub-hit-item" title="${escapeHtml(t.title)}" style="cursor:default;">
-                    <i class="fa-solid ${isForeshadow ? 'fa-eye' : (isOngoing ? 'fa-play' : 'fa-check')}" style="color:${color};font-size:0.7em;"></i>
-                    <span class="bb-hub-hit-title">${escapeHtml((t.title || '').length > 18 ? t.title.slice(0, 18) + '...' : (t.title || ''))}</span>
-                    <span class="bb-hub-hit-level" style="color:${color}">${isForeshadow ? '伏笔' : (isOngoing ? '进行中' : '已结束')}</span>
-                </div>`;
-            }).join('');
-        }
-    }
-
-    listEl.innerHTML = html;
+    listEl.innerHTML = [
+        renderHitGroup('记忆', 'fa-brain', `${result.hits?.length || 0}条`, memoryHtml),
+        renderHitGroup('NPC', 'fa-user', `${result.npcHits?.length || 0}条`, npcHtml),
+        renderHitGroup('物品', 'fa-box', `${result.itemHits?.length || 0}条`, itemHtml),
+        renderHitGroup('地图', 'fa-map', `${result.mapHits?.length || 0}处`, mapHtml),
+        renderHitGroup('时间条目', 'fa-timeline', `${tlAll.length}条`, timelineHtml),
+    ].join('');
 }
 
 // ═══════════════════════════════════════════════════════════

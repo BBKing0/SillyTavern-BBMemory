@@ -8,11 +8,12 @@
  *   4. 提供可提取 exchange 的查询接口
  */
 
-import { getSettings } from './memory-store.js';
+import { getSettings, recordHits } from './memory-store.js';
 
 const EXCHANGE_STORE_PREFIX = 'bb_memory_exchanges_';
 const LOG_TAG = '[BB-Memory]';
 const MESSAGE_UID_KEY = '_bbmem_messageUid';
+let lastExtractionMarkAt = 0;
 
 // ═══════════════════════════════════════════════════════════
 //  SillyTavern API 辅助
@@ -65,6 +66,41 @@ function clearHitFrameMetadata(msg) {
     return changed;
 }
 
+function nextExtractionMarkAt() {
+    const now = Date.now();
+    lastExtractionMarkAt = Math.max(now, lastExtractionMarkAt + 1);
+    return lastExtractionMarkAt;
+}
+
+function parseHitFrameRecords(records) {
+    if (!Array.isArray(records)) return [];
+    const hits = [];
+    for (const raw of records) {
+        const text = String(raw || '');
+        const pos = text.indexOf(':');
+        if (pos <= 0) continue;
+        const collection = text.slice(0, pos);
+        const id = text.slice(pos + 1);
+        if (!collection || !id) continue;
+        hits.push({ collection, id });
+    }
+    return hits;
+}
+
+async function flushHitFrameMetadata(chatId, msg, hash) {
+    if (!chatId || !msg || typeof msg !== 'object') return false;
+    if (!Object.prototype.hasOwnProperty.call(msg, '_bbmem_hitRecords')) return false;
+    const hits = parseHitFrameRecords(msg._bbmem_hitRecords);
+    const frameKey = msg._bbmem_hitFrameKey || hash || '';
+    try {
+        await recordHits(chatId, hits, { countMisses: true, frameKey });
+    } catch (err) {
+        console.warn(`${LOG_TAG} 命中升降格记录失败:`, err?.message || err);
+    }
+    clearHitFrameMetadata(msg);
+    return true;
+}
+
 function hideAsPlugin(msg) {
     if (!msg || typeof msg !== 'object') return false;
     if (msg.is_hidden && msg._bbmem_hideSource === 'plugin') return false;
@@ -77,6 +113,7 @@ function applyExtractedDisplay(msg, displayMode, options = {}) {
     if (!msg || typeof msg !== 'object') return false;
     const { forceHide = false, forceVisible = false } = options;
     if (forceHide || displayMode === 'hidden') {
+        msg._bbmem_autoHidden = true;
         return hideAsPlugin(msg);
     }
     if (forceVisible && msg.is_hidden && msg._bbmem_hideSource === 'plugin') {
@@ -267,9 +304,18 @@ export async function syncMessageVisibility(windowOverride) {
     // 已提取 / 已跳过 / 元对话不再占用短期窗口，避免窗口被旧楼层卡住。
     let visibleExchangeCount = 0;
     let cutoff = -1;
+    let newestAiIndex = -1;
+    for (let i = chat.length - 1; i >= 0; i--) {
+        if (isAiMessage(chat[i])) {
+            newestAiIndex = i;
+            break;
+        }
+    }
+    const skipNewestAiForWindow = newestAiIndex === chat.length - 1;
     for (let i = chat.length - 1; i >= 0; i--) {
         const msg = chat[i];
         if (!isAiMessage(msg)) continue;
+        if (skipNewestAiForWindow && i === newestAiIndex) continue;
         if (msg._bbmem_extracted || msg._bbmem_skipped || msg._bbmem_meta_marker) continue;
         if (msg.is_hidden && msg._bbmem_hideSource === 'plugin') continue;
         visibleExchangeCount++;
@@ -316,6 +362,9 @@ export async function syncMessageVisibility(windowOverride) {
             const prev = findPreviousUser(chat, i);
             if (prev.userIndex === -1) continue;
             msg._bbmem_pendingExtraction = true;
+            if (chat[prev.userIndex] && !chat[prev.userIndex]._bbmem_extracted && !chat[prev.userIndex]._bbmem_skipped) {
+                chat[prev.userIndex]._bbmem_pendingExtraction = true;
+            }
             pendingCount++;
             changed = true;
         } else if (msg.is_hidden && !msg._bbmem_hideSource) {
@@ -402,19 +451,26 @@ export async function getExtractableExchanges() {
         // 指纹已存在 → 跳过（标记为已提取以加速后续扫描）
         if (processedSet.has(hash)) {
             const displayMode = getSettings().extractedMsgDisplay || 'hidden';
+            const extractedAt = nextExtractionMarkAt();
+            await flushHitFrameMetadata(chatId, chat[userIndex], hash);
             msg._bbmem_extracted = true;
+            msg._bbmem_extractedAt = extractedAt;
             delete msg._bbmem_pendingExtraction;
-            applyExtractedDisplay(msg, displayMode);
+            applyExtractedDisplay(msg, displayMode, { forceHide: true });
             clearHitFrameMetadata(msg);
             if (chat[userIndex]) {
                 chat[userIndex]._bbmem_extracted = true;
-                applyExtractedDisplay(chat[userIndex], displayMode);
+                chat[userIndex]._bbmem_extractedAt = extractedAt;
+                delete chat[userIndex]._bbmem_pendingExtraction;
+                applyExtractedDisplay(chat[userIndex], displayMode, { forceHide: true });
                 clearHitFrameMetadata(chat[userIndex]);
             }
             for (const idx of openingIndices) {
                 if (chat[idx]) {
                     chat[idx]._bbmem_extracted = true;
-                    applyExtractedDisplay(chat[idx], displayMode);
+                    chat[idx]._bbmem_extractedAt = extractedAt;
+                    delete chat[idx]._bbmem_pendingExtraction;
+                    applyExtractedDisplay(chat[idx], displayMode, { forceHide: true });
                     clearHitFrameMetadata(chat[idx]);
                 }
             }
@@ -452,19 +508,23 @@ export async function markExchangeExtracted(userIndex, aiIndex, hash, extraIndic
     const displayMode = settings.extractedMsgDisplay || 'hidden';
 
     if (chat) {
-        const markExtracted = (idx, forceVisibleWhenNeeded = false) => {
+        const extractedAt = nextExtractionMarkAt();
+        await flushHitFrameMetadata(chatId, chat[userIndex], hash);
+        const markExtracted = (idx) => {
             if (!chat[idx]) return;
             chat[idx]._bbmem_extracted = true;
+            chat[idx]._bbmem_extractedAt = extractedAt;
             delete chat[idx]._bbmem_pendingExtraction;
             delete chat[idx]._bbmem_skipped;
             chat[idx]._bbmem_exchangeHash = hash;
             clearHitFrameMetadata(chat[idx]);
-            applyExtractedDisplay(chat[idx], displayMode, { forceVisible: forceVisibleWhenNeeded });
+            applyExtractedDisplay(chat[idx], displayMode, { forceHide: true });
         };
-        markExtracted(aiIndex, true);
-        markExtracted(userIndex, false);
-        for (const idx of extraIndices || []) markExtracted(idx, true);
+        markExtracted(aiIndex);
+        markExtracted(userIndex);
+        for (const idx of extraIndices || []) markExtracted(idx);
         saveChat();
+        refreshExtractionMarkers();
     }
 
     await markExchangeProcessed(chatId, hash);
@@ -494,6 +554,7 @@ export async function markExchangeMetaSkipped(userIndex, aiIndex, hash, reason =
             }
             chat[idx]._bbmem_skipped = true;
             chat[idx]._bbmem_extracted = false;
+            chat[idx]._bbmem_autoHidden = true;
             delete chat[idx]._bbmem_pendingExtraction;
             chat[idx]._bbmem_exchangeHash = hash;
             clearHitFrameMetadata(chat[idx]);
@@ -503,6 +564,7 @@ export async function markExchangeMetaSkipped(userIndex, aiIndex, hash, reason =
         markSkipped(userIndex, false);
         for (const idx of extraIndices || []) markSkipped(idx, false);
         saveChat();
+        refreshExtractionMarkers();
     }
 
     await markExchangeProcessed(chatId, hash);
@@ -516,6 +578,7 @@ export function getExtractionFloorStatus() {
     const skipped = [];
     const meta = [];
     const unextracted = [];
+    const extractedTimes = [];
 
     for (let i = 0; i < chat.length; i++) {
         const msg = chat[i];
@@ -528,8 +591,23 @@ export function getExtractionFloorStatus() {
             pending.push(i);
         } else if (isExtractedLike(msg)) {
             extracted.push(i);
+            extractedTimes.push({ floor: i, at: Number(msg._bbmem_extractedAt) || 0 });
         } else {
             unextracted.push(i);
+        }
+    }
+
+    let latestExtracted = [];
+    const newestAt = extractedTimes.reduce((max, item) => Math.max(max, item.at || 0), 0);
+    if (newestAt > 0) {
+        latestExtracted = extractedTimes.filter(item => item.at === newestAt).map(item => item.floor);
+    } else if (extracted.length) {
+        const sorted = [...extracted].sort((a, b) => a - b);
+        const end = sorted[sorted.length - 1];
+        latestExtracted = [end];
+        for (let i = sorted.length - 2; i >= 0; i--) {
+            if (sorted[i] === latestExtracted[0] - 1) latestExtracted.unshift(sorted[i]);
+            else break;
         }
     }
 
@@ -552,6 +630,8 @@ export function getExtractionFloorStatus() {
         skippedText: formatFloorRanges(skipped),
         metaText: formatFloorRanges(meta),
         unextractedText: formatFloorRanges(unextracted),
+        latestExtracted,
+        latestExtractedText: formatFloorRanges(latestExtracted),
         summary: parts.join('；'),
         compact: `已提取 ${extracted.length} / 待提取 ${pending.length} / 未提取 ${unextracted.length}`,
     };
@@ -573,11 +653,13 @@ export function hideExchange(userIndex, aiIndex) {
     if (chat[userIndex] && !chat[userIndex].is_hidden) {
         chat[userIndex].is_hidden = true;
         chat[userIndex]._bbmem_hideSource = 'plugin';
+        chat[userIndex]._bbmem_autoHidden = true;
         changed = true;
     }
     if (chat[aiIndex] && !chat[aiIndex].is_hidden) {
         chat[aiIndex].is_hidden = true;
         chat[aiIndex]._bbmem_hideSource = 'plugin';
+        chat[aiIndex]._bbmem_autoHidden = true;
         changed = true;
     }
 
@@ -652,6 +734,7 @@ export function refreshExtractionMarkers() {
                 msg._bbmem_extracted = false;
                 msg._bbmem_skipped = false;
                 msg._bbmem_meta_reason = undefined;
+                delete msg._bbmem_autoHidden;
                 let userText = '';
                 for (let j = idx - 1; j >= 0; j--) {
                     if (chat[j].is_user && chat[j].mes) { userText = chat[j].mes; break; }
@@ -665,6 +748,7 @@ export function refreshExtractionMarkers() {
                         chat[prev.userIndex]._bbmem_hideSource = undefined;
                     }
                     chat[prev.userIndex]._bbmem_skipped = false;
+                    delete chat[prev.userIndex]._bbmem_autoHidden;
                 }
             } else {
                 delete msg._bbmem_pendingExtraction;
@@ -723,6 +807,7 @@ export function refreshExtractionMarkers() {
                 e.stopPropagation();
                 msg._bbmem_pendingExtraction = true;
                 msg._bbmem_skipped = false;
+                delete msg._bbmem_autoHidden;
                 saveChat();
                 refreshExtractionMarkers();
             });
@@ -822,32 +907,18 @@ export function refreshExtractionMarkers() {
             markerTarget.appendChild(floorActions);
         }
 
-        // ── 根据 extractedMsgDisplay 设置显示状态 ──
-        const displayMode = getSettings().extractedMsgDisplay || 'hidden';
+        // ── 根据提取/跳过状态同步真实隐藏状态；显示模式只通过外层 CSS 临时预览 ──
         const forceMetaHidden = (msg._bbmem_meta_marker || msg._bbmem_meta_pair) && msg._bbmem_skipped;
-        if (msg._bbmem_extracted || forceMetaHidden) {
+        const forceExtractedHidden = msg._bbmem_extracted || msg._bbmem_autoHidden || forceMetaHidden;
+        const pluginHidden = msg.is_hidden && msg._bbmem_hideSource === 'plugin';
+        if (forceExtractedHidden || pluginHidden) {
             block.classList.remove('bb-extracted-transparent');
-            if (forceMetaHidden || displayMode === 'hidden') {
-                if (!block.classList.contains('bb-extracted-hidden')) {
-                    block.classList.add('bb-extracted-hidden');
-                }
-                if (!msg.is_hidden) {
-                    hideAsPlugin(msg);
-                    changed = true;
-                }
-            } else if (displayMode === 'transparent') {
-                block.classList.remove('bb-extracted-hidden');
-                if (!block.classList.contains('bb-extracted-transparent')) {
-                    block.classList.add('bb-extracted-transparent');
-                }
-                if (msg.is_hidden && msg._bbmem_hideSource === 'plugin') {
-                    msg.is_hidden = false;
-                }
-            } else {
-                block.classList.remove('bb-extracted-hidden', 'bb-extracted-transparent');
-                if (msg.is_hidden && msg._bbmem_hideSource === 'plugin') {
-                    msg.is_hidden = false;
-                }
+            if (!block.classList.contains('bb-extracted-hidden')) {
+                block.classList.add('bb-extracted-hidden');
+            }
+            if (forceExtractedHidden && !msg.is_hidden) {
+                hideAsPlugin(msg);
+                changed = true;
             }
         } else {
             block.classList.remove('bb-extracted-hidden', 'bb-extracted-transparent');
