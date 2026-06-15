@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.0.7</b>
+            <b>BB-Memory v9.0.8</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -531,14 +531,25 @@
                 </div>
                 <div class="bb-settings-section-body">
                     <div class="bb-mem-hint" style="margin-bottom:8px;">
-                        <i class="fa-solid fa-circle-info"></i> 与 BBTel 小手机双向同步记忆数据。确保 BBTel 服务已启动（端口 3001）。
+                        <i class="fa-solid fa-circle-info"></i> 与 BBTel 小手机双向同步完整存档槽。云端部署默认使用同域 /bbtel。
+                    </div>
+                    <div style="display:flex;gap:4px;margin:4px 0;align-items:center;">
+                        <input id="bbtel_bridge_base_url" class="bb-input" type="text" placeholder="/bbtel" style="flex:1;font-size:0.75em;" />
+                        <button id="bbtel_save_base_btn" class="menu_button" title="保存 BBTel 桥接地址" style="font-size:0.75em;min-width:54px;">保存</button>
+                    </div>
+                    <div style="display:flex;gap:4px;margin:4px 0;align-items:center;">
+                        <select id="bbtel_local_slot_select" class="bb-input" style="flex:1;font-size:0.78em;"></select>
+                        <button id="bbtel_sync_to_btn" class="menu_button" title="将当前 BB-Memory 存档槽发送到 BBTel" style="flex:1;font-size:0.8em;">
+                            <i class="fa-solid fa-upload"></i> 发给 BBTel
+                        </button>
+                    </div>
+                    <div style="display:flex;gap:4px;margin:4px 0;align-items:center;">
+                        <select id="bbtel_outbox_select" class="bb-input" style="flex:1;font-size:0.78em;"></select>
+                        <button id="bbtel_refresh_outbox_btn" class="menu_button" title="刷新 BBTel 发件箱" style="font-size:0.75em;min-width:54px;">刷新</button>
                     </div>
                     <div style="display:flex;gap:4px;margin:4px 0;">
-                        <button id="bbtel_sync_from_btn" class="menu_button" title="从 BBTel 拉取记忆数据" style="flex:1;font-size:0.8em;">
-                            <i class="fa-solid fa-download"></i> 从 BBTel 同步
-                        </button>
-                        <button id="bbtel_sync_to_btn" class="menu_button" title="将记忆数据推送到 BBTel" style="flex:1;font-size:0.8em;">
-                            <i class="fa-solid fa-upload"></i> 同步到 BBTel
+                        <button id="bbtel_sync_from_btn" class="menu_button" title="从 BBTel 拉取完整存档槽" style="flex:1;font-size:0.8em;">
+                            <i class="fa-solid fa-download"></i> 从 BBTel 加载
                         </button>
                     </div>
                     <div id="bbtel_sync_status" style="font-size:0.75em;margin-top:6px;opacity:0.7;">
@@ -553,6 +564,11 @@
                 function bindSyncButtons() {
                     var fromBtn = document.getElementById('bbtel_sync_from_btn');
                     var toBtn = document.getElementById('bbtel_sync_to_btn');
+                    var refreshBtn = document.getElementById('bbtel_refresh_outbox_btn');
+                    var saveBaseBtn = document.getElementById('bbtel_save_base_btn');
+                    var baseInput = document.getElementById('bbtel_bridge_base_url');
+                    var localSlotSelect = document.getElementById('bbtel_local_slot_select');
+                    var outboxSelect = document.getElementById('bbtel_outbox_select');
                     var statusEl = document.getElementById('bbtel_sync_status');
 
                     if (!fromBtn || !toBtn) return;
@@ -573,7 +589,9 @@
                         setStatus('正在加载 BBTel 同步桥接...');
                         window.__bbtelSyncLoading = new Promise(function(resolve) {
                             var script = document.createElement('script');
-                            script.src = 'http://127.0.0.1:3001/bridge/bb-memory-sync.js';
+                            var saved = window.localStorage && window.localStorage.getItem('bbtel_bridge_base_url');
+                            var base = saved || ((location.hostname === '127.0.0.1' || location.hostname === 'localhost') ? 'http://127.0.0.1:3001' : location.origin + '/bbtel');
+                            script.src = base.replace(/\/+$/, '') + '/bridge/bb-memory-sync.js';
                             script.async = true;
                             script.onload = function() { resolve(!!window.BBTelSync); };
                             script.onerror = function() { resolve(false); };
@@ -584,16 +602,59 @@
                         return window.__bbtelSyncLoading;
                     }
 
-                    fromBtn.addEventListener('click', async function() {
+                    async function refreshLocalSlots() {
+                        if (!localSlotSelect || !window.BBTelSync || !window.BBTelSync.listLocalSlots) return;
+                        var slots = await window.BBTelSync.listLocalSlots();
+                        localSlotSelect.innerHTML = slots.map(function(name) {
+                            return '<option value="' + String(name).replace(/"/g, '&quot;') + '">' + name + '</option>';
+                        }).join('');
+                    }
+
+                    async function refreshOutbox() {
+                        if (!outboxSelect || !window.BBTelSync || !window.BBTelSync.listBBTelOutbox) return;
+                        var packages = await window.BBTelSync.listBBTelOutbox();
+                        outboxSelect.innerHTML = packages.length
+                            ? packages.map(function(pkg) {
+                                var name = (pkg.slotName || (pkg.sourceMeta && pkg.sourceMeta.slotName) || pkg.id);
+                                var count = pkg.stats && pkg.stats.total ? ' (' + pkg.stats.total + ')' : '';
+                                return '<option value="' + pkg.id + '">' + name + count + '</option>';
+                            }).join('')
+                            : '<option value="">BBTel 发件箱为空</option>';
+                    }
+
+                    async function refreshAll() {
                         if (!await ensureBridgeLoaded()) {
                             setStatus('BBTel 同步桥接未加载，请确认 BBTel 服务已启动', false);
-                            return;
+                            return false;
                         }
-                        setStatus('正在从 BBTel 拉取...');
+                        if (baseInput && window.BBTelSync.getBaseUrl) baseInput.value = window.BBTelSync.getBaseUrl();
+                        await refreshLocalSlots();
+                        await refreshOutbox();
+                        return true;
+                    }
+
+                    saveBaseBtn && saveBaseBtn.addEventListener('click', async function() {
+                        if (!baseInput) return;
+                        window.localStorage && window.localStorage.setItem('bbtel_bridge_base_url', baseInput.value.trim());
+                        window.BBTelSync = null;
+                        setStatus('桥接地址已保存，正在重新加载...');
+                        await refreshAll();
+                    });
+
+                    refreshBtn && refreshBtn.addEventListener('click', async function() {
+                        if (await refreshAll()) setStatus('发件箱已刷新', true);
+                    });
+
+                    fromBtn.addEventListener('click', async function() {
+                        if (!await refreshAll()) return;
+                        var packageId = outboxSelect && outboxSelect.value;
+                        if (!packageId) { setStatus('BBTel 发件箱为空', false); return; }
+                        var slotName = localSlotSelect && localSlotSelect.value || 'ST-1';
+                        setStatus('正在从 BBTel 加载...');
                         fromBtn.disabled = true;
                         toBtn.disabled = true;
                         try {
-                            var result = await window.BBTelSync.syncFromBBTel();
+                            var result = await window.BBTelSync.pullSlotFromBBTel(packageId, slotName);
                             setStatus(result.success ? '✓ ' + result.message : '✗ ' + result.message, result.success);
                         } catch(e) {
                             setStatus('✗ 同步出错: ' + e.message, false);
@@ -603,21 +664,23 @@
                     });
 
                     toBtn.addEventListener('click', async function() {
-                        if (!await ensureBridgeLoaded()) {
-                            setStatus('BBTel 同步桥接未加载，请确认 BBTel 服务已启动', false);
-                            return;
-                        }
+                        if (!await refreshAll()) return;
+                        var slotName = localSlotSelect && localSlotSelect.value || 'default';
                         setStatus('正在推送到 BBTel...');
                         fromBtn.disabled = true;
                         toBtn.disabled = true;
                         try {
-                            var result = await window.BBTelSync.syncToBBTel();
+                            var result = await window.BBTelSync.pushSlotToBBTel(slotName);
                             setStatus(result.success ? '✓ ' + result.message : '✗ ' + result.message, result.success);
                         } catch(e) {
                             setStatus('✗ 同步出错: ' + e.message, false);
                         }
                         fromBtn.disabled = false;
                         toBtn.disabled = false;
+                    });
+
+                    refreshAll().catch(function(e) {
+                        setStatus('BBTel 初始化失败: ' + e.message, false);
                     });
                 }
 
