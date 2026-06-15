@@ -2675,7 +2675,7 @@ function toggleFloatingMenu() {
     floatingMenuVisible = !floatingMenuVisible;
     if (floatingMenuVisible) {
         const hubRect = hub.getBoundingClientRect();
-        const menuWidth = 268;
+        const menuWidth = 320;
         const menuMaxHeight = 320;
         const gap = 56;
         const edgeMargin = 16;

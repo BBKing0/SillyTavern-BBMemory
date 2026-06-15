@@ -3999,8 +3999,8 @@
     bottom: 56px;
     right: 0;
     z-index: 99999;
-    width: min(30rem, calc(100vw - 2rem));
-    max-width: 30rem;
+    width: min(20rem, calc(100vw - 1.25rem));
+    max-width: 20rem;
     background: var(--SmartThemeChatTintColor, #1e1e2e);
     border: 1px solid var(--SmartThemeBorderColor, #444);
     border-radius: 8px;
