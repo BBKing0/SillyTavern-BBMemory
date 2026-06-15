@@ -186,8 +186,11 @@ export function getCharacterId() {
         if (ctx.characterId !== undefined && ctx.characterId !== null) {
             return String(ctx.characterId);
         }
-        if (ctx.characters && ctx.characterId !== undefined) {
-            return String(ctx.characterId);
+        if (ctx.this_chid !== undefined && ctx.this_chid !== null && ctx.this_chid !== '') {
+            return String(ctx.this_chid);
+        }
+        if (ctx.groupId !== undefined && ctx.groupId !== null && ctx.groupId !== '') {
+            return `group:${ctx.groupId}`;
         }
     } catch { /* ignore */ }
     return null;

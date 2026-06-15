@@ -74,6 +74,8 @@ let lastRetrievalResult = null;
 let settingsPanelMounted = false;
 let lastObservedChatId = null;
 let lastObservedCharId = null;
+let chatSwitchFallbackTimer = null;
+let chatSwitchFallbackRunning = false;
 let chatSwitchPromptOpen = false;
 const handledChatSwitchPrompts = new Set();
 
@@ -2054,6 +2056,24 @@ async function onChatChanged() {
     }, 1200);
 }
 
+function initChatSwitchFallbackWatch() {
+    if (chatSwitchFallbackTimer) return;
+    chatSwitchFallbackTimer = setInterval(() => {
+        const chatId = getChatId();
+        if (!chatId) return;
+        const charId = getCharacterId();
+        const sameChat = String(chatId) === String(lastObservedChatId || '');
+        const sameChar = String(charId || '') === String(lastObservedCharId || '');
+        if (sameChat && sameChar) return;
+        if (chatSwitchFallbackRunning) return;
+
+        chatSwitchFallbackRunning = true;
+        onChatChanged()
+            .catch((e) => console.warn('[BB-Memory] 聊天切换兜底检测失败:', e.message || e))
+            .finally(() => { chatSwitchFallbackRunning = false; });
+    }, 1500);
+}
+
 function onNewMessage() {
     if (!getSettings().autoGenEnabled) {
         syncMessageVisibility().catch(() => {});
@@ -2668,6 +2688,7 @@ async function init() {
     injectFloatingHub();
     initMessageDeletionWatch();
     initExtractionMarkerWatch();
+    initChatSwitchFallbackWatch();
 
     // v6.1: 监听消息删除，自动清理关联记忆
     setTimeout(() => {
