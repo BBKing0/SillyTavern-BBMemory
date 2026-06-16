@@ -103,10 +103,39 @@ async function flushHitFrameMetadata(chatId, msg, hash) {
 
 function hideAsPlugin(msg) {
     if (!msg || typeof msg !== 'object') return false;
-    if (msg.is_hidden && msg._bbmem_hideSource === 'plugin') return false;
+    if (msg.is_hidden && msg._bbmem_hideSource === 'plugin' && msg._bbmem_autoHidden === true) return false;
     msg.is_hidden = true;
     msg._bbmem_hideSource = 'plugin';
+    msg._bbmem_autoHidden = true;
     return true;
+}
+
+function shouldStayHiddenAfterExtraction(msg) {
+    if (!msg || typeof msg !== 'object') return false;
+    if (msg._bbmem_extracted === true) return true;
+    if (msg._bbmem_autoHidden === true) return true;
+    return msg._bbmem_skipped === true && (msg._bbmem_meta_marker || msg._bbmem_meta_pair);
+}
+
+function enforceCompletedMessageHiding(chat) {
+    if (!Array.isArray(chat)) return { hiddenCount: 0, changed: false };
+    let hiddenCount = 0;
+    let changed = false;
+    for (const msg of chat) {
+        if (!shouldStayHiddenAfterExtraction(msg)) continue;
+        if (hideAsPlugin(msg)) hiddenCount++;
+        if (msg._bbmem_pendingExtraction) {
+            delete msg._bbmem_pendingExtraction;
+            changed = true;
+        }
+    }
+    return { hiddenCount, changed: changed || hiddenCount > 0 };
+}
+
+function refreshExtractionMarkersSoon() {
+    refreshExtractionMarkers();
+    setTimeout(() => refreshExtractionMarkers(), 150);
+    setTimeout(() => refreshExtractionMarkers(), 800);
 }
 
 function applyExtractedDisplay(msg, displayMode, options = {}) {
@@ -299,6 +328,13 @@ export async function syncMessageVisibility(windowOverride) {
 
     const settings = getSettings();
     const windowExchanges = windowOverride ?? settings.contextWindowExchanges ?? 5;
+    let hiddenCount = 0;
+    let pendingCount = 0;
+    let changed = false;
+
+    const enforced = enforceCompletedMessageHiding(chat);
+    hiddenCount += enforced.hiddenCount;
+    changed = changed || enforced.changed;
 
     // 从末尾反向计数“尚未处理”的 AI 回复，找到窗口截止位置。
     // 已提取 / 已跳过 / 元对话不再占用短期窗口，避免窗口被旧楼层卡住。
@@ -326,12 +362,9 @@ export async function syncMessageVisibility(windowOverride) {
     }
 
     if (cutoff < 0) {
-        return { hiddenCount: 0, pendingCount: 0 };
+        if (changed) saveChat();
+        return { hiddenCount, pendingCount };
     }
-
-    let hiddenCount = 0;
-    let pendingCount = 0;
-    let changed = false;
 
     // 将窗口外的完整 exchange 标记为待提取；开场白不单独提取，会并入首个用户+AI exchange。
     for (let i = 0; i < cutoff; i++) {
@@ -524,7 +557,7 @@ export async function markExchangeExtracted(userIndex, aiIndex, hash, extraIndic
         markExtracted(userIndex);
         for (const idx of extraIndices || []) markExtracted(idx);
         saveChat();
-        refreshExtractionMarkers();
+        refreshExtractionMarkersSoon();
     }
 
     await markExchangeProcessed(chatId, hash);
@@ -564,7 +597,7 @@ export async function markExchangeMetaSkipped(userIndex, aiIndex, hash, reason =
         markSkipped(userIndex, false);
         for (const idx of extraIndices || []) markSkipped(idx, false);
         saveChat();
-        refreshExtractionMarkers();
+        refreshExtractionMarkersSoon();
     }
 
     await markExchangeProcessed(chatId, hash);
@@ -650,18 +683,8 @@ export function hideExchange(userIndex, aiIndex) {
     if (!chat) return false;
 
     let changed = false;
-    if (chat[userIndex] && !chat[userIndex].is_hidden) {
-        chat[userIndex].is_hidden = true;
-        chat[userIndex]._bbmem_hideSource = 'plugin';
-        chat[userIndex]._bbmem_autoHidden = true;
-        changed = true;
-    }
-    if (chat[aiIndex] && !chat[aiIndex].is_hidden) {
-        chat[aiIndex].is_hidden = true;
-        chat[aiIndex]._bbmem_hideSource = 'plugin';
-        chat[aiIndex]._bbmem_autoHidden = true;
-        changed = true;
-    }
+    if (chat[userIndex]) changed = hideAsPlugin(chat[userIndex]) || changed;
+    if (chat[aiIndex]) changed = hideAsPlugin(chat[aiIndex]) || changed;
 
     if (changed) saveChat();
     return changed;
