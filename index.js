@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.1.1 主入口
+ * index.js —— BB-Memory v9.1.2 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 时间线 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -40,8 +40,8 @@ import {
 
 import {
     syncMessageVisibility, refreshExtractionMarkers,
-    markExchangeExtracted, hideExchange, unmarkExchangeProcessed, computeExchangeHash,
-    getExtractionFloorStatus,
+    markExchangeExtracted, unmarkExchangeProcessed, computeExchangeHash,
+    getExtractionFloorStatus, setPluginHiddenState,
 } from './message-state.js';
 
 import { getClueBoard } from './clue-board.js';
@@ -79,7 +79,7 @@ let chatSwitchFallbackRunning = false;
 let chatSwitchPromptOpen = false;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.1.1';
+const SETTINGS_EXPORT_VERSION = '9.1.2';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'maxResults', 'npcInjectionMax', 'itemInjectionMax', 'timelineEndedMax',
@@ -197,13 +197,20 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     }
     if (!userMessage) { clearInjection(); return chat; }
 
-    // 2. 上下文隐藏安全网 —— 只隐藏已提取的消息
-    for (const msg of chat) {
-        if (msg._bbmem_extracted && !msg.is_hidden) {
-            msg.is_hidden = true;
-            msg._bbmem_hideSource = 'plugin';
-            msg._bbmem_autoHidden = true;
+    // 2. 上下文隐藏安全网 —— 用 ST 原生 is_system 隐藏已提取消息
+    let hideChanged = false;
+    for (let i = 0; i < chat.length; i++) {
+        const msg = chat[i];
+        if (msg?._bbmem_extracted) {
+            hideChanged = setPluginHiddenState(msg, i, true) || hideChanged;
         }
+    }
+    if (hideChanged) {
+        try {
+            if (typeof ctx.saveChatConditional === 'function') ctx.saveChatConditional();
+            else if (typeof ctx.saveChatDebounced === 'function') ctx.saveChatDebounced();
+            else if (typeof ctx.saveChat === 'function') ctx.saveChat();
+        } catch { /* ignore */ }
     }
 
     // 3. 迁移检查
@@ -363,7 +370,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         }
     }
 
-    // ST 原生跳过 is_hidden 消息，已由 syncMessageVisibility 处理
+    // ST 原生跳过 is_system 消息，已由 syncMessageVisibility 处理
 
     return chat;
 };
@@ -730,22 +737,16 @@ async function toggleMetaMarkerForMessage(chat, aiIdx) {
     const hash = msg._bbmem_exchangeHash || computeExchangeHash(userText, msg.mes || '');
 
     if (!msg._bbmem_meta_marker) {
-        msg.is_hidden = false;
-        msg._bbmem_hideSource = undefined;
+        setPluginHiddenState(msg, aiIdx, false);
         delete msg._bbmem_meta_pair;
         msg._bbmem_pendingExtraction = true;
         msg._bbmem_extracted = false;
         msg._bbmem_skipped = false;
         msg._bbmem_meta_reason = undefined;
-        delete msg._bbmem_autoHidden;
         if (userIndex >= 0 && chat[userIndex]) {
             delete chat[userIndex]._bbmem_meta_pair;
             chat[userIndex]._bbmem_skipped = false;
-            delete chat[userIndex]._bbmem_autoHidden;
-            if (chat[userIndex].is_hidden && chat[userIndex]._bbmem_hideSource === 'plugin') {
-                chat[userIndex].is_hidden = false;
-                chat[userIndex]._bbmem_hideSource = undefined;
-            }
+            setPluginHiddenState(chat[userIndex], userIndex, false);
         }
         await unmarkExchangeProcessed(getChatId(), hash);
     } else {
@@ -815,7 +816,7 @@ async function handleInitMemory(chatId, rangeStr = '') {
         throw new Error('没有可用的上下文（角色卡、世界书、对话记录均为空）');
     }
 
-    // 使用分阶段提取
+    // 使用合并提取
     const progressEl = createProgressToast('手动提取: 准备中...');
 
     const updateProgress = (info) => {
@@ -2926,7 +2927,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.1.1 初始化开始...');
+    console.log('[BB-Memory] v9.1.2 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -3081,7 +3082,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.1.1 初始化完成');
+    console.log('[BB-Memory] v9.1.2 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆

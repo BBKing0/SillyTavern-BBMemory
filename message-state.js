@@ -2,7 +2,7 @@
  * message-state.js —— BB-Memory 的"消息管理员"（消息稳定化机制）
  *
  * 职责：
- *   1. 自动隐藏超出短期窗口的消息（使用 SillyTavern 原生 is_hidden）
+ *   1. 自动隐藏已处理消息（使用 SillyTavern 原生 is_system 隐藏标记）
  *   2. 标记每条消息的隐藏来源（插件/用户）和提取状态
  *   3. 计算 exchange（用户消息 + AI 回复）的唯一指纹，防止重复提取
  *   4. 提供可提取 exchange 的查询接口
@@ -42,9 +42,11 @@ function getLocalForage() {
 function saveChat() {
     try {
         const ctx = getContext();
-        // v4.4.2: 优先直接保存，避免 saveChatConditional 在有条件时跳过
-        // is_hidden 等变更必须持久化，否则刷新后丢失
-        if (typeof ctx.saveChat === 'function') {
+        // ST 原生隐藏通过 is_system 持久化；优先使用官方隐藏函数同款保存路径。
+        if (typeof ctx.saveChatConditional === 'function') {
+            const result = ctx.saveChatConditional();
+            if (result?.catch) result.catch((err) => console.warn(`${LOG_TAG} 保存聊天失败:`, err));
+        } else if (typeof ctx.saveChat === 'function') {
             ctx.saveChat();
         } else if (typeof ctx.saveChatDebounced === 'function') {
             ctx.saveChatDebounced();
@@ -101,13 +103,71 @@ async function flushHitFrameMetadata(chatId, msg, hash) {
     return true;
 }
 
-function hideAsPlugin(msg) {
+function syncMessageBlockHiddenState(index, hidden) {
+    if (!Number.isInteger(index) || index < 0) return;
+    try {
+        const block = document.querySelector(`.mes[mesid="${index}"]`);
+        if (block) block.setAttribute('is_system', String(Boolean(hidden)));
+    } catch { /* ignore */ }
+}
+
+function isPluginHidden(msg) {
+    return !!msg && msg._bbmem_hideSource === 'plugin'
+        && (msg.is_system === true || msg.is_hidden === true || msg._bbmem_autoHidden === true);
+}
+
+function isRealSystemMessage(msg) {
+    return !!msg && msg.is_system === true && msg._bbmem_hideSource !== 'plugin';
+}
+
+export function setPluginHiddenState(msg, index, hidden) {
     if (!msg || typeof msg !== 'object') return false;
-    if (msg.is_hidden && msg._bbmem_hideSource === 'plugin' && msg._bbmem_autoHidden === true) return false;
-    msg.is_hidden = true;
-    msg._bbmem_hideSource = 'plugin';
-    msg._bbmem_autoHidden = true;
-    return true;
+    let changed = false;
+    if (hidden) {
+        if (msg.is_system !== true) {
+            msg.is_system = true;
+            changed = true;
+        }
+        if (Object.prototype.hasOwnProperty.call(msg, 'is_hidden')) {
+            delete msg.is_hidden;
+            changed = true;
+        }
+        if (msg._bbmem_hideSource !== 'plugin') {
+            msg._bbmem_hideSource = 'plugin';
+            changed = true;
+        }
+        if (msg._bbmem_autoHidden !== true) {
+            msg._bbmem_autoHidden = true;
+            changed = true;
+        }
+        syncMessageBlockHiddenState(index, true);
+        return changed;
+    }
+
+    if (msg._bbmem_hideSource !== 'plugin') return false;
+    if (msg.is_system === true) {
+        msg.is_system = false;
+        changed = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(msg, 'is_hidden')) {
+        delete msg.is_hidden;
+        changed = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(msg, '_bbmem_hideSource')) {
+        delete msg._bbmem_hideSource;
+        changed = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(msg, '_bbmem_autoHidden')) {
+        delete msg._bbmem_autoHidden;
+        changed = true;
+    }
+    syncMessageBlockHiddenState(index, false);
+    return changed;
+}
+
+function hideAsPlugin(msg, index = null) {
+    if (!msg || typeof msg !== 'object') return false;
+    return setPluginHiddenState(msg, index, true);
 }
 
 function shouldStayHiddenAfterExtraction(msg) {
@@ -121,9 +181,10 @@ function enforceCompletedMessageHiding(chat) {
     if (!Array.isArray(chat)) return { hiddenCount: 0, changed: false };
     let hiddenCount = 0;
     let changed = false;
-    for (const msg of chat) {
+    for (let i = 0; i < chat.length; i++) {
+        const msg = chat[i];
         if (!shouldStayHiddenAfterExtraction(msg)) continue;
-        if (hideAsPlugin(msg)) hiddenCount++;
+        if (hideAsPlugin(msg, i)) hiddenCount++;
         if (msg._bbmem_pendingExtraction) {
             delete msg._bbmem_pendingExtraction;
             changed = true;
@@ -138,16 +199,14 @@ function refreshExtractionMarkersSoon() {
     setTimeout(() => refreshExtractionMarkers(), 800);
 }
 
-function applyExtractedDisplay(msg, displayMode, options = {}) {
+function applyExtractedDisplay(msg, displayMode, options = {}, index = null) {
     if (!msg || typeof msg !== 'object') return false;
     const { forceHide = false, forceVisible = false } = options;
     if (forceHide || displayMode === 'hidden') {
-        msg._bbmem_autoHidden = true;
-        return hideAsPlugin(msg);
+        return hideAsPlugin(msg, index);
     }
-    if (forceVisible && msg.is_hidden && msg._bbmem_hideSource === 'plugin') {
-        msg.is_hidden = false;
-        return true;
+    if (forceVisible && isPluginHidden(msg)) {
+        return setPluginHiddenState(msg, index, false);
     }
     return false;
 }
@@ -175,7 +234,7 @@ function ensureMessageUid(msg) {
 }
 
 function isAiMessage(msg) {
-    return msg && !msg.is_user && !msg.is_system;
+    return msg && !msg.is_user && !isRealSystemMessage(msg);
 }
 
 function findPreviousUser(chat, aiIndex) {
@@ -222,7 +281,7 @@ function formatFloorRanges(floors) {
 
 function isExtractedLike(msg) {
     return msg?._bbmem_extracted === true
-        || (msg?.is_hidden && msg?._bbmem_hideSource === 'plugin' && !msg?._bbmem_skipped && !msg?._bbmem_meta_marker);
+        || (isPluginHidden(msg) && !msg?._bbmem_skipped && !msg?._bbmem_meta_marker);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -310,16 +369,16 @@ export async function markExchangeProcessed(chatId, hash) {
 // ═══════════════════════════════════════════════════════════
 
 /**
- * v2.9.8: 扫描当前聊天，基于 exchange 窗口自动隐藏消息。
+ * v2.9.8: 扫描当前聊天，基于 exchange 窗口把旧消息送入提取队列。
  *
  * 规则：
  *   - 从末尾向前数 N 个尚未处理的 exchange 保留，其余进入待提取队列
  *   - 开场白不单独提取，会并入第一个用户+AI exchange 的上下文
- *   - 系统消息(is_system)跳过
+ *   - 真实系统消息(is_system 且非插件隐藏)跳过
  *   - 隐藏来源：_bbmem_hideSource='plugin'（插件隐藏）或 'user'（用户手动隐藏）
  *
  * @param {number} [windowOverride] - 覆盖 exchange 窗口大小
- * @returns {Promise<{ hiddenCount: number }>} 本次新隐藏的消息数
+ * @returns {Promise<{ hiddenCount: number, pendingCount: number }>} 本次新隐藏/入队的消息数
  */
 export async function syncMessageVisibility(windowOverride) {
     const ctx = getContext();
@@ -353,7 +412,7 @@ export async function syncMessageVisibility(windowOverride) {
         if (!isAiMessage(msg)) continue;
         if (skipNewestAiForWindow && i === newestAiIndex) continue;
         if (msg._bbmem_extracted || msg._bbmem_skipped || msg._bbmem_meta_marker) continue;
-        if (msg.is_hidden && msg._bbmem_hideSource === 'plugin') continue;
+        if (isPluginHidden(msg)) continue;
         visibleExchangeCount++;
         if (visibleExchangeCount >= windowExchanges) {
             cutoff = i;
@@ -373,7 +432,7 @@ export async function syncMessageVisibility(windowOverride) {
 
         if (msg._bbmem_meta_marker) {
             // 元对话在短期窗口内保留可见；一旦进入提取窗口，直接标记为已跳过并隐藏整组 exchange。
-            if (!msg._bbmem_skipped || !msg.is_hidden) {
+            if (!msg._bbmem_skipped || !isPluginHidden(msg)) {
                 const prev = findPreviousUser(chat, i);
                 const hash = msg._bbmem_exchangeHash || computeExchangeHash(prev.userText || '', msg.mes || '');
                 if (prev.userIndex >= 0) {
@@ -381,17 +440,17 @@ export async function syncMessageVisibility(windowOverride) {
                     hiddenCount++;
                 } else {
                     msg._bbmem_skipped = true;
-                    if (hideAsPlugin(msg)) hiddenCount++;
+                    if (hideAsPlugin(msg, i)) hiddenCount++;
                     changed = true;
                 }
                 changed = true;
             }
-        } else if (msg._bbmem_skipped && !msg.is_hidden) {
+        } else if (msg._bbmem_skipped && !isPluginHidden(msg)) {
             // 已跳过的消息超出窗口后自动隐藏
-            hideAsPlugin(msg);
+            hideAsPlugin(msg, i);
             hiddenCount++;
             changed = true;
-        } else if (!msg.is_hidden && !msg._bbmem_extracted && !msg._bbmem_pendingExtraction && !msg._bbmem_skipped) {
+        } else if (!isPluginHidden(msg) && !msg._bbmem_extracted && !msg._bbmem_pendingExtraction && !msg._bbmem_skipped) {
             const prev = findPreviousUser(chat, i);
             if (prev.userIndex === -1) continue;
             msg._bbmem_pendingExtraction = true;
@@ -400,7 +459,7 @@ export async function syncMessageVisibility(windowOverride) {
             }
             pendingCount++;
             changed = true;
-        } else if (msg.is_hidden && !msg._bbmem_hideSource) {
+        } else if (msg.is_system && !msg._bbmem_hideSource) {
             msg._bbmem_hideSource = 'user';
             changed = true;
         }
@@ -455,7 +514,7 @@ export async function getExtractableExchanges() {
         const msg = chat[i];
 
         // 只关注 AI 消息
-        if (msg.is_user || msg.is_system) continue;
+        if (!isAiMessage(msg)) continue;
         // 只处理标记为待提取的
         if (!msg._bbmem_pendingExtraction) continue;
         // 已经提取过的跳过
@@ -489,13 +548,13 @@ export async function getExtractableExchanges() {
             msg._bbmem_extracted = true;
             msg._bbmem_extractedAt = extractedAt;
             delete msg._bbmem_pendingExtraction;
-            applyExtractedDisplay(msg, displayMode, { forceHide: true });
+            applyExtractedDisplay(msg, displayMode, { forceHide: true }, i);
             clearHitFrameMetadata(msg);
             if (chat[userIndex]) {
                 chat[userIndex]._bbmem_extracted = true;
                 chat[userIndex]._bbmem_extractedAt = extractedAt;
                 delete chat[userIndex]._bbmem_pendingExtraction;
-                applyExtractedDisplay(chat[userIndex], displayMode, { forceHide: true });
+                applyExtractedDisplay(chat[userIndex], displayMode, { forceHide: true }, userIndex);
                 clearHitFrameMetadata(chat[userIndex]);
             }
             for (const idx of openingIndices) {
@@ -503,7 +562,7 @@ export async function getExtractableExchanges() {
                     chat[idx]._bbmem_extracted = true;
                     chat[idx]._bbmem_extractedAt = extractedAt;
                     delete chat[idx]._bbmem_pendingExtraction;
-                    applyExtractedDisplay(chat[idx], displayMode, { forceHide: true });
+                    applyExtractedDisplay(chat[idx], displayMode, { forceHide: true }, idx);
                     clearHitFrameMetadata(chat[idx]);
                 }
             }
@@ -551,7 +610,7 @@ export async function markExchangeExtracted(userIndex, aiIndex, hash, extraIndic
             delete chat[idx]._bbmem_skipped;
             chat[idx]._bbmem_exchangeHash = hash;
             clearHitFrameMetadata(chat[idx]);
-            applyExtractedDisplay(chat[idx], displayMode, { forceHide: true });
+            applyExtractedDisplay(chat[idx], displayMode, { forceHide: true }, idx);
         };
         markExtracted(aiIndex);
         markExtracted(userIndex);
@@ -587,11 +646,10 @@ export async function markExchangeMetaSkipped(userIndex, aiIndex, hash, reason =
             }
             chat[idx]._bbmem_skipped = true;
             chat[idx]._bbmem_extracted = false;
-            chat[idx]._bbmem_autoHidden = true;
             delete chat[idx]._bbmem_pendingExtraction;
             chat[idx]._bbmem_exchangeHash = hash;
             clearHitFrameMetadata(chat[idx]);
-            hideAsPlugin(chat[idx]);
+            hideAsPlugin(chat[idx], idx);
         };
         markSkipped(aiIndex, true);
         markSkipped(userIndex, false);
@@ -615,7 +673,7 @@ export function getExtractionFloorStatus() {
 
     for (let i = 0; i < chat.length; i++) {
         const msg = chat[i];
-        if (!msg || msg.is_system) continue;
+        if (!msg || isRealSystemMessage(msg)) continue;
         if (msg._bbmem_meta_marker || msg._bbmem_meta_pair) {
             meta.push(i);
         } else if (msg._bbmem_skipped) {
@@ -683,8 +741,8 @@ export function hideExchange(userIndex, aiIndex) {
     if (!chat) return false;
 
     let changed = false;
-    if (chat[userIndex]) changed = hideAsPlugin(chat[userIndex]) || changed;
-    if (chat[aiIndex]) changed = hideAsPlugin(chat[aiIndex]) || changed;
+    if (chat[userIndex]) changed = hideAsPlugin(chat[userIndex], userIndex) || changed;
+    if (chat[aiIndex]) changed = hideAsPlugin(chat[aiIndex], aiIndex) || changed;
 
     if (changed) saveChat();
     return changed;
@@ -750,14 +808,12 @@ export function refreshExtractionMarkers() {
             msg._bbmem_meta_marker = !msg._bbmem_meta_marker;
             if (!msg._bbmem_meta_marker) {
                 // 取消元标记：恢复消息为待提取状态
-                msg.is_hidden = false;
-                msg._bbmem_hideSource = undefined;
+                setPluginHiddenState(msg, idx, false);
                 delete msg._bbmem_meta_pair;
                 msg._bbmem_pendingExtraction = true;
                 msg._bbmem_extracted = false;
                 msg._bbmem_skipped = false;
                 msg._bbmem_meta_reason = undefined;
-                delete msg._bbmem_autoHidden;
                 let userText = '';
                 for (let j = idx - 1; j >= 0; j--) {
                     if (chat[j].is_user && chat[j].mes) { userText = chat[j].mes; break; }
@@ -766,12 +822,8 @@ export function refreshExtractionMarkers() {
                 await unmarkExchangeProcessed(chatId, hash);
                 const prev = setPairedUserMetaFlag(chat, idx, false);
                 if (prev.userIndex >= 0 && chat[prev.userIndex]) {
-                    if (chat[prev.userIndex].is_hidden && chat[prev.userIndex]._bbmem_hideSource === 'plugin') {
-                        chat[prev.userIndex].is_hidden = false;
-                        chat[prev.userIndex]._bbmem_hideSource = undefined;
-                    }
+                    setPluginHiddenState(chat[prev.userIndex], prev.userIndex, false);
                     chat[prev.userIndex]._bbmem_skipped = false;
-                    delete chat[prev.userIndex]._bbmem_autoHidden;
                 }
             } else {
                 delete msg._bbmem_pendingExtraction;
@@ -830,7 +882,7 @@ export function refreshExtractionMarkers() {
                 e.stopPropagation();
                 msg._bbmem_pendingExtraction = true;
                 msg._bbmem_skipped = false;
-                delete msg._bbmem_autoHidden;
+                setPluginHiddenState(msg, idx, false);
                 saveChat();
                 refreshExtractionMarkers();
             });
@@ -933,14 +985,14 @@ export function refreshExtractionMarkers() {
         // ── 根据提取/跳过状态同步真实隐藏状态；显示模式只通过外层 CSS 临时预览 ──
         const forceMetaHidden = (msg._bbmem_meta_marker || msg._bbmem_meta_pair) && msg._bbmem_skipped;
         const forceExtractedHidden = msg._bbmem_extracted || msg._bbmem_autoHidden || forceMetaHidden;
-        const pluginHidden = msg.is_hidden && msg._bbmem_hideSource === 'plugin';
+        const pluginHidden = isPluginHidden(msg);
         if (forceExtractedHidden || pluginHidden) {
             block.classList.remove('bb-extracted-transparent');
             if (!block.classList.contains('bb-extracted-hidden')) {
                 block.classList.add('bb-extracted-hidden');
             }
-            if (forceExtractedHidden && !msg.is_hidden) {
-                hideAsPlugin(msg);
+            if (forceExtractedHidden && !isPluginHidden(msg)) {
+                hideAsPlugin(msg, idx);
                 changed = true;
             }
         } else {

@@ -1,8 +1,9 @@
 /**
  * auto-generator.js —— BB-Memory v5.0 自动提取系统
  *
- * 四柱架构：每轮对话分四个阶段独立提取 NPC/物品/时间线/记忆。
- * 每个阶段有聚焦的短 Prompt 和专用解析器。
+ * 当前实现：每个 exchange 使用一次合并提取调用，同时返回
+ * memories / npc / items / timeline / locations / threads。
+ * 解析器仍按集合拆分结果并写入对应存储。
  */
 
 import {
@@ -15,7 +16,7 @@ import {
 } from './memory-store.js';
 import {
     getExtractableExchanges, markExchangeExtracted, isExchangeProcessed,
-    markExchangeMetaSkipped, computeExchangeHash, cyrb53Hash, hideExchange, refreshExtractionMarkers,
+    markExchangeMetaSkipped, computeExchangeHash, cyrb53Hash, refreshExtractionMarkers,
     syncMessageVisibility,
 } from './message-state.js';
 import { normalizeNpcTier, normalizeItemTier } from './entity-tiers.js';
@@ -76,6 +77,7 @@ const PROMPT_META_GUARD = `你是一个角色扮演(RP)叙事记忆提取助手�
 ❌ 不提取：用户给AI的元指令、OOC标注、系统设置、风格指导
 ❌ 不提取：AI的自我介绍、能力声明、工具说明
 ✅ 只提取：角色扮演中的剧情内容、角色互动、情感交流
+✅ 用户发言同样是记忆来源：当用户以玩家/主角身份表达偏好、背景、目标、承诺、选择、恐惧、关系态度或身体/情绪状态时，必须作为玩家/主角信息提取。
 
 **混合内容处理**：
 - 如果消息中既有RP剧情又夹着元指令（如"(我们跳过三天)""角色应该知道..."），
@@ -759,6 +761,13 @@ const MERGED_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个叙事记忆�
 
 **工作顺序**：先提取记忆，再根据记忆内容反推需要更新的 NPC/物品/时间线。
 
+**用户/玩家信息规则（必须遵守）**：
+- 同时阅读“用户”和“角色”两侧内容；不要只总结角色回复。
+- 用户以第一人称或操控主角表达的事实、偏好、目标、计划、承诺、拒绝、关系态度、伤势、情绪、能力、物品状态，都应进入 memories。
+- 如果用户消息包含可长期复用的真实玩家偏好（例如想要的互动边界、叙事口味），只有在它不是临时 OOC 指令且会影响后续 RP 体验时才记录为 habit/fact。
+- 纯 OOC 指令、格式要求、模型控制、风格命令仍然跳过；混合消息只提取其中的 RP/长期偏好部分。
+- 主体字段优先写明确角色名；未知时用“玩家”或“主角”，不要默认忽略用户侧信息。
+
 ═══════════════════════════════════════════════════════
 {{CORE_PRINCIPLES}}
 
@@ -1259,10 +1268,10 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
 
 
 
-// ═══ 分阶段提取 ═══
+// ═══ 自动提取调度（窗口入队 + 合并提取）═══
 
 async function processLatestExchange(chatId) {
-    // 先同步可见性，将超出窗口的旧消息标记为插件隐藏
+    // 先同步窗口状态，将超出保留窗口的完整 exchange 标记为待提取
     await syncMessageVisibility();
 
     const settings = getSettings();

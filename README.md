@@ -459,7 +459,7 @@ bb-memory/
 ### v2.1.0（2026-05-03）— 消息稳定化机制
 
 **新增功能：**
-- 消息自动隐藏：超出短期窗口（默认最近 5 条）的消息由插件自动隐藏（使用 SillyTavern 原生 `is_hidden`）
+- 消息自动隐藏：当前实现先让超出保留窗口的完整 exchange 入队提取，提取/跳过后使用 SillyTavern 原生 `is_system` 标记隐藏
 - 消息状态标记：每条消息标记 `_bbmem_hideSource`（插件/用户隐藏）和 `_bbmem_extracted`（是否已提取）
 - Exchange 机制：将「AI 回复 + 前一条用户消息」组成 exchange，整体送入提取流程
 - Exchange 指纹去重：基于 cyrb53 哈希算法为每个 exchange 生成唯一指纹，防止重复提取
