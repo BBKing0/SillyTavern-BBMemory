@@ -16,6 +16,11 @@ import {
     addHiddenNote,
 } from './memory-store.js';
 import { cyrb53Hash } from './message-state.js';
+import {
+    DEFAULT_HEALTH_TAG_PROMPT,
+    fillPromptTemplate,
+    getPromptTemplate,
+} from './prompt-templates.js';
 
 // ═══════════════════════════════════════════════════════════
 //  工具函数
@@ -1182,7 +1187,14 @@ async function handleAiTag(issue, chatId, itemEl, callbacks) {
         const content = mem.content || mem.summary || mem.title || '';
         const existingTags = (mem.tags || []).map(t => typeof t === 'string' ? t : t.name).join(', ');
 
-        const prompt = `请为以下角色扮演记忆生成3-5个简洁的标签关键词（每个词不超过6个字），用逗号分隔，只输出标签不要其他内容。\n\n记忆标题：${mem.title || '无标题'}\n记忆内容：${content.slice(0, 500)}\n现有标签：${existingTags || '无'}`;
+        const prompt = fillPromptTemplate(
+            getPromptTemplate(getSettings(), 'health.tagSuggestion', DEFAULT_HEALTH_TAG_PROMPT),
+            {
+                title: mem.title || '无标题',
+                content: content.slice(0, 500),
+                existingTags: existingTags || '无',
+            }
+        );
 
         const response = await callMainApi(prompt, { maxTokens: 80, temperature: 0.3 });
         const suggestedTags = (response || '').split(/[,，、\n]/).map(t => t.trim()).filter(t => t.length >= 1 && t.length <= 10).slice(0, 6);

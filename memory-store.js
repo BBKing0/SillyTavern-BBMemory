@@ -55,6 +55,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // 自定义提示词（v7.7.1）
     customCorePrinciples: '',            // 自定义核心原则（空=使用默认）
     customExtractionDimensions: '',      // 自定义提取维度（空=使用默认）
+    customPromptTemplates: {},           // v9.1.3 统一提示词模板覆盖：{ templateKey: text }
     // Embedding
     embeddingEnabled: false,
     embeddingEndpoint: '',
@@ -1251,7 +1252,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.1.2',
+        version: '9.1.3',
         timestamp: Date.now(),
         npc: [],
         items: [],
@@ -1564,7 +1565,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
 
     const includeEmbeddings = options.includeEmbeddings === true;
     const backup = {
-        version: '9.1.2',
+        version: '9.1.3',
         timestamp: Date.now(),
         embeddingsIncluded: includeEmbeddings,
         npc: includeEmbeddings ? npc : stripEmbeddings(npc),
@@ -2283,7 +2284,7 @@ export async function exportMemories(chatId) {
         getTimelineThreads(chatId), getMap(chatId), getClueBoard(chatId),
     ]);
     return JSON.stringify({
-        version: '9.1.2',
+        version: '9.1.3',
         npc,
         items,
         timeline,

@@ -18,6 +18,7 @@ import {
 import {
     isArchived, getSettings,
 } from './memory-store.js';
+import { fillPromptTemplate, getPromptTemplate } from './prompt-templates.js';
 
 // ═══════════════════════════════════════════════════════════
 //  评分权重（4 维）
@@ -42,6 +43,67 @@ export const INJECTION_LEVELS = Object.freeze({
     L2: { id: 'L2', label: '摘要',   tokenCost: 'medium' },
     L1: { id: 'L1', label: '标签',   tokenCost: 'low' },
 });
+
+const DEFAULT_INJECTION_SECTION_HEADERS = Object.freeze({
+    thread: '【故事线程地图】',
+    npc: '【角色档案】',
+    item: '【重要物品】',
+    timeline: '【故事时间线】',
+    memory: '【相关记忆】',
+    map: '【世界地图 —— 空间关系{{worldRefSuffix}}】',
+});
+
+function getInjectionHeader(settings, key, replacements = {}) {
+    const template = getPromptTemplate(settings || getSettings(), `injection.${key}Header`, DEFAULT_INJECTION_SECTION_HEADERS[key] || '');
+    return fillPromptTemplate(template, replacements).trim();
+}
+
+export function getRetrieverPromptTemplates() {
+    return [
+        {
+            key: 'injection.threadHeader',
+            title: '故事线程注入标题',
+            category: '五柱注入',
+            description: '长期记忆注入中“故事线程地图”区块的标题。',
+            defaultValue: DEFAULT_INJECTION_SECTION_HEADERS.thread,
+        },
+        {
+            key: 'injection.npcHeader',
+            title: 'NPC 档案注入标题',
+            category: '五柱注入',
+            description: '长期记忆注入中 NPC/角色档案区块的标题。',
+            defaultValue: DEFAULT_INJECTION_SECTION_HEADERS.npc,
+        },
+        {
+            key: 'injection.itemHeader',
+            title: '物品注入标题',
+            category: '五柱注入',
+            description: '长期记忆注入中重要物品区块的标题。',
+            defaultValue: DEFAULT_INJECTION_SECTION_HEADERS.item,
+        },
+        {
+            key: 'injection.timelineHeader',
+            title: '时间线注入标题',
+            category: '五柱注入',
+            description: '长期记忆注入中故事时间线区块的标题。',
+            defaultValue: DEFAULT_INJECTION_SECTION_HEADERS.timeline,
+        },
+        {
+            key: 'injection.memoryHeader',
+            title: '记忆条目注入标题',
+            category: '五柱注入',
+            description: '长期记忆注入中相关记忆区块的标题。',
+            defaultValue: DEFAULT_INJECTION_SECTION_HEADERS.memory,
+        },
+        {
+            key: 'injection.mapHeader',
+            title: '地图注入标题',
+            category: '地图注入',
+            description: '长期记忆注入中世界地图/空间关系区块的标题，{{worldRefSuffix}} 会带入全局现实参考。',
+            defaultValue: DEFAULT_INJECTION_SECTION_HEADERS.map,
+        },
+    ];
+}
 
 // ═══════════════════════════════════════════════════════════
 //  文本分词
@@ -440,7 +502,7 @@ export function getThreadSummaryForInjection(threads, maxActive = 5) {
 
     if (!forInjection.length) return { text: '', threads: [] };
 
-    const lines = ['【故事线程地图】'];
+    const lines = [getInjectionHeader(getSettings(), 'thread') || DEFAULT_INJECTION_SECTION_HEADERS.thread];
     for (const thread of forInjection) {
         const statusMark = thread.status === 'resident' ? '★常驻' :
                           thread.status === 'ongoing' ? '●进行中' :
@@ -626,7 +688,10 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
     const selected = [...selectedMap.values()];
 
     const worldRef = settings.worldRealWorldRef || '';
-    const header = worldRef ? `【世界地图 — 空间关系】(现实参考: ${worldRef})` : '【世界地图 — 空间关系】';
+    const header = getInjectionHeader(settings, 'map', {
+        worldRef,
+        worldRefSuffix: worldRef ? `｜现实参考：${worldRef}` : '',
+    }) || (worldRef ? `【世界地图 — 空间关系】(现实参考: ${worldRef})` : '【世界地图 — 空间关系】');
     const lines = [header];
     let tokens = 0;
     const maxTokens = tokenBudget * 0.18;
@@ -717,7 +782,7 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline,
 
     // ── 区块 1：角色档案 ──
     if (npcProfiles?.length) {
-        const lines = ['【角色档案】'];
+        const lines = [getInjectionHeader(settings, 'npc') || DEFAULT_INJECTION_SECTION_HEADERS.npc];
         let sectionTokens = 0;
         for (const npc of npcProfiles) {
             const line = formatNpcLine(npc);
@@ -736,7 +801,7 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline,
 
     // ── 区块 2：重要物品 ──
     if (items?.length) {
-        const lines = ['【重要物品】'];
+        const lines = [getInjectionHeader(settings, 'item') || DEFAULT_INJECTION_SECTION_HEADERS.item];
         let sectionTokens = 0;
         for (const item of items) {
             const line = formatItemLine(item);
@@ -761,7 +826,7 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline,
             isResidentEntry(t) || isForeshadowTimeline(t) || !isTimelineCoveredByThread(t, threadIndex)
         );
         if (all.length) {
-            const lines = ['【故事时间线】'];
+            const lines = [getInjectionHeader(settings, 'timeline') || DEFAULT_INJECTION_SECTION_HEADERS.timeline];
             let sectionTokens = 0;
             for (const t of all) {
                 const line = formatTimelineLine(t);
@@ -781,7 +846,7 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline,
 
     // ── 区块 4：相关记忆 ──
     if (relevantResults?.length) {
-        const lines = ['【相关记忆】'];
+        const lines = [getInjectionHeader(settings, 'memory') || DEFAULT_INJECTION_SECTION_HEADERS.memory];
         const MAX_MEM = (settings.maxResults || 10) + 4;
         let count = 0;
         let sectionTokens = 0;

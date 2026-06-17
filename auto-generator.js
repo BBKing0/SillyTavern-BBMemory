@@ -20,6 +20,12 @@ import {
     syncMessageVisibility,
 } from './message-state.js';
 import { normalizeNpcTier, normalizeItemTier } from './entity-tiers.js';
+import {
+    DEFAULT_CONCRETE_TIME_RULE,
+    DEFAULT_INITIALIZATION_PROMPT,
+    fillPromptTemplate,
+    getPromptTemplate,
+} from './prompt-templates.js';
 
 // ═══ 语义去重（保留 v4.1.0 逻辑） ═══
 
@@ -420,11 +426,17 @@ function normalizeEmbeddingEndpoint(url) {
     return cleaned + '/v1/embeddings';
 }
 
+const DEFAULT_API_JSON_SYSTEM_PROMPT = '你是一个JSON格式的记忆提取助手。只输出{{formatHint}}，不要包含其他文字。';
+
 export async function callMainApi(prompt, options = {}) {
     const { generateRaw } = SillyTavern.getContext();
     const formatHint = options.isMerged ? '纯JSON对象' : '纯JSON';
+    const systemPrompt = fillPromptTemplate(
+        getPromptTemplate(getSettings(), 'extract.apiJsonSystem', DEFAULT_API_JSON_SYSTEM_PROMPT),
+        { formatHint }
+    );
     const result = await generateRaw({
-        systemPrompt: `你是一个JSON格式的记忆提取助手。只输出${formatHint}，不要包含其他文字。`,
+        systemPrompt,
         prompt,
     });
     return result;
@@ -439,6 +451,10 @@ export async function callCustomApi(prompt, options = {}) {
     if (settings.debugLogging) console.log('[BB-Memory] 副API请求端点:', endpoint);
 
     const formatHint = options.isMerged ? '纯JSON对象' : '纯JSON';
+    const systemPrompt = fillPromptTemplate(
+        getPromptTemplate(settings, 'extract.apiJsonSystem', DEFAULT_API_JSON_SYSTEM_PROMPT),
+        { formatHint }
+    );
 
     const response = await fetchWithTimeout(endpoint, {
         method: 'POST',
@@ -449,7 +465,7 @@ export async function callCustomApi(prompt, options = {}) {
         body: JSON.stringify({
             model: autoGenModel || 'gpt-3.5-turbo',
             messages: [
-                { role: 'system', content: `你是一个JSON格式的记忆提取助手。只输出${formatHint}，不要包含其他文字。` },
+                { role: 'system', content: systemPrompt },
                 { role: 'user', content: prompt },
             ],
             temperature: 0.3,
@@ -883,6 +899,76 @@ p(优先级:high/medium/low), s(一句话总结), entries(可留空数组)
 用户: {{userMessage}}
 角色: {{aiMessage}}`;
 
+export function getAutoGeneratorPromptTemplates() {
+    return [
+        {
+            key: 'extract.metaGuard',
+            title: '提取元对话防护',
+            category: '记忆提取',
+            description: '用于自动/手动提取前过滤 OOC、元指令和非 RP 内容。',
+            defaultValue: PROMPT_META_GUARD,
+        },
+        {
+            key: 'extract.concreteTimeRule',
+            title: '具体真实时间规则',
+            category: '记忆提取',
+            description: '约束记忆、时间线和线程条目使用可推断的具体日期，避免抽象相对时间。',
+            defaultValue: DEFAULT_CONCRETE_TIME_RULE,
+        },
+        {
+            key: 'extract.corePrinciples',
+            title: '核心原则',
+            category: '记忆提取',
+            description: '插入合并提取提示词的核心判断原则，决定哪些叙事信息值得长期保存。',
+            defaultValue: DEFAULT_CORE_PRINCIPLES,
+            legacySettingKey: 'customCorePrinciples',
+        },
+        {
+            key: 'extract.dimensions',
+            title: '提取维度',
+            category: '记忆提取',
+            description: '插入合并提取提示词的候选维度，覆盖情感、关系、伏笔、世界观等。',
+            defaultValue: DEFAULT_EXTRACTION_DIMENSIONS,
+            legacySettingKey: 'customExtractionDimensions',
+        },
+        {
+            key: 'extract.mergedTemplate',
+            title: '合并提取总模板',
+            category: '五柱/地图提取',
+            description: '自动提取和手动楼层提取使用的主提示词，输出记忆、NPC、物品、时间线、地图地点和线程。',
+            defaultValue: MERGED_EXTRACTION_PROMPT,
+        },
+        {
+            key: 'extract.initializationTemplate',
+            title: '初始化提取模板',
+            category: '五柱/地图提取',
+            description: '初始化工作台把角色卡、世界书和聊天记录转为 BB-Memory JSON 草稿时使用。',
+            defaultValue: DEFAULT_INITIALIZATION_PROMPT,
+        },
+        {
+            key: 'extract.styleDaily',
+            title: '日常陪伴风格偏置',
+            category: '记忆提取',
+            description: '当提取风格选择“日常陪伴”时追加，强调习惯、情感温度和感官锚点。',
+            defaultValue: STYLE_BIAS_DAILY,
+        },
+        {
+            key: 'extract.styleDrama',
+            title: '正剧叙事风格偏置',
+            category: '记忆提取',
+            description: '当提取风格选择“正剧叙事”时追加，强调伏笔、冲突和角色弧线。',
+            defaultValue: STYLE_BIAS_DRAMA,
+        },
+        {
+            key: 'extract.apiJsonSystem',
+            title: '主 API JSON 系统提示',
+            category: 'API 调用',
+            description: '调用 SillyTavern 主 API 进行提取或总结时使用的系统提示，{{formatHint}} 会被替换。',
+            defaultValue: DEFAULT_API_JSON_SYSTEM_PROMPT,
+        },
+    ];
+}
+
 function parseMergedResponse(responseText) {
     if (!responseText || !responseText.trim()) {
         console.warn('[BB-Memory] 合并提取响应为空');
@@ -966,8 +1052,8 @@ function getStyleBias() {
     const settings = getSettings();
     const style = settings.extractionStyle || 'auto';
     switch (style) {
-        case 'daily': return STYLE_BIAS_DAILY;
-        case 'drama': return STYLE_BIAS_DRAMA;
+        case 'daily': return getPromptTemplate(settings, 'extract.styleDaily', STYLE_BIAS_DAILY);
+        case 'drama': return getPromptTemplate(settings, 'extract.styleDrama', STYLE_BIAS_DRAMA);
         case 'custom': return settings.customExtractionBias || '';
         default: return '';  // 'auto' — 不追加偏置
     }
@@ -982,11 +1068,20 @@ function buildMergedPrompt(settings, styleBias, calDesc) {
     calDesc = (calDesc && calDesc.trim()) || '';
     const calRef = calDesc ? `\n**世界历法参考**：${calDesc}\n（仅用于推断故事时间，无需计算天数）` : '';
 
-    let prompt = MERGED_EXTRACTION_PROMPT;
+    let prompt = getPromptTemplate(s, 'extract.mergedTemplate', MERGED_EXTRACTION_PROMPT);
+    const metaGuard = getPromptTemplate(s, 'extract.metaGuard', PROMPT_META_GUARD);
+    if (prompt.startsWith(PROMPT_META_GUARD)) {
+        prompt = metaGuard + prompt.slice(PROMPT_META_GUARD.length);
+    }
+    prompt = prompt.replace('{{META_GUARD}}', metaGuard);
 
     // 注入自定义核心原则（精确字符串替换）
-    prompt = prompt.replace('{{CORE_PRINCIPLES}}', (s.customCorePrinciples || '').trim() || DEFAULT_CORE_PRINCIPLES);
-    prompt = prompt.replace('{{EXTRACTION_DIMENSIONS}}', (s.customExtractionDimensions || '').trim() || DEFAULT_EXTRACTION_DIMENSIONS);
+    const concreteTimeRule = getPromptTemplate(s, 'extract.concreteTimeRule', DEFAULT_CONCRETE_TIME_RULE);
+    const corePrinciples = getPromptTemplate(s, 'extract.corePrinciples', DEFAULT_CORE_PRINCIPLES, { legacyKey: 'customCorePrinciples' });
+    const extractionDimensions = getPromptTemplate(s, 'extract.dimensions', DEFAULT_EXTRACTION_DIMENSIONS, { legacyKey: 'customExtractionDimensions' });
+    prompt = prompt.replace('{{CORE_PRINCIPLES}}', `${corePrinciples}\n\n${concreteTimeRule}`);
+    prompt = prompt.replace('{{EXTRACTION_DIMENSIONS}}', extractionDimensions);
+    prompt = prompt.replace('{{CONCRETE_TIME_RULE}}', concreteTimeRule);
 
     // 注入历法参考和风格偏置
     prompt = prompt.replace('{{CALENDAR_REF}}', calRef);
@@ -1060,6 +1155,19 @@ function buildInitializationPrompt(settings, styleBias, calDesc, selectedPillars
     const worldRef = (s.worldRealWorldRef || '').trim()
         ? `\n现实原型参考：${(s.worldRealWorldRef || '').trim()}。地点、距离、方位可参考这个原型推断。`
         : '';
+
+    const concreteTimeRule = getPromptTemplate(s, 'extract.concreteTimeRule', DEFAULT_CONCRETE_TIME_RULE);
+    const template = getPromptTemplate(s, 'extract.initializationTemplate', DEFAULT_INITIALIZATION_PROMPT);
+    if (template && template.trim()) {
+        return fillPromptTemplate(template, {
+            selectedLines,
+            calRef,
+            worldRef,
+            styleBias: styleBias || '',
+            CONCRETE_TIME_RULE: concreteTimeRule,
+            CONTEXT_TEXT: '{{CONTEXT_TEXT}}',
+        });
+    }
 
     return `你是 BB-Memory 初始化提取助手。输入可能包含角色卡、世界书、聊天记录或用户上传资料。
 

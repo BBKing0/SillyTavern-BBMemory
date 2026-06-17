@@ -907,7 +907,7 @@ function showQuickAddForm(overlay, chatId) {
 
     const formOverlay = document.createElement('div');
     formOverlay.className = 'bb-form-overlay';
-    formOverlay.style.cssText = 'position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,0.6);display:flex;align-items:flex-start;justify-content:center;padding:clamp(8px,3vh,20px);overflow-y:auto;';
+    formOverlay.style.cssText = 'position:fixed;inset:0;z-index:1000014;background:rgba(0,0,0,0.6);display:flex;align-items:flex-start;justify-content:center;padding:clamp(8px,3vh,20px);overflow-y:auto;';
     document.body.appendChild(formOverlay);
 
     function buildFormHTML(pillar) {
@@ -1261,7 +1261,7 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
 
     const formOverlay = document.createElement('div');
     formOverlay.className = 'bb-form-overlay';
-    formOverlay.style.cssText = 'position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,0.6);display:flex;align-items:flex-start;justify-content:center;padding:clamp(8px,3vh,20px);overflow-y:auto;';
+    formOverlay.style.cssText = 'position:fixed;inset:0;z-index:1000014;background:rgba(0,0,0,0.6);display:flex;align-items:flex-start;justify-content:center;padding:clamp(8px,3vh,20px);overflow-y:auto;';
     document.body.appendChild(formOverlay);
 
     const render = () => {

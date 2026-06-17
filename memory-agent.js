@@ -16,6 +16,7 @@ import {
     getCategoryStats,
 } from './memory-store.js';
 import { simpleSearch } from './retriever.js';
+import { DEFAULT_AGENT_SYSTEM_PROMPT, getPromptTemplate } from './prompt-templates.js';
 
 // ═══════════════════════════════════════════════════════════
 //  预检索：将相关数据直接注入 prompt
@@ -217,7 +218,7 @@ async function callAgentApi(contextText, conversationHistory) {
 
     const endpoint = normalizeEndpoint(settings.autoGenEndpoint);
 
-    const systemPrompt = `你是 BB-Memory 记忆管家，帮助用户管理 SillyTavern 角色扮演的长期记忆。
+    const systemPrompt = getPromptTemplate(settings, 'agent.systemPrompt', DEFAULT_AGENT_SYSTEM_PROMPT) || `你是 BB-Memory 记忆管家，帮助用户管理 SillyTavern 角色扮演的长期记忆。
 
 你能读取并解释：记忆、NPC、物品、时间线、地图地点、线索板节点。
 当用户只是询问或列举时，直接基于数据快照回答，不要编造。

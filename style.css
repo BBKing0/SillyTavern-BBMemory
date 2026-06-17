@@ -2243,13 +2243,18 @@
     overflow-y: auto !important;
     padding: clamp(8px, 3vh, 20px) !important;
     box-sizing: border-box;
-    z-index: 1000013 !important;
+    z-index: 1000014 !important;
 }
 
 .bb-form-overlay .bb-mem-form-popup,
 .bb-floor-select-overlay .bb-floor-select-popup {
     max-height: calc(100dvh - 16px) !important;
     margin: 0 auto !important;
+}
+
+.bb-form-overlay .bb-mem-form-popup {
+    position: relative;
+    z-index: 1000015 !important;
 }
 
 .bb-mem-form-popup {
@@ -2544,6 +2549,14 @@
     .bb-mem-form-footer .menu_button {
         min-width: 60px;
         font-size: 0.9em;
+    }
+
+    .bb-prompt-template-actions {
+        flex-direction: column;
+    }
+
+    .bb-prompt-template-meta {
+        padding-left: 10px;
     }
 
     /* 维护弹窗 */
@@ -3268,6 +3281,112 @@
 
 .bb-settings-section-body {
     padding: 4px 0;
+}
+
+.bb-prompt-template-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.bb-prompt-template-card {
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--SmartThemeChatTintColor, #1e1e2e) 92%, transparent);
+    overflow: hidden;
+}
+
+.bb-prompt-template-head {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 0;
+    border-bottom: 1px solid transparent;
+    background: transparent;
+    color: inherit;
+    padding: 9px 10px 5px;
+    cursor: pointer;
+    text-align: left;
+}
+
+.bb-prompt-template-card.open .bb-prompt-template-head {
+    border-bottom-color: color-mix(in srgb, var(--SmartThemeBorderColor, #444) 60%, transparent);
+}
+
+.bb-prompt-template-title {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-weight: 700;
+    font-size: 0.9em;
+}
+
+.bb-prompt-template-title i {
+    width: 0.9em;
+    text-align: center;
+    opacity: 0.7;
+}
+
+.bb-prompt-template-badge {
+    flex-shrink: 0;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 999px;
+    padding: 1px 7px;
+    font-size: 0.68em;
+    opacity: 0.65;
+}
+
+.bb-prompt-template-badge.custom {
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor, #4caf50) 70%, transparent);
+    color: var(--SmartThemeQuoteColor, #4caf50);
+    opacity: 0.95;
+}
+
+.bb-prompt-template-meta {
+    padding: 0 10px 8px 27px;
+    font-size: 0.72em;
+    line-height: 1.45;
+    opacity: 0.62;
+}
+
+.bb-prompt-template-body {
+    padding: 9px 10px 10px;
+}
+
+.bb-prompt-template-text {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 9rem;
+    max-height: 45vh;
+    resize: vertical;
+    font-family: var(--monoFontFamily, ui-monospace, SFMono-Regular, Consolas, monospace);
+    font-size: 0.78em;
+    line-height: 1.45;
+    white-space: pre-wrap;
+}
+
+.bb-prompt-template-text[readonly] {
+    opacity: 0.82;
+    cursor: default;
+}
+
+.bb-prompt-template-card.editing .bb-prompt-template-text {
+    opacity: 1;
+    border-color: var(--SmartThemeQuoteColor, #4caf50);
+}
+
+.bb-prompt-template-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 7px;
+}
+
+.bb-prompt-template-actions .menu_button {
+    flex: 1;
+    font-size: 0.78em;
 }
 
 /* ═══ v2.9.5：命中记忆列表 ═══ */

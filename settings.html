@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.1.2</b>
+            <b>BB-Memory v9.1.3</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -503,33 +503,22 @@
                 </div>
                 <div class="bb-settings-section-body">
                     <div class="bb-mem-hint" style="margin-bottom:8px;">
-                        <i class="fa-solid fa-circle-info"></i> 导入/导出注入、AI 自动提取、语义向量、维护阈值等设置；API Key 不会写入导出文件。
+                        <i class="fa-solid fa-circle-info"></i> 导入/导出注入、AI 自动提取、语义向量、维护阈值和提示词模板；API Key 不会写入导出文件。
                     </div>
                     <div style="display:flex;gap:6px;margin:6px 0 10px;">
                         <button id="bb_export_extract_settings_btn" class="menu_button" style="flex:1;font-size:0.82em;">
-                            <i class="fa-solid fa-file-export"></i> 导出提取设置
+                            <i class="fa-solid fa-file-export"></i> 导出设置/提示词
                         </button>
                         <button id="bb_import_extract_settings_btn" class="menu_button" style="flex:1;font-size:0.82em;">
-                            <i class="fa-solid fa-file-import"></i> 导入提取设置
+                            <i class="fa-solid fa-file-import"></i> 导入设置/提示词
                         </button>
                         <input id="bb_import_extract_settings_file" type="file" accept="application/json,.json" style="display:none;" />
                     </div>
                     <div class="bb-mem-hint" style="margin-bottom:8px;">
-                        <i class="fa-solid fa-circle-info"></i> 自定义 AI 提取的核心提示词。留空则使用默认值。
+                        <i class="fa-solid fa-circle-info"></i> BB-Memory 内部提示词默认直接展示。每个条目默认只读；展开后可单独编辑或恢复默认。
                     </div>
-                    <div class="bb-mem-sidebar-section">
-                        <label for="bb_custom_core_principles">
-                            自定义核心原则
-                            <button class="menu_button" id="bb_reset_core_principles" style="font-size:0.7em;padding:2px 6px;margin-left:8px;">恢复默认</button>
-                        </label>
-                        <textarea id="bb_custom_core_principles" class="bb-input" rows="4" placeholder="留空使用默认核心原则..."></textarea>
-                    </div>
-                    <div class="bb-mem-sidebar-section">
-                        <label for="bb_custom_extraction_dimensions">
-                            自定义提取维度
-                            <button class="menu_button" id="bb_reset_extraction_dimensions" style="font-size:0.7em;padding:2px 6px;margin-left:8px;">恢复默认</button>
-                        </label>
-                        <textarea id="bb_custom_extraction_dimensions" class="bb-input" rows="8" placeholder="留空使用默认提取维度..."></textarea>
+                    <div id="bb_prompt_template_list" class="bb-prompt-template-list">
+                        <div class="bb-mem-empty">正在加载提示词模板...</div>
                     </div>
                 </div>
             </div>

@@ -7,8 +7,9 @@
 
 import {
     getNpcProfiles, getItems, getTimeline, getMemories,
-    scheduleAutoBackup,
+    scheduleAutoBackup, getSettings,
 } from './memory-store.js';
+import { getPromptTemplate } from './prompt-templates.js';
 import {
     createGraphViewport,
     fitToGraph,
@@ -181,6 +182,32 @@ const CONFIDENCE_LABEL = {
     low: '信心：低',
 };
 
+const DEFAULT_CLUE_BOARD_INTRO_PROMPT = `【玩家推理板】
+以下是玩家当前追踪的线索推测。这些推测可能正确也可能错误——
+你可以顺着线索推进，也可以提供反例来制造叙事张力。`;
+
+const DEFAULT_CLUE_BOARD_GUIDANCE_PROMPT = `叙事建议：高信心链路通常应顺着发展；中信心可部分证实部分推翻；
+低信心或孤立线索适合埋伏、误导或反转。不要一次性回收所有线索——留一些给未来的轮次。`;
+
+export function getClueBoardPromptTemplates() {
+    return [
+        {
+            key: 'injection.clueBoardIntro',
+            title: '线索板注入开头',
+            category: '线索板',
+            description: '线索板存在活跃线索时，注入给模型的说明开头。',
+            defaultValue: DEFAULT_CLUE_BOARD_INTRO_PROMPT,
+        },
+        {
+            key: 'injection.clueBoardGuidance',
+            title: '线索板叙事建议',
+            category: '线索板',
+            description: '线索板注入末尾对高/中/低信心线索的叙事处理建议。',
+            defaultValue: DEFAULT_CLUE_BOARD_GUIDANCE_PROMPT,
+        },
+    ];
+}
+
 export function buildClueBoardInjection(board) {
     if (!hasActiveClues(board)) return '';
 
@@ -198,12 +225,12 @@ export function buildClueBoardInjection(board) {
         outgoing.get(conn.fromNodeId)?.push(conn);
     }
 
-    const lines = [
-        '【玩家推理板】',
-        '以下是玩家当前追踪的线索推测。这些推测可能正确也可能错误——',
-        '你可以顺着线索推进，也可以提供反例来制造叙事张力。',
-        '',
-    ];
+    const settings = getSettings();
+    const lines = getPromptTemplate(settings, 'injection.clueBoardIntro', DEFAULT_CLUE_BOARD_INTRO_PROMPT)
+        .split('\n')
+        .map(line => line.trimEnd())
+        .filter(line => line.trim());
+    lines.push('');
 
     const confidenceWeight = { high: 3, medium: 2, low: 1 };
     const sortedConnections = [...validConnections].sort((a, b) => {
@@ -278,8 +305,10 @@ export function buildClueBoardInjection(board) {
     }
 
     lines.push('');
-    lines.push('叙事建议：高信心链路通常应顺着发展；中信心可部分证实部分推翻；');
-    lines.push('低信心或孤立线索适合埋伏、误导或反转。不要一次性回收所有线索——留一些给未来的轮次。');
+    lines.push(...getPromptTemplate(settings, 'injection.clueBoardGuidance', DEFAULT_CLUE_BOARD_GUIDANCE_PROMPT)
+        .split('\n')
+        .map(line => line.trimEnd())
+        .filter(line => line.trim()));
 
     return lines.join('\n');
 }

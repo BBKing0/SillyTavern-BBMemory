@@ -14,6 +14,12 @@ import {
     getCalendarDescription,
 } from './memory-store.js';
 import { callCustomApi, callMainApi } from './auto-generator.js';
+import {
+    DEFAULT_CONCRETE_TIME_RULE,
+    DEFAULT_THREAD_SUMMARY_PROMPT,
+    fillPromptTemplate,
+    getPromptTemplate,
+} from './prompt-templates.js';
 
 // ═══════════════════════════════════════════════════════════
 //  维护状态
@@ -320,7 +326,16 @@ export async function regenerateThreadSummary(chatId, options = {}) {
     const calRef2 = calDesc2
         ? `\n**世界历法参考**：${calDesc2}\n（仅用于推断和整理故事时间，无需计算天数）\n` : '';
 
-    const prompt = `你是一个故事时间线组织助手。根据时间线条目和已有线程，重新整理故事线程。${calRef2}
+    const prompt = fillPromptTemplate(
+        getPromptTemplate(settings, 'maintenance.threadSummary', DEFAULT_THREAD_SUMMARY_PROMPT),
+        {
+            calRef: calRef2,
+            CONCRETE_TIME_RULE: getPromptTemplate(settings, 'extract.concreteTimeRule', DEFAULT_CONCRETE_TIME_RULE),
+            entriesText: entriesText || '(无)',
+            threadsText,
+            maxActive,
+        }
+    ) || `你是一个故事时间线组织助手。根据时间线条目和已有线程，重新整理故事线程。${calRef2}
 
 ═══════════════════════════════════════════════════════
 ## 时间线条目（按重要性排序）

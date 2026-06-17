@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.1.2 主入口
+ * index.js —— BB-Memory v9.1.3 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 时间线 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -25,6 +25,7 @@ import {
     getRelevantMemories, getResidentMemories, buildMemoryInjectionPrompt,
     mergeExpandedRelevantResults, simpleSearch,
     getNpcForInjection, getItemsForInjection, getTimelineForInjection, getThreadSummaryForInjection,
+    getRetrieverPromptTemplates,
 } from './retriever.js';
 
 import { MEMORY_TYPES, TRUTH_STATUS } from './memory-types.js';
@@ -35,7 +36,7 @@ import {
     setAutoExtractProgressCallback, getPendingAutoCandidates, clearPendingAutoCandidates,
     callEmbeddingApi, embedExistingMemories,
     lastExtractFailedFloor, clearLastExtractFailedFloor,
-    testApiConnection,
+    testApiConnection, getAutoGeneratorPromptTemplates,
 } from './auto-generator.js';
 
 import {
@@ -44,8 +45,17 @@ import {
     getExtractionFloorStatus, setPluginHiddenState,
 } from './message-state.js';
 
-import { getClueBoard } from './clue-board.js';
+import { getClueBoard, getClueBoardPromptTemplates } from './clue-board.js';
 import { getMap } from './map-store.js';  // v8.7.0
+import {
+    DEFAULT_AGENT_SYSTEM_PROMPT,
+    DEFAULT_HEALTH_TAG_PROMPT,
+    DEFAULT_THREAD_SUMMARY_PROMPT,
+    getPromptTemplate,
+    getPromptTemplates,
+    isPromptTemplateCustomized,
+    normalizePromptTemplatePatch,
+} from './prompt-templates.js';
 
 import {
     checkMaintenanceNeeded, dismissMaintenanceRemind,
@@ -79,15 +89,15 @@ let chatSwitchFallbackRunning = false;
 let chatSwitchPromptOpen = false;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.1.2';
+const SETTINGS_EXPORT_VERSION = '9.1.3';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'maxResults', 'npcInjectionMax', 'itemInjectionMax', 'timelineEndedMax',
-    'mapInjectionMax', 'clueBoardInjectionEnabled',
+    'mapInjectionMax', 'worldRealWorldRef', 'clueBoardInjectionEnabled',
     'autoGenEnabled', 'autoGenMode', 'autoGenEndpoint', 'autoGenModel', 'autoGenMaxExchanges',
     'maxMemoriesPerExchange', 'extractionConfirmMode', 'activeConfirmStyle', 'contextWindowExchanges',
     'batchExtractionCount', 'sourceRollbackFloorWindow', 'extractedMsgDisplay', 'extractionStyle',
-    'customExtractionBias', 'customCorePrinciples', 'customExtractionDimensions',
+    'customExtractionBias', 'customCorePrinciples', 'customExtractionDimensions', 'customPromptTemplates',
     'embeddingEnabled', 'embeddingEndpoint', 'embeddingModel', 'dedupEnabled', 'mergeSimilarityThreshold',
     'reduceSimilarityThreshold',
     'diversityLimitPerTag', 'promotionCooldownRounds', 'hitScorePromoteThreshold', 'hitScoreEternalThreshold',
@@ -149,6 +159,49 @@ const SETTING_CONTROL_BINDINGS = {
     customCorePrinciples: ['#bb_custom_core_principles', 'value'],
     customExtractionDimensions: ['#bb_custom_extraction_dimensions', 'value'],
 };
+
+function getPromptTemplateDefinitions() {
+    return [
+        {
+            key: 'settings.injectionTemplate',
+            settingKey: 'injectionTemplate',
+            title: '注入总模板',
+            category: '注入设置',
+            description: '最终写入 SillyTavern extension prompt 的外层模板，{{memories}} 会替换为五柱/地图/线索板上下文。',
+            defaultValue: DEFAULT_SETTINGS.injectionTemplate,
+        },
+        {
+            key: 'agent.systemPrompt',
+            title: '记忆管家 Agent 系统提示',
+            category: 'Agent',
+            description: '记忆管家 Agent 对话时使用，决定它如何读取、解释和执行记忆管理动作。',
+            defaultValue: DEFAULT_AGENT_SYSTEM_PROMPT,
+        },
+        {
+            key: 'maintenance.threadSummary',
+            title: '时间线线程总结提示',
+            category: '维护/总结',
+            description: '点击刷新时间线总结时使用，把时间线条目整理为命名线程。',
+            defaultValue: DEFAULT_THREAD_SUMMARY_PROMPT,
+        },
+        {
+            key: 'health.tagSuggestion',
+            title: '体检标签建议提示',
+            category: '记忆体检',
+            description: '记忆体检中为条目生成建议标签时使用。',
+            defaultValue: DEFAULT_HEALTH_TAG_PROMPT,
+        },
+        ...getAutoGeneratorPromptTemplates(),
+        ...getRetrieverPromptTemplates(),
+        ...getClueBoardPromptTemplates(),
+    ];
+}
+
+function getPromptTemplateAllowedKeys() {
+    return getPromptTemplateDefinitions()
+        .filter(def => !def.settingKey)
+        .map(def => def.key);
+}
 
 function hashHitFrameText(text) {
     let h = 2166136261;
@@ -479,15 +532,22 @@ function buildSettingsExportPayload() {
         if (!(key in settings)) continue;
         if (key === 'apiProfiles') {
             exported.apiProfiles = sanitizeApiProfilesForExport(settings.apiProfiles);
+        } else if (key === 'customPromptTemplates') {
+            exported.customPromptTemplates = normalizePromptTemplatePatch(settings.customPromptTemplates, getPromptTemplateAllowedKeys());
         } else {
             exported[key] = structuredClone(settings[key]);
         }
     }
+    const customPromptTemplates = exported.customPromptTemplates || {};
     return {
         type: 'bb-memory-settings',
         version: SETTINGS_EXPORT_VERSION,
         exportedAt: new Date().toISOString(),
-        note: 'API keys are intentionally excluded.',
+        note: 'API keys are intentionally excluded. customPromptTemplates contains only edited prompt templates.',
+        promptTemplates: {
+            custom: customPromptTemplates,
+            customizedKeys: Object.keys(customPromptTemplates),
+        },
         settings: exported,
     };
 }
@@ -501,9 +561,15 @@ function normalizeImportedSettingsPayload(payload) {
         if (!(key in source)) continue;
         if (key === 'apiProfiles') {
             patch.apiProfiles = mergeImportedApiProfiles(source.apiProfiles, current.apiProfiles || []);
+        } else if (key === 'customPromptTemplates') {
+            patch.customPromptTemplates = normalizePromptTemplatePatch(source.customPromptTemplates, getPromptTemplateAllowedKeys());
         } else {
             patch[key] = structuredClone(source[key]);
         }
+    }
+    if (payload?.promptTemplates) {
+        const promptSource = payload.promptTemplates.custom || payload.promptTemplates;
+        patch.customPromptTemplates = normalizePromptTemplatePatch(promptSource, getPromptTemplateAllowedKeys());
     }
     delete patch.autoGenApiKey;
     delete patch.embeddingApiKey;
@@ -534,6 +600,127 @@ function syncSettingsControls(settings = getSettings()) {
     if (styleSelect && customBiasSection) {
         customBiasSection.style.display = styleSelect.value === 'custom' ? '' : 'none';
     }
+    renderPromptTemplateList(settings);
+}
+
+function getPromptDefinitionValue(def, settings = getSettings()) {
+    if (def.settingKey) return settings[def.settingKey] ?? def.defaultValue ?? '';
+    return getPromptTemplate(settings, def.key, def.defaultValue || '', { legacyKey: def.legacySettingKey });
+}
+
+function isPromptDefinitionCustomized(def, settings = getSettings()) {
+    if (def.settingKey) return String(settings[def.settingKey] ?? '') !== String(def.defaultValue ?? '');
+    return isPromptTemplateCustomized(settings, def.key, { legacyKey: def.legacySettingKey });
+}
+
+function getPromptOpenState() {
+    try {
+        const raw = localStorage.getItem('bb_memory_prompt_template_open');
+        const parsed = raw ? JSON.parse(raw) : {};
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch { return {}; }
+}
+
+function setPromptOpenState(key, open) {
+    try {
+        const state = getPromptOpenState();
+        state[key] = !!open;
+        localStorage.setItem('bb_memory_prompt_template_open', JSON.stringify(state));
+    } catch { /* ignore */ }
+}
+
+function savePromptTemplateValue(def, value) {
+    const settings = getSettings();
+    if (def.settingKey) {
+        const nextValue = String(value || '').trim() ? value : def.defaultValue;
+        updateSettings({ [def.settingKey]: nextValue });
+        return;
+    }
+    const templates = { ...getPromptTemplates(settings) };
+    if (!String(value || '').trim() || String(value) === String(def.defaultValue || '')) {
+        delete templates[def.key];
+    } else {
+        templates[def.key] = String(value);
+    }
+    const patch = { customPromptTemplates: templates };
+    if (def.legacySettingKey) patch[def.legacySettingKey] = '';
+    updateSettings(patch);
+}
+
+function resetPromptTemplateValue(def) {
+    const settings = getSettings();
+    if (def.settingKey) {
+        updateSettings({ [def.settingKey]: def.defaultValue || '' });
+        return;
+    }
+    const templates = { ...getPromptTemplates(settings) };
+    delete templates[def.key];
+    const patch = { customPromptTemplates: templates };
+    if (def.legacySettingKey) patch[def.legacySettingKey] = '';
+    updateSettings(patch);
+}
+
+function renderPromptTemplateList(settings = getSettings()) {
+    const container = document.querySelector('#bb_prompt_template_list');
+    if (!container) return;
+    const definitions = getPromptTemplateDefinitions();
+    const openState = getPromptOpenState();
+    container.innerHTML = definitions.map((def, idx) => {
+        const value = getPromptDefinitionValue(def, settings);
+        const customized = isPromptDefinitionCustomized(def, settings);
+        const isOpen = openState[def.key] === true;
+        return `
+            <div class="bb-prompt-template-card ${isOpen ? 'open' : ''}" data-key="${escapeHtml(def.key)}" data-index="${idx}">
+                <button type="button" class="bb-prompt-template-head" data-action="toggle">
+                    <span class="bb-prompt-template-title">
+                        <i class="fa-solid ${isOpen ? 'fa-chevron-down' : 'fa-chevron-right'}"></i>
+                        ${escapeHtml(def.title || def.key)}
+                    </span>
+                    <span class="bb-prompt-template-badge ${customized ? 'custom' : ''}">${customized ? '已自定义' : '默认'}</span>
+                </button>
+                <div class="bb-prompt-template-meta">${escapeHtml(def.category || '提示词')} · ${escapeHtml(def.description || '')}</div>
+                <div class="bb-prompt-template-body" style="${isOpen ? '' : 'display:none;'}">
+                    <textarea class="bb-input bb-prompt-template-text" rows="8" readonly spellcheck="false">${escapeHtml(value)}</textarea>
+                    <div class="bb-prompt-template-actions">
+                        <button type="button" class="menu_button bb-prompt-template-edit" data-action="edit"><i class="fa-solid fa-pen"></i> 编辑</button>
+                        <button type="button" class="menu_button bb-prompt-template-reset" data-action="reset"><i class="fa-solid fa-rotate-left"></i> 恢复默认</button>
+                    </div>
+                </div>
+            </div>`;
+    }).join('');
+
+    container.querySelectorAll('.bb-prompt-template-card').forEach(card => {
+        const def = definitions[Number(card.dataset.index)];
+        const body = card.querySelector('.bb-prompt-template-body');
+        const textarea = card.querySelector('.bb-prompt-template-text');
+        const editBtn = card.querySelector('.bb-prompt-template-edit');
+        const toggle = () => {
+            const isOpen = body.style.display === 'none';
+            body.style.display = isOpen ? '' : 'none';
+            card.classList.toggle('open', isOpen);
+            const icon = card.querySelector('.bb-prompt-template-title i');
+            if (icon) icon.className = `fa-solid ${isOpen ? 'fa-chevron-down' : 'fa-chevron-right'}`;
+            setPromptOpenState(def.key, isOpen);
+        };
+        card.querySelector('[data-action="toggle"]')?.addEventListener('click', toggle);
+        editBtn?.addEventListener('click', () => {
+            if (textarea.readOnly) {
+                textarea.readOnly = false;
+                textarea.focus();
+                editBtn.innerHTML = '<i class="fa-solid fa-check"></i> 保存';
+                card.classList.add('editing');
+                return;
+            }
+            savePromptTemplateValue(def, textarea.value);
+            showToast(`提示词「${def.title}」已保存`, 'success');
+            syncSettingsControls(getSettings());
+        });
+        card.querySelector('[data-action="reset"]')?.addEventListener('click', () => {
+            resetPromptTemplateValue(def);
+            showToast(`提示词「${def.title}」已恢复默认`, 'info');
+            syncSettingsControls(getSettings());
+        });
+    });
 }
 
 function isMetaDialogueHitFrame(chat, userFloor) {
@@ -1108,13 +1295,14 @@ function bindSidebarEvents() {
         if (ta) ta.value = '';
         showToast('提取维度已恢复为默认', 'info');
     });
+    renderPromptTemplateList(settings);
 
     document.querySelector('#bb_export_extract_settings_btn')?.addEventListener('click', () => {
         try {
             const payload = buildSettingsExportPayload();
             const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
             downloadTextFile(`bb-memory-settings-v${SETTINGS_EXPORT_VERSION}-${stamp}.json`, JSON.stringify(payload, null, 2));
-            showToast('提取/注入设置已导出（不含 API Key）', 'success');
+            showToast('设置与提示词模板已导出（不含 API Key）', 'success');
         } catch (e) {
             showToast(`设置导出失败: ${e.message}`, 'error');
         }
@@ -1140,7 +1328,9 @@ function bindSidebarEvents() {
             if (patch.autoGenEnabled !== undefined) {
                 if (getSettings().autoGenEnabled) initAutoGenerator(); else stopAutoGenerator();
             }
-            showToast(`设置导入完成：${Object.keys(patch).length} 项已更新（API Key 保持本机现有值）`, 'success');
+            const promptCount = Object.keys(patch.customPromptTemplates || {}).length;
+            const promptText = promptCount ? `，提示词模板 ${promptCount} 项` : '';
+            showToast(`设置导入完成：${Object.keys(patch).length} 项已更新${promptText}（API Key 保持本机现有值）`, 'success');
         } catch (e) {
             showToast(`设置导入失败: ${e.message}`, 'error');
         }
@@ -2927,7 +3117,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.1.2 初始化开始...');
+    console.log('[BB-Memory] v9.1.3 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -3082,7 +3272,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.1.2 初始化完成');
+    console.log('[BB-Memory] v9.1.3 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
