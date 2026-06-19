@@ -12,6 +12,8 @@
  * - 此举大幅减小聊天文件体积，并消除存档操作中的 saveChat 阻塞
  */
 
+import { getSettings, updateSettings } from './memory-store.js';
+
 // ═══ localforage 访问 ═══
 
 function getLocalForage() {
@@ -21,6 +23,7 @@ function getLocalForage() {
 // ═══ 存储键 ═══
 
 const SLOT_PREFIX = 'bb_memory_slot_';
+const CHAT_SLOT_BINDINGS_VERSION = 1;
 
 // v5 四柱存储键
 const PILLAR_KEYS = ['bb_npc_chat_', 'bb_item_chat_', 'bb_timeline_chat_', 'bb_mem_chat_'];
@@ -33,6 +36,111 @@ const CLUE_BOARD_KEY = 'bb_clue_board_';
 
 function slotKey(charId, slotName) {
     return `${SLOT_PREFIX}${charId}_${slotName}`;
+}
+
+function normalizeBindingId(value) {
+    const text = String(value ?? '').trim();
+    return text || null;
+}
+
+function normalizeChatSlotBindings(raw) {
+    const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    const rawEntries = source.entries && typeof source.entries === 'object' && !Array.isArray(source.entries)
+        ? source.entries
+        : source;
+    const entries = {};
+
+    for (const [charKey, chatMap] of Object.entries(rawEntries || {})) {
+        const charId = normalizeBindingId(charKey);
+        if (!charId || !chatMap || typeof chatMap !== 'object' || Array.isArray(chatMap)) continue;
+
+        const cleanMap = {};
+        for (const [chatKey, rawEntry] of Object.entries(chatMap)) {
+            const chatId = normalizeBindingId(chatKey);
+            if (!chatId) continue;
+            const slotName = typeof rawEntry === 'string'
+                ? rawEntry.trim()
+                : String(rawEntry?.slotName || '').trim();
+            if (!slotName) continue;
+            cleanMap[chatId] = {
+                slotName,
+                updatedAt: Number(rawEntry?.updatedAt) || 0,
+            };
+        }
+
+        if (Object.keys(cleanMap).length) entries[charId] = cleanMap;
+    }
+
+    return { version: CHAT_SLOT_BINDINGS_VERSION, entries };
+}
+
+export function getChatSlotBinding(charId, chatId) {
+    const c = normalizeBindingId(charId);
+    const ch = normalizeBindingId(chatId);
+    if (!c || !ch) return null;
+    const bindings = normalizeChatSlotBindings(getSettings().chatSlotBindings);
+    return bindings.entries?.[c]?.[ch] || null;
+}
+
+export function getBoundSlotName(charId, chatId) {
+    return getChatSlotBinding(charId, chatId)?.slotName || '';
+}
+
+export function bindChatToSlot(charId, chatId, slotName, options = {}) {
+    const c = normalizeBindingId(charId);
+    const ch = normalizeBindingId(chatId);
+    const name = String(slotName || 'default').trim() || 'default';
+    if (!c || !ch) return null;
+
+    const bindings = normalizeChatSlotBindings(getSettings().chatSlotBindings);
+    const existing = bindings.entries?.[c]?.[ch] || null;
+    if (existing?.slotName && options.overwrite === false) {
+        if (options.updateCurrent !== false) updateSettings({ currentSlotName: existing.slotName });
+        return existing;
+    }
+
+    if (!bindings.entries[c]) bindings.entries[c] = {};
+    const entry = { slotName: name, updatedAt: Date.now() };
+    bindings.entries[c][ch] = entry;
+
+    const patch = { chatSlotBindings: bindings };
+    if (options.updateCurrent !== false) patch.currentSlotName = name;
+    updateSettings(patch);
+    return entry;
+}
+
+export function clearChatSlotBinding(charId, chatId) {
+    const c = normalizeBindingId(charId);
+    const ch = normalizeBindingId(chatId);
+    if (!c || !ch) return false;
+
+    const bindings = normalizeChatSlotBindings(getSettings().chatSlotBindings);
+    if (!bindings.entries?.[c]?.[ch]) return false;
+    delete bindings.entries[c][ch];
+    if (!Object.keys(bindings.entries[c]).length) delete bindings.entries[c];
+    updateSettings({ chatSlotBindings: bindings });
+    return true;
+}
+
+export function clearSlotBindingsForSlot(charId, slotName) {
+    const c = normalizeBindingId(charId);
+    const name = String(slotName || '').trim();
+    if (!c || !name) return 0;
+
+    const bindings = normalizeChatSlotBindings(getSettings().chatSlotBindings);
+    const chatMap = bindings.entries?.[c];
+    if (!chatMap) return 0;
+
+    let removed = 0;
+    for (const [chatId, entry] of Object.entries(chatMap)) {
+        if (entry?.slotName === name) {
+            delete chatMap[chatId];
+            removed++;
+        }
+    }
+    if (!Object.keys(chatMap).length) delete bindings.entries[c];
+    if (removed) updateSettings({ chatSlotBindings: bindings });
+    return removed;
 }
 
 function clonePlain(value) {
@@ -314,6 +422,7 @@ export async function saveToSlot(charId, chatId, slotName, options = {}) {
     data._slotCreatedAt = existing?._slotCreatedAt || existing?.createdAt || now;
     data._slotUpdatedAt = now;
     await lf.setItem(slotKey(charId, slotName), data);
+    if (options.bindChat !== false) bindChatToSlot(charId, chatId, slotName);
 
     const slots = await listSlots(charId);
     if (!slots.find(s => s.name === slotName)) {
@@ -412,7 +521,7 @@ export async function cloneSlot(charId, sourceSlotName, targetSlotName, options 
  * 从指定槽加载数据到当前聊天（覆盖当前聊天数据）
  * v8.2.0 仅在当前聊天已有数据时重新生成 ID 以避免冲突
  */
-export async function loadFromSlot(charId, chatId, slotName) {
+export async function loadFromSlot(charId, chatId, slotName, options = {}) {
     if (!charId || !chatId) throw new Error('无法获取角色或聊天ID');
 
     const lf = getLocalForage();
@@ -439,7 +548,7 @@ export async function loadFromSlot(charId, chatId, slotName) {
         currentData.threads.length > 0 || Object.keys(currentData.map.locations || {}).length > 0 ||
         currentData.clueBoard.nodes.length > 0;
 
-    if (hasExistingData) {
+    if (hasExistingData && options.preserveIds !== true) {
         const oldIds = {
             npc: data.npc.map(e => e.id),
             item: data.items.map(e => e.id),
@@ -491,6 +600,7 @@ export async function loadFromSlot(charId, chatId, slotName) {
     }
 
     await writeAllPillarData(chatId, data);
+    if (options.bindChat !== false) bindChatToSlot(charId, chatId, slotName);
 
     // v9.0.3: 从云端拉取的数据缺少 embedding，后台补全
     if (pulledFromCloud) {
@@ -549,6 +659,10 @@ export async function deleteSlot(charId, slotName) {
     // v8.5.1 同步到 chatMetadata + 清理远程槽数据
     await syncSlotIndexToChatMetadata(charId, { removeSlotName: slotName });
     await removeSlotDataFromChatMetadata(slotName, null, charId);
+    clearSlotBindingsForSlot(charId, slotName);
+    if ((getSettings().currentSlotName || 'default') === slotName) {
+        updateSettings({ currentSlotName: 'default' });
+    }
 }
 
 /**

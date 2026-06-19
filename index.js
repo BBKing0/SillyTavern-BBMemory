@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.1.3 主入口
+ * index.js —— BB-Memory v9.1.4 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 时间线 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -71,7 +71,7 @@ import { openAssistant } from './memory-assistant.js';
 import { openMemoryManager } from './memory-manager.js';
 import {
     getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot,
-    cloneSlot, getChatSlotDataSummary,
+    cloneSlot, getChatSlotDataSummary, bindChatToSlot, getBoundSlotName,
 } from './memory-slots.js';
 
 // ═══ 常量 ═══
@@ -89,7 +89,7 @@ let chatSwitchFallbackRunning = false;
 let chatSwitchPromptOpen = false;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.1.3';
+const SETTINGS_EXPORT_VERSION = '9.1.4';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'maxResults', 'npcInjectionMax', 'itemInjectionMax', 'timelineEndedMax',
@@ -395,9 +395,22 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     }
 
     // 11. 存储命中追踪
+    const memoryHitRecords = merged.map(r => ({
+        id: r.memory.id,
+        title: r.memory.title,
+        type: r.memory.type,
+        score: r.score,
+        level: r.level,
+        memoryTier: r.memory.memoryTier || '',
+    }));
+    const visibleMemoryHits = memoryHitRecords.filter(h => h.memoryTier !== 'eternal');
+    const eternalInjectedCount = memoryHitRecords.length - visibleMemoryHits.length;
+
     lastRetrievalResult = {
         chatId, timestamp: Date.now(),
-        hits: merged.map(r => ({ id: r.memory.id, title: r.memory.title, type: r.memory.type, score: r.score, level: r.level })),
+        hits: visibleMemoryHits,
+        memoryHitsAll: memoryHitRecords,
+        eternalInjectedCount,
         npcHits: npcForInjection.map(n => ({ id: n.id, name: n.name, npcTier: n.npcTier })),
         itemHits: itemsForInjection.map(i => ({ id: i.id, name: i.name, itemTier: i.itemTier })),
         timelineHits: {
@@ -1926,31 +1939,88 @@ function showChatSwitchSlotDialog({ sourceSlot, sourceCount, sourceEmbeddingCoun
     });
 }
 
-async function maybePromptChatSwitchSlot({ prevChatId, prevCharId, chatId, charId }) {
-    if (!prevChatId || !chatId || prevChatId === chatId) return;
-    if (!prevCharId || !charId || String(prevCharId) !== String(charId)) return;
+async function saveObservedChatSlot(charId, chatId, slotName) {
+    if (!charId || !chatId || !slotName) return null;
+    try {
+        const summary = await getChatSlotDataSummary(chatId);
+        const alreadyBound = getBoundSlotName(charId, chatId);
+        if (summary.count <= 0 && !alreadyBound) return null;
+        return await saveToSlot(charId, chatId, slotName, { syncCloud: false });
+    } catch (e) {
+        console.warn('[BB-Memory] 切换窗口前置保存失败:', e.message || e);
+        return null;
+    }
+}
 
-    const promptKey = `${charId}:${prevChatId}->${chatId}`;
-    if (handledChatSwitchPrompts.has(promptKey) || chatSwitchPromptOpen) return;
-    handledChatSwitchPrompts.add(promptKey);
+async function loadBoundSlotForObservedChat(charId, chatId, slotName, previousSlotName = '') {
+    const progress = createProgressToast(`正在切换 BB-Memory 存档到「${slotName}」...`);
+    try {
+        const loaded = await loadFromSlot(charId, chatId, slotName, { preserveIds: true });
+        const fromText = previousSlotName && previousSlotName !== slotName ? `（由「${previousSlotName}」切换）` : '';
+        showTopNotification(`已加载当前窗口绑定存档「${slotName}」${fromText}：${loaded.count} 条`, 'success');
+        refreshSidebar();
+        refreshFloatingHubData();
+        return loaded;
+    } finally {
+        if (progress) {
+            progress.textContent = '存档切换完成';
+            setTimeout(() => progress.remove(), 1200);
+        }
+    }
+}
+
+async function maybePromptChatSwitchSlot({ prevChatId, prevCharId, chatId, charId }) {
+    if (!chatId || !charId) return;
+
+    const hadPrevious = !!(prevChatId && prevCharId);
+    const switchedChat = hadPrevious && String(prevChatId) !== String(chatId);
+    const switchedChar = hadPrevious && String(prevCharId) !== String(charId);
+    const switched = switchedChat || switchedChar;
+    const previousSlotName = getSettings().currentSlotName || 'default';
 
     try {
-        const currentSummary = await getChatSlotDataSummary(chatId);
-        if (currentSummary.count > 0) return;
+        if (switched && prevChatId && prevCharId) {
+            const prevBoundSlot = getBoundSlotName(prevCharId, prevChatId) || previousSlotName;
+            await saveObservedChatSlot(prevCharId, prevChatId, prevBoundSlot);
+        }
 
-        const sourceSlot = getSettings().currentSlotName || 'default';
+        const boundSlot = getBoundSlotName(charId, chatId);
+        if (boundSlot) {
+            const currentSlot = getSettings().currentSlotName || 'default';
+            if (switched || currentSlot !== boundSlot) {
+                await loadBoundSlotForObservedChat(charId, chatId, boundSlot, currentSlot);
+            } else {
+                bindChatToSlot(charId, chatId, boundSlot, { overwrite: false });
+            }
+            return;
+        }
+
+        if (!switched) {
+            bindChatToSlot(charId, chatId, previousSlotName, { overwrite: false });
+            return;
+        }
+
+        const sameCharacter = !switchedChar && String(prevCharId) === String(charId);
+        const currentSummary = await getChatSlotDataSummary(chatId);
+
+        if (!sameCharacter || currentSummary.count > 0) {
+            const fallbackSlot = sameCharacter ? previousSlotName : 'default';
+            bindChatToSlot(charId, chatId, fallbackSlot, { overwrite: false });
+            return;
+        }
+
+        const promptKey = `${charId}:${prevChatId}->${chatId}`;
+        if (handledChatSwitchPrompts.has(promptKey) || chatSwitchPromptOpen) return;
+        handledChatSwitchPrompts.add(promptKey);
+
+        const sourceSlot = getBoundSlotName(prevCharId, prevChatId) || previousSlotName;
         let sourceCount = 0;
         let sourceEmbeddingCount = 0;
 
-        try {
-            const previousSummary = await getChatSlotDataSummary(prevChatId);
-            if (previousSummary.count > 0) {
-                const saved = await saveToSlot(charId, prevChatId, sourceSlot, { syncCloud: false });
-                sourceCount = saved.count || 0;
-                sourceEmbeddingCount = saved.embeddingCount || 0;
-            }
-        } catch (e) {
-            console.warn('[BB-Memory] 切换窗口前置保存失败:', e.message || e);
+        const saved = await saveObservedChatSlot(prevCharId, prevChatId, sourceSlot);
+        if (saved) {
+            sourceCount = saved.count || 0;
+            sourceEmbeddingCount = saved.embeddingCount || 0;
         }
 
         if (sourceCount === 0) {
@@ -1975,14 +2045,12 @@ async function maybePromptChatSwitchSlot({ prevChatId, prevCharId, chatId, charI
             if (choice.action === 'branch') {
                 progress && (progress.textContent = '正在复制当前存档为 if 分支...');
                 await cloneSlot(charId, sourceSlot, choice.slotName, { syncCloud: false });
-                const loaded = await loadFromSlot(charId, chatId, choice.slotName);
-                updateSettings({ currentSlotName: choice.slotName });
+                const loaded = await loadFromSlot(charId, chatId, choice.slotName, { preserveIds: true });
                 showTopNotification(`已基于「${sourceSlot}」创建 if 分支「${choice.slotName}」，复制 ${loaded.count} 条`, 'success');
             } else if (choice.action === 'new') {
                 progress && (progress.textContent = '正在创建空存档...');
                 await createEmptySlot(charId, choice.slotName);
-                const loaded = await loadFromSlot(charId, chatId, choice.slotName);
-                updateSettings({ currentSlotName: choice.slotName });
+                const loaded = await loadFromSlot(charId, chatId, choice.slotName, { preserveIds: true });
                 showTopNotification(`已新建并切换到存档「${choice.slotName}」 (${loaded.count} 条)`, 'success');
             }
             refreshSidebar();
@@ -2617,6 +2685,14 @@ function renderHubHitItem(h, typeIcons, levelColors, dimmed) {
     </div>`;
 }
 
+function renderEternalInjectionNote(count) {
+    const n = Number(count || 0);
+    if (n <= 0) return '';
+    return `<div class="bb-hit-eternal-note">
+        <i class="fa-solid fa-infinity"></i> 永恒记忆 ${n} 条已全部注入，未计入普通命中列表
+    </div>`;
+}
+
 function getRetrievalHitTotal(result = lastRetrievalResult) {
     if (!result) return 0;
     const tlCount = (result.timelineHits?.foreshadow?.length || 0)
@@ -2691,6 +2767,7 @@ async function renderHubHitList(listEl, chatId) {
     }).join('');
 
     listEl.innerHTML = [
+        renderEternalInjectionNote(result.eternalInjectedCount),
         renderHitGroup('记忆', 'fa-brain', `${result.hits?.length || 0}条`, memoryHtml),
         renderHitGroup('NPC', 'fa-user', `${result.npcHits?.length || 0}条`, npcHtml),
         renderHitGroup('物品', 'fa-box', `${result.itemHits?.length || 0}条`, itemHtml),
@@ -3117,7 +3194,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.1.3 初始化开始...');
+    console.log('[BB-Memory] v9.1.4 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -3265,6 +3342,15 @@ async function init() {
     initMessageDeletionWatch();
     initExtractionMarkerWatch();
     initChatSwitchFallbackWatch();
+    setTimeout(() => {
+        const chatId = getChatId();
+        const charId = getCharacterId();
+        if (chatId && charId) {
+            maybePromptChatSwitchSlot({ prevChatId: null, prevCharId: null, chatId, charId }).catch((e) => {
+                console.warn('[BB-Memory] 初始化存档绑定同步失败:', e.message || e);
+            });
+        }
+    }, 1200);
 
     // v6.1: 监听消息删除，自动清理关联记忆
     setTimeout(() => {
@@ -3272,7 +3358,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.1.3 初始化完成');
+    console.log('[BB-Memory] v9.1.4 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
@@ -3432,6 +3518,7 @@ function updateSidebarHitList() {
 
     const hasAny = result && (
         (result.hits && result.hits.length) ||
+        (result.eternalInjectedCount > 0) ||
         (result.npcHits && result.npcHits.length) ||
         (result.itemHits && result.itemHits.length) ||
         (result.timelineHits && ((result.timelineHits.foreshadow?.length || 0) + result.timelineHits.ongoing.length + result.timelineHits.ended.length)) ||
@@ -3508,6 +3595,7 @@ function updateSidebarHitList() {
     }).join('');
 
     listEl.innerHTML = [
+        renderEternalInjectionNote(result.eternalInjectedCount),
         renderHitGroup('记忆', 'fa-brain', `${result.hits?.length || 0}条`, memoryHtml),
         renderHitGroup('NPC', 'fa-user', `${result.npcHits?.length || 0}条`, npcHtml),
         renderHitGroup('物品', 'fa-box', `${result.itemHits?.length || 0}条`, itemHtml),

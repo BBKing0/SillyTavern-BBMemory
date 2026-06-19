@@ -11,10 +11,11 @@ export const LEGACY_PROMPT_TEMPLATE_KEYS = Object.freeze({
 });
 
 export const DEFAULT_CONCRETE_TIME_RULE = `## 具体真实时间规则
-- 记录 storyTime / period / timeline.t 时，优先使用对话、世界日历或上下文中能推断出的具体真实日期。
-- 不要把“出发前一天”“第一次见面”“三天后”“上次任务后”这类抽象相对时间直接写入记忆。
-- 如果能推断出日期，请写成明确时间，例如“2025年7月1日”“王国历123年春月15日”“第3周周三下午”。
-- 如果确实无法推断具体时间，才允许留空或写“时间未明”，并不要编造日期。`;
+- 时间字段非常重要：记录 memories[].st / storyTime / timeline[].t / threads.entries[].period 时，必须先从对话、世界日历、上下文顺序和已知时间锚点推断。
+- 能推断就填写具体故事时间，不要因为字段可选而省略；可用真实日期、世界历日期或明确的故事内时间，例如“2025年7月1日”“王国历123年春月15日”“第3周周三下午3点”。
+- 不要把“出发前一天”“第一次见面”“三天后”“上次任务后”这类抽象相对时间直接写入记忆；应换算成具体时间，或结合上下文写成明确阶段。
+- 如果确实无法推断具体时间，才允许写“时间未明”或留空，并且不要编造日期。
+- 除时间外，主体、目标、地点、参与者、状态、标签等字段也要优先填写；只有原文和上下文都没有依据时才留空。`;
 
 export const DEFAULT_INITIALIZATION_PROMPT = `你是 BB-Memory 初始化提取助手。输入可能包含角色卡、世界书、聊天记录或用户上传资料。
 任务：把资料整理成 BB-Memory 可保存的结构化草稿。只输出 JSON 对象，不要 markdown，不要解释。
@@ -27,6 +28,7 @@ export const DEFAULT_INITIALIZATION_PROMPT = `你是 BB-Memory 初始化提取�
 - 同一人物、物品、地点或事件不要重复输出，必要时合并成更完整的一条。
 - threads 是持续叙事线地图；普通线索节点优先放进 threads.entries。
 - timeline 只输出未被 threads.entries 覆盖的关键里程碑、伏笔或阶段转折。
+- 每个已输出条目都要优先、尽量填写完整字段；能从上下文推断的时间、地点、主体、目标、参与者、状态和标签不要留空。
 
 {{CONCRETE_TIME_RULE}}
 
@@ -34,7 +36,7 @@ export const DEFAULT_INITIALIZATION_PROMPT = `你是 BB-Memory 初始化提取�
 {{selectedLines}}
 
 字段格式：
-1. memories 数组：{ "n":"标题", "tp":"event/emotion/habit/fact", "m":"一句话摘要", "c":"完整内容", "v":"重要原话", "s":"主体", "a":"目标", "i":0.6, "e":0.2, "st":"故事时间", "g":["标签"] }
+1. memories 数组：{ "n":"标题", "tp":"event/emotion/habit/fact", "m":"一句话摘要", "c":"完整内容", "v":"重要原话", "s":"主体", "a":"目标", "i":0.6, "e":0.2, "st":"具体故事时间", "g":["标签"] }
 2. npc 数组：{ "n":"姓名", "r":"身份/职业", "p":"性格", "a":"外貌", "s":"状态", "l":"所在地", "rt":[{"n":"关联角色","r":"关系","a":"态度"}], "nt":"core/important/minor/background", "ic":"一句话索引卡", "g":["标签"] }
 3. items 数组：{ "n":"物品名", "o":"持有者", "s":"held/used/lost/destroyed", "l":"所在地点", "sig":"意义与用途", "kp":false, "it":"key/equipped/clue/consumable/background", "g":["标签"] }
 4. timeline 数组：{ "t":"具体故事时间", "e":"事件摘要", "p":["参与者"], "l":"地点", "active":true, "imp":"影响", "g":["标签"] }

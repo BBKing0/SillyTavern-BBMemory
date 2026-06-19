@@ -2239,11 +2239,17 @@
 }
 
 .bb-form-overlay {
+    position: fixed !important;
+    inset: 0 !important;
+    display: flex !important;
     align-items: flex-start !important;
+    justify-content: center !important;
+    background: rgba(0, 0, 0, 0.6) !important;
     overflow-y: auto !important;
     padding: clamp(8px, 3vh, 20px) !important;
     box-sizing: border-box;
-    z-index: 1000014 !important;
+    isolation: isolate;
+    z-index: 1000022 !important;
 }
 
 .bb-form-overlay .bb-mem-form-popup,
@@ -2254,7 +2260,7 @@
 
 .bb-form-overlay .bb-mem-form-popup {
     position: relative;
-    z-index: 1000015 !important;
+    z-index: 1000023 !important;
 }
 
 .bb-mem-form-popup {
@@ -4244,6 +4250,17 @@
 
 .bb-hit-group-list {
     padding-bottom: 2px;
+}
+
+.bb-hit-eternal-note {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 14px;
+    font-size: 0.72em;
+    line-height: 1.35;
+    color: #ce93d8;
+    opacity: 0.72;
 }
 
 /* 浮窗命中记忆子列表 */

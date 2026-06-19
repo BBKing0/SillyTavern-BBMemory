@@ -26,6 +26,19 @@ import { fuzzyMemory, archiveMemory, restoreMemory } from './memory-maintainer.j
 // ═══ 全局状态 ═══
 let activeFilter = 'all';
 
+const MANAGER_FORM_OVERLAY_Z = 1000022;
+const MANAGER_FORM_POPUP_Z = 1000023;
+
+function applyManagerFormLayer(formOverlay) {
+    if (!formOverlay) return;
+    formOverlay.style.setProperty('z-index', String(MANAGER_FORM_OVERLAY_Z), 'important');
+    const popup = formOverlay.querySelector('.bb-mem-form-popup');
+    if (popup) {
+        popup.style.setProperty('position', 'relative');
+        popup.style.setProperty('z-index', String(MANAGER_FORM_POPUP_Z), 'important');
+    }
+}
+
 // ═══ 入口 ═══
 
 export async function openMemoryManager(chatId) {
@@ -907,7 +920,8 @@ function showQuickAddForm(overlay, chatId) {
 
     const formOverlay = document.createElement('div');
     formOverlay.className = 'bb-form-overlay';
-    formOverlay.style.cssText = 'position:fixed;inset:0;z-index:1000014;background:rgba(0,0,0,0.6);display:flex;align-items:flex-start;justify-content:center;padding:clamp(8px,3vh,20px);overflow-y:auto;';
+    formOverlay.style.cssText = `position:fixed;inset:0;z-index:${MANAGER_FORM_OVERLAY_Z};background:rgba(0,0,0,0.6);display:flex;align-items:flex-start;justify-content:center;padding:clamp(8px,3vh,20px);overflow-y:auto;`;
+    applyManagerFormLayer(formOverlay);
     document.body.appendChild(formOverlay);
 
     function buildFormHTML(pillar) {
@@ -1027,6 +1041,7 @@ function showQuickAddForm(overlay, chatId) {
 
     const render = (pillar) => {
         formOverlay.innerHTML = buildFormHTML(pillar);
+        applyManagerFormLayer(formOverlay);
         bindFormEvents(formOverlay, chatId, pillar);
     };
 
@@ -1261,7 +1276,8 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
 
     const formOverlay = document.createElement('div');
     formOverlay.className = 'bb-form-overlay';
-    formOverlay.style.cssText = 'position:fixed;inset:0;z-index:1000014;background:rgba(0,0,0,0.6);display:flex;align-items:flex-start;justify-content:center;padding:clamp(8px,3vh,20px);overflow-y:auto;';
+    formOverlay.style.cssText = `position:fixed;inset:0;z-index:${MANAGER_FORM_OVERLAY_Z};background:rgba(0,0,0,0.6);display:flex;align-items:flex-start;justify-content:center;padding:clamp(8px,3vh,20px);overflow-y:auto;`;
+    applyManagerFormLayer(formOverlay);
     document.body.appendChild(formOverlay);
 
     const render = () => {
@@ -1281,6 +1297,7 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
                 <button class="menu_button bb-form-save" style="flex:1;background:#4caf50;color:#fff;">${isEdit ? '更新' : '保存'}</button>
             </div>
         </div>`;
+        applyManagerFormLayer(formOverlay);
 
         // 预填数据
         if (prefill) {
