@@ -596,12 +596,52 @@ async function callApi(prompt, options = {}) {
 
 // ═══ AI消息清洗 ═══
 
+const DEFAULT_EXTRACTION_MESSAGE_TAGS = Object.freeze(['content', 'context', 'status']);
+
+function normalizeExtractionMessageTags(tags) {
+    const source = Array.isArray(tags) ? tags : DEFAULT_EXTRACTION_MESSAGE_TAGS;
+    const out = [];
+    const seen = new Set();
+    for (const raw of source) {
+        const tag = String(raw || '')
+            .trim()
+            .replace(/^<\/?/, '')
+            .replace(/>$/, '')
+            .toLowerCase();
+        if (!/^[a-z][\w:-]{0,63}$/.test(tag) || seen.has(tag)) continue;
+        seen.add(tag);
+        out.push(tag);
+    }
+    return out;
+}
+
+function escapeRegExp(text) {
+    return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function extractConfiguredTagBlocks(text, tags) {
+    const parts = [];
+    for (const tag of tags) {
+        const re = new RegExp(`<${escapeRegExp(tag)}\\b[^>]*>([\\s\\S]*?)<\\/${escapeRegExp(tag)}>`, 'gi');
+        let match;
+        while ((match = re.exec(text)) !== null) {
+            const body = String(match[1] || '').trim();
+            if (!body) continue;
+            parts.push(`【${tag}】\n${body}`);
+        }
+    }
+    return parts.join('\n\n').trim();
+}
+
 function cleanAiMessage(text) {
     if (!text) return '';
     let cleaned = text;
-    const contentMatch = cleaned.match(/<content>([\s\S]*?)<\/content>/i);
-    if (contentMatch) return contentMatch[1].trim();
     cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, '');
+    const selectedTags = normalizeExtractionMessageTags(getSettings().extractionMessageTags);
+    if (selectedTags.length) {
+        const taggedText = extractConfiguredTagBlocks(cleaned, selectedTags);
+        if (taggedText) return taggedText;
+    }
     cleaned = cleaned.replace(/\[[\w\s:/.-]+\]/g, '');
     return cleaned.trim();
 }

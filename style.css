@@ -2238,7 +2238,8 @@
     padding: 20px;
 }
 
-.bb-form-overlay {
+.bb-form-overlay,
+.bb-manager-form-overlay {
     position: fixed !important;
     inset: 0 !important;
     display: flex !important;
@@ -2249,18 +2250,20 @@
     padding: clamp(8px, 3vh, 20px) !important;
     box-sizing: border-box;
     isolation: isolate;
-    z-index: 1000022 !important;
+    z-index: 1000100 !important;
 }
 
 .bb-form-overlay .bb-mem-form-popup,
+.bb-manager-form-overlay .bb-mem-form-popup,
 .bb-floor-select-overlay .bb-floor-select-popup {
     max-height: calc(100dvh - 16px) !important;
     margin: 0 auto !important;
 }
 
-.bb-form-overlay .bb-mem-form-popup {
+.bb-form-overlay .bb-mem-form-popup,
+.bb-manager-form-overlay .bb-mem-form-popup {
     position: relative;
-    z-index: 1000023 !important;
+    z-index: 1000101 !important;
 }
 
 .bb-mem-form-popup {
@@ -3287,6 +3290,18 @@
 
 .bb-settings-section-body {
     padding: 4px 0;
+}
+
+.bb-extract-tag-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+    gap: 0.25rem 0.5rem;
+    margin-top: 0.35rem;
+}
+
+.bb-extract-tag-options .checkbox_label {
+    margin: 0;
+    font-size: 0.86em;
 }
 
 .bb-prompt-template-list {

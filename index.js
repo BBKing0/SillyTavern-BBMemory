@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.1.4 主入口
+ * index.js —— BB-Memory v9.1.5 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 时间线 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -89,7 +89,7 @@ let chatSwitchFallbackRunning = false;
 let chatSwitchPromptOpen = false;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.1.4';
+const SETTINGS_EXPORT_VERSION = '9.1.5';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'maxResults', 'npcInjectionMax', 'itemInjectionMax', 'timelineEndedMax',
@@ -97,6 +97,7 @@ const SETTINGS_EXPORT_KEYS = [
     'autoGenEnabled', 'autoGenMode', 'autoGenEndpoint', 'autoGenModel', 'autoGenMaxExchanges',
     'maxMemoriesPerExchange', 'extractionConfirmMode', 'activeConfirmStyle', 'contextWindowExchanges',
     'batchExtractionCount', 'sourceRollbackFloorWindow', 'extractedMsgDisplay', 'extractionStyle',
+    'extractionMessageTags',
     'customExtractionBias', 'customCorePrinciples', 'customExtractionDimensions', 'customPromptTemplates',
     'embeddingEnabled', 'embeddingEndpoint', 'embeddingModel', 'dedupEnabled', 'mergeSimilarityThreshold',
     'reduceSimilarityThreshold',
@@ -159,6 +160,63 @@ const SETTING_CONTROL_BINDINGS = {
     customCorePrinciples: ['#bb_custom_core_principles', 'value'],
     customExtractionDimensions: ['#bb_custom_extraction_dimensions', 'value'],
 };
+
+const EXTRACTION_MESSAGE_TAG_OPTIONS = Object.freeze(['content', 'context', 'status', 'thinking', 'note']);
+
+function normalizeExtractionMessageTags(tags) {
+    const source = Array.isArray(tags) ? tags : DEFAULT_SETTINGS.extractionMessageTags;
+    const out = [];
+    const seen = new Set();
+    for (const raw of source || []) {
+        const tag = String(raw || '')
+            .trim()
+            .replace(/^<\/?/, '')
+            .replace(/>$/, '')
+            .toLowerCase();
+        if (!/^[a-z][\w:-]{0,63}$/.test(tag) || seen.has(tag)) continue;
+        seen.add(tag);
+        out.push(tag);
+    }
+    return out;
+}
+
+function parseExtractionTagInput(text) {
+    return normalizeExtractionMessageTags(String(text || '').split(/[,，\s]+/));
+}
+
+function syncExtractionTagControls(settings = getSettings()) {
+    const selected = new Set(normalizeExtractionMessageTags(settings.extractionMessageTags));
+    document.querySelectorAll('[data-bb-extract-tag]').forEach(input => {
+        input.checked = selected.has(input.dataset.bbExtractTag);
+    });
+    const customInput = document.querySelector('#bb_extract_custom_tags');
+    if (customInput) {
+        customInput.value = [...selected]
+            .filter(tag => !EXTRACTION_MESSAGE_TAG_OPTIONS.includes(tag))
+            .join(', ');
+    }
+}
+
+function readExtractionTagControls() {
+    const tags = [];
+    document.querySelectorAll('[data-bb-extract-tag]').forEach(input => {
+        if (input.checked) tags.push(input.dataset.bbExtractTag);
+    });
+    const customTags = parseExtractionTagInput(document.querySelector('#bb_extract_custom_tags')?.value || '');
+    return normalizeExtractionMessageTags([...tags, ...customTags]);
+}
+
+function bindExtractionTagControls() {
+    const save = () => {
+        updateSettings({ extractionMessageTags: readExtractionTagControls() });
+        syncExtractionTagControls(getSettings());
+    };
+    document.querySelectorAll('[data-bb-extract-tag]').forEach(input => {
+        input.addEventListener('change', save);
+    });
+    document.querySelector('#bb_extract_custom_tags')?.addEventListener('change', save);
+    syncExtractionTagControls(getSettings());
+}
 
 function getPromptTemplateDefinitions() {
     return [
@@ -613,6 +671,7 @@ function syncSettingsControls(settings = getSettings()) {
     if (styleSelect && customBiasSection) {
         customBiasSection.style.display = styleSelect.value === 'custom' ? '' : 'none';
     }
+    syncExtractionTagControls(settings);
     renderPromptTemplateList(settings);
 }
 
@@ -1292,6 +1351,7 @@ function bindSidebarEvents() {
     }
 
     // v7.7.1 自定义提示词绑定
+    bindExtractionTagControls();
     bindInput('#bb_custom_core_principles', 'customCorePrinciples', 'string');
     bindInput('#bb_custom_extraction_dimensions', 'customExtractionDimensions', 'string');
 
@@ -3194,7 +3254,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.1.4 初始化开始...');
+    console.log('[BB-Memory] v9.1.5 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -3358,7 +3418,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.1.4 初始化完成');
+    console.log('[BB-Memory] v9.1.5 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆

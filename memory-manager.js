@@ -26,17 +26,34 @@ import { fuzzyMemory, archiveMemory, restoreMemory } from './memory-maintainer.j
 // ═══ 全局状态 ═══
 let activeFilter = 'all';
 
-const MANAGER_FORM_OVERLAY_Z = 1000022;
-const MANAGER_FORM_POPUP_Z = 1000023;
+const MANAGER_FORM_OVERLAY_Z = 1000100;
+const MANAGER_FORM_POPUP_Z = 1000101;
+
+function closeManagerFormOverlays() {
+    document.querySelectorAll('.bb-manager-form-overlay, .bb-form-overlay, .bb-thread-form-overlay')
+        .forEach(el => el.remove());
+}
 
 function applyManagerFormLayer(formOverlay) {
     if (!formOverlay) return;
+    formOverlay.classList.add('bb-manager-form-overlay');
+    formOverlay.style.setProperty('position', 'fixed', 'important');
+    formOverlay.style.setProperty('inset', '0', 'important');
     formOverlay.style.setProperty('z-index', String(MANAGER_FORM_OVERLAY_Z), 'important');
     const popup = formOverlay.querySelector('.bb-mem-form-popup');
     if (popup) {
         popup.style.setProperty('position', 'relative');
         popup.style.setProperty('z-index', String(MANAGER_FORM_POPUP_Z), 'important');
     }
+}
+
+function createManagerFormOverlay(extraClass = '') {
+    closeManagerFormOverlays();
+    const formOverlay = document.createElement('div');
+    formOverlay.className = ['bb-form-overlay', 'bb-manager-form-overlay', extraClass].filter(Boolean).join(' ');
+    applyManagerFormLayer(formOverlay);
+    document.body.appendChild(formOverlay);
+    return formOverlay;
 }
 
 // ═══ 入口 ═══
@@ -912,17 +929,10 @@ function rebindItemActions(overlay, chatId) {
 // ═══ 详细添加表单 ═══
 
 function showQuickAddForm(overlay, chatId) {
-    const existing = document.querySelector('.bb-form-overlay');
-    if (existing) existing.remove();
-
     let currentPillar = 'mem';
     const pillarOpts = { mem: '记忆条目', npc: 'NPC档案', item: '物品', timeline: '时间线事件', map: '地图地点' };
 
-    const formOverlay = document.createElement('div');
-    formOverlay.className = 'bb-form-overlay';
-    formOverlay.style.cssText = `position:fixed;inset:0;z-index:${MANAGER_FORM_OVERLAY_Z};background:rgba(0,0,0,0.6);display:flex;align-items:flex-start;justify-content:center;padding:clamp(8px,3vh,20px);overflow-y:auto;`;
-    applyManagerFormLayer(formOverlay);
-    document.body.appendChild(formOverlay);
+    const formOverlay = createManagerFormOverlay();
 
     function buildFormHTML(pillar) {
         const p = pillar;
@@ -1267,18 +1277,11 @@ async function showQuickEditForm(overlay, chatId, id, pillar) {
 // ═══ 通用弹出表单（添加/编辑共用） ═══
 
 function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill }) {
-    const existing = document.querySelector('.bb-form-overlay');
-    if (existing) existing.remove();
-
     const isEdit = mode === 'edit';
     const titleText = isEdit ? '编辑条目' : '添加条目';
     const titleIcon = isEdit ? 'fa-pen-to-square' : 'fa-plus';
 
-    const formOverlay = document.createElement('div');
-    formOverlay.className = 'bb-form-overlay';
-    formOverlay.style.cssText = `position:fixed;inset:0;z-index:${MANAGER_FORM_OVERLAY_Z};background:rgba(0,0,0,0.6);display:flex;align-items:flex-start;justify-content:center;padding:clamp(8px,3vh,20px);overflow-y:auto;`;
-    applyManagerFormLayer(formOverlay);
-    document.body.appendChild(formOverlay);
+    const formOverlay = createManagerFormOverlay();
 
     const render = () => {
         formOverlay.innerHTML = `
@@ -2412,10 +2415,7 @@ async function renderThreadPanel(overlay, chatId) {
 
 function showThreadEditForm(overlay, chatId, thread) {
     // 移除已有表单
-    document.querySelector('.bb-thread-form-overlay')?.remove();
-
-    const formOverlay = document.createElement('div');
-    formOverlay.className = 'bb-mem-form-overlay bb-thread-form-overlay';
+    const formOverlay = createManagerFormOverlay('bb-mem-form-overlay bb-thread-form-overlay');
     formOverlay.innerHTML = `
     <div class="bb-mem-form-popup" style="max-width:480px;">
         <div class="bb-mem-form-header">
@@ -2454,8 +2454,7 @@ function showThreadEditForm(overlay, chatId, thread) {
             <button class="menu_button bb-thread-form-cancel">取消</button>
         </div>
     </div>`;
-    document.body.appendChild(formOverlay);
-
+    applyManagerFormLayer(formOverlay);
     const close = () => formOverlay.remove();
     formOverlay.querySelector('.bb-thread-form-close')?.addEventListener('click', close);
     formOverlay.querySelector('.bb-thread-form-cancel')?.addEventListener('click', close);
@@ -2480,10 +2479,7 @@ function showThreadEditForm(overlay, chatId, thread) {
 
 // v7.9.0 新建线程表单
 function showThreadCreateForm(overlay, chatId) {
-    document.querySelector('.bb-thread-form-overlay')?.remove();
-
-    const formOverlay = document.createElement('div');
-    formOverlay.className = 'bb-mem-form-overlay bb-thread-form-overlay';
+    const formOverlay = createManagerFormOverlay('bb-mem-form-overlay bb-thread-form-overlay');
     formOverlay.innerHTML = `
     <div class="bb-mem-form-popup" style="max-width:480px;">
         <div class="bb-mem-form-header">
@@ -2522,8 +2518,7 @@ function showThreadCreateForm(overlay, chatId) {
             <button class="menu_button bb-thread-form-cancel">取消</button>
         </div>
     </div>`;
-    document.body.appendChild(formOverlay);
-
+    applyManagerFormLayer(formOverlay);
     const close = () => formOverlay.remove();
     formOverlay.querySelector('.bb-thread-form-close')?.addEventListener('click', close);
     formOverlay.querySelector('.bb-thread-form-cancel')?.addEventListener('click', close);
@@ -2548,10 +2543,7 @@ function showThreadCreateForm(overlay, chatId) {
 function showThreadEntryEditForm(overlay, chatId, thread, entryIdx) {
     const entry = thread.entries[entryIdx];
     if (!entry) return;
-    document.querySelector('.bb-thread-form-overlay')?.remove();
-
-    const formOverlay = document.createElement('div');
-    formOverlay.className = 'bb-mem-form-overlay bb-thread-form-overlay';
+    const formOverlay = createManagerFormOverlay('bb-mem-form-overlay bb-thread-form-overlay');
     formOverlay.innerHTML = `
     <div class="bb-mem-form-popup" style="max-width:480px;">
         <div class="bb-mem-form-header">
@@ -2581,8 +2573,7 @@ function showThreadEntryEditForm(overlay, chatId, thread, entryIdx) {
             <button class="menu_button bb-thread-form-cancel">取消</button>
         </div>
     </div>`;
-    document.body.appendChild(formOverlay);
-
+    applyManagerFormLayer(formOverlay);
     const close = () => formOverlay.remove();
     formOverlay.querySelector('.bb-thread-form-close')?.addEventListener('click', close);
     formOverlay.querySelector('.bb-thread-form-cancel')?.addEventListener('click', close);

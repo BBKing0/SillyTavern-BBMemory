@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.1.4</b>
+            <b>BB-Memory v9.1.5</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -348,6 +348,22 @@
                         <input id="bb_context_window" type="number" class="bb-input" min="1" max="20" value="3" />
                     </div>
                     <div class="bb-mem-hint">保留最近 N 个尚未提取的 AI 回复；第 N+1 个完整 exchange 会进入提取队列，完成后真实隐藏。“楼层可见”只用于临时预览已提取楼层。</div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label>AI 提取读取标签 <small>从 AI 回复的 XML 风格标签中读取，可多选</small></label>
+                        <div id="bb_extract_tag_options" class="bb-extract-tag-options">
+                            <label class="checkbox_label"><input type="checkbox" data-bb-extract-tag="content" /> <span>&lt;content&gt;</span></label>
+                            <label class="checkbox_label"><input type="checkbox" data-bb-extract-tag="context" /> <span>&lt;context&gt;</span></label>
+                            <label class="checkbox_label"><input type="checkbox" data-bb-extract-tag="status" /> <span>&lt;status&gt;</span></label>
+                            <label class="checkbox_label"><input type="checkbox" data-bb-extract-tag="thinking" /> <span>&lt;thinking&gt;</span></label>
+                            <label class="checkbox_label"><input type="checkbox" data-bb-extract-tag="note" /> <span>&lt;note&gt;</span></label>
+                        </div>
+                    </div>
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_extract_custom_tags">自定义读取标签 <small>逗号分隔，例如 time,scene</small></label>
+                        <input id="bb_extract_custom_tags" type="text" class="bb-input" placeholder="可留空" />
+                    </div>
+                    <div class="bb-mem-hint">若一条 AI 回复命中所选标签，BB-Memory 只把这些标签内容交给提取器；未命中时会回退为普通回复文本，避免无标签对话被跳过。</div>
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_batch_extraction">并行提取数</label>

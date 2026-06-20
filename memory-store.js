@@ -51,6 +51,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     sourceRollbackFloorWindow: 10,   // 更新回滚快照保留的最近楼层数
     extractedMsgDisplay: 'hidden', // 'hidden' | 'transparent' | 'visible'
     extractionStyle: 'auto',             // 'auto' | 'daily' | 'drama' | 'custom'
+    extractionMessageTags: ['content', 'context', 'status'],
     customExtractionBias: '',            // 自定义风格偏置（extractionStyle=custom 时生效）
     // 自定义提示词（v7.7.1）
     customCorePrinciples: '',            // 自定义核心原则（空=使用默认）
@@ -1253,7 +1254,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.1.4',
+        version: '9.1.5',
         timestamp: Date.now(),
         npc: [],
         items: [],
@@ -1566,7 +1567,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
 
     const includeEmbeddings = options.includeEmbeddings === true;
     const backup = {
-        version: '9.1.4',
+        version: '9.1.5',
         timestamp: Date.now(),
         embeddingsIncluded: includeEmbeddings,
         npc: includeEmbeddings ? npc : stripEmbeddings(npc),
@@ -2285,7 +2286,7 @@ export async function exportMemories(chatId) {
         getTimelineThreads(chatId), getMap(chatId), getClueBoard(chatId),
     ]);
     return JSON.stringify({
-        version: '9.1.4',
+        version: '9.1.5',
         npc,
         items,
         timeline,
