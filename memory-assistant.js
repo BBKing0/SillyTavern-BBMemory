@@ -1,16 +1,16 @@
 /**
  * memory-assistant.js —— BB-Memory v5.0 记忆管家面板
  *
- * 四柱浏览：NPC档案 / 物品栏 / 时间线 / 记忆条目 + 仪表盘。
+ * 四柱浏览：NPC档案 / 物品栏 / 里程碑 / 记忆条目 + 仪表盘。
  */
 
 import { MEMORY_TYPES } from './memory-types.js';
 import { NPC_TIERS, ITEM_TIERS } from './entity-tiers.js';
 import {
-    getNpcProfiles, getItems, getTimeline, getMemories,
-    removeNpcProfile, removeItem, removeTimelineEntry, removeMemory,
-    updateNpcProfile, updateItem, updateTimelineEntry, updateMemory,
-    addTimelineEntry, getMemoryStats, getSettings,
+    getNpcProfiles, getItems, getMilestones, getMemories,
+    removeNpcProfile, removeItem, removeMilestone, removeMemory,
+    updateNpcProfile, updateItem, updateMilestone, updateMemory,
+    addMilestone, getMemoryStats, getSettings,
 } from './memory-store.js';
 import { simpleSearch } from './retriever.js';
 import { getExtractionFloorStatus } from './message-state.js';
@@ -30,7 +30,7 @@ export async function openAssistant(chatId, initialTab = 'dashboard') {
     currentTab = initialTab;
 
     const [npc, items, timeline, memories] = await Promise.all([
-        getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+        getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId),
     ]);
 
     currentWindow = document.createElement('div');
@@ -63,7 +63,7 @@ function buildAssistantHTML(npc, items, timeline, memories) {
         <button class="bb-assistant-tab active" data-tab="dashboard">仪表盘</button>
         <button class="bb-assistant-tab" data-tab="npc">NPC档案 <span class="bb-tab-count">${npc.length}</span></button>
         <button class="bb-assistant-tab" data-tab="items">物品栏 <span class="bb-tab-count">${items.length}</span></button>
-        <button class="bb-assistant-tab" data-tab="timeline">时间线 <span class="bb-tab-count">${timeline.length}</span></button>
+        <button class="bb-assistant-tab" data-tab="timeline">里程碑 <span class="bb-tab-count">${timeline.length}</span></button>
         <button class="bb-assistant-tab" data-tab="memories">记忆条目 <span class="bb-tab-count">${memories.length}</span></button>
     </div>
     <div class="bb-assistant-panels">
@@ -123,7 +123,7 @@ function buildDashboardHTML(npc, items, timeline, memories) {
                 <div class="bb-dash-detail">核心:${itemTiers.core} 稳定:${itemTiers.stable} 瞬时:${itemTiers.transient}</div>
             </div>
             <div class="bb-dash-card timeline">
-                <div class="bb-dash-num">${timeline.length}</div><div>时间线</div>
+                <div class="bb-dash-num">${timeline.length}</div><div>里程碑</div>
                 <div class="bb-dash-detail">进行中:${timeline.filter(t=>t.isActive).length} 已结束:${timeline.filter(t=>!t.isActive).length}</div>
             </div>
             <div class="bb-dash-card memories">
@@ -234,7 +234,7 @@ function buildItemHTML(i) {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  时间线浏览
+//  里程碑浏览
 // ═══════════════════════════════════════════════════════════
 
 function buildTimelineBrowseHTML(timeline) {
@@ -252,7 +252,7 @@ function buildTimelineBrowseHTML(timeline) {
                 <option value="created_desc">按创建时间降序</option>
             </select>
             <button class="bb-item-btn" id="bb_btn_new_timeline" data-action="new-timeline" style="background:#4caf50;color:#fff;font-size:0.8em;padding:4px 10px;white-space:nowrap;">
-                <i class="fa-solid fa-plus"></i> 新建
+        <i class="fa-solid fa-plus"></i> 新建
             </button>
         </div>
     </div>
@@ -341,7 +341,7 @@ function bindAssistantEvents(win, chatId) {
     win.querySelector('#bb_assistant_close')?.addEventListener('click', closeAssistant);
     win.querySelector('#bb_assistant_refresh')?.addEventListener('click', async () => {
         const [npc, items, timeline, memories] = await Promise.all([
-            getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+            getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId),
         ]);
         const panels = win.querySelector('.bb-assistant-panels');
         panels.querySelector('[data-panel="dashboard"]').innerHTML = buildDashboardHTML(npc, items, timeline, memories);
@@ -409,14 +409,14 @@ function bindBrowseEvents(win, chatId) {
         sortMemories(win, e.target.value);
     });
 
-    // v7.8.0 新建时间线
+    // v9.2.0 新建里程碑
     win.querySelector('#bb_btn_new_timeline')?.addEventListener('click', () => {
         const formEl = win.querySelector('#bb_timeline_add_form');
         if (!formEl) return;
         formEl.style.display = formEl.style.display === 'none' ? '' : 'none';
         formEl.innerHTML = `
             <div style="display:flex;flex-direction:column;gap:6px;">
-                <label style="font-size:0.85em;font-weight:bold;"><i class="fa-solid fa-plus"></i> 新建时间线</label>
+                <label style="font-size:0.85em;font-weight:bold;"><i class="fa-solid fa-plus"></i> 新建里程碑</label>
                 <input class="bb-input" id="bb_new_tl_event" placeholder="事件描述 *" style="font-size:0.85em;">
                 <div style="display:flex;gap:6px;">
                     <input class="bb-input" id="bb_new_tl_storyTime" placeholder="故事时间（如：第三天清晨）" style="font-size:0.85em;flex:1;">
@@ -439,7 +439,7 @@ function bindBrowseEvents(win, chatId) {
             const event = formEl.querySelector('#bb_new_tl_event')?.value?.trim();
             if (!event) { alert('请输入事件描述'); return; }
             const status = formEl.querySelector('#bb_new_tl_status')?.value || 'ongoing';
-            await addTimelineEntry(chatId, {
+            await addMilestone(chatId, {
                 event, summary: event,
                 storyTime: formEl.querySelector('#bb_new_tl_storyTime')?.value?.trim() || '',
                 status, isActive: status === 'ongoing',
@@ -449,8 +449,8 @@ function bindBrowseEvents(win, chatId) {
                 memoryTier: 'stable',
             });
             formEl.style.display = 'none';
-            // 刷新时间线面板
-            const timeline = await getTimeline(chatId);
+            // 刷新里程碑面板
+            const timeline = await getMilestones(chatId);
             const panels = win.querySelector('.bb-assistant-panels');
             if (panels) panels.querySelector('[data-panel="timeline"]').innerHTML = buildTimelineBrowseHTML(timeline);
             if (win.querySelector('.bb-assistant-tab[data-tab="timeline"] .bb-tab-count')) {
@@ -471,7 +471,7 @@ function bindBrowseEvents(win, chatId) {
             const item = btn.closest('.bb-browse-item');
             const id = item.dataset.id;
             const panelName = getPanelName(item);
-            const removeFn = { npc: removeNpcProfile, items: removeItem, timeline: removeTimelineEntry, memories: removeMemory }[panelName];
+            const removeFn = { npc: removeNpcProfile, items: removeItem, timeline: removeMilestone, memories: removeMemory }[panelName];
             if (removeFn && confirm('确定删除？')) {
                 await removeFn(chatId, id);
                 item.remove();
@@ -479,15 +479,15 @@ function bindBrowseEvents(win, chatId) {
         });
     });
 
-    // Toggle active (timeline)
+    // Toggle active (milestone)
     win.querySelectorAll('.bb-item-btn.toggle-active').forEach(btn => {
         btn.addEventListener('click', async () => {
             const item = btn.closest('.bb-browse-item');
             const id = item.dataset.id;
-            const timeline = await getTimeline(chatId);
+            const timeline = await getMilestones(chatId);
             const entry = timeline.find(t => t.id === id);
             if (entry) {
-                await updateTimelineEntry(chatId, id, {
+                await updateMilestone(chatId, id, {
                     isActive: !entry.isActive,
                     status: entry.isActive ? 'ended' : 'ongoing',
                 });

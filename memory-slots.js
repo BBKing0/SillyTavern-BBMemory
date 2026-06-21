@@ -25,14 +25,24 @@ function getLocalForage() {
 const SLOT_PREFIX = 'bb_memory_slot_';
 const CHAT_SLOT_BINDINGS_VERSION = 1;
 
-// v5 四柱存储键
-const PILLAR_KEYS = ['bb_npc_chat_', 'bb_item_chat_', 'bb_timeline_chat_', 'bb_mem_chat_'];
-const PILLAR_NAMES = ['npc', 'items', 'timeline', 'memories'];
-
-// v7.5.0 时间线线程存储键（独立于四柱）
-const THREAD_KEY = 'bb_timeline_threads_';
+// v9.2.0 存储键：旧时间条目已改为里程碑，旧时间线程已改为时间线
+const NPC_KEY = 'bb_npc_chat_';
+const ITEM_KEY = 'bb_item_chat_';
+const MILESTONE_KEY = 'bb_milestone_chat_';
+const TIMELINE_KEY = 'bb_timeline_chat_';
+const MEMORY_KEY = 'bb_mem_chat_';
+const LEGACY_THREAD_KEY = 'bb_timeline_threads_';
 const MAP_KEY = 'bb_map_chat_';
 const CLUE_BOARD_KEY = 'bb_clue_board_';
+
+function looksLikeLegacyMilestoneList(data) {
+    return Array.isArray(data) && data.some(entry =>
+        entry && typeof entry === 'object'
+        && (entry.event || entry.storyTime || entry.impact)
+        && !entry.name
+        && !Array.isArray(entry.entries)
+    );
+}
 
 function slotKey(charId, slotName) {
     return `${SLOT_PREFIX}${charId}_${slotName}`;
@@ -157,9 +167,9 @@ function createEmptySlotData() {
     return {
         npc: [],
         items: [],
+        milestones: [],
         timeline: [],
         memories: [],
-        threads: [],
         map: { locations: {} },
         clueBoard: { nodes: [], connections: [], updatedAt: 0 },
         _slotEmpty: true,
@@ -172,18 +182,26 @@ function createEmptySlotData() {
 
 async function readAllPillarData(chatId) {
     const lf = getLocalForage();
-    const [npc, items, timeline, memories, threads, map, clueBoard] = await Promise.all([
-        ...PILLAR_KEYS.map(k => lf.getItem(k + chatId)),
-        lf.getItem(THREAD_KEY + chatId),
+    const [npc, items, rawMilestones, rawTimeline, memories, legacyThreads, map, clueBoard] = await Promise.all([
+        lf.getItem(NPC_KEY + chatId),
+        lf.getItem(ITEM_KEY + chatId),
+        lf.getItem(MILESTONE_KEY + chatId),
+        lf.getItem(TIMELINE_KEY + chatId),
+        lf.getItem(MEMORY_KEY + chatId),
+        lf.getItem(LEGACY_THREAD_KEY + chatId),
         lf.getItem(MAP_KEY + chatId),
         lf.getItem(CLUE_BOARD_KEY + chatId),
     ]);
+    const legacyMilestones = looksLikeLegacyMilestoneList(rawTimeline) ? rawTimeline : [];
+    const timeline = looksLikeLegacyMilestoneList(rawTimeline)
+        ? (Array.isArray(legacyThreads) ? legacyThreads : [])
+        : (Array.isArray(rawTimeline) ? rawTimeline : (Array.isArray(legacyThreads) ? legacyThreads : []));
     return {
         npc: Array.isArray(npc) ? npc : [],
         items: Array.isArray(items) ? items : [],
-        timeline: Array.isArray(timeline) ? timeline : [],
+        milestones: Array.isArray(rawMilestones) && rawMilestones.length ? rawMilestones : legacyMilestones,
+        timeline,
         memories: Array.isArray(memories) ? memories : [],
-        threads: Array.isArray(threads) ? threads : [],
         map: normalizeMapData(map),
         clueBoard: normalizeClueBoardData(clueBoard),
     };
@@ -193,11 +211,12 @@ async function writeAllPillarData(chatId, data) {
     const lf = getLocalForage();
     const normalized = normalizeSlotData(data);
     await Promise.all([
-        lf.setItem(PILLAR_KEYS[0] + chatId, normalized.npc),
-        lf.setItem(PILLAR_KEYS[1] + chatId, normalized.items),
-        lf.setItem(PILLAR_KEYS[2] + chatId, normalized.timeline),
-        lf.setItem(PILLAR_KEYS[3] + chatId, normalized.memories),
-        lf.setItem(THREAD_KEY + chatId, normalized.threads),
+        lf.setItem(NPC_KEY + chatId, normalized.npc),
+        lf.setItem(ITEM_KEY + chatId, normalized.items),
+        lf.setItem(MILESTONE_KEY + chatId, normalized.milestones),
+        lf.setItem(TIMELINE_KEY + chatId, normalized.timeline),
+        lf.setItem(MEMORY_KEY + chatId, normalized.memories),
+        lf.removeItem(LEGACY_THREAD_KEY + chatId),
         lf.setItem(MAP_KEY + chatId, normalized.map),
         lf.setItem(CLUE_BOARD_KEY + chatId, normalized.clueBoard),
     ]);
@@ -228,12 +247,19 @@ function normalizeSlotData(raw) {
     if (!raw || typeof raw !== 'object') {
         return createEmptySlotData();
     }
+    const rawTimelineLooksLegacy = looksLikeLegacyMilestoneList(raw.timeline);
+    const milestones = Array.isArray(raw.milestones)
+        ? clonePlain(raw.milestones)
+        : (rawTimelineLooksLegacy && Array.isArray(raw.timeline) ? clonePlain(raw.timeline) : []);
+    const timeline = rawTimelineLooksLegacy
+        ? (Array.isArray(raw.threads) ? clonePlain(raw.threads) : [])
+        : (Array.isArray(raw.timeline) ? clonePlain(raw.timeline) : (Array.isArray(raw.threads) ? clonePlain(raw.threads) : []));
     const normalized = {
         npc: Array.isArray(raw.npc) ? clonePlain(raw.npc) : [],
         items: Array.isArray(raw.items) ? clonePlain(raw.items) : [],
-        timeline: Array.isArray(raw.timeline) ? clonePlain(raw.timeline) : [],
+        milestones,
+        timeline,
         memories: Array.isArray(raw.memories) ? clonePlain(raw.memories) : [],
-        threads: Array.isArray(raw.threads) ? clonePlain(raw.threads) : [],
         map: normalizeMapData(raw.map || raw.mapData),
         clueBoard: normalizeClueBoardData(raw.clueBoard || raw.clues),
         _slotEmpty: raw._slotEmpty === true,
@@ -241,8 +267,8 @@ function normalizeSlotData(raw) {
         _slotUpdatedAt: raw._slotUpdatedAt || raw.updatedAt || now,
     };
     normalized._slotEmpty =
-        normalized.npc.length + normalized.items.length + normalized.timeline.length + normalized.memories.length +
-        normalized.threads.length + Object.keys(normalized.map.locations || {}).length + normalized.clueBoard.nodes.length === 0;
+        normalized.npc.length + normalized.items.length + normalized.milestones.length + normalized.timeline.length + normalized.memories.length +
+        Object.keys(normalized.map.locations || {}).length + normalized.clueBoard.nodes.length === 0;
     return normalized;
 }
 
@@ -253,9 +279,9 @@ function totalCount(data) {
     const normalized = normalizeSlotData(data);
     return normalized.npc.length
         + normalized.items.length
+        + normalized.milestones.length
         + normalized.timeline.length
         + normalized.memories.length
-        + normalized.threads.length
         + Object.keys(normalized.map.locations || {}).length
         + normalized.clueBoard.nodes.length;
 }
@@ -265,7 +291,7 @@ function countSlotEmbeddings(data) {
     const normalized = normalizeSlotData(data);
     const hasEmbedding = (entry) => Array.isArray(entry?.embedding) && entry.embedding.length > 0;
     let count = 0;
-    for (const key of ['npc', 'items', 'timeline', 'memories', 'threads']) {
+    for (const key of ['npc', 'items', 'milestones', 'timeline', 'memories']) {
         count += normalized[key].filter(hasEmbedding).length;
     }
     count += Object.values(normalized.map.locations || {}).filter(hasEmbedding).length;
@@ -371,7 +397,7 @@ export async function listSlots(charId) {
     // v9.0.6 slot payloads may exist in chatMetadata; embeddings are included only by explicit user action.
     const remoteIndex = getRemoteSlotIndex(charId);
     for (const [name, meta] of Object.entries(remoteIndex.slots || {})) {
-        const total = (meta.npc || 0) + (meta.items || 0) + (meta.timeline || 0) + (meta.mem || 0) + (meta.threads || 0) + (meta.map || 0) + (meta.clues || 0);
+        const total = (meta.npc || 0) + (meta.items || 0) + (meta.milestones || 0) + (meta.timeline || 0) + (meta.mem || 0) + (meta.map || 0) + (meta.clues || 0);
         const remotePayloadAvailable = slotPayloadExistsInChatMetadata(charId, name);
         const local = localByName.get(name);
         if (local) {
@@ -543,7 +569,7 @@ export async function loadFromSlot(charId, chatId, slotName, options = {}) {
     let raw = await lf.getItem(slotKey(charId, slotName));
 
     // Pull cloud data only when there is no local slot. A deliberate local empty
-    // slot must stay empty, otherwise stale cloud data can leak maps/threads into it.
+    // slot must stay empty, otherwise stale cloud data can leak maps/timeline into it.
     let pulledFromCloud = false;
     if (raw === null || raw === undefined) {
         const pulled = await pullSlotFromChatMetadata(charId, slotName);
@@ -563,55 +589,55 @@ export async function loadFromSlot(charId, chatId, slotName, options = {}) {
     // 检查当前聊天是否已有数据，仅在有冲突风险时重新生成 ID
     const currentData = await readAllPillarData(chatId);
     const hasExistingData = currentData.npc.length > 0 || currentData.items.length > 0 ||
-        currentData.timeline.length > 0 || currentData.memories.length > 0 ||
-        currentData.threads.length > 0 || Object.keys(currentData.map.locations || {}).length > 0 ||
+        currentData.milestones.length > 0 || currentData.timeline.length > 0 || currentData.memories.length > 0 ||
+        Object.keys(currentData.map.locations || {}).length > 0 ||
         currentData.clueBoard.nodes.length > 0;
 
     if (hasExistingData && options.preserveIds !== true) {
         const oldIds = {
             npc: data.npc.map(e => e.id),
             item: data.items.map(e => e.id),
-            timeline: data.timeline.map(e => e.id),
+            milestone: data.milestones.map(e => e.id),
             mem: data.memories.map(e => e.id),
-            thread: data.threads.map(e => e.id),
+            timeline: data.timeline.map(e => e.id),
         };
 
         const now = Date.now();
         const newId = (i) => `bb_${now + i}_${Math.random().toString(36).slice(2, 7)}`;
         data.npc = data.npc.map((e, i) => ({ ...e, id: newId(i) }));
         data.items = data.items.map((e, i) => ({ ...e, id: newId(i + data.npc.length) }));
-        data.timeline = data.timeline.map((e, i) => ({ ...e, id: newId(i + data.npc.length + data.items.length) }));
-        data.memories = data.memories.map((e, i) => ({ ...e, id: newId(i + data.npc.length + data.items.length + data.timeline.length) }));
-        data.threads = data.threads.map((e, i) => ({ ...e, id: newId(i + data.npc.length + data.items.length + data.timeline.length + data.memories.length) }));
-
-        // v8.9.0 重映射线程与线索板引用，修复 ID 重生后引用断裂
+        data.milestones = data.milestones.map((e, i) => ({ ...e, id: newId(i + data.npc.length + data.items.length) }));
+        data.memories = data.memories.map((e, i) => ({ ...e, id: newId(i + data.npc.length + data.items.length + data.milestones.length) }));
+        data.timeline = data.timeline.map((e, i) => ({ ...e, id: newId(i + data.npc.length + data.items.length + data.milestones.length + data.memories.length) }));
+        // v8.9.0 重映射时间线与线索板引用，修复 ID 重生后引用断裂
         const idMaps = {
             npc: new Map(oldIds.npc.map((id, i) => [id, data.npc[i]?.id])),
             item: new Map(oldIds.item.map((id, i) => [id, data.items[i]?.id])),
-            timeline: new Map(oldIds.timeline.map((id, i) => [id, data.timeline[i]?.id])),
+            milestone: new Map(oldIds.milestone.map((id, i) => [id, data.milestones[i]?.id])),
             mem: new Map(oldIds.mem.map((id, i) => [id, data.memories[i]?.id])),
-            thread: new Map(oldIds.thread.map((id, i) => [id, data.threads[i]?.id])),
+            timeline: new Map(oldIds.timeline.map((id, i) => [id, data.timeline[i]?.id])),
         };
         idMaps.items = idMaps.item;
         idMaps.memory = idMaps.mem;
         idMaps.memories = idMaps.mem;
-        const timelineIdMap = idMaps.timeline;
-        if (timelineIdMap.size > 0) {
-            for (const thread of data.threads) {
-                if (thread.parentThreadId && idMaps.thread.has(thread.parentThreadId)) {
-                    thread.parentThreadId = idMaps.thread.get(thread.parentThreadId);
+        const milestoneIdMap = idMaps.milestone;
+        if (milestoneIdMap.size > 0 || idMaps.timeline.size > 0) {
+            for (const thread of data.timeline) {
+                if (thread.parentThreadId && idMaps.timeline.has(thread.parentThreadId)) {
+                    thread.parentThreadId = idMaps.timeline.get(thread.parentThreadId);
                 }
                 if (Array.isArray(thread.entries)) {
                     for (const entry of thread.entries) {
-                        if (entry.refId && timelineIdMap.has(entry.refId)) {
-                            entry.refId = timelineIdMap.get(entry.refId);
+                        if (entry.refId && milestoneIdMap.has(entry.refId)) {
+                            entry.refId = milestoneIdMap.get(entry.refId);
                         }
                     }
                 }
             }
         }
         for (const node of data.clueBoard.nodes) {
-            const map = idMaps[node.refType];
+            const refType = node.refType === 'timeline' ? 'milestone' : node.refType;
+            const map = idMaps[refType];
             if (node.refId && map?.has(node.refId)) {
                 node.refId = map.get(node.refId);
             }
@@ -796,18 +822,18 @@ async function getSlotPillarCounts(charId, slotName) {
     const lf = getLocalForage();
     const data = await lf.getItem(slotKey(charId, slotName));
     if (Array.isArray(data)) {
-        return { npc: 0, items: 0, timeline: 0, mem: data.length, threads: 0, map: 0, clues: 0, embeddings: countSlotEmbeddings(data) };
+        return { npc: 0, items: 0, milestones: 0, timeline: 0, mem: data.length, map: 0, clues: 0, embeddings: countSlotEmbeddings(data) };
     }
     if (!data || typeof data !== 'object') {
-        return { npc: 0, items: 0, timeline: 0, mem: 0, threads: 0, map: 0, clues: 0, embeddings: 0 };
+        return { npc: 0, items: 0, milestones: 0, timeline: 0, mem: 0, map: 0, clues: 0, embeddings: 0 };
     }
     const normalized = normalizeSlotData(data);
     return {
         npc: normalized.npc.length,
         items: normalized.items.length,
+        milestones: normalized.milestones.length,
         timeline: normalized.timeline.length,
         mem: normalized.memories.length,
-        threads: normalized.threads.length,
         map: Object.keys(normalized.map.locations || {}).length,
         clues: normalized.clueBoard.nodes.length,
         embeddings: countSlotEmbeddings(normalized),
@@ -910,9 +936,9 @@ async function scheduleSlotReembed(chatId) {
         const pillars = [
             { key: 'npc', entries: data.npc, collection: 'npc', label: 'NPC' },
             { key: 'items', entries: data.items, collection: 'item', label: '物品' },
+            { key: 'milestones', entries: data.milestones, collection: 'milestone', label: '里程碑' },
             { key: 'timeline', entries: data.timeline, collection: 'timeline', label: '时间线' },
             { key: 'memories', entries: data.memories, collection: 'mem', label: '记忆' },
-            { key: 'threads', entries: data.threads, collection: 'threads', label: '线程' },
             { key: 'map', entries: Object.values(data.map?.locations || {}), collection: 'map', label: '地图' },
         ];
 
@@ -975,9 +1001,9 @@ function stripSlotEmbeddings(data) {
     return {
         npc: Array.isArray(data.npc) ? data.npc.map(strip) : [],
         items: Array.isArray(data.items) ? data.items.map(strip) : [],
+        milestones: Array.isArray(data.milestones) ? data.milestones.map(strip) : [],
         timeline: Array.isArray(data.timeline) ? data.timeline.map(strip) : [],
         memories: Array.isArray(data.memories) ? data.memories.map(strip) : [],
-        threads: Array.isArray(data.threads) ? data.threads.map(strip) : [],
         map: stripMap(data.map),
         clueBoard: data.clueBoard || { nodes: [], connections: [], updatedAt: 0 },
         _slotEmpty: data._slotEmpty === true,

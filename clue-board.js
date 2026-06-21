@@ -6,7 +6,7 @@
  */
 
 import {
-    getNpcProfiles, getItems, getTimeline, getMemories,
+    getNpcProfiles, getItems, getMilestones, getMemories,
     scheduleAutoBackup, getSettings, isArchived,
 } from './memory-store.js';
 import { getPromptTemplate } from './prompt-templates.js';
@@ -389,7 +389,7 @@ export async function openClueBoard(chatId) {
         const newBody = body;
         if (newBody) {
             const freshBoard = body._clueBoard || board;
-            if (viewMode === 'spatial') renderClueBoardSpatial(newBody, freshBoard, editMode);
+            if (viewMode === 'spatial') renderClueBoardSpatial(newBody, freshBoard, editMode, chatId, renderCurrentBoard);
             else refreshClueBoard(newBody, freshBoard, chatId, overlay, panel);
         }
     });
@@ -401,7 +401,7 @@ export async function openClueBoard(chatId) {
         const newBody = body;
         if (newBody && viewMode === 'spatial') {
             const freshBoard = body._clueBoard || board;
-            renderClueBoardSpatial(newBody, freshBoard, editMode);
+            renderClueBoardSpatial(newBody, freshBoard, editMode, chatId, renderCurrentBoard);
         }
     });
     panel.appendChild(header);
@@ -449,7 +449,7 @@ export async function openClueBoard(chatId) {
     function renderCurrentBoard(nextBoard) {
         body._clueBoard = nextBoard;
         body._clueChatId = chatId;
-        if (viewMode === 'spatial') renderClueBoardSpatial(body, nextBoard, editMode);
+        if (viewMode === 'spatial') renderClueBoardSpatial(body, nextBoard, editMode, chatId, renderCurrentBoard);
         else refreshClueBoard(body, nextBoard, chatId, overlay, panel);
         updatePanelStats(nextBoard);
     }
@@ -531,7 +531,7 @@ function clamp01(value) {
 }
 
 // v8.8.8 线索板空间视图 —— 复用地图图视口核心
-function renderClueBoardSpatial(body, board, editMode) {
+function renderClueBoardSpatial(body, board, editMode, chatId, onBoardChanged) {
     if (typeof body._clueCleanup === 'function') body._clueCleanup();
 
     const nodes = board.nodes || [];
@@ -542,9 +542,9 @@ function renderClueBoardSpatial(body, board, editMode) {
     body.className = 'bb-clue-spatial-body';
     body.style.cssText = '';
 
-    const refColors = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784', map: '#4db6ac' };
-    const refIcons = { mem: 'fa-brain', npc: 'fa-user', item: 'fa-box', timeline: 'fa-clock', map: 'fa-map-location-dot' };
-    const refLabels = { mem: '记忆', npc: 'NPC', item: '物品', timeline: '时间线', map: '地图' };
+    const refColors = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784', milestone: '#81c784', map: '#4db6ac' };
+    const refIcons = { mem: 'fa-brain', npc: 'fa-user', item: 'fa-box', timeline: 'fa-clock', milestone: 'fa-clock', map: 'fa-map-location-dot' };
+    const refLabels = { mem: '记忆', npc: 'NPC', item: '物品', timeline: '里程碑', milestone: '里程碑', map: '地图' };
     const typeColors = { causal: '#ff9800', hint: '#2196f3', contradicts: '#f44336', related: '#9e9e9e', speculation: '#ce93d8' };
 
     if (!nodes.length) {
@@ -682,13 +682,28 @@ function renderClueBoardSpatial(body, board, editMode) {
             return;
         }
         const rc = refColors[node.refType] || '#888';
+        const relatedConnections = conns.filter(c => c.fromNodeId === node.id || c.toNodeId === node.id);
+        const connRows = relatedConnections.map(conn => {
+            const isOut = conn.fromNodeId === node.id;
+            const other = nodeMap.get(isOut ? conn.toNodeId : conn.fromNodeId);
+            const typeText = (CONN_TYPE_LABEL[conn.type] || '关联').replace(/→/g, '').trim();
+            const confidenceText = CONFIDENCE_LABEL[conn.confidence] || conn.confidence || '';
+            return `
+                <div class="bb-clue-detail-conn">
+                    <span>${isOut ? '→' : '←'} ${escapeHtml(other?.label || other?.id || '未知节点')}</span>
+                    <small>${escapeHtml(typeText)} ${escapeHtml(confidenceText)}</small>
+                    <button class="menu_button bb-clue-detail-conn-del" data-conn-id="${conn.id}" title="删除连线"><i class="fa-solid fa-xmark"></i></button>
+                </div>`;
+        }).join('');
         detailPane.style.display = '';
         detailPane.innerHTML = `
             <div class="bb-clue-detail-title" style="--bb-clue-color:${rc};">${escapeHtml(node.label || node.id)}</div>
             <div class="bb-clue-detail-meta"><i class="fa-solid ${refIcons[node.refType] || 'fa-circle'}"></i> ${refLabels[node.refType] || node.refType}</div>
             ${node.note ? `<div class="bb-clue-detail-note">${escapeHtml(node.note)}</div>` : '<div class="bb-clue-detail-note empty">暂无备注</div>'}
+            ${relatedConnections.length ? `<div class="bb-clue-detail-conns">${connRows}</div>` : '<div class="bb-clue-detail-note empty">暂无关联连线</div>'}
             <div class="bb-clue-detail-actions">
                 <button class="menu_button bb-clue-detail-note-btn"><i class="fa-solid fa-pen"></i> 备注</button>
+                <button class="menu_button bb-clue-detail-delete-btn" style="color:#f44336;"><i class="fa-solid fa-trash"></i> 删除节点</button>
             </div>`;
         detailPane.querySelector('.bb-clue-detail-note-btn')?.addEventListener('click', async () => {
             const note = prompt('编辑备注：', node.note || '');
@@ -698,6 +713,24 @@ function renderClueBoardSpatial(body, board, editMode) {
             renderDetails(node);
             renderElements();
             showToast('备注已更新', 'success');
+        });
+        detailPane.querySelector('.bb-clue-detail-delete-btn')?.addEventListener('click', async () => {
+            if (!chatId || !confirm(`确定删除节点"${node.label || node.id}"及其所有连线？`)) return;
+            await removeClueNode(chatId, node.id);
+            const nextBoard = await getClueBoard(chatId);
+            showToast('节点已删除', 'success');
+            if (typeof onBoardChanged === 'function') onBoardChanged(nextBoard);
+        });
+        detailPane.querySelectorAll('.bb-clue-detail-conn-del').forEach(btn => {
+            btn.addEventListener('click', async (event) => {
+                event.stopPropagation();
+                const connId = btn.dataset.connId;
+                if (!chatId || !connId || !confirm('确定删除此连线？')) return;
+                await removeClueConnection(chatId, connId);
+                const nextBoard = await getClueBoard(chatId);
+                showToast('连线已删除', 'success');
+                if (typeof onBoardChanged === 'function') onBoardChanged(nextBoard);
+            });
         });
     }
 
@@ -869,9 +902,9 @@ function renderClueBoardBody(body, board, chatId, overlay, panel) {
     }
 
     // 颜色定义
-    const refColors = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784', map: '#4db6ac' };
-    const refIcons = { mem: 'fa-brain', npc: 'fa-user', item: 'fa-box', timeline: 'fa-clock', map: 'fa-map-location-dot' };
-    const refLabels = { mem: '记忆', npc: 'NPC', item: '物品', timeline: '时间线', map: '地图' };
+    const refColors = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784', milestone: '#81c784', map: '#4db6ac' };
+    const refIcons = { mem: 'fa-brain', npc: 'fa-user', item: 'fa-box', timeline: 'fa-clock', milestone: 'fa-clock', map: 'fa-map-location-dot' };
+    const refLabels = { mem: '记忆', npc: 'NPC', item: '物品', timeline: '里程碑', milestone: '里程碑', map: '地图' };
     const typeColors = { causal: '#ff9800', hint: '#2196f3', contradicts: '#f44336', related: '#9e9e9e', speculation: '#ce93d8' };
     const typeIcons = { causal: '⚡', hint: '💡', contradicts: '⚠️', related: '🔗', speculation: '❓' };
     const typeOrder = { causal: 0, hint: 1, contradicts: 2, related: 3, speculation: 4 };
@@ -1184,7 +1217,7 @@ function showAddNodeDialog(chatId, onDone) {
             <button class="bb-clue-tab" data-pillar="mem" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">记忆</button>
             <button class="bb-clue-tab" data-pillar="npc" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">NPC</button>
             <button class="bb-clue-tab" data-pillar="item" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">物品</button>
-            <button class="bb-clue-tab" data-pillar="timeline" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">时间线</button>
+            <button class="bb-clue-tab" data-pillar="timeline" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">里程碑</button>
             <button class="bb-clue-tab" data-pillar="map" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">地图</button>
         </div>
         <input type="text" id="bb_clue_node_search" class="bb-input" placeholder="搜索条目..." style="margin-bottom:8px;flex-shrink:0;" />
@@ -1203,7 +1236,7 @@ function showAddNodeDialog(chatId, onDone) {
     // 加载数据
     (async () => {
         const [npc, items, timeline, memories] = await Promise.all([
-            getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+            getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId),
         ]);
         let mapLocations = [];
         try {
@@ -1237,8 +1270,8 @@ function showAddNodeDialog(chatId, onDone) {
             parentSelect.appendChild(opt);
         }
 
-        const pillarIcon = { mem: 'fa-brain', npc: 'fa-user', item: 'fa-box', timeline: 'fa-clock', map: 'fa-map-location-dot' };
-        const pillarColor = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784', map: '#4db6ac' };
+        const pillarIcon = { mem: 'fa-brain', npc: 'fa-user', item: 'fa-box', timeline: 'fa-clock', milestone: 'fa-clock', map: 'fa-map-location-dot' };
+        const pillarColor = { mem: '#ce93d8', npc: '#64b5f6', item: '#ffb74d', timeline: '#81c784', milestone: '#81c784', map: '#4db6ac' };
         const truthColor = { unknown: '#9e9e9e', rumor: '#ff9800', misleading: '#f44336', secret_true: '#7c4dff', 'true': '#4caf50', 'false': '#f44336' };
 
         let activePillar = 'all';

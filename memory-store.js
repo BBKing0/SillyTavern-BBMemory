@@ -1,7 +1,7 @@
 /**
  * memory-store.js —— BB-Memory v5.0 数据持久化层
  *
- * 四柱架构：NPC档案 / 物品栏 / 时间线 / 记忆条目 各自独立存储。
+ * 四柱架构：NPC档案 / 物品栏 / 里程碑 / 记忆条目 各自独立存储。
  * 含 v4→v5 迁移、升降格系统、跨设备备份同步。
  */
 
@@ -13,10 +13,15 @@ export const MODULE_NAME = 'bb_memory';
 const STORAGE_KEYS = {
     npc:      'bb_npc_chat_',
     item:     'bb_item_chat_',
-    timeline: 'bb_timeline_chat_',
+    milestone:'bb_milestone_chat_',
     mem:      'bb_mem_chat_',
     map:      'bb_map_chat_',           // v8.7.0 地图记忆
-    threads:  'bb_timeline_threads_',   // v6.7.0 命名线程系统
+    timeline: 'bb_timeline_chat_',      // v9.2.0 时间线（原时间线程）
+};
+
+const LEGACY_STORAGE_KEYS = {
+    milestone: 'bb_timeline_chat_',     // v9.1.x 时间条目
+    timeline: 'bb_timeline_threads_',   // v9.1.x 时间线程
 };
 
 const OLD_STORAGE_KEY = 'bb_memory_chat_';
@@ -33,7 +38,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // v8.0.0 各柱注入上限（独立于 maxResults，后者仅控制记忆条目）
     npcInjectionMax: 8,
     itemInjectionMax: 5,
-    timelineEndedMax: 3,
+    milestoneVectorMax: 3,
+    milestoneDefaultInjectionMode: 'resident', // 'resident' | 'vector'
     mapInjectionMax: 8,             // v8.7.0 地图地点注入上限
     worldRealWorldRef: '',           // v8.7.1 全局现实原型参考
     floorRecentWindow: 6,            // 近 N 轮内的记忆用完整内容
@@ -87,11 +93,12 @@ export const DEFAULT_SETTINGS = Object.freeze({
     healthCheckIsolationThreshold: 0.30,   // 语义孤立检测阈值
     healthCheckStaleDays: 7,               // 长期休眠判定天数
     healthCheckStaleHitThreshold: 3,       // 休眠命中次数阈值
-    healthCheckThreadStaleDays: 30,        // 线程长期停滞判定天数
+    healthCheckThreadStaleDays: 30,        // 时间线长期停滞判定天数
     healthCheckClueStaleDays: 14,          // 线索板多久未更新时提醒
     // 时间线总结
     timelineSummaryEnabled: true,
-    maxActiveThreads: 5,               // v6.7.0 活跃线程最大注入数
+    maxActiveTimeline: 5,              // v9.2.0 活跃时间线最大注入数
+    maxActiveThreads: 5,               // 兼容旧设置键
     // 自动备份
     autoBackupEnabled: false,
     chatMetadataBackupMaxKb: 2048,
@@ -134,9 +141,19 @@ export function getSettings() {
         extensionSettings[MODULE_NAME] = structuredClone(DEFAULT_SETTINGS);
     }
     const s = extensionSettings[MODULE_NAME];
+    const hadMilestoneVectorMax = Object.prototype.hasOwnProperty.call(s, 'milestoneVectorMax');
+    const hadMaxActiveTimeline = Object.prototype.hasOwnProperty.call(s, 'maxActiveTimeline');
     // 合并新默认值
     for (const [key, val] of Object.entries(DEFAULT_SETTINGS)) {
         if (!(key in s)) s[key] = typeof val === 'object' ? structuredClone(val) : val;
+    }
+    if (!hadMilestoneVectorMax && s.timelineEndedMax !== undefined) {
+        const oldMax = Number(s.timelineEndedMax);
+        if (Number.isFinite(oldMax)) s.milestoneVectorMax = oldMax;
+    }
+    if (!hadMaxActiveTimeline && s.maxActiveThreads !== undefined) {
+        const oldMax = Number(s.maxActiveThreads);
+        if (Number.isFinite(oldMax)) s.maxActiveTimeline = oldMax;
     }
     return s;
 }
@@ -165,8 +182,38 @@ function defaultActiveTier(value) {
     return value || 'stable';
 }
 
+function normalizeCollectionType(type) {
+    if (type === 'timeline_entry') return 'milestone';
+    if (type === 'thread' || type === 'threads' || type === 'timelineThreads' || type === 'timeThreads') return 'timeline';
+    return type;
+}
+
 function storageKey(type, chatId) {
-    return STORAGE_KEYS[type] + chatId;
+    const normalized = normalizeCollectionType(type);
+    return STORAGE_KEYS[normalized] + chatId;
+}
+
+function legacyStorageKey(type, chatId) {
+    const normalized = normalizeCollectionType(type);
+    return LEGACY_STORAGE_KEYS[normalized] ? LEGACY_STORAGE_KEYS[normalized] + chatId : '';
+}
+
+function normalizeMilestoneEntry(entry = {}) {
+    if (!entry || typeof entry !== 'object') return entry;
+    return {
+        ...entry,
+        injectionMode: entry.injectionMode === 'vector' ? 'vector' : 'resident',
+    };
+}
+
+function looksLikeLegacyMilestoneList(data) {
+    if (!Array.isArray(data) || !data.length) return false;
+    return data.some(entry =>
+        entry && typeof entry === 'object'
+        && (entry.event || entry.storyTime || entry.impact)
+        && !entry.name
+        && !Array.isArray(entry.entries)
+    );
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -175,14 +222,50 @@ function storageKey(type, chatId) {
 
 async function loadCollection(type, chatId) {
     if (!chatId) return [];
+    const normalized = normalizeCollectionType(type);
     const lf = getLocalForage();
-    const data = await lf.getItem(storageKey(type, chatId));
-    return Array.isArray(data) ? data : [];
+    const data = await lf.getItem(storageKey(normalized, chatId));
+    if (normalized === 'timeline' && looksLikeLegacyMilestoneList(data)) {
+        const milestoneKey = storageKey('milestone', chatId);
+        const existingMilestones = await lf.getItem(milestoneKey);
+        if (!Array.isArray(existingMilestones) || !existingMilestones.length) {
+            await lf.setItem(milestoneKey, data.map(normalizeMilestoneEntry));
+        }
+        const legacyTimeline = await lf.getItem(legacyStorageKey('timeline', chatId));
+        const migratedTimeline = Array.isArray(legacyTimeline) ? legacyTimeline : [];
+        await lf.setItem(storageKey('timeline', chatId), migratedTimeline);
+        return migratedTimeline;
+    }
+    if (Array.isArray(data)) {
+        return normalized === 'milestone' ? data.map(normalizeMilestoneEntry) : data;
+    }
+
+    const legacyKey = legacyStorageKey(normalized, chatId);
+    if (legacyKey) {
+        const legacyData = await lf.getItem(legacyKey);
+        if (Array.isArray(legacyData) && legacyData.length) {
+            if (normalized === 'milestone' && !looksLikeLegacyMilestoneList(legacyData)) return [];
+            const migrated = normalized === 'milestone'
+                ? legacyData.map(normalizeMilestoneEntry)
+                : legacyData;
+            await lf.setItem(storageKey(normalized, chatId), migrated);
+            if (normalized === 'milestone') {
+                const legacyTimeline = await lf.getItem(legacyStorageKey('timeline', chatId));
+                await lf.setItem(storageKey('timeline', chatId), Array.isArray(legacyTimeline) ? legacyTimeline : []);
+            }
+            return migrated;
+        }
+    }
+    return [];
 }
 
 async function saveCollection(type, chatId, data) {
     const lf = getLocalForage();
-    await lf.setItem(storageKey(type, chatId), data);
+    const normalized = normalizeCollectionType(type);
+    const normalizedData = normalized === 'milestone' && Array.isArray(data)
+        ? data.map(normalizeMilestoneEntry)
+        : data;
+    await lf.setItem(storageKey(normalized, chatId), normalizedData);
 }
 
 const SOURCE_ROLLBACK_KEY = '_bbmemSourceRollback';
@@ -496,16 +579,17 @@ export async function removeItem(chatId, id) {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  时间线 CRUD
+//  里程碑 CRUD
 // ═══════════════════════════════════════════════════════════
 
-export async function getTimeline(chatId) {
-    return loadCollection('timeline', chatId);
+export async function getMilestones(chatId) {
+    return loadCollection('milestone', chatId);
 }
 
-export async function addTimelineEntry(chatId, data) {
-    const timeline = await getTimeline(chatId);
+export async function addMilestone(chatId, data) {
+    const milestones = await getMilestones(chatId);
     const now = Date.now();
+    const settings = getSettings();
     const entry = {
         id: generateId(),
         storyTime: data.storyTime || '',
@@ -522,6 +606,7 @@ export async function addTimelineEntry(chatId, data) {
         hitCount: data.hitCount || 0,
         hitScore: normalizeHitScore(data.hitScore),
         memoryTier: defaultActiveTier(data.memoryTier),
+        injectionMode: data.injectionMode === 'vector' ? 'vector' : (settings.milestoneDefaultInjectionMode === 'vector' ? 'vector' : 'resident'),
         archived: data.archived || false,
         relatedEventIds: Array.isArray(data.relatedEventIds) ? data.relatedEventIds : [],
         subEntries: Array.isArray(data.subEntries) ? data.subEntries : [],  // v8.0.0 子条目
@@ -536,21 +621,21 @@ export async function addTimelineEntry(chatId, data) {
         sourceMessageHash: data.sourceMessageHash || '',
         sourceChatId: data.sourceChatId || '',
     };
-    timeline.push(entry);
+    milestones.push(entry);
     // 按 storyTimeSort 排序
-    timeline.sort((a, b) => (a.storyTimeSort ?? 0) - (b.storyTimeSort ?? 0));
-    await saveCollection('timeline', chatId, timeline);
+    milestones.sort((a, b) => (a.storyTimeSort ?? 0) - (b.storyTimeSort ?? 0));
+    await saveCollection('milestone', chatId, milestones);
     scheduleAutoBackup(chatId);
     return entry;
 }
 
 /**
- * 更新或合并时间线条目（按 event 摘要 + isActive 去重）
+ * 更新或合并里程碑（按 event 摘要 + isActive 去重）
  */
-export async function upsertTimelineEntry(chatId, data) {
-    const timeline = await getTimeline(chatId);
-    // 查找同名进行中事件
-    const existing = timeline.find(t =>
+export async function upsertMilestone(chatId, data) {
+    const milestones = await getMilestones(chatId);
+    // 查找同名进行中里程碑
+    const existing = milestones.find(t =>
         t.isActive && t.event.toLowerCase() === (data.event || '').toLowerCase()
     );
     if (existing) {
@@ -559,74 +644,82 @@ export async function upsertTimelineEntry(chatId, data) {
             patch.summary = existing.summary + ' → ' + data.summary;
         }
         patch.updatedAt = Date.now();
-        return updateTimelineEntry(chatId, existing.id, patch);
+        return updateMilestone(chatId, existing.id, patch);
     }
-    return addTimelineEntry(chatId, data);
+    return addMilestone(chatId, data);
 }
 
-export async function updateTimelineEntry(chatId, id, patch) {
-    const timeline = await getTimeline(chatId);
-    const entry = timeline.find(t => t.id === id);
+export async function updateMilestone(chatId, id, patch) {
+    const milestones = await getMilestones(chatId);
+    const entry = milestones.find(t => t.id === id);
     if (!entry) return null;
     patch = attachSourceRollback(entry, patch);
     const { id: _id, createdAt: _ca, ...safe } = patch;
     Object.assign(entry, safe);
+    entry.injectionMode = entry.injectionMode === 'vector' ? 'vector' : 'resident';
     entry.updatedAt = Date.now();
     if (typeof patch.isActive === 'boolean' && !patch.isActive) {
         entry.isActive = false;
         entry.status = 'ended';
     }
-    await saveCollection('timeline', chatId, timeline);
+    await saveCollection('milestone', chatId, milestones);
     scheduleAutoBackup(chatId);
     return entry;
 }
 
-export async function removeTimelineEntry(chatId, id) {
-    const timeline = await getTimeline(chatId);
-    const filtered = timeline.filter(t => t.id !== id);
-    if (filtered.length < timeline.length) {
-        await saveCollection('timeline', chatId, filtered);
+export async function removeMilestone(chatId, id) {
+    const milestones = await getMilestones(chatId);
+    const filtered = milestones.filter(t => t.id !== id);
+    if (filtered.length < milestones.length) {
+        await saveCollection('milestone', chatId, filtered);
         scheduleAutoBackup(chatId);
         return true;
     }
     return false;
 }
 
+// v9.2.0 兼容旧时间条目调用名。新代码请使用 Milestone 命名。
+export const getTimelineEntries = getMilestones;
+export const addTimelineEntry = addMilestone;
+export const upsertTimelineEntry = upsertMilestone;
+export const updateTimelineEntry = updateMilestone;
+export const removeTimelineEntry = removeMilestone;
+
 // ═══════════════════════════════════════════════════════════
-//  v6.7.0 命名线程系统 (Timeline Threads)
+//  v9.2.0 时间线系统（原时间线程）
 // ═══════════════════════════════════════════════════════════
 
 /**
- * 获取所有时间线线程
+ * 获取所有时间线
  */
-export async function getTimelineThreads(chatId) {
-    return loadCollection('threads', chatId);
+export async function getTimeline(chatId) {
+    return loadCollection('timeline', chatId);
 }
 
 /**
- * 保存时间线线程（全量替换）
+ * 保存时间线（全量替换）
  */
-export async function saveTimelineThreads(chatId, threads) {
-    await saveCollection('threads', chatId, threads);
+export async function saveTimeline(chatId, timeline) {
+    await saveCollection('timeline', chatId, timeline);
     scheduleAutoBackup(chatId);
 }
 
 /**
- * 更新或新增一个线程
+ * 更新或新增一条时间线
  * @param {string} chatId
  * @param {object} threadData - { id?, name, type, status, priority, parentThreadId, entries, embedding }
  */
-export async function upsertTimelineThread(chatId, threadData) {
-    const threads = await getTimelineThreads(chatId);
+export async function upsertTimeline(chatId, threadData) {
+    const timeline = await getTimeline(chatId);
     const now = Date.now();
 
     if (threadData.id) {
-        const existing = threads.find(t => t.id === threadData.id);
+        const existing = timeline.find(t => t.id === threadData.id);
         if (existing) {
             const { id: _id, createdAt: _ca, ...safe } = threadData;
             Object.assign(existing, safe);
             existing.updatedAt = now;
-            await saveTimelineThreads(chatId, threads);
+            await saveTimeline(chatId, timeline);
             return existing;
         }
     }
@@ -638,29 +731,39 @@ export async function upsertTimelineThread(chatId, threadData) {
         status: threadData.status || 'ongoing',  // ongoing | paused | ended | archived | resident
         priority: threadData.priority || 'medium', // high | medium | low
         parentThreadId: threadData.parentThreadId || null,
-        summary: threadData.summary || '',        // v7.3.0 线程一句话总结
+        summary: threadData.summary || '',        // v7.3.0 时间线一句话总结
         entries: Array.isArray(threadData.entries) ? threadData.entries : [],
         embedding: threadData.embedding || null,
         createdAt: now,
         updatedAt: now,
     };
-    threads.push(thread);
-    await saveTimelineThreads(chatId, threads);
+    timeline.push(thread);
+    await saveTimeline(chatId, timeline);
     return thread;
 }
 
 /**
- * 删除一个线程
+ * 删除一条时间线
  */
-export async function removeTimelineThread(chatId, threadId) {
-    const threads = await getTimelineThreads(chatId);
-    const filtered = threads.filter(t => t.id !== threadId);
-    if (filtered.length < threads.length) {
-        await saveTimelineThreads(chatId, filtered);
+export async function removeTimeline(chatId, timelineId) {
+    const timeline = await getTimeline(chatId);
+    const filtered = timeline.filter(t => t.id !== timelineId);
+    if (filtered.length < timeline.length) {
+        await saveTimeline(chatId, filtered);
         return true;
     }
     return false;
 }
+
+// 兼容旧调用名。新代码请使用 Timeline 命名。
+export const getStoryThreads = getTimeline;
+export const saveStoryThreads = saveTimeline;
+export const upsertStoryThread = upsertTimeline;
+export const removeStoryThread = removeTimeline;
+export const getTimelineThreads = getTimeline;
+export const saveTimelineThreads = saveTimeline;
+export const upsertTimelineThread = upsertTimeline;
+export const removeTimelineThread = removeTimeline;
 
 // ═══════════════════════════════════════════════════════════
 //  记忆条目 CRUD
@@ -759,17 +862,19 @@ export function isArchived(entry) {
 }
 
 /**
- * 归档指定条目（支持四柱 + 线程）
+ * 归档指定条目（支持四柱 + 时间线）
  * @param {string} chatId
- * @param {string} type - 'npc' | 'item' | 'timeline' | 'mem' | 'thread'
+ * @param {string} type - 'npc' | 'item' | 'milestone' | 'mem' | 'timeline'
  * @param {string} id
  */
 export async function archiveEntry(chatId, type, id) {
     switch (type) {
         case 'npc': return updateNpcProfile(chatId, id, { archived: true });
         case 'item': return updateItem(chatId, id, { archived: true });
-        case 'timeline': return updateTimelineEntry(chatId, id, { archived: true, isActive: false });
-        case 'thread': return upsertTimelineThread(chatId, { id, status: 'archived' });
+        case 'milestone':
+        case 'timeline_entry': return updateMilestone(chatId, id, { archived: true, isActive: false });
+        case 'timeline':
+        case 'thread': return upsertTimeline(chatId, { id, status: 'archived' });
         case 'map': { const { archiveLocation } = await import('./map-store.js'); return archiveLocation(chatId, id); }
         default: return updateMemory(chatId, id, { archived: true, status: 'archived' });
     }
@@ -778,15 +883,17 @@ export async function archiveEntry(chatId, type, id) {
 /**
  * 从归档恢复条目（保持原等级不变）
  * @param {string} chatId
- * @param {string} type - 'npc' | 'item' | 'timeline' | 'mem' | 'thread'
+ * @param {string} type - 'npc' | 'item' | 'milestone' | 'mem' | 'timeline'
  * @param {string} id
  */
 export async function restoreEntry(chatId, type, id) {
     switch (type) {
         case 'npc': return updateNpcProfile(chatId, id, { archived: false });
         case 'item': return updateItem(chatId, id, { archived: false });
-        case 'timeline': return updateTimelineEntry(chatId, id, { archived: false, isActive: true, status: 'ongoing' });
-        case 'thread': return upsertTimelineThread(chatId, { id, status: 'ongoing' });
+        case 'milestone':
+        case 'timeline_entry': return updateMilestone(chatId, id, { archived: false, isActive: true, status: 'ongoing' });
+        case 'timeline':
+        case 'thread': return upsertTimeline(chatId, { id, status: 'ongoing' });
         case 'map': { const { restoreLocation } = await import('./map-store.js'); return restoreLocation(chatId, id); }
         default: return updateMemory(chatId, id, { archived: false, status: 'active' });
     }
@@ -821,7 +928,7 @@ export async function removeCategory(chatId, categoryName) {
     await updateSettings(settings);
 
     // 将四柱中属于该分类的条目重置为 null
-    const pillars = ['npc', 'item', 'timeline', 'mem'];
+    const pillars = ['npc', 'item', 'milestone', 'mem'];
     for (const type of pillars) {
         const items = await loadCollection(type, chatId);
         let changed = false;
@@ -851,7 +958,7 @@ export async function renameCategory(chatId, oldName, newName) {
     await updateSettings(settings);
 
     // 更新四柱中属于该分类的条目
-    const pillars = ['npc', 'item', 'timeline', 'mem'];
+    const pillars = ['npc', 'item', 'milestone', 'mem'];
     for (const type of pillars) {
         const items = await loadCollection(type, chatId);
         let changed = false;
@@ -887,15 +994,16 @@ export async function getCategoryStats(chatId) {
     const pillars = [
         { type: 'npc', label: 'NPC' },
         { type: 'item', label: '物品' },
-        { type: 'timeline', label: '时间线' },
+        { type: 'milestone', label: '里程碑' },
         { type: 'mem', label: '记忆' },
     ];
     for (const p of pillars) {
         const items = await loadCollection(p.type, chatId);
         for (const item of items) {
             const cat = item.category || '(通用)';
-            if (!stats[cat]) stats[cat] = { npc: 0, item: 0, timeline: 0, mem: 0 };
+            if (!stats[cat]) stats[cat] = { npc: 0, item: 0, milestone: 0, timeline: 0, mem: 0 };
             stats[cat][p.type]++;
+            if (p.type === 'milestone') stats[cat].timeline++;
         }
     }
     return stats;
@@ -1017,8 +1125,9 @@ async function recordMapHits(chatId, ids, now) {
 }
 
 export async function recordHit(chatId, collection, id) {
-    const result = await recordHits(chatId, [{ collection, id }], { countMisses: false });
-    return result?.updated?.find(e => e.collection === collection && e.id === id)?.entry || null;
+    const normalized = collection === 'timeline_entry' ? 'milestone' : collection;
+    const result = await recordHits(chatId, [{ collection: normalized, id }], { countMisses: false });
+    return result?.updated?.find(e => e.collection === normalized && e.id === id)?.entry || null;
 }
 
 export async function recordHits(chatId, hits, options = {}) {
@@ -1027,20 +1136,21 @@ export async function recordHits(chatId, hits, options = {}) {
     const hitSets = {
         npc: new Set(),
         item: new Set(),
-        timeline: new Set(),
+        milestone: new Set(),
         mem: new Set(),
         map: new Set(),
     };
 
     for (const hit of hits || []) {
-        if (!hit?.id || !hitSets[hit.collection]) continue;
-        hitSets[hit.collection].add(hit.id);
+        const collection = hit?.collection === 'timeline_entry' ? 'milestone' : hit?.collection;
+        if (!hit?.id || !hitSets[collection]) continue;
+        hitSets[collection].add(hit.id);
     }
 
     const collections = [
         { name: 'npc', loader: getNpcProfiles, saver: (d) => saveCollection('npc', chatId, d), apply: (entry, delta) => applyOrderedEntityTierScore(entry, delta, 'npcTier', NPC_TIER_ORDER_V905, now) },
         { name: 'item', loader: getItems, saver: (d) => saveCollection('item', chatId, d), apply: (entry, delta) => applyOrderedEntityTierScore(entry, delta, 'itemTier', ITEM_TIER_ORDER_V905, now) },
-        { name: 'timeline', loader: getTimeline, saver: (d) => saveCollection('timeline', chatId, d), apply: (entry, delta) => applyMemoryTierScore(chatId, 'timeline', entry, delta, now) },
+        { name: 'milestone', loader: getMilestones, saver: (d) => saveCollection('milestone', chatId, d), apply: (entry, delta) => applyMemoryTierScore(chatId, 'milestone', entry, delta, now) },
         { name: 'mem', loader: getMemories, saver: (d) => saveCollection('mem', chatId, d), apply: (entry, delta) => applyMemoryTierScore(chatId, 'mem', entry, delta, now) },
     ];
 
@@ -1085,7 +1195,8 @@ async function checkDiversityLimit(chatId, collection, entry, targetTier) {
     switch (collection) {
         case 'npc': allItems = await getNpcProfiles(chatId); break;
         case 'item': allItems = await getItems(chatId); break;
-        case 'timeline': allItems = await getTimeline(chatId); break;
+        case 'milestone':
+        case 'timeline_entry': allItems = await getMilestones(chatId); break;
         case 'mem': allItems = await getMemories(chatId); break;
         default: return true;
     }
@@ -1116,10 +1227,12 @@ export async function clearAllData(chatId) {
     await Promise.all([
         lf.removeItem(storageKey('npc', chatId)),
         lf.removeItem(storageKey('item', chatId)),
-        lf.removeItem(storageKey('timeline', chatId)),
+        lf.removeItem(storageKey('milestone', chatId)),
+        lf.removeItem(legacyStorageKey('milestone', chatId)),
         lf.removeItem(storageKey('mem', chatId)),
         lf.removeItem(storageKey('map', chatId)),
-        lf.removeItem(storageKey('threads', chatId)),
+        lf.removeItem(storageKey('timeline', chatId)),
+        lf.removeItem(legacyStorageKey('timeline', chatId)),
         lf.removeItem('bb_clue_board_' + chatId),
         lf.removeItem('bb_calendar_chat_' + chatId),
         lf.removeItem('bb_memory_exchanges_' + chatId),
@@ -1127,13 +1240,13 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.1.9',
+        version: '9.2.0',
         timestamp: Date.now(),
         npc: [],
         items: [],
+        milestones: [],
         timeline: [],
         memories: [],
-        threads: [],
         map: { locations: {} },
         clueBoard: { nodes: [], connections: [] },
     });
@@ -1144,31 +1257,34 @@ export async function clearAllData(chatId) {
  * 按 exchange hash 删除关联的记忆条目（支持 ROLL 后清理）
  */
 export async function deleteByExchange(chatId, exchangeHash) {
-    if (!exchangeHash) return { npc: 0, items: 0, timeline: 0, memories: 0, map: 0 };
-    const [npc, items, timeline, memories] = await Promise.all([
-        getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+    if (!exchangeHash) return { npc: 0, items: 0, milestones: 0, timeline: 0, memories: 0, map: 0 };
+    const [npc, items, milestones, memories] = await Promise.all([
+        getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId),
     ]);
     const npcResult = rollbackCollectionByExchange(npc, exchangeHash);
     const itemResult = rollbackCollectionByExchange(items, exchangeHash);
-    const timelineResult = rollbackCollectionByExchange(timeline, exchangeHash);
+    const milestoneResult = rollbackCollectionByExchange(milestones, exchangeHash);
     const memoryResult = rollbackCollectionByExchange(memories, exchangeHash);
     const removed = {
         npc: npcResult.removed + npcResult.restored,
         items: itemResult.removed + itemResult.restored,
-        timeline: timelineResult.removed + timelineResult.restored,
+        milestones: milestoneResult.removed + milestoneResult.restored,
+        timeline: milestoneResult.removed + milestoneResult.restored,
         memories: memoryResult.removed + memoryResult.restored,
         map: 0,
         deleted: {
             npc: npcResult.removed,
             items: itemResult.removed,
-            timeline: timelineResult.removed,
+            milestones: milestoneResult.removed,
+            timeline: milestoneResult.removed,
             memories: memoryResult.removed,
             map: 0,
         },
         restored: {
             npc: npcResult.restored,
             items: itemResult.restored,
-            timeline: timelineResult.restored,
+            milestones: milestoneResult.restored,
+            timeline: milestoneResult.restored,
             memories: memoryResult.restored,
             map: 0,
         },
@@ -1220,7 +1336,7 @@ export async function deleteByExchange(chatId, exchangeHash) {
     const saves = [];
     if (npcResult.changed) saves.push(saveCollection('npc', chatId, npcResult.entries));
     if (itemResult.changed) saves.push(saveCollection('item', chatId, itemResult.entries));
-    if (timelineResult.changed) saves.push(saveCollection('timeline', chatId, timelineResult.entries));
+    if (milestoneResult.changed) saves.push(saveCollection('milestone', chatId, milestoneResult.entries));
     if (memoryResult.changed) saves.push(saveCollection('mem', chatId, memoryResult.entries));
     if (saves.length) await Promise.all(saves);
     if (saves.length || removed.map) scheduleAutoBackup(chatId);
@@ -1228,15 +1344,16 @@ export async function deleteByExchange(chatId, exchangeHash) {
 }
 
 async function deleteByExchangeLegacy(chatId, exchangeHash) {
-    if (!exchangeHash) return { npc: 0, items: 0, timeline: 0, memories: 0, map: 0 };
-    const [npc, items, timeline, memories] = await Promise.all([
-        getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+    if (!exchangeHash) return { npc: 0, items: 0, milestones: 0, timeline: 0, memories: 0, map: 0 };
+    const [npc, items, milestones, memories] = await Promise.all([
+        getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId),
     ]);
     const filterOut = (arr) => arr.filter(e => e.sourceExchange === exchangeHash);
     const removed = {
         npc: filterOut(npc).length,
         items: filterOut(items).length,
-        timeline: filterOut(timeline).length,
+        milestones: filterOut(milestones).length,
+        timeline: filterOut(milestones).length,
         memories: filterOut(memories).length,
         map: 0,
     };
@@ -1251,7 +1368,7 @@ async function deleteByExchangeLegacy(chatId, exchangeHash) {
     await Promise.all([
         saveCollection('npc', chatId, npc.filter(e => e.sourceExchange !== exchangeHash)),
         saveCollection('item', chatId, items.filter(e => e.sourceExchange !== exchangeHash)),
-        saveCollection('timeline', chatId, timeline.filter(e => e.sourceExchange !== exchangeHash)),
+        saveCollection('milestone', chatId, milestones.filter(e => e.sourceExchange !== exchangeHash)),
         saveCollection('mem', chatId, memories.filter(e => e.sourceExchange !== exchangeHash)),
     ]);
     scheduleAutoBackup(chatId);
@@ -1263,18 +1380,18 @@ async function deleteByExchangeLegacy(chatId, exchangeHash) {
  * 用于玩家"换楼"（开新聊天）后，将旧楼层的记忆标记为无特定楼层来源
  */
 export async function refreshAllSourceFloors(chatId) {
-    const [npc, items, timeline, memories] = await Promise.all([
-        getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+    const [npc, items, milestones, memories] = await Promise.all([
+        getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId),
     ]);
-    const stats = { npc: 0, items: 0, timeline: 0, memories: 0 };
+    const stats = { npc: 0, items: 0, milestones: 0, timeline: 0, memories: 0 };
     for (const e of npc) { if (typeof e.sourceFloor === 'number' && e.sourceFloor >= 0) { e.sourceFloor = -1; stats.npc++; } }
     for (const e of items) { if (typeof e.sourceFloor === 'number' && e.sourceFloor >= 0) { e.sourceFloor = -1; stats.items++; } }
-    for (const e of timeline) { if (typeof e.sourceFloor === 'number' && e.sourceFloor >= 0) { e.sourceFloor = -1; stats.timeline++; } }
+    for (const e of milestones) { if (typeof e.sourceFloor === 'number' && e.sourceFloor >= 0) { e.sourceFloor = -1; stats.milestones++; stats.timeline++; } }
     for (const e of memories) { if (typeof e.sourceFloor === 'number' && e.sourceFloor >= 0) { e.sourceFloor = -1; stats.memories++; } }
     await Promise.all([
         saveCollection('npc', chatId, npc),
         saveCollection('item', chatId, items),
-        saveCollection('timeline', chatId, timeline),
+        saveCollection('milestone', chatId, milestones),
         saveCollection('mem', chatId, memories),
     ]);
     return stats;
@@ -1285,11 +1402,12 @@ export async function refreshAllSourceFloors(chatId) {
 // ═══════════════════════════════════════════════════════════
 
 export async function getMemoryStats(chatId) {
-    const [npc, items, timeline, memories] = await Promise.all([
+    const [npc, items, milestones, memories, timeline] = await Promise.all([
         getNpcProfiles(chatId),
         getItems(chatId),
-        getTimeline(chatId),
+        getMilestones(chatId),
         getMemories(chatId),
+        getTimeline(chatId),
     ]);
 
     const byTier = (arr) => {
@@ -1304,7 +1422,9 @@ export async function getMemoryStats(chatId) {
     return {
         npc: { total: npc.length, byTier: byTier(npc) },
         items: { total: items.length, byTier: byTier(items) },
+        milestones: { total: milestones.length, byTier: byTier(milestones) },
         timeline: { total: timeline.length, byTier: byTier(timeline) },
+        timelineEntries: { total: milestones.length, byTier: byTier(milestones) },
         memories: { total: memories.length, byTier: byTier(memories) },
     };
 }
@@ -1327,11 +1447,13 @@ function getChatMetadataBackupLimit() {
 function countBackupEntries(backup) {
     const mapCount = Object.keys(backup.map?.locations || {}).length;
     const clueCount = Array.isArray(backup.clueBoard?.nodes) ? backup.clueBoard.nodes.length : 0;
+    const milestones = backup.milestones || [];
+    const timeline = backup.timeline || backup.threads || [];
     return (backup.npc?.length || 0)
         + (backup.items?.length || 0)
-        + (backup.timeline?.length || 0)
+        + (milestones.length || 0)
         + (backup.memories?.length || 0)
-        + (backup.threads?.length || 0)
+        + (timeline.length || 0)
         + mapCount
         + clueCount;
 }
@@ -1360,9 +1482,11 @@ function stripMapEmbeddings(map) {
 function countBackupEmbeddings(backup) {
     const hasEmbedding = (entry) => Array.isArray(entry?.embedding) && entry.embedding.length > 0;
     let count = 0;
-    for (const key of ['npc', 'items', 'timeline', 'memories', 'threads']) {
+    for (const key of ['npc', 'items', 'memories']) {
         count += (backup[key] || []).filter(hasEmbedding).length;
     }
+    count += (backup.milestones || []).filter(hasEmbedding).length;
+    count += (backup.timeline || backup.threads || []).filter(hasEmbedding).length;
     count += Object.values(backup.map?.locations || {}).filter(hasEmbedding).length;
     return count;
 }
@@ -1428,26 +1552,26 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
         import('./map-store.js'),
         import('./clue-board.js'),
     ]);
-    const [npc, items, timeline, memories, threads, map, clueBoard] = await Promise.all([
+    const [npc, items, milestones, memories, timeline, map, clueBoard] = await Promise.all([
         getNpcProfiles(chatId),
         getItems(chatId),
-        getTimeline(chatId),
+        getMilestones(chatId),
         getMemories(chatId),
-        getTimelineThreads(chatId),
+        getTimeline(chatId),
         getMap(chatId),
         getClueBoard(chatId),
     ]);
 
     const includeEmbeddings = options.includeEmbeddings === true;
     const backup = {
-        version: '9.1.9',
+        version: '9.2.0',
         timestamp: Date.now(),
         embeddingsIncluded: includeEmbeddings,
         npc: includeEmbeddings ? npc : stripEmbeddings(npc),
         items: includeEmbeddings ? items : stripEmbeddings(items),
+        milestones: includeEmbeddings ? milestones : stripEmbeddings(milestones),
         timeline: includeEmbeddings ? timeline : stripEmbeddings(timeline),
         memories: includeEmbeddings ? memories : stripEmbeddings(memories),
-        threads: includeEmbeddings ? threads : stripEmbeddings(threads),
         map: includeEmbeddings ? map : stripMapEmbeddings(map),
         clueBoard,
     };
@@ -1570,7 +1694,8 @@ async function restoreClueBoardBackup(chatId, backupBoard, idMaps = {}) {
     for (const raw of (backupBoard.nodes || [])) {
         if (!raw || typeof raw !== 'object') continue;
         const node = { ...raw };
-        const refMap = idMaps[node.refType];
+        const refType = node.refType === 'timeline' ? 'milestone' : node.refType;
+        const refMap = idMaps[refType];
         if (node.refId && refMap?.has(node.refId)) node.refId = refMap.get(node.refId);
         const oldNodeId = raw.id;
         const key = `${node.refType || ''}|${node.refId || ''}|${(node.label || '').toLowerCase().trim()}`;
@@ -1691,30 +1816,32 @@ async function restoreBackupPayload(chatId, backup) {
 
     await restorePart('npc', backup.npc, getNpcProfiles, e => (e.name || '').toLowerCase().trim());
     await restorePart('item', backup.items, getItems, e => (e.name || '').toLowerCase().trim());
-    await restorePart('timeline', backup.timeline, getTimeline, e => `${(e.event || '').toLowerCase().trim()}|${e.storyTime || ''}`);
+    const backupMilestones = backup.milestones || (looksLikeLegacyMilestoneList(backup.timeline) ? backup.timeline : []);
+    const backupTimeline = backup.milestones ? (backup.timeline || backup.threads) : (looksLikeLegacyMilestoneList(backup.timeline) ? backup.threads : backup.timeline || backup.threads);
+    await restorePart('milestone', backupMilestones, getMilestones, e => `${(e.event || '').toLowerCase().trim()}|${e.storyTime || ''}`);
     await restorePart('mem', backup.memories, getMemories, e => `${(e.title || '').toLowerCase().trim()}|${(e.content || '').toLowerCase().trim().slice(0, 80)}`);
-    await restorePart('threads', backup.threads, getTimelineThreads, e => (e.name || '').toLowerCase().trim(), thread => {
-        if (thread.parentThreadId && idMaps.threads?.has(thread.parentThreadId)) {
-            thread.parentThreadId = idMaps.threads.get(thread.parentThreadId);
+    await restorePart('timeline', backupTimeline, getTimeline, e => (e.name || '').toLowerCase().trim(), timeline => {
+        if (timeline.parentThreadId && idMaps.timeline?.has(timeline.parentThreadId)) {
+            timeline.parentThreadId = idMaps.timeline.get(timeline.parentThreadId);
         }
-        if (Array.isArray(thread.entries) && idMaps.timeline) {
-            thread.entries = thread.entries.map(entry => ({
+        if (Array.isArray(timeline.entries) && idMaps.milestone) {
+            timeline.entries = timeline.entries.map(entry => ({
                 ...entry,
-                refId: idMaps.timeline.get(entry.refId) || entry.refId,
+                refId: idMaps.milestone.get(entry.refId) || entry.refId,
             }));
         }
-        return thread;
+        return timeline;
     });
-    if (idMaps.threads?.size > 0) {
-        const threads = await getTimelineThreads(chatId);
+    if (idMaps.timeline?.size > 0) {
+        const timeline = await getTimeline(chatId);
         let changed = false;
-        for (const thread of threads) {
-            if (thread.parentThreadId && idMaps.threads.has(thread.parentThreadId)) {
-                thread.parentThreadId = idMaps.threads.get(thread.parentThreadId);
+        for (const item of timeline) {
+            if (item.parentThreadId && idMaps.timeline.has(item.parentThreadId)) {
+                item.parentThreadId = idMaps.timeline.get(item.parentThreadId);
                 changed = true;
             }
         }
-        if (changed) await saveCollection('threads', chatId, threads);
+        if (changed) await saveCollection('timeline', chatId, timeline);
     }
 
     const mapResult = await restoreMapBackup(chatId, backup.map || backup.mapData);
@@ -1926,18 +2053,19 @@ export async function migrateV4ToV5(chatId) {
     await Promise.all([
         saveCollection('npc', chatId, npcList),
         saveCollection('item', chatId, itemList),
-        saveCollection('timeline', chatId, timelineEntries),
+        saveCollection('milestone', chatId, timelineEntries.map(normalizeMilestoneEntry)),
         saveCollection('mem', chatId, memoryEntries),
     ]);
 
     settings.migratedFromV4 = true;
     updateSettings({ migratedFromV4: true });
 
-    console.log(`[BB-Memory] v4→v5 迁移完成: ${npcList.length} NPC, ${itemList.length} 物品, ${timelineEntries.length} 时间线, ${memoryEntries.length} 记忆`);
+    console.log(`[BB-Memory] v4→v5 迁移完成: ${npcList.length} NPC, ${itemList.length} 物品, ${timelineEntries.length} 里程碑, ${memoryEntries.length} 记忆`);
     return {
         migrated: true,
         npc: npcList.length,
         items: itemList.length,
+        milestones: timelineEntries.length,
         timeline: timelineEntries.length,
         memories: memoryEntries.length,
     };
@@ -2045,10 +2173,11 @@ function normalizeImportedEntry(type, raw, options = {}) {
             if (entry.status === 'archived' && entry.archived !== true) entry.status = 'active';
             entry.archived = entry.archived === true ? true : false;
         }
-    } else if (type === 'threads') {
+    } else if (type === 'threads' || type === 'timeline') {
         entry.entries = normalizeImportedThreadEntries(entry.entries);
-    } else if (['npc', 'item', 'timeline'].includes(type)) {
+    } else if (['npc', 'item', 'milestone'].includes(type)) {
         entry.memoryTier = normalizeStableTier(entry.memoryTier, forceStable);
+        if (type === 'milestone') entry.injectionMode = entry.injectionMode === 'vector' ? 'vector' : 'resident';
         if (forceStable && entry.archived !== true) entry.archived = false;
     }
     return entry;
@@ -2085,8 +2214,9 @@ function mergeImportedEntryInPlace(type, base, incoming, options = {}) {
     const textFields = {
         npc: ['role', 'personality', 'appearance', 'status', 'location', 'indexCard'],
         item: ['owner', 'status', 'location', 'significance'],
-        timeline: ['storyTime', 'event', 'summary', 'location', 'impact'],
+        milestone: ['storyTime', 'event', 'summary', 'location', 'impact'],
         mem: ['title', 'summary', 'content', 'verbatim', 'subject', 'target', 'storyTime'],
+        timeline: ['name', 'type', 'status', 'priority', 'summary'],
         threads: ['name', 'type', 'status', 'priority', 'summary'],
     }[type] || [];
 
@@ -2131,11 +2261,11 @@ function mergeImportedEntryInPlace(type, base, incoming, options = {}) {
             if (base.status === 'archived') base.status = 'active';
             changed = true;
         }
-    } else if (type === 'threads') {
+    } else if (type === 'threads' || type === 'timeline') {
         const entries = mergeUniqueObjects(base.entries, normalized.entries, e => `${e.period || ''}|${e.event || ''}|${e.status || ''}`);
         if (entries.length !== (base.entries || []).length) changed = true;
         base.entries = entries;
-    } else if (type === 'timeline') {
+    } else if (type === 'milestone') {
         const participants = mergeUniqueObjects(base.participants, normalized.participants, v => String(v));
         if (participants.length !== (base.participants || []).length) changed = true;
         base.participants = participants;
@@ -2154,17 +2284,17 @@ export async function exportMemories(chatId) {
         import('./map-store.js'),
         import('./clue-board.js'),
     ]);
-    const [npc, items, timeline, memories, threads, map, clueBoard] = await Promise.all([
-        getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
-        getTimelineThreads(chatId), getMap(chatId), getClueBoard(chatId),
+    const [npc, items, milestones, memories, timeline, map, clueBoard] = await Promise.all([
+        getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId),
+        getTimeline(chatId), getMap(chatId), getClueBoard(chatId),
     ]);
     return JSON.stringify({
-        version: '9.1.9',
+        version: '9.2.0',
         npc,
         items,
+        milestones,
         timeline,
         memories,
-        threads,
         map,
         clueBoard,
     });

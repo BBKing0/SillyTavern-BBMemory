@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.1.9</b>
+            <b>BB-Memory v9.2.0</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -32,6 +32,9 @@
                 <button id="bb_memory_manage_btn" class="menu_button" title="打开记忆管理（增删改查/存档槽/常驻档案）">
                     <i class="fa-solid fa-list"></i> 记忆管理
                 </button>
+                <button id="bb_memory_help_btn" class="menu_button" title="打开 BB-Memory 使用说明">
+                    <i class="fa-solid fa-circle-question"></i> 使用说明
+                </button>
                 <button id="bb_memory_maintenance_btn" class="menu_button" title="打开记忆维护面板（等级/状态管理）">
                     <i class="fa-solid fa-broom"></i> 记忆维护
                 </button>
@@ -50,10 +53,10 @@
                 </button>
             </div>
 
-            <!-- 快捷按钮 行3：时间线线程 + 换楼刷新 -->
+            <!-- 快捷按钮 行3：时间线 + 换楼刷新 -->
             <div class="bb-mem-sidebar-buttons">
-                <button id="bb_thread_refresh_btn" class="menu_button" title="从时间线条目重新生成故事线程总结">
-                    <i class="fa-solid fa-timeline"></i> 刷新时间线总结
+                <button id="bb_thread_refresh_btn" class="menu_button" title="从里程碑重新生成时间线总结">
+                    <i class="fa-solid fa-timeline"></i> 刷新时间线
                 </button>
                 <button id="bb_floor_refresh_btn" class="menu_button" title="将所有记忆的来源楼层标记为旧聊天（开新聊天后使用）">
                     <i class="fa-solid fa-arrows-rotate"></i> 换楼刷新
@@ -125,8 +128,17 @@
                     </div>
 
                     <div class="bb-mem-sidebar-section">
-                        <label for="bb_timeline_ended_max">时间线已结束事件上限</label>
-                        <input id="bb_timeline_ended_max" type="number" class="bb-input" min="1" max="15" value="3" />
+                        <label for="bb_milestone_default_injection_mode">新里程碑默认注入模式</label>
+                        <small class="bb-mem-hint">常驻：默认全部注入；向量命中：只有相关时注入。旧里程碑会按常驻处理，除非手动改为向量命中。</small>
+                        <select id="bb_milestone_default_injection_mode" class="bb-input" style="width:100%;">
+                            <option value="resident" selected>常驻全部注入</option>
+                            <option value="vector">向量命中时注入</option>
+                        </select>
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_milestone_vector_max">向量命中里程碑上限</label>
+                        <input id="bb_milestone_vector_max" type="number" class="bb-input" min="0" max="20" value="3" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
@@ -254,9 +266,9 @@
                     </label>
 
                     <div class="bb-mem-sidebar-section">
-                        <label for="bb_max_active_threads">最大活跃线程数</label>
-                        <small class="bb-mem-hint">活跃线程超过此数时自动限制注入（默认5）</small>
-                        <input id="bb_max_active_threads" type="number" class="bb-input" min="2" max="15" value="5" />
+                        <label for="bb_max_active_timeline">最大活跃时间线数</label>
+                        <small class="bb-mem-hint">活跃时间线超过此数时自动限制注入（默认5）</small>
+                        <input id="bb_max_active_timeline" type="number" class="bb-input" min="2" max="15" value="5" />
                     </div>
 
                     <label class="checkbox_label" style="margin: 8px 0;">

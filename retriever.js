@@ -1,7 +1,7 @@
 /**
  * retriever.js —— BB-Memory v5.0 检索与注入系统
  *
- * 四柱架构注入格式：角色档案 / 重要物品 / 故事时间线 / 相关记忆。
+ * 长期记忆注入格式：角色档案 / 重要物品 / 故事里程碑 / 故事时间线 / 相关记忆。
  * 简化为 5 维评分 + 实体展开。
  */
 
@@ -45,10 +45,11 @@ export const INJECTION_LEVELS = Object.freeze({
 });
 
 const DEFAULT_INJECTION_SECTION_HEADERS = Object.freeze({
-    thread: '【故事线程地图】',
+    thread: '【故事时间线】',
+    timeline: '【故事时间线】',
     npc: '【角色档案】',
     item: '【重要物品】',
-    timeline: '【故事时间线】',
+    milestone: '【故事里程碑】',
     memory: '【相关记忆】',
     map: '【世界地图 —— 空间关系{{worldRefSuffix}}】',
 });
@@ -60,36 +61,50 @@ const TOKEN_BUDGET_MODES = Object.freeze({
 
 const SECTION_BUDGET_RATIOS = Object.freeze({
     thread: 0.25,
+    timeline: 0.25,
     npc: 0.30,
     item: 0.20,
-    timeline: 0.25,
+    milestone: 0.25,
     memory: 0.70,
     map: 0.18,
     clue: 0.15,
 });
 
 const SECTION_LABELS = Object.freeze({
-    thread: '线程地图',
+    thread: '时间线',
+    timeline: '时间线',
     npc: 'NPC',
     item: '物品',
-    timeline: '时间线',
+    milestone: '里程碑',
     memory: '记忆',
     map: '地图',
     clue: '线索板',
 });
 
 function getInjectionHeader(settings, key, replacements = {}) {
-    const template = getPromptTemplate(settings || getSettings(), `injection.${key}Header`, DEFAULT_INJECTION_SECTION_HEADERS[key] || '');
+    const activeSettings = settings || getSettings();
+    const defaultValue = DEFAULT_INJECTION_SECTION_HEADERS[key] || '';
+    const fallback = key === 'timeline'
+        ? getPromptTemplate(activeSettings, 'injection.threadHeader', defaultValue)
+        : defaultValue;
+    const template = getPromptTemplate(activeSettings, `injection.${key}Header`, fallback);
     return fillPromptTemplate(template, replacements).trim();
 }
 
 export function getRetrieverPromptTemplates() {
     return [
         {
-            key: 'injection.threadHeader',
-            title: '故事线程注入标题',
+            key: 'injection.timelineHeader',
+            title: '时间线注入标题',
             category: '五柱注入',
-            description: '长期记忆注入中“故事线程地图”区块的标题。',
+            description: '长期记忆注入中“故事时间线”区块的标题。',
+            defaultValue: DEFAULT_INJECTION_SECTION_HEADERS.timeline,
+        },
+        {
+            key: 'injection.threadHeader',
+            title: '旧版时间线注入标题（threadHeader）',
+            category: '五柱注入',
+            description: '兼容旧模板键；新版本优先使用 injection.timelineHeader。',
             defaultValue: DEFAULT_INJECTION_SECTION_HEADERS.thread,
         },
         {
@@ -107,11 +122,11 @@ export function getRetrieverPromptTemplates() {
             defaultValue: DEFAULT_INJECTION_SECTION_HEADERS.item,
         },
         {
-            key: 'injection.timelineHeader',
-            title: '时间线注入标题',
+            key: 'injection.milestoneHeader',
+            title: '里程碑注入标题',
             category: '五柱注入',
-            description: '长期记忆注入中故事时间线区块的标题。',
-            defaultValue: DEFAULT_INJECTION_SECTION_HEADERS.timeline,
+            description: '长期记忆注入中故事里程碑区块的标题。',
+            defaultValue: DEFAULT_INJECTION_SECTION_HEADERS.milestone,
         },
         {
             key: 'injection.memoryHeader',
@@ -194,6 +209,12 @@ function isForeshadowTimeline(entry) {
         .filter(Boolean)
         .join(' ');
     return entry?.status === 'foreshadow' || /伏笔|待兑现|待揭示/.test(tagText);
+}
+
+function isResidentMilestone(entry) {
+    if (!entry) return false;
+    if (isResidentEntry(entry)) return true;
+    return entry.injectionMode !== 'vector';
 }
 
 function isTimelineCoveredByThread(entry, threadIndex) {
@@ -482,64 +503,69 @@ export function getItemsForInjection(items, queryText, queryEmbedding = null) {
 }
 
 /**
- * 时间线：ongoing 全注入，最近 ended 3 条
+ * 里程碑：默认常驻全注入；设置为 vector 的里程碑只在关键词/向量命中时注入。
  */
-export function getTimelineForInjection(timeline, queryText = '', queryEmbedding = null) {
-    const active = timeline.filter(t => !isArchived(t) && matchesActiveCategory(t));
-    const ongoing = active.filter(t => (t.isActive && t.status === 'ongoing') || (isResidentEntry(t) && t.status === 'ongoing'));
-    const foreshadow = active.filter(t => t.status === 'foreshadow');
-    const residentEnded = active.filter(t => isResidentEntry(t) && t.status !== 'ongoing' && t.status !== 'foreshadow');
-    const endedHits = active
-        .filter(t => (!t.isActive || t.status === 'ended') && !isResidentEntry(t))
+export function getMilestonesForInjection(milestones, queryText = '', queryEmbedding = null) {
+    const active = milestones.filter(t => !isArchived(t) && matchesActiveCategory(t));
+    const resident = active.filter(isResidentMilestone);
+    const vectorLimit = Number(getSettings().milestoneVectorMax ?? getSettings().timelineEndedMax ?? 3);
+    const vectorHits = active
+        .filter(t => !isResidentMilestone(t))
         .filter(t => entryTextMatches(t, queryText, ['title', 'event', 'summary', 'impact', 'location', 'storyTime'], queryEmbedding))
         .sort((a, b) => (b.storyTimeSort ?? b.updatedAt ?? 0) - (a.storyTimeSort ?? a.updatedAt ?? 0))
-        .slice(0, getSettings().timelineEndedMax ?? 3);
+        .slice(0, Math.max(0, Number.isFinite(vectorLimit) ? vectorLimit : 3));
+    const selected = uniqueById([...resident, ...vectorHits]);
     return {
-        ongoing: uniqueById(ongoing),
-        ended: uniqueById([...residentEnded, ...endedHits]),
-        foreshadow: uniqueById(foreshadow),
+        ongoing: selected.filter(t => !isForeshadowTimeline(t) && (t.status === 'ongoing' || t.isActive)),
+        ended: selected.filter(t => !isForeshadowTimeline(t) && !(t.status === 'ongoing' || t.isActive)),
+        foreshadow: selected.filter(isForeshadowTimeline),
     };
 }
 
 // ═══════════════════════════════════════════════════════════
-//  v6.7.0 命名线程系统 — 线程总结注入
+//  v9.2.0 时间线系统 — 时间线总结注入
 // ═══════════════════════════════════════════════════════════
 
 /**
- * 从线程数据构建注入文本
- * @param {Array} threads - getTimelineThreads 的结果
- * @param {number} maxActive - 最大活跃线程数
- * @returns {object} { text: string, threads: Array }
+ * 从时间线数据构建注入文本
+ * @param {Array} timeline - getTimeline 的结果
+ * @param {number} maxActive - 最大活跃时间线数
+ * @returns {object} { text: string, timeline: Array, threads: Array }
  */
-export function getThreadSummaryForInjection(threads, maxActive = 5) {
-    if (!threads || !threads.length) return { text: '', threads: [] };
+export function getTimelineForInjection(timeline, maxActive = 5) {
+    if (!timeline || !timeline.length) return { text: '', timeline: [], threads: [] };
 
-    // 用户预期：时间线程作为全局叙事地图全部注入，仅跳过已归档线程。
+    // 常驻时间线全部注入；其他时间线按上限注入，避免叙事地图过长。
     const priorityOrder = { resident: 0, high: 1, medium: 2, low: 3 };
-    const sorted = threads.filter(t => !isArchived(t) && t.status !== 'archived').sort((a, b) => {
+    const sorted = timeline.filter(t => !isArchived(t) && t.status !== 'archived').sort((a, b) => {
         const pa = priorityOrder[a.priority || 'medium'] ?? 2;
         const pb = priorityOrder[b.priority || 'medium'] ?? 2;
         if (pa !== pb) return pa - pb;
         return (b.updatedAt || 0) - (a.updatedAt || 0);
     });
 
-    const forInjection = sorted;
+    const resident = sorted.filter(t => isResidentEntry(t) || t.status === 'resident');
+    const nonResidentLimit = Math.max(0, Number.isFinite(Number(maxActive)) ? Number(maxActive) : 5);
+    const forInjection = uniqueById([
+        ...resident,
+        ...sorted.filter(t => !(isResidentEntry(t) || t.status === 'resident')).slice(0, nonResidentLimit),
+    ]);
 
-    if (!forInjection.length) return { text: '', threads: [] };
+    if (!forInjection.length) return { text: '', timeline: [], threads: [] };
 
-    const header = getInjectionHeader(getSettings(), 'thread') || DEFAULT_INJECTION_SECTION_HEADERS.thread;
+    const header = getInjectionHeader(getSettings(), 'timeline') || getInjectionHeader(getSettings(), 'thread') || DEFAULT_INJECTION_SECTION_HEADERS.timeline;
     const lines = [header];
     const blocks = [];
-    for (const thread of forInjection) {
-        const statusMark = thread.status === 'resident' ? '★常驻' :
-                          thread.status === 'ongoing' ? '●进行中' :
-                          thread.status === 'paused' ? '⏸暂停' : '';
-        const typeMark = thread.type === 'emotional' ? '[感情]' :
-                         thread.type === 'side' ? '[支线]' :
-                         thread.type === 'world' ? '[世界]' : '';
-        const summarySuffix = thread.summary ? ` — ${thread.summary}` : '';
-        const blockLines = [`${statusMark} ${typeMark} ${thread.name}${summarySuffix}`];
-        for (const entry of (thread.entries || [])) {
+    for (const line of forInjection) {
+        const statusMark = line.status === 'resident' ? '★常驻' :
+                          line.status === 'ongoing' ? '●进行中' :
+                          line.status === 'paused' ? '⏸暂停' : '';
+        const typeMark = line.type === 'emotional' ? '[感情]' :
+                         line.type === 'side' ? '[支线]' :
+                         line.type === 'world' ? '[世界]' : '';
+        const summarySuffix = line.summary ? ` — ${line.summary}` : '';
+        const blockLines = [`${statusMark} ${typeMark} ${line.name}${summarySuffix}`];
+        for (const entry of (line.entries || [])) {
             const entryStatus = entry.status === 'ongoing' ? '→' :
                                entry.status === 'ended' ? '✓' :
                                entry.status === 'milestone' ? '◆' : '·';
@@ -548,11 +574,13 @@ export function getThreadSummaryForInjection(threads, maxActive = 5) {
             blockLines.push(`  ${entryStatus} ${period} ${event}`);
         }
         lines.push(...blockLines);
-        blocks.push({ text: blockLines.join('\n'), thread });
+        blocks.push({ text: blockLines.join('\n'), timeline: line, thread: line });
     }
 
-    return { text: lines.join('\n'), threads: forInjection, header, blocks };
+    return { text: lines.join('\n'), timeline: forInjection, threads: forInjection, header, blocks };
 }
+
+export const getThreadSummaryForInjection = getTimelineForInjection;
 
 // ═══════════════════════════════════════════════════════════
 //  格式化
@@ -587,9 +615,10 @@ function formatItemLine(item) {
 
 function formatTimelineLine(t) {
     const timeStr = t.storyTime || '';
-    const activeMark = t.status === 'ongoing' ? '（进行中）' :
-                       t.status === 'foreshadow' ? '【伏笔】' : '（已结束）';
-    return `▸ ${timeStr} ${t.event} ${activeMark}\n  ${t.summary}${t.impact ? ' — ' + t.impact : ''}`;
+    const activeMark = isForeshadowTimeline(t) ? '【伏笔】' :
+                       (t.status === 'ongoing' || t.isActive) ? '（里程碑·进行中）' : '（里程碑）';
+    const modeMark = isResidentMilestone(t) ? '常驻' : '向量命中';
+    return `▸ ${timeStr} ${t.event} ${activeMark} [${modeMark}]\n  ${t.summary}${t.impact ? ' — ' + t.impact : ''}`;
 }
 
 function formatHiddenNotesForInjection(m) {
@@ -845,7 +874,7 @@ function priorityForItem(item) {
 }
 
 function priorityForTimelineEntry(entry) {
-    if (isResidentEntry(entry)) return 0;
+    if (isResidentMilestone(entry)) return 0;
     if (entry?.status === 'ongoing' || entry?.isActive || isForeshadowTimeline(entry)) return 1;
     return 2;
 }
@@ -972,12 +1001,14 @@ function buildInjectionStats(selectedItems) {
     const stats = {
         npcCount: 0,
         itemCount: 0,
+        milestoneCount: 0,
         timelineCount: 0,
         memoryCount: 0,
         threadCount: 0,
         mapCount: 0,
         npcIds: [],
         itemIds: [],
+        milestoneIds: [],
         timelineIds: [],
         memoryIds: [],
         threadIds: [],
@@ -986,8 +1017,9 @@ function buildInjectionStats(selectedItems) {
     const seen = {
         npc: new Set(),
         item: new Set(),
-        timeline: new Set(),
+        milestone: new Set(),
         mem: new Set(),
+        timeline: new Set(),
         thread: new Set(),
         map: new Set(),
     };
@@ -1004,11 +1036,14 @@ function buildInjectionStats(selectedItems) {
         if (item.flagKey) stats[item.flagKey] = true;
         if (item.collection === 'npc') addUnique('npc', item.id, 'npcIds', 'npcCount');
         else if (item.collection === 'item') addUnique('item', item.id, 'itemIds', 'itemCount');
+        else if (item.collection === 'milestone') addUnique('milestone', item.id, 'milestoneIds', 'milestoneCount');
         else if (item.collection === 'timeline') addUnique('timeline', item.id, 'timelineIds', 'timelineCount');
         else if (item.collection === 'mem') addUnique('mem', item.id, 'memoryIds', 'memoryCount');
         else if (item.collection === 'thread') addUnique('thread', item.id, 'threadIds', 'threadCount');
         else if (item.collection === 'map') addUnique('map', item.id, 'mapLocationIds', 'mapCount');
     }
+    stats.threadIds = stats.timelineIds.length ? [...stats.timelineIds] : stats.threadIds;
+    stats.threadCount = stats.timelineCount || stats.threadCount;
     stats.mapInjected = stats.mapCount > 0;
     return stats;
 }
@@ -1018,26 +1053,28 @@ function buildInjectionStats(selectedItems) {
  * @param {object} params
  * @param {Array} params.npcProfiles - getNpcForInjection 结果
  * @param {Array} params.items - getItemsForInjection 结果
+ * @param {object} params.milestones - getMilestonesForInjection 结果
  * @param {object} params.timeline - getTimelineForInjection 结果
  * @param {Array} params.relevantResults - getRelevantMemories 结果
  * @param {object} params.settings
  * @returns {{ text: string, tokenEstimate: number, stats: object }}
  */
-export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, threadSummary, relevantResults, settings, chatLength = 0, clueBoard = null, mapData = null, queryText = '', queryEmbedding = null }) {
+export async function buildMemoryInjectionPrompt({ npcProfiles, items, milestones, timeline, threadSummary, relevantResults, settings, chatLength = 0, clueBoard = null, mapData = null, queryText = '', queryEmbedding = null }) {
     const activeSettings = settings || getSettings();
     const tokenBudget = normalizeTokenBudget(activeSettings);
     const budgetSections = [];
 
-    const threadBlocks = getThreadBudgetBlocks(threadSummary);
-    if (threadBlocks.length) {
-        const header = threadSummary?.header || getInjectionHeader(activeSettings, 'thread') || DEFAULT_INJECTION_SECTION_HEADERS.thread;
-        budgetSections.push(makeBudgetSection('thread', header, threadBlocks.map((block, index) => {
-            const thread = block.thread || threadSummary?.threads?.[index] || null;
+    const timelineSummary = timeline || threadSummary;
+    const timelineBlocks = getThreadBudgetBlocks(timelineSummary);
+    if (timelineBlocks.length) {
+        const header = timelineSummary?.header || getInjectionHeader(activeSettings, 'timeline') || DEFAULT_INJECTION_SECTION_HEADERS.timeline;
+        budgetSections.push(makeBudgetSection('timeline', header, timelineBlocks.map((block, index) => {
+            const line = block.timeline || block.thread || timelineSummary?.timeline?.[index] || timelineSummary?.threads?.[index] || null;
             return makeBudgetItem(block.text, {
-                resident: isResidentEntry(thread),
-                priority: priorityForThread(thread),
-                collection: 'thread',
-                id: thread?.id || thread?.name || `thread_${index}`,
+                resident: isResidentEntry(line),
+                priority: priorityForThread(line),
+                collection: 'timeline',
+                id: line?.id || line?.name || `timeline_${index}`,
             });
         })));
     }
@@ -1068,20 +1105,21 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline,
         ));
     }
 
-    if (timeline) {
-        const { ongoing = [], ended = [], foreshadow = [] } = timeline;
-        const threadIndex = buildThreadTimelineIndex(threadSummary?.threads || []);
+    const milestoneGroup = milestones || (!timelineBlocks.length && timeline && (timeline.ongoing || timeline.ended || timeline.foreshadow) ? timeline : null);
+    if (milestoneGroup) {
+        const { ongoing = [], ended = [], foreshadow = [] } = milestoneGroup;
+        const threadIndex = buildThreadTimelineIndex(timelineSummary?.timeline || timelineSummary?.threads || []);
         const allTimeline = [...foreshadow, ...ongoing, ...ended].filter(t =>
-            isResidentEntry(t) || isForeshadowTimeline(t) || !isTimelineCoveredByThread(t, threadIndex)
+            isResidentMilestone(t) || isForeshadowTimeline(t) || !isTimelineCoveredByThread(t, threadIndex)
         );
         if (allTimeline.length) {
             budgetSections.push(makeBudgetSection(
-                'timeline',
-                getInjectionHeader(activeSettings, 'timeline') || DEFAULT_INJECTION_SECTION_HEADERS.timeline,
+                'milestone',
+                getInjectionHeader(activeSettings, 'milestone') || DEFAULT_INJECTION_SECTION_HEADERS.milestone,
                 allTimeline.map(t => makeBudgetItem(formatTimelineLine(t), {
-                    resident: isResidentEntry(t),
+                    resident: isResidentMilestone(t),
                     priority: priorityForTimelineEntry(t),
-                    collection: 'timeline',
+                    collection: 'milestone',
                     id: t.id,
                 }))
             ));

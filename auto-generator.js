@@ -1,17 +1,17 @@
-/**
+﻿/**
  * auto-generator.js —— BB-Memory v5.0 自动提取系统
  *
  * 当前实现：每个 exchange 使用一次合并提取调用，同时返回
- * memories / npc / items / timeline / locations / threads。
+ * memories / npc / items / milestones / locations / timeline。
  * 解析器仍按集合拆分结果并写入对应存储。
  */
 
 import {
     getSettings, updateSettings, getMemories, addMemory, updateMemory,
-    upsertNpcProfile, upsertItem, upsertTimelineEntry,
-    upsertTimelineThread, getTimelineThreads,
-    updateNpcProfile, updateItem, updateTimelineEntry,
-    getNpcProfiles, getItems, getTimeline,
+    upsertNpcProfile, upsertItem, upsertMilestone,
+    upsertTimeline, getTimeline,
+    updateNpcProfile, updateItem, updateMilestone,
+    getNpcProfiles, getItems, getMilestones,
     getCalendarDescription,
 } from './memory-store.js';
 import {
@@ -77,7 +77,7 @@ function mergeMemoryFields(existing, incoming) {
 
 const PROMPT_META_GUARD = `你是一个角色扮演(RP)叙事记忆提取助手。
 
-**职责**：从角色扮演对话中提取记忆条目（必做），以及可选的 NPC/物品/时间线更新。
+**职责**：从角色扮演对话中提取记忆条目（必做），以及可选的 NPC/物品/里程碑/时间线更新。
 
 **内容边界**：
 ❌ 不提取：用户给AI的元指令、OOC标注、系统设置、风格指导
@@ -94,7 +94,8 @@ const PROMPT_META_GUARD = `你是一个角色扮演(RP)叙事记忆提取助手�
 - 🅼 记忆条目：优先提取真正值得长期保留的剧情、情感、习惯、事实。不要为了凑数制造记忆。
 - 🅽 NPC 更新：可选。仅当新角色出场或已知角色属性/关系发生明显变化时。
 - 🅸 物品更新：可选。仅当新物品出现或已知物品状态/持有者改变时。
-- 🆃 时间线：可选。仅当达到故事里程碑级别时记录。
+- 🅻 里程碑：可选且克制。仅当出现重要关系变化、剧情拐点、伏笔兑现或阶段结果时记录。
+- 🆃 时间线：可选。仅用于持续存在的主线、支线、情感线或世界线，不记录单个普通事件。
 
 **字段完整性要求（强制）**：
 - 一旦决定输出某个条目，就要优先、尽量填写该条目的所有字段；不要因为字段可选就省略可从上下文推断的信息。
@@ -273,7 +274,7 @@ function parseTimelineThreadResponse(responseText) {
                 source: 'auto',
             }));
     } catch (e) {
-        if (getSettings().debugLogging) console.warn('[BB-Memory] 时间线程响应解析失败:', e.message);
+        if (getSettings().debugLogging) console.warn('[BB-Memory] 时间线响应解析失败:', e.message);
         return [];
     }
 }
@@ -331,20 +332,31 @@ function isTimelineCoveredByThread(entry, threadIndex) {
 }
 
 function filterTimelineCoveredByThreads(result) {
-    if (!result || !Array.isArray(result.timeline) || !result.timeline.length) return result;
-    const threadIndex = buildThreadTimelineIndex(result.threads || []);
+    const legacyTimelineAsMilestones = !result?.milestones?.length && looksLikeMilestoneArray(result?.timeline);
+    const milestonesIn = result?.milestones || (legacyTimelineAsMilestones ? result?.timeline : []);
+    if (!result || !Array.isArray(milestonesIn) || !milestonesIn.length) return result;
+    const threadIndex = buildThreadTimelineIndex(result.timeline || result.threads || []);
     if (!threadIndex.full.size && !threadIndex.eventWithoutPeriod.size) return result;
     let skipped = 0;
-    const timeline = result.timeline.filter(entry => {
+    const milestones = milestonesIn.filter(entry => {
         if (isImportantTimeline(entry)) return true;
         if (!isTimelineCoveredByThread(entry, threadIndex)) return true;
         skipped++;
         return false;
     });
     if (skipped && getSettings().debugLogging) {
-        console.log(`[BB-Memory] 时间线降噪：${skipped} 条已由时间线程覆盖，跳过保存/注入`);
+        console.log(`[BB-Memory] 里程碑降噪：${skipped} 条已由时间线覆盖，跳过保存/注入`);
     }
-    return { ...result, timeline };
+    return { ...result, milestones, timeline: legacyTimelineAsMilestones ? [] : (result.timeline || []), threads: result.threads || result.timeline || [] };
+}
+
+function looksLikeMilestoneArray(entries) {
+    return Array.isArray(entries) && entries.some(entry =>
+        entry && typeof entry === 'object'
+        && (entry.e || entry.event || entry.storyTime || entry.impact)
+        && !(entry.n || entry.name)
+        && !Array.isArray(entry.entries)
+    );
 }
 
 // v8.7.0 地点解析器
@@ -675,8 +687,9 @@ export function clearPendingAutoCandidates() {
 const CANDIDATE_PILLARS = {
     npc: { group: 'npc', label: 'NPC' },
     item: { group: 'item', label: '物品' },
+    milestone: { group: 'milestone', label: '里程碑' },
     timeline: { group: 'timeline', label: '时间线' },
-    thread: { group: 'timeline', label: '故事线程' },
+    thread: { group: 'timeline', label: '时间线' },
     location: { group: 'location', label: '地点' },
     memory: { group: 'memory', label: '记忆' },
 };
@@ -717,16 +730,17 @@ function buildCandidateDisplay(pillar, payload = {}) {
                 title: payload.name || '未命名物品',
                 summary: [payload.owner ? `持有者:${payload.owner}` : '', payload.status, payload.location, payload.significance].filter(Boolean).join(' / '),
             };
-        case 'timeline':
+        case 'milestone':
             return {
-                type: payload.status || 'timeline',
-                title: payload.event || payload.summary || '未命名事件',
+                type: payload.injectionMode === 'vector' ? '向量命中' : (payload.status || '里程碑'),
+                title: payload.event || payload.summary || '未命名里程碑',
                 summary: [payload.storyTime, payload.location, payload.impact, formatTagNames(payload.tags)].filter(Boolean).join(' / '),
             };
+        case 'timeline':
         case 'thread':
             return {
-                type: payload.type || payload.status || 'thread',
-                title: payload.name || '未命名线程',
+                type: payload.type || payload.status || 'timeline',
+                title: payload.name || '未命名时间线',
                 summary: [payload.status, payload.priority, payload.summary].filter(Boolean).join(' / '),
             };
         case 'location':
@@ -770,8 +784,9 @@ export function buildExtractedCandidates(results, chatId, sourceInfo = {}) {
 
     (results?.npc || []).forEach((entry, index) => push('npc', entry, index));
     (results?.items || []).forEach((entry, index) => push('item', entry, index));
+    (results?.milestones || []).forEach((entry, index) => push('milestone', entry, index));
     (results?.timeline || []).forEach((entry, index) => push('timeline', entry, index));
-    (results?.threads || []).forEach((entry, index) => push('thread', entry, index));
+    (results?.threads || []).forEach((entry, index) => push('timeline', entry, index));
     (results?.locations || []).forEach((entry, index) => push('location', entry, index));
     (results?.memories || []).forEach((entry, index) => push('memory', entry, index));
     return out;
@@ -925,7 +940,7 @@ const DEFAULT_EXTRACTION_DIMENSIONS = `## 记忆提取维度（满足任一即�
 const MERGED_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个叙事记忆提取助手。从角色扮演对话中识别**情感流动**和**叙事线索**，
 提取构成故事血肉的关键时刻。
 
-**工作顺序**：先提取记忆，再根据记忆内容反推需要更新的 NPC/物品/时间线。
+**工作顺序**：先提取记忆，再根据记忆内容反推需要更新的 NPC/物品/里程碑。
 
 **用户/玩家信息规则（必须遵守）**：
 - 同时阅读“用户”和“角色”两侧内容；不要只总结角色回复。
@@ -935,7 +950,7 @@ const MERGED_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个叙事记忆�
 - 主体字段优先写明确角色名；未知时用“玩家”或“主角”，不要默认忽略用户侧信息。
 
 **字段填写总规则（强制）**：
-- 已决定输出的每个记忆、NPC、物品、地点、时间线和线程条目，都要尽量填写完整字段。
+- 已决定输出的每个记忆、NPC、物品、地点、里程碑和时间线条目，都要尽量填写完整字段。
 - 尤其是时间字段：能从当前对话、世界历法、上下文顺序或已有锚点推断，就必须填写具体故事时间。
 - 无法确认时才写“时间未明”或留空；不要把可推断信息留空，也不要编造日期。
 
@@ -1015,12 +1030,13 @@ it=分级(key/equipped/clue/consumable/background) | g=标签数组
 若无新地点或空间关系变化，返回空数组。
 
 ═══════════════════════════════════════════════════════
-## 辅助：时间线里程碑（可选，仅记录真正重要的故事节点）
+## 辅助：里程碑（可选，极克制，只记录真正重要的故事节点）
 ═══════════════════════════════════════════════════════
 
-时间线是故事里程碑，不是日记流水账。
-记录门槛：时间跨越一天以上 / 故事阶段转换 / 重大冲突起止 / 核心关系质变 / 剧情关键揭示 / 叙事节奏明显变化
-如果同一事件已经写入 threads.entries，除非它是伏笔、常驻或阶段转折，否则不要重复输出为 timeline。
+里程碑不是日记流水账，也不是时间线的普通节点。
+记录门槛：时间跨越一天以上 / 故事阶段转换 / 重大冲突起止 / 核心关系质变 / 剧情关键揭示 / 叙事节奏明显变化。
+只有“以后回看整个故事时必须记住的时间点”才输出为 milestones；普通推进、日常互动、单轮情绪波动不要输出。
+如果同一事件已经写入 timeline.entries，除非它是伏笔、常驻或阶段转折，否则不要重复输出为 milestones。
 
 字段：t(具体故事时间，优先填写), e(事件摘要), p(参与者数组), l(地点),
 active=true/false, imp(对叙事弧线的影响), g(标签数组含节奏标签[起点/转折/高潮/收束/承上启下])
@@ -1028,14 +1044,14 @@ active=true/false, imp(对叙事弧线的影响), g(标签数组含节奏标签[
 若未达里程碑级别，返回空数组。
 
 ═══════════════════════════════════════════════════════
-## 辅助：时间线程（可选，初始化或阶段总结时使用）
+## 辅助：时间线（可选，初始化或阶段总结时使用）
 ═══════════════════════════════════════════════════════
 
-时间线程用于概括一条持续存在的叙事线，不是单个事件。
+时间线用于概括一条持续存在的叙事线，不是单个事件。
 仅当输入中有清晰的主线、感情线、支线或世界观线索时输出。
-持续叙事线下的普通节点优先放入 entries，而不是另建 timeline。
+持续叙事线下的普通节点优先放入 entries，而不是另建 milestones。
 
-字段：n(线程名), tp(类型:plot/emotional/side/world), st(状态:ongoing/paused/ended/resident),
+字段：n(时间线名), tp(类型:plot/emotional/side/world), st(状态:ongoing/paused/ended/resident),
 p(优先级:high/medium/low), s(一句话总结), entries(可留空数组；若有条目，每条优先填写 period/故事时间)
 
 若无法形成持续线索，返回空数组。
@@ -1045,7 +1061,7 @@ p(优先级:high/medium/low), s(一句话总结), entries(可留空数组；若�
 ═══════════════════════════════════════════════════════
 
 返回纯JSON对象（不要markdown代码块）：
-{"memories":[...记忆数组，核心输出...], "npc":[...], "items":[...], "timeline":[...], "locations":[...地点数组...], "threads":[...时间线程数组...]}
+{"memories":[...记忆数组，核心输出...], "npc":[...], "items":[...], "milestones":[...里程碑数组...], "locations":[...地点数组...], "timeline":[...时间线数组...]}
 
 {{CALENDAR_REF}}
 {{STYLE_BIAS}}
@@ -1067,7 +1083,7 @@ export function getAutoGeneratorPromptTemplates() {
             key: 'extract.concreteTimeRule',
             title: '具体真实时间规则',
             category: '记忆提取',
-            description: '约束记忆、时间线和线程条目使用可推断的具体日期，避免抽象相对时间。',
+            description: '约束记忆、里程碑和时间线节点使用可推断的具体日期，避免抽象相对时间。',
             defaultValue: DEFAULT_CONCRETE_TIME_RULE,
         },
         {
@@ -1090,7 +1106,7 @@ export function getAutoGeneratorPromptTemplates() {
             key: 'extract.mergedTemplate',
             title: '合并提取总模板',
             category: '五柱/地图提取',
-            description: '自动提取和手动楼层提取使用的主提示词，输出记忆、NPC、物品、时间线、地图地点和线程。',
+            description: '自动提取和手动楼层提取使用的主提示词，输出记忆、NPC、物品、里程碑、地图地点和时间线。',
             defaultValue: MERGED_EXTRACTION_PROMPT,
         },
         {
@@ -1127,13 +1143,13 @@ export function getAutoGeneratorPromptTemplates() {
 function parseMergedResponse(responseText) {
     if (!responseText || !responseText.trim()) {
         console.warn('[BB-Memory] 合并提取响应为空');
-        return { npc: [], items: [], timeline: [], memories: [], locations: [], threads: [] };
+        return { npc: [], items: [], milestones: [], timeline: [], memories: [], locations: [], threads: [] };
     }
     let text = responseText.trim();
     // META_DIALOGUE 检测（安全网：即便 extractMergedStage 已检查，解析阶段也再确认一次）
     if (text.toUpperCase().startsWith('META_DIALOGUE')) {
         console.log('[BB-Memory] parseMergedResponse: 检测到 META_DIALOGUE，返回空数据');
-        return { npc: [], items: [], timeline: [], memories: [], locations: [], threads: [], metaDialogue: true };
+        return { npc: [], items: [], milestones: [], timeline: [], memories: [], locations: [], threads: [], metaDialogue: true };
     }
     text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
     // 先尝试匹配 JSON 对象；若失败则尝试数组
@@ -1150,11 +1166,11 @@ function parseMergedResponse(responseText) {
             match = text.match(/\[[\s\S]*\]/);
             if (!match) {
                 console.warn('[BB-Memory] 合并提取响应未找到JSON，前200字符:', text.slice(0, 200));
-                return { npc: [], items: [], timeline: [], memories: [], locations: [], threads: [] };
+                return { npc: [], items: [], milestones: [], timeline: [], memories: [], locations: [], threads: [] };
             }
             try { parsed = JSON.parse(match[0]); } catch (e2) {
                 console.warn('[BB-Memory] 合并响应JSON解析失败:', e2.message, '前200字符:', text.slice(0, 200));
-                return { npc: [], items: [], timeline: [], memories: [], locations: [], threads: [] };
+                return { npc: [], items: [], milestones: [], timeline: [], memories: [], locations: [], threads: [] };
             }
         }
         // 如果解析结果是数组，尝试取第一个对象元素
@@ -1163,7 +1179,7 @@ function parseMergedResponse(responseText) {
                 parsed = parsed[0];
             } else {
                 console.warn('[BB-Memory] 合并提取响应为数组但无可用的对象元素');
-                return { npc: [], items: [], timeline: [], memories: [], locations: [], threads: [] };
+                return { npc: [], items: [], milestones: [], timeline: [], memories: [], locations: [], threads: [] };
             }
         }
     }
@@ -1172,24 +1188,29 @@ function parseMergedResponse(responseText) {
         const memArr = parsed.memories || parsed.memory || parsed.mem || [];
         const npcArr = parsed.npc || [];
         const itemsArr = parsed.items || [];
-        const tlArr = parsed.timeline || [];
+        const rawTimelineArr = parsed.timeline || parsed.threads || parsed.timelineThreads || parsed.timeThreads || [];
+        const timelineIsLegacyMilestones = looksLikeMilestoneArray(rawTimelineArr);
+        const milestoneArr = parsed.milestones || parsed.milestone || (timelineIsLegacyMilestones ? rawTimelineArr : []);
         const locArr = parsed.locations || parsed.map || [];  // v8.7.0
-        const threadArr = parsed.threads || parsed.timelineThreads || parsed.timeThreads || [];
+        const threadArr = timelineIsLegacyMilestones ? (parsed.threads || parsed.timelineThreads || parsed.timeThreads || []) : rawTimelineArr;
+        const milestones = parseTimelineResponse(JSON.stringify(milestoneArr));
+        const timeline = parseTimelineThreadResponse(JSON.stringify(threadArr));
         const result = {
             npc: parseNpcResponse(JSON.stringify(npcArr)),
             items: parseItemResponse(JSON.stringify(itemsArr)),
-            timeline: parseTimelineResponse(JSON.stringify(tlArr)),
+            milestones,
+            timeline,
             memories: parseMemoryResponse(JSON.stringify(memArr)),
             locations: parseLocationResponse(JSON.stringify(locArr)),
-            threads: parseTimelineThreadResponse(JSON.stringify(threadArr)),
+            threads: timeline,
         };
-        if (memArr.length === 0 && npcArr.length === 0 && itemsArr.length === 0 && tlArr.length === 0 && locArr.length === 0 && threadArr.length === 0) {
+        if (memArr.length === 0 && npcArr.length === 0 && itemsArr.length === 0 && milestoneArr.length === 0 && locArr.length === 0 && threadArr.length === 0) {
             console.log('[BB-Memory] 合并提取: 本轮无需提取');
         }
         return result;
     } catch (e) {
         console.warn('[BB-Memory] 合并响应JSON解析失败:', e.message, '前200字符:', text.slice(0, 200));
-        return { npc: [], items: [], timeline: [], memories: [], locations: [], threads: [] };
+        return { npc: [], items: [], milestones: [], timeline: [], memories: [], locations: [], threads: [] };
     }
 }
 
@@ -1250,14 +1271,14 @@ function buildMergedPrompt(settings, styleBias, calDesc) {
     return prompt;
 }
 
-const INITIAL_PILLARS = ['memories', 'npc', 'items', 'timeline', 'locations', 'threads'];
+const INITIAL_PILLARS = ['memories', 'npc', 'items', 'milestones', 'locations', 'timeline'];
 const INITIAL_PILLAR_LABELS = {
     memories: '记忆条目',
     npc: 'NPC角色',
     items: '物品',
-    timeline: '时间线事件',
+    milestones: '里程碑',
     locations: '地图地点',
-    threads: '时间线程',
+    timeline: '时间线',
 };
 
 function normalizeInitialPillars(pillars) {
@@ -1268,9 +1289,12 @@ function normalizeInitialPillars(pillars) {
         item: 'items',
         map: 'locations',
         location: 'locations',
-        thread: 'threads',
-        timelineThreads: 'threads',
-        timeThreads: 'threads',
+        milestone: 'milestones',
+        timeline_entry: 'milestones',
+        thread: 'timeline',
+        threads: 'timeline',
+        timelineThreads: 'timeline',
+        timeThreads: 'timeline',
     };
     const selected = new Set();
     for (const p of pillars) {
@@ -1281,10 +1305,11 @@ function normalizeInitialPillars(pillars) {
 }
 
 function filterInitialResult(result, selectedSet) {
-    const out = { npc: [], items: [], timeline: [], memories: [], locations: [], threads: [] };
+    const out = { npc: [], items: [], milestones: [], timeline: [], memories: [], locations: [], threads: [] };
     for (const key of INITIAL_PILLARS) {
         out[key] = selectedSet.has(key) && Array.isArray(result?.[key]) ? result[key] : [];
     }
+    out.threads = out.timeline;
     return out;
 }
 
@@ -1329,13 +1354,13 @@ function buildInitializationPrompt(settings, styleBias, calDesc, selectedPillars
 任务：把资料整理成 BB-Memory 可保存的结构化草稿。请只输出 JSON 对象，不要 markdown，不要解释。
 
 读取边界：
-- 角色卡和世界书通常是背景设定，优先提取 NPC、物品、地点、世界观事实、持续时间线程。
-- 聊天记录中已经发生的剧情可以提取为记忆条目和时间线事件。
+- 角色卡和世界书通常是背景设定，优先提取 NPC、物品、地点、世界观事实、持续时间线。
+- 聊天记录中已经发生的剧情可以提取为记忆条目；只有极重要节点才提取为里程碑。
 - 不要把 OOC/元指令/工具说明当作剧情记忆。
-- 不确定的信息可以用 truthStatus:"unknown" 或时间线程 status:"paused" 标记。
+- 不确定的信息可以用 truthStatus:"unknown" 或时间线 status:"paused" 标记。
 - 同一人物、物品、地点或事件不要重复输出；必要时合并成更完整的一条。
-- 时间线程 threads 是持续叙事线地图；普通线索节点优先放进 threads.entries。
-- 时间线 timeline 只输出未被 threads.entries 覆盖的关键里程碑、伏笔或阶段转折。
+- 时间线 timeline 是持续叙事线地图；普通线索节点优先放进 timeline.entries。
+- 里程碑 milestones 只输出未被 timeline.entries 覆盖的关键时间点、伏笔或阶段转折。
 - 每个已输出条目都要优先、尽量填写完整字段；能从上下文推断的时间、地点、主体、目标、参与者、状态和标签不要留空。
 
 本次勾选的提取范围：
@@ -1351,19 +1376,19 @@ ${selectedLines}
 3. items 数组：
 { "n":"物品名", "o":"持有者", "s":"held/used/lost/destroyed", "l":"所在地点", "sig":"意义与用途", "kp":false, "it":"key/equipped/clue/consumable/background", "g":["标签"] }
 
-4. timeline 数组：
+4. milestones 数组：
 { "t":"具体故事时间", "e":"事件摘要", "p":["参与者"], "l":"地点", "active":true, "imp":"影响", "g":["标签"] }
 status 可通过 active 推断；伏笔类事件请在 g 中加入"伏笔"或"待兑现"。
-如果同一事件已经作为 threads.entries 输出，普通事件不要再放入 timeline。
+如果同一事件已经作为 timeline.entries 输出，普通事件不要再放入 milestones。
 
 5. locations 数组：
 { "n":"地名", "desc":"地点描述", "reg":"区域", "rw":"现实原型参考，可为空", "conn":[{"to":"相邻地名","dist":"距离","type":"路径类型","diff":"easy/normal/hard"}] }
 
-6. threads 数组：
-{ "n":"线程名", "tp":"plot/emotional/side/world", "st":"ongoing/paused/ended/resident", "p":"high/medium/low", "s":"一句话总结", "entries":[] }
+6. timeline 数组：
+{ "n":"时间线名", "tp":"plot/emotional/side/world", "st":"ongoing/paused/ended/resident", "p":"high/medium/low", "s":"一句话总结", "entries":[] }
 
 返回 JSON：
-{"memories":[],"npc":[],"items":[],"timeline":[],"locations":[],"threads":[]}
+{"memories":[],"npc":[],"items":[],"milestones":[],"locations":[],"timeline":[]}
 
 ${calRef}${worldRef}
 ${styleBias || ''}
@@ -1472,7 +1497,7 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
         const settings = getSettings();
         const hasEmbedding = settings.embeddingEnabled && settings.embeddingEndpoint;
         reportProgress('merged', 1, 5, '正在解析提取结果...');
-        reportProgress('merged', 2, 5, '正在保存 NPC/物品/时间线...');
+        reportProgress('merged', 2, 5, '正在保存 NPC/物品/里程碑/时间线...');
         for (const npc of results.npc) {
             const embedding = hasEmbedding ? await embedMemoryEntry(npc) : null;
             await upsertNpcProfile(chatId, { ...npc, embedding, ...(sourceInfo || {}) });
@@ -1483,16 +1508,16 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
             await upsertItem(chatId, { ...item, embedding, ...(sourceInfo || {}) });
             total++;
         }
-        for (const tl of results.timeline) {
-            const embedding = hasEmbedding ? await embedMemoryEntry(tl) : null;
-            await upsertTimelineEntry(chatId, { ...tl, embedding, ...(sourceInfo || {}) });
+        for (const milestone of results.milestones || []) {
+            const embedding = hasEmbedding ? await embedMemoryEntry(milestone) : null;
+            await upsertMilestone(chatId, { ...milestone, embedding, ...(sourceInfo || {}) });
             total++;
         }
         // v8.7.0 地点提取
         total += await saveExtractedLocations(chatId, results.locations, sourceInfo);
-        const threadSave = { threads: 0, merged: 0, skipped: 0 };
-        await saveInitialThreads(chatId, results.threads || [], sourceInfo, threadSave);
-        total += threadSave.threads + threadSave.merged;
+        const timelineSave = { timeline: 0, threads: 0, merged: 0, skipped: 0 };
+        await saveInitialThreads(chatId, results.timeline || results.threads || [], sourceInfo, timelineSave);
+        total += timelineSave.timeline + timelineSave.merged;
         const maxPerExchange = settings.maxMemoriesPerExchange ?? 3;
         const limited = results.memories.slice(0, maxPerExchange);
         const existingMemories = await getMemories(chatId);
@@ -1518,7 +1543,7 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
             total++;
         }
         reportProgress('merged', 4, 5, '正在汇总结果...');
-        console.log('[BB-Memory] 合并提取: NPC' + results.npc.length + '/物品' + results.items.length + '/时间线' + results.timeline.length + '/线程' + (results.threads || []).length + '/记忆' + limited.length + ' (保存' + total + '条)');
+        console.log('[BB-Memory] 合并提取: NPC' + results.npc.length + '/物品' + results.items.length + '/里程碑' + (results.milestones || []).length + '/时间线' + (results.timeline || []).length + '/记忆' + limited.length + ' (保存' + total + '条)');
         reportProgress('merged', 5, 5, '提取完成');
         return { total };
     } catch (e) {
@@ -1645,18 +1670,18 @@ async function processLatestExchange(chatId) {
         globalThis.bbMemoryRecordActivity('success', '自动提取完成', `已处理楼层 ${formatFloorList(floors)}，共 ${succeeded.length} 个 exchange`);
     }
 
-    // v6.7.0: 线程自动更新检测（按成功处理的 exchange 数计数）
+    // v6.7.0: 时间线自动更新检测（按成功处理的 exchange 数计数）
     if (getSettings().timelineSummaryEnabled) {
-        const counter = (getSettings()._threadUpdateCounter || 0) + succeeded.length;
-        const threshold = getSettings()._threadUpdateThreshold || 5;
-        updateSettings({ _threadUpdateCounter: counter });
+        const counter = (getSettings()._timelineUpdateCounter ?? getSettings()._threadUpdateCounter ?? 0) + succeeded.length;
+        const threshold = getSettings()._timelineUpdateThreshold ?? getSettings()._threadUpdateThreshold ?? 5;
+        updateSettings({ _timelineUpdateCounter: counter, _threadUpdateCounter: counter });
         if (counter >= threshold) {
-            updateSettings({ _threadUpdateCounter: 0 });
+            updateSettings({ _timelineUpdateCounter: 0, _threadUpdateCounter: 0 });
             setTimeout(async () => {
                 try {
                     const { regenerateThreadSummary } = await import('./memory-maintainer.js');
                     await regenerateThreadSummary(chatId);
-                    console.log('[BB-Memory] 线程总结自动更新完成');
+                    console.log('[BB-Memory] 时间线总结自动更新完成');
                 } catch (e) { /* 静默失败 */ }
             }, 3000);
         }
@@ -1690,13 +1715,13 @@ export async function extractInitialDataFromContext(chatId, contextText, options
     if (onProgress) onProgress({ stage: 'ai', progress: '正在调用 AI 生成初始化草稿...' });
     const responseText = await callApi(prompt, { isMerged: true });
     if (responseText && responseText.trim().toUpperCase().startsWith('META_DIALOGUE')) {
-        return { npc: [], items: [], timeline: [], memories: [], locations: [], threads: [], metaDialogue: true };
+        return { npc: [], items: [], milestones: [], timeline: [], memories: [], locations: [], threads: [], metaDialogue: true };
     }
 
     if (onProgress) onProgress({ stage: 'parse', progress: '正在解析初始化草稿...' });
     const parsed = parseMergedResponse(responseText);
     const scoped = filterInitialResult(parsed, selected);
-    return markInitialSource(selected.has('threads') ? filterTimelineCoveredByThreads(scoped) : scoped, 'init');
+    return markInitialSource(selected.has('timeline') ? filterTimelineCoveredByThreads(scoped) : scoped, 'init');
 }
 
 function mergeTextField(existingText, incomingText) {
@@ -1711,7 +1736,7 @@ function mergeTextField(existingText, incomingText) {
 
 async function saveInitialThreads(chatId, threads, sourceInfo, result) {
     if (!Array.isArray(threads) || threads.length === 0) return;
-    const existing = await getTimelineThreads(chatId);
+    const existing = await getTimeline(chatId);
     const byName = new Map(existing.map(t => [(t.name || '').toLowerCase().trim(), t]).filter(([k]) => k));
     const settings = getSettings();
     const hasEmbedding = settings.embeddingEnabled && settings.embeddingEndpoint;
@@ -1726,12 +1751,13 @@ async function saveInitialThreads(chatId, threads, sourceInfo, result) {
             data.summary = mergeTextField(old.summary, thread.summary);
             data.entries = Array.isArray(old.entries) && old.entries.length ? old.entries : (Array.isArray(thread.entries) ? thread.entries : []);
             if (!data.embedding && old.embedding) data.embedding = old.embedding;
-            await upsertTimelineThread(chatId, data);
+            await upsertTimeline(chatId, data);
             result.merged++;
         } else {
-            const saved = await upsertTimelineThread(chatId, data);
+            const saved = await upsertTimeline(chatId, data);
             byName.set(key, saved);
-            result.threads++;
+            result.timeline = (result.timeline || 0) + 1;
+            if ('threads' in result) result.threads++;
         }
     }
 }
@@ -1792,13 +1818,13 @@ async function saveInitialMemories(chatId, memories, sourceInfo, result) {
 
 export async function saveInitialExtractionResult(chatId, data, options = {}) {
     const selected = normalizeInitialPillars(options.selectedPillars);
-    const dataForSave = selected.has('threads') ? filterTimelineCoveredByThreads(data) : data;
+    const dataForSave = selected.has('timeline') ? filterTimelineCoveredByThreads(data) : data;
     const sourceInfo = {
         source: 'init',
         sourceChatId: chatId,
         ...(options.sourceInfo || {}),
     };
-    const result = { npc: 0, items: 0, timeline: 0, locations: 0, threads: 0, memories: 0, merged: 0, skipped: 0 };
+    const result = { npc: 0, items: 0, milestones: 0, timeline: 0, threads: 0, locations: 0, memories: 0, merged: 0, skipped: 0 };
     const settings = getSettings();
     const hasEmbedding = settings.embeddingEnabled && settings.embeddingEndpoint;
 
@@ -1818,19 +1844,19 @@ export async function saveInitialExtractionResult(chatId, data, options = {}) {
             result.items++;
         }
     }
-    if (selected.has('timeline')) {
-        for (const tl of (dataForSave?.timeline || [])) {
-            if (!tl?.event) continue;
-            const embedding = hasEmbedding ? await embedMemoryEntry(tl) : null;
-            await upsertTimelineEntry(chatId, { ...tl, embedding, ...sourceInfo });
-            result.timeline++;
+    if (selected.has('milestones')) {
+        for (const milestone of (dataForSave?.milestones || [])) {
+            if (!milestone?.event) continue;
+            const embedding = hasEmbedding ? await embedMemoryEntry(milestone) : null;
+            await upsertMilestone(chatId, { ...milestone, embedding, ...sourceInfo });
+            result.milestones++;
         }
     }
     if (selected.has('locations')) {
         result.locations += await saveExtractedLocations(chatId, dataForSave?.locations || [], sourceInfo);
     }
-    if (selected.has('threads')) {
-        await saveInitialThreads(chatId, dataForSave?.threads || [], sourceInfo, result);
+    if (selected.has('timeline')) {
+        await saveInitialThreads(chatId, dataForSave?.timeline || dataForSave?.threads || [], sourceInfo, result);
     }
     if (selected.has('memories')) {
         await saveInitialMemories(chatId, dataForSave?.memories || [], sourceInfo, result);
@@ -1841,7 +1867,7 @@ export async function saveInitialExtractionResult(chatId, data, options = {}) {
 
 export async function extractFromContext(chatId, contextText, options = {}) {
     const { onProgress, sourceInfo } = options;
-    const results = { npc: 0, items: 0, timeline: 0, locations: 0, threads: 0, memories: 0 };
+    const results = { npc: 0, items: 0, milestones: 0, timeline: 0, threads: 0, locations: 0, memories: 0 };
 
     if (onProgress) onProgress({ stage: 'merged', progress: '正在 AI 提取记忆（合并模式）...' });
 
@@ -1872,15 +1898,16 @@ export async function extractFromContext(chatId, contextText, options = {}) {
             await upsertItem(chatId, { ...item, embedding, ...(sourceInfo || {}) });
             results.items++;
         }
-        for (const tl of parsed.timeline) {
-            const embedding = hasEmbedding ? await embedMemoryEntry(tl) : null;
-            await upsertTimelineEntry(chatId, { ...tl, embedding, ...(sourceInfo || {}) });
-            results.timeline++;
+        for (const milestone of parsed.milestones || []) {
+            const embedding = hasEmbedding ? await embedMemoryEntry(milestone) : null;
+            await upsertMilestone(chatId, { ...milestone, embedding, ...(sourceInfo || {}) });
+            results.milestones++;
         }
         results.locations += await saveExtractedLocations(chatId, parsed.locations, sourceInfo);
-        const threadSave = { threads: 0, merged: 0, skipped: 0 };
-        await saveInitialThreads(chatId, parsed.threads || [], sourceInfo || {}, threadSave);
-        results.threads += threadSave.threads + threadSave.merged;
+        const timelineSave = { timeline: 0, threads: 0, merged: 0, skipped: 0 };
+        await saveInitialThreads(chatId, parsed.timeline || parsed.threads || [], sourceInfo || {}, timelineSave);
+        results.timeline += timelineSave.timeline + timelineSave.merged;
+        results.threads += timelineSave.threads + timelineSave.merged;
 
         const existingMemories = await getMemories(chatId);
         const activeMemories = existingMemories.filter(m => m.embedding);
@@ -1961,8 +1988,8 @@ function normalizeCandidatePillar(candidate) {
     if (raw === 'mem' || raw === 'memories') return 'memory';
     if (raw === 'items') return 'item';
     if (raw === 'locations' || raw === 'map') return 'location';
-    if (raw === 'threads') return 'thread';
-    if (raw === 'timeline_entry') return 'timeline';
+    if (raw === 'threads' || raw === 'thread') return 'timeline';
+    if (raw === 'timeline_entry') return 'milestone';
     return CANDIDATE_PILLARS[raw] ? raw : 'memory';
 }
 
@@ -2017,7 +2044,7 @@ async function saveMemoryCandidate(chatId, mem, sourceInfo, activeMemories) {
 }
 
 export async function saveExtractedCandidates(chatId, candidates, onProgress) {
-    const result = { npc: 0, items: 0, timeline: 0, locations: 0, threads: 0, memories: 0, merged: 0, skipped: 0, total: 0 };
+    const result = { npc: 0, items: 0, milestones: 0, timeline: 0, threads: 0, locations: 0, memories: 0, merged: 0, skipped: 0, total: 0 };
     const selected = (Array.isArray(candidates) ? candidates : []).filter(shouldSaveCandidate);
     const settings = getSettings();
     const hasEmbedding = settings.embeddingEnabled && settings.embeddingEndpoint;
@@ -2046,23 +2073,23 @@ export async function saveExtractedCandidates(chatId, candidates, onProgress) {
             await upsertItem(chatId, { ...payload, embedding, ...sourceInfo });
             result.items++;
             result.total++;
-        } else if (pillar === 'timeline') {
+        } else if (pillar === 'milestone') {
             if (!payload.event && !payload.summary) { result.skipped++; reportCandidateProgress(candidate); continue; }
             const embedding = hasEmbedding ? await embedMemoryEntry(payload) : null;
-            await upsertTimelineEntry(chatId, { ...payload, embedding, ...sourceInfo });
-            result.timeline++;
+            await upsertMilestone(chatId, { ...payload, embedding, ...sourceInfo });
+            result.milestones++;
             result.total++;
         } else if (pillar === 'location') {
             if (!payload.name) { result.skipped++; reportCandidateProgress(candidate); continue; }
             const saved = await saveExtractedLocations(chatId, [payload], sourceInfo);
             result.locations += saved;
             result.total += saved;
-        } else if (pillar === 'thread') {
+        } else if (pillar === 'timeline') {
             if (!payload.name) { result.skipped++; reportCandidateProgress(candidate); continue; }
-            const beforeThreads = result.threads;
+            const beforeTimeline = result.timeline;
             const beforeMerged = result.merged;
             await saveInitialThreads(chatId, [payload], sourceInfo, result);
-            result.total += (result.threads - beforeThreads) + (result.merged - beforeMerged);
+            result.total += (result.timeline - beforeTimeline) + (result.merged - beforeMerged);
         } else {
             if (!payload.content && !payload.summary) { result.skipped++; reportCandidateProgress(candidate); continue; }
             const saved = await saveMemoryCandidate(chatId, payload, sourceInfo, activeMemories);
@@ -2101,17 +2128,19 @@ async function persistEntryEmbedding(chatId, collection, entry, embedding) {
         case 'item':
             await updateItem(chatId, entry.id, { embedding });
             break;
-        case 'timeline':
-            await updateTimelineEntry(chatId, entry.id, { embedding });
+        case 'milestone':
+        case 'timeline_entry':
+            await updateMilestone(chatId, entry.id, { embedding });
             break;
         case 'map': {
             const { updateLocation } = await import('./map-store.js');
             await updateLocation(chatId, entry.id, { embedding });
             break;
         }
-        case 'thread':
         case 'threads':
-            await upsertTimelineThread(chatId, { id: entry.id, embedding });
+        case 'thread':
+        case 'timeline':
+            await upsertTimeline(chatId, { id: entry.id, embedding });
             break;
         case 'mem':
         default:
@@ -2148,3 +2177,4 @@ export async function embedExistingMemories(chatIdOrMemories, memoriesOrProgress
     }
     return { total: memories.length, updated, failed };
 }
+

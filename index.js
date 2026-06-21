@@ -1,7 +1,7 @@
 /**
- * index.js —— BB-Memory v9.1.9 主入口
+ * index.js —— BB-Memory v9.2.0 主入口
  *
- * 四柱架构编排器：NPC档案 / 物品栏 / 时间线 / 记忆条目。
+ * 四柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
  */
 
@@ -10,8 +10,8 @@ import {
     MODULE_NAME, DEFAULT_SETTINGS, getSettings, updateSettings,
     getNpcProfiles, addNpcProfile, updateNpcProfile, removeNpcProfile, upsertNpcProfile,
     getItems, addItem, updateItem, removeItem, upsertItem,
-    getTimeline, addTimelineEntry, updateTimelineEntry, removeTimelineEntry, upsertTimelineEntry,
-    getTimelineThreads, saveTimelineThreads, upsertTimelineThread, removeTimelineThread,
+    getMilestones, addMilestone, updateMilestone, removeMilestone, upsertMilestone,
+    getTimeline,
     getMemories, addMemory, updateMemory, removeMemory,
     clearAllData, deleteByExchange, getMemoryStats, refreshAllSourceFloors,
     exportMemoriesToChatMetadata, importMemoriesFromChatMetadata, cleanupChatMetadataBloat,
@@ -24,7 +24,7 @@ import {
 import {
     getRelevantMemories, getResidentMemories, buildMemoryInjectionPrompt,
     mergeExpandedRelevantResults, simpleSearch,
-    getNpcForInjection, getItemsForInjection, getTimelineForInjection, getThreadSummaryForInjection,
+    getNpcForInjection, getItemsForInjection, getMilestonesForInjection, getTimelineForInjection,
     getRetrieverPromptTemplates,
 } from './retriever.js';
 
@@ -90,11 +90,11 @@ let chatSwitchPromptOpen = false;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.1.9';
+const SETTINGS_EXPORT_VERSION = '9.2.0';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
-    'npcInjectionMax', 'itemInjectionMax', 'timelineEndedMax',
+    'npcInjectionMax', 'itemInjectionMax', 'milestoneVectorMax', 'milestoneDefaultInjectionMode',
     'mapInjectionMax', 'worldRealWorldRef', 'clueBoardInjectionEnabled',
     'autoGenEnabled', 'autoGenMode', 'autoGenEndpoint', 'autoGenModel', 'autoGenMaxExchanges',
     'maxMemoriesPerExchange', 'extractionConfirmMode', 'activeConfirmStyle', 'contextWindowExchanges',
@@ -108,7 +108,7 @@ const SETTINGS_EXPORT_KEYS = [
     'maintenanceMode', 'maintenanceMemThreshold', 'maintenanceNpcThreshold', 'maintenanceItemThreshold',
     'healthCheckDuplicateThreshold', 'healthCheckIsolationThreshold', 'healthCheckStaleDays',
     'healthCheckStaleHitThreshold', 'healthCheckThreadStaleDays', 'healthCheckClueStaleDays',
-    'timelineSummaryEnabled', 'maxActiveThreads', 'autoBackupEnabled', 'chatMetadataBackupMaxKb',
+    'timelineSummaryEnabled', 'maxActiveTimeline', 'autoBackupEnabled', 'chatMetadataBackupMaxKb',
     'cloudBackupIncludeEmbeddings', 'apiProfiles', 'activeApiProfile', 'categories', 'enabledCategories',
     'debugLogging',
 ];
@@ -137,7 +137,8 @@ const SETTING_CONTROL_BINDINGS = {
     floorRecentWindow: ['#bb_floor_recent_window', 'value'],
     npcInjectionMax: ['#bb_npc_injection_max', 'value'],
     itemInjectionMax: ['#bb_item_injection_max', 'value'],
-    timelineEndedMax: ['#bb_timeline_ended_max', 'value'],
+    milestoneVectorMax: ['#bb_milestone_vector_max', 'value'],
+    milestoneDefaultInjectionMode: ['#bb_milestone_default_injection_mode', 'value'],
     mapInjectionMax: ['#bb_map_injection_max', 'value'],
     maintenanceMemThreshold: ['#bb_maintenance_mem_threshold', 'value'],
     maintenanceNpcThreshold: ['#bb_maintenance_npc_threshold', 'value'],
@@ -149,7 +150,7 @@ const SETTING_CONTROL_BINDINGS = {
     hitScoreDemoteThreshold: ['#bb_hit_score_demote_threshold', 'value'],
     entityTierPromoteThreshold: ['#bb_entity_tier_promote_threshold', 'value'],
     entityTierDemoteThreshold: ['#bb_entity_tier_demote_threshold', 'value'],
-    maxActiveThreads: ['#bb_max_active_threads', 'value'],
+    maxActiveTimeline: ['#bb_max_active_timeline', 'value'],
     chatMetadataBackupMaxKb: ['#bb_chat_metadata_backup_max_kb', 'value'],
     healthCheckDuplicateThreshold: ['#bb_health_check_duplicate_threshold', 'value'],
     healthCheckIsolationThreshold: ['#bb_health_check_isolation_threshold', 'value'],
@@ -242,9 +243,9 @@ function getPromptTemplateDefinitions() {
         },
         {
             key: 'maintenance.threadSummary',
-            title: '时间线线程总结提示',
+            title: '时间线总结提示',
             category: '维护/总结',
-            description: '点击刷新时间线总结时使用，把时间线条目整理为命名线程。',
+            description: '点击刷新时间线总结时使用，把里程碑整理为命名时间线。',
             defaultValue: DEFAULT_THREAD_SUMMARY_PROMPT,
         },
         {
@@ -335,9 +336,9 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     }
 
     // 4. 加载数据
-    const [npc, items, timeline, memories, threads, clueBoard, mapData] = await Promise.all([
-        getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
-        getTimelineThreads(chatId),
+    const [npc, items, milestones, memories, timeline, clueBoard, mapData] = await Promise.all([
+        getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId),
+        getTimeline(chatId),
         getClueBoard(chatId),
         getMap(chatId),  // v8.7.0
     ]);
@@ -345,7 +346,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     const hasMapData = Object.values(mapData?.locations || {}).some(loc => loc && !loc.archived);
     const activeClueBoard = settings.clueBoardInjectionEnabled === false ? null : clueBoard;
     const hasClueData = Array.isArray(activeClueBoard?.nodes) && activeClueBoard.nodes.length > 0;
-    const hasData = npc.length + items.length + timeline.length + memories.length + threads.length > 0 || hasMapData || hasClueData;
+    const hasData = npc.length + items.length + milestones.length + memories.length + timeline.length > 0 || hasMapData || hasClueData;
     if (!hasData) { clearInjection(); return chat; }
 
     // 5. 自动维护
@@ -362,10 +363,10 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     // 7. 检索各支柱
     const npcForInjection = getNpcForInjection(npc, userMessage, queryEmbedding);
     const itemsForInjection = getItemsForInjection(items, userMessage, queryEmbedding);
-    const tlForInjection = getTimelineForInjection(timeline, userMessage, queryEmbedding);
-    const threadSummary = settings.timelineSummaryEnabled
-        ? getThreadSummaryForInjection(threads, settings.maxActiveThreads || 5)
-        : { text: '', threads: [] };
+    const milestoneForInjection = getMilestonesForInjection(milestones, userMessage, queryEmbedding);
+    const timelineForInjection = settings.timelineSummaryEnabled
+        ? getTimelineForInjection(timeline, settings.maxActiveTimeline ?? settings.maxActiveThreads ?? 5)
+        : { text: '', timeline: [], threads: [] };
     const residentMems = getResidentMemories(memories);
     // v8.2.2 重roll 时扩大候选集 + 同分段局部 shuffle，保证质量不下降
     const relevantResults = getRelevantMemories(memories, userMessage, {
@@ -393,8 +394,8 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     }
 
     if (!npcForInjection.length && !itemsForInjection.length &&
-        !tlForInjection.ongoing.length && !tlForInjection.ended.length && !tlForInjection.foreshadow.length &&
-        !merged.length && !threadSummary.text && !hasMapData && !hasClueData) {
+        !milestoneForInjection.ongoing.length && !milestoneForInjection.ended.length && !milestoneForInjection.foreshadow.length &&
+        !merged.length && !timelineForInjection.text && !hasMapData && !hasClueData) {
         clearInjection(); return chat;
     }
 
@@ -402,8 +403,8 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     const { text, tokenEstimate, stats, truncated, tokenBudget } = await buildMemoryInjectionPrompt({
         npcProfiles: npcForInjection,
         items: itemsForInjection,
-        timeline: tlForInjection,
-        threadSummary,
+        milestones: milestoneForInjection,
+        timeline: timelineForInjection,
         relevantResults: merged,
         settings,
         chatLength: chat.length,
@@ -417,13 +418,14 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     // 8. 记录实际注入命中
     const injectedNpcIds = Array.isArray(stats.npcIds) ? new Set(stats.npcIds) : null;
     const injectedItemIds = Array.isArray(stats.itemIds) ? new Set(stats.itemIds) : null;
+    const injectedMilestoneIds = Array.isArray(stats.milestoneIds) ? new Set(stats.milestoneIds) : null;
     const injectedTimelineIds = Array.isArray(stats.timelineIds) ? new Set(stats.timelineIds) : null;
     const injectedMemoryIds = Array.isArray(stats.memoryIds) ? new Set(stats.memoryIds) : null;
     const hitRecords = [];
     for (const n of npcForInjection) if (!injectedNpcIds || injectedNpcIds.has(String(n.id))) hitRecords.push({ collection: 'npc', id: n.id });
     for (const i of itemsForInjection) if (!injectedItemIds || injectedItemIds.has(String(i.id))) hitRecords.push({ collection: 'item', id: i.id });
-    for (const t of [...tlForInjection.foreshadow, ...tlForInjection.ongoing, ...tlForInjection.ended]) {
-        if (!injectedTimelineIds || injectedTimelineIds.has(String(t.id))) hitRecords.push({ collection: 'timeline', id: t.id });
+    for (const t of [...milestoneForInjection.foreshadow, ...milestoneForInjection.ongoing, ...milestoneForInjection.ended]) {
+        if (!injectedMilestoneIds || injectedMilestoneIds.has(String(t.id))) hitRecords.push({ collection: 'milestone', id: t.id });
     }
     for (const r of merged) if (!injectedMemoryIds || injectedMemoryIds.has(String(r.memory.id))) hitRecords.push({ collection: 'mem', id: r.memory.id });
     for (const id of stats.mapLocationIds || []) hitRecords.push({ collection: 'map', id });
@@ -459,13 +461,14 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
 
     if (settings.debugLogging) {
         const prefix = isReroll ? '[BB-Memory] 重roll注入' : '[BB-Memory] 注入';
-        console.log(`${prefix}: 线程${stats.threadCount} NPC${stats.npcCount} 物品${stats.itemCount} 时间线${stats.timelineCount} 记忆${stats.memoryCount} 地图${stats.mapCount || 0}${stats.clueBoard ? ' 线索板1' : ''} | ~${tokenEstimate} tokens`);
+        console.log(`${prefix}: 时间线${stats.timelineCount || 0} NPC${stats.npcCount} 物品${stats.itemCount} 里程碑${stats.milestoneCount || 0} 记忆${stats.memoryCount} 地图${stats.mapCount || 0}${stats.clueBoard ? ' 线索板1' : ''} | ~${tokenEstimate} tokens`);
     }
 
     // 11. 存储命中追踪
     const injectedMerged = injectedMemoryIds ? merged.filter(r => injectedMemoryIds.has(String(r.memory.id))) : merged;
     const injectedNpcs = injectedNpcIds ? npcForInjection.filter(n => injectedNpcIds.has(String(n.id))) : npcForInjection;
     const injectedItems = injectedItemIds ? itemsForInjection.filter(i => injectedItemIds.has(String(i.id))) : itemsForInjection;
+    const filterMilestoneHits = (entries) => injectedMilestoneIds ? entries.filter(t => injectedMilestoneIds.has(String(t.id))) : entries;
     const filterTimelineHits = (entries) => injectedTimelineIds ? entries.filter(t => injectedTimelineIds.has(String(t.id))) : entries;
 
     const memoryHitRecords = injectedMerged.map(r => ({
@@ -486,11 +489,13 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         eternalInjectedCount,
         npcHits: injectedNpcs.map(n => ({ id: n.id, name: n.name, npcTier: n.npcTier })),
         itemHits: injectedItems.map(i => ({ id: i.id, name: i.name, itemTier: i.itemTier })),
-        timelineHits: {
-            foreshadow: filterTimelineHits(tlForInjection.foreshadow).map(t => ({ id: t.id, title: t.title || t.event, status: t.status })),
-            ongoing: filterTimelineHits(tlForInjection.ongoing).map(t => ({ id: t.id, title: t.title || t.event, status: t.status })),
-            ended: filterTimelineHits(tlForInjection.ended).map(t => ({ id: t.id, title: t.title || t.event, status: t.status })),
+        milestoneHits: {
+            foreshadow: filterMilestoneHits(milestoneForInjection.foreshadow).map(t => ({ id: t.id, title: t.title || t.event, status: t.status, injectionMode: t.injectionMode || 'resident' })),
+            ongoing: filterMilestoneHits(milestoneForInjection.ongoing).map(t => ({ id: t.id, title: t.title || t.event, status: t.status, injectionMode: t.injectionMode || 'resident' })),
+            ended: filterMilestoneHits(milestoneForInjection.ended).map(t => ({ id: t.id, title: t.title || t.event, status: t.status, injectionMode: t.injectionMode || 'resident' })),
         },
+        timelineHits: filterTimelineHits(timelineForInjection.timeline || timelineForInjection.threads || [])
+            .map(t => ({ id: t.id, title: t.name || t.title || t.summary, status: t.status, priority: t.priority })),
         mapHits: (stats.mapLocationIds || []).map(id => {
             const loc = mapData?.locations?.[id];
             return loc ? { id, name: loc.name, region: loc.region } : { id, name: id, region: '' };
@@ -541,7 +546,8 @@ function mergeResidentMemoryResults(residentMems, relevantResults) {
 function getReviewGroup(candidate) {
     if (candidate?.group) return candidate.group;
     const pillar = candidate?.pillar || 'memory';
-    if (pillar === 'thread') return 'timeline';
+    if (pillar === 'milestone' || pillar === 'timeline_entry') return 'milestone';
+    if (pillar === 'thread' || pillar === 'timeline') return 'timeline';
     if (pillar === 'item') return 'item';
     if (pillar === 'location' || pillar === 'map') return 'location';
     if (pillar === 'npc') return 'npc';
@@ -553,8 +559,9 @@ function getReviewPillarLabel(candidate) {
     const labels = {
         npc: 'NPC',
         item: '物品',
+        milestone: '里程碑',
         timeline: '时间线',
-        thread: '故事线程',
+        thread: '时间线',
         location: '地点',
         memory: '记忆',
     };
@@ -565,8 +572,8 @@ function formatReviewSaveResult(result) {
     const parts = [
         result.npc ? `NPC ${result.npc}` : '',
         result.items ? `物品 ${result.items}` : '',
+        result.milestones ? `里程碑 ${result.milestones}` : '',
         result.timeline ? `时间线 ${result.timeline}` : '',
-        result.threads ? `线程 ${result.threads}` : '',
         result.locations ? `地点 ${result.locations}` : '',
         result.memories ? `记忆 ${result.memories}` : '',
     ].filter(Boolean);
@@ -583,6 +590,7 @@ function showFloatingReviewPanel(chatId, candidates) {
         { key: 'all', label: '全部' },
         { key: 'npc', label: 'NPC' },
         { key: 'item', label: '物品' },
+        { key: 'milestone', label: '里程碑' },
         { key: 'timeline', label: '时间线' },
         { key: 'location', label: '地点' },
         { key: 'memory', label: '记忆' },
@@ -1313,11 +1321,11 @@ async function handleInitMemory(chatId, rangeStr = '') {
     const results = await extractFromContext(chatId, contextText, { onProgress: updateProgress, sourceInfo });
 
     if (progressEl) {
-        progressEl.textContent = `提取完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 线程 ${results.threads || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`;
+        progressEl.textContent = `提取完成！NPC ${results.npc} / 物品 ${results.items} / 里程碑 ${results.milestones || 0} / 时间线 ${results.timeline || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`;
         setTimeout(() => progressEl.remove(), 3000);
     }
 
-    showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 线程 ${results.threads || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
+    showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 里程碑 ${results.milestones || 0} / 时间线 ${results.timeline || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
     return results;
 }
 
@@ -1647,7 +1655,8 @@ function bindSidebarEvents() {
     bindInput('#bb_floor_recent_window', 'floorRecentWindow', 'number');
     bindInput('#bb_npc_injection_max', 'npcInjectionMax', 'number');
     bindInput('#bb_item_injection_max', 'itemInjectionMax', 'number');
-    bindInput('#bb_timeline_ended_max', 'timelineEndedMax', 'number');
+    bindInput('#bb_milestone_vector_max', 'milestoneVectorMax', 'number');
+    bindSelect('#bb_milestone_default_injection_mode', 'milestoneDefaultInjectionMode');
     bindInput('#bb_map_injection_max', 'mapInjectionMax', 'number');
     bindInput('#bb_maintenance_mem_threshold', 'maintenanceMemThreshold', 'number');
     bindInput('#bb_maintenance_npc_threshold', 'maintenanceNpcThreshold', 'number');
@@ -1659,7 +1668,7 @@ function bindSidebarEvents() {
     bindInput('#bb_hit_score_demote_threshold', 'hitScoreDemoteThreshold', 'number');
     bindInput('#bb_entity_tier_promote_threshold', 'entityTierPromoteThreshold', 'number');
     bindInput('#bb_entity_tier_demote_threshold', 'entityTierDemoteThreshold', 'number');
-    bindInput('#bb_max_active_threads', 'maxActiveThreads', 'number');
+    bindInput('#bb_max_active_timeline', 'maxActiveTimeline', 'number');
     bindInput('#bb_chat_metadata_backup_max_kb', 'chatMetadataBackupMaxKb', 'number');
     bindInput('#bb_health_check_duplicate_threshold', 'healthCheckDuplicateThreshold', 'number');
     bindInput('#bb_health_check_isolation_threshold', 'healthCheckIsolationThreshold', 'number');
@@ -1747,6 +1756,13 @@ function bindSidebarEvents() {
         openMemoryManager(chatId);
     });
 
+    document.querySelector('#bb_memory_help_btn')?.addEventListener('click', () => {
+        const url = new URL('./BBMemory使用说明.html', import.meta.url).href;
+        const opened = window.open(url, '_blank', 'noopener');
+        if (opened) showToast('已打开 BB-Memory 使用说明', 'info');
+        else showToast('浏览器阻止了说明页弹窗，可手动打开扩展目录中的 BBMemory使用说明.html', 'warning');
+    });
+
     // v5.5: 记忆维护
     document.querySelector('#bb_memory_extract_btn')?.addEventListener('click', async () => {
         const chatId = getChatId();
@@ -1756,7 +1772,7 @@ function bindSidebarEvents() {
         showToast('正在收集上下文并提取记忆...', 'info');
         try {
             const results = await handleInitMemory(chatId, range);
-            showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 线程 ${results.threads || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
+            showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 里程碑 ${results.milestones || 0} / 时间线 ${results.timeline || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
         } catch (e) {
             showToast(`提取失败: ${e.message}`, 'error');
         }
@@ -1792,7 +1808,7 @@ function bindSidebarEvents() {
             showMaintenancePopup(chatId, { issues: [], issueCount: 0, totalItems: 0, needed: false });
         }
     });
-    // v6.7.0 刷新时间线总结
+    // v9.2.0 刷新时间线总结
     document.querySelector('#bb_thread_refresh_btn')?.addEventListener('click', async () => {
         const chatId = getChatId();
         if (!chatId) return;
@@ -1800,13 +1816,13 @@ function bindSidebarEvents() {
         try {
             const result = await regenerateThreadSummary(chatId);
             if (result.threadCount > 0) {
-                showToast(`时间线总结完成：${result.threadCount} 条线程`, 'success');
+                showToast(`时间线总结完成：${result.timelineCount || result.threadCount} 条时间线`, 'success');
             } else {
                 showToast('时间线总结完成：本轮无需更新', 'info');
             }
         } catch (e) {
-            console.warn('[BB-Memory] 线程总结失败:', e.message);
-            showToast('线程总结失败: ' + e.message, 'error');
+            console.warn('[BB-Memory] 时间线总结失败:', e.message);
+            showToast('时间线总结失败: ' + e.message, 'error');
         }
     });
     // v7.9.0 换楼刷新（从悬浮窗移到侧边栏）
@@ -1818,7 +1834,7 @@ function bindSidebarEvents() {
         if (total === 0) {
             showToast('当前没有需要刷新的楼层记忆', 'info');
         } else {
-            showToast(`已标记 ${total} 条记忆为旧聊天来源（NPC:${stats.npc} 物品:${stats.items} 时间线:${stats.timeline} 记忆:${stats.memories}）`, 'success');
+            showToast(`已标记 ${total} 条记忆为旧聊天来源（NPC:${stats.npc} 物品:${stats.items} 里程碑:${stats.milestones || stats.timeline} 记忆:${stats.memories}）`, 'success');
         }
     });
     document.querySelector('#bb_clue_board_btn')?.addEventListener('click', () => {
@@ -1845,20 +1861,20 @@ function bindSidebarEvents() {
         if (!chatId) return;
         if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 重建中...'; }
         try {
-            const [npc, items, timeline, memories, threads, mapData] = await Promise.all([
+            const [npc, items, milestones, memories, timeline, mapData] = await Promise.all([
                 getNpcProfiles(chatId),
                 getItems(chatId),
-                getTimeline(chatId),
+                getMilestones(chatId),
                 getMemories(chatId),
-                getTimelineThreads(chatId),
+                getTimeline(chatId),
                 getMap(chatId),
             ]);
             const collections = [
                 { key: 'npc', label: 'NPC', entries: npc },
                 { key: 'item', label: '物品', entries: items },
-                { key: 'timeline', label: '时间线', entries: timeline },
+                { key: 'milestone', label: '里程碑', entries: milestones },
                 { key: 'mem', label: '记忆', entries: memories },
-                { key: 'threads', label: '时间线程', entries: threads },
+                { key: 'timeline', label: '时间线', entries: timeline },
                 { key: 'map', label: '地图', entries: Object.values(mapData?.locations || {}) },
             ];
             const totalResult = { total: 0, updated: 0, failed: 0 };
@@ -2440,7 +2456,7 @@ function showMaintenancePopup(chatId, result) {
     const issueTypeDefs = {
         idle_transient_memory: { icon: 'fa-regular fa-clock', label: '瞬时记忆（长期未命中）' },
         status_changed_item:   { icon: 'fa-solid fa-box',     label: '状态变更的物品' },
-        compressible_timeline: { icon: 'fa-solid fa-compress', label: '可压缩的时间线' },
+        compressible_timeline: { icon: 'fa-solid fa-compress', label: '可压缩的里程碑' },
         low_tier_npc:          { icon: 'fa-solid fa-user',     label: '低优先级NPC' },
         foreshadow:            { icon: 'fa-solid fa-eye',      label: '待确认伏笔' },
     };
@@ -2711,7 +2727,7 @@ function registerSlashCommands() {
         const chatId = getChatId();
         if (!chatId) return;
         const stats = await getMemoryStats(chatId);
-        const msg = `BB-Memory 统计：\nNPC: ${stats.npc.total} | 物品: ${stats.items.total} | 时间线: ${stats.timeline.total} | 记忆: ${stats.memories.total}`;
+        const msg = `BB-Memory 统计：\nNPC: ${stats.npc.total} | 物品: ${stats.items.total} | 里程碑: ${stats.milestones?.total || 0} | 时间线: ${stats.timeline?.total || 0} | 记忆: ${stats.memories.total}`;
         showToast(msg, 'info');
     }, '查看记忆统计');
 
@@ -2777,7 +2793,7 @@ function registerSlashCommands() {
         msg._bbmem_pendingExtraction = true;
         try { ctx2.saveChatDebounced(); } catch {}
         refreshExtractionMarkers();
-        showToast(`已处理楼层关联数据：删除 ${deletedTotal} / 回滚 ${restoredTotal}（NPC${result.npc}/物品${result.items}/时间线${result.timeline}/地点${result.map || 0}/记忆${result.memories}）`, 'success');
+        showToast(`已处理楼层关联数据：删除 ${deletedTotal} / 回滚 ${restoredTotal}（NPC${result.npc}/物品${result.items}/里程碑${result.milestones || result.timeline}/地点${result.map || 0}/记忆${result.memories}）`, 'success');
     }, '删除指定楼层的所有关联记忆');
 
     addCmd('bb-re-extract', async (args) => {
@@ -2818,7 +2834,7 @@ function registerSlashCommands() {
         if (total === 0) {
             showToast('当前没有需要刷新的楼层记忆（所有记忆已标记为旧聊天来源）', 'info');
         } else {
-            showToast(`楼层刷新完成！已标记 ${total} 条记忆为旧聊天来源（NPC:${stats.npc} 物品:${stats.items} 时间线:${stats.timeline} 记忆:${stats.memories}）`, 'success');
+            showToast(`楼层刷新完成！已标记 ${total} 条记忆为旧聊天来源（NPC:${stats.npc} 物品:${stats.items} 里程碑:${stats.milestones || stats.timeline} 记忆:${stats.memories}）`, 'success');
         }
     }, '换楼刷新 — 将所有记忆的楼层标记为旧聊天来源（开新聊天后使用）');
 
@@ -2985,15 +3001,30 @@ function renderEternalInjectionNote(count) {
     </div>`;
 }
 
+function getMilestoneHitGroups(result = lastRetrievalResult) {
+    const hits = result?.milestoneHits || {};
+    if (Array.isArray(hits)) return { foreshadow: [], ongoing: [], ended: hits };
+    if (hits && typeof hits === 'object') {
+        return {
+            foreshadow: Array.isArray(hits.foreshadow) ? hits.foreshadow : [],
+            ongoing: Array.isArray(hits.ongoing) ? hits.ongoing : [],
+            ended: Array.isArray(hits.ended) ? hits.ended : [],
+        };
+    }
+    return { foreshadow: [], ongoing: [], ended: [] };
+}
+
 function getRetrievalHitTotal(result = lastRetrievalResult) {
     if (!result) return 0;
-    const tlCount = (result.timelineHits?.foreshadow?.length || 0)
-        + (result.timelineHits?.ongoing?.length || 0)
-        + (result.timelineHits?.ended?.length || 0);
+    const milestoneHits = getMilestoneHitGroups(result);
+    const tlCount = (milestoneHits.foreshadow?.length || 0)
+        + (milestoneHits.ongoing?.length || 0)
+        + (milestoneHits.ended?.length || 0);
     return (result.hits?.length || 0)
         + (result.npcHits?.length || 0)
         + (result.itemHits?.length || 0)
         + (result.mapHits?.length || 0)
+        + (Array.isArray(result.timelineHits) ? result.timelineHits.length : 0)
         + tlCount;
 }
 
@@ -3042,10 +3073,11 @@ async function renderHubHitList(listEl, chatId) {
         <span class="bb-hub-hit-title">${escapeHtml(loc.name || loc.id)}</span>
         <span class="bb-hub-hit-level" style="color:#4fc3f7">${escapeHtml(loc.region || '')}</span>
     </div>`).join('');
+    const milestoneHits = getMilestoneHitGroups(result);
     const timelineAll = [
-        ...(result.timelineHits?.foreshadow || []),
-        ...(result.timelineHits?.ongoing || []),
-        ...(result.timelineHits?.ended || []),
+        ...(milestoneHits.foreshadow || []),
+        ...(milestoneHits.ongoing || []),
+        ...(milestoneHits.ended || []),
     ];
     const timelineHtml = timelineAll.map(t => {
         const isOngoing = t.status === 'ongoing';
@@ -3057,6 +3089,12 @@ async function renderHubHitList(listEl, chatId) {
             <span class="bb-hub-hit-level" style="color:${color}">${isForeshadow ? '伏笔' : (isOngoing ? '进行中' : '已结束')}</span>
         </div>`;
     }).join('');
+    const timelineLineHtml = (Array.isArray(result.timelineHits) ? result.timelineHits : []).map(t => `
+        <div class="bb-hub-hit-item" title="${escapeHtml(t.title || t.id)}">
+            <i class="fa-solid fa-timeline" style="color:#81c784;font-size:0.7em;"></i>
+            <span class="bb-hub-hit-title">${escapeHtml((t.title || '').length > 14 ? t.title.slice(0, 14) + '...' : (t.title || ''))}</span>
+            <span class="bb-hub-hit-level" style="color:#81c784">${escapeHtml(t.status || '')}</span>
+        </div>`).join('');
 
     listEl.innerHTML = [
         renderEternalInjectionNote(result.eternalInjectedCount),
@@ -3064,7 +3102,8 @@ async function renderHubHitList(listEl, chatId) {
         renderHitGroup('NPC', 'fa-user', `${result.npcHits?.length || 0}条`, npcHtml),
         renderHitGroup('物品', 'fa-box', `${result.itemHits?.length || 0}条`, itemHtml),
         renderHitGroup('地图', 'fa-map', `${result.mapHits?.length || 0}处`, mapHtml),
-        renderHitGroup('时间条目', 'fa-timeline', `${timelineAll.length}条`, timelineHtml),
+        renderHitGroup('里程碑', 'fa-landmark', `${timelineAll.length}条`, timelineHtml),
+        renderHitGroup('时间线', 'fa-timeline', `${Array.isArray(result.timelineHits) ? result.timelineHits.length : 0}条`, timelineLineHtml),
     ].join('');
 }
 
@@ -3383,7 +3422,7 @@ async function handleFloatingMenuAction(action) {
             showToast('正在提取记忆...', 'info');
             try {
                 const results = await handleInitMemory(chatId, range);
-                showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 时间线 ${results.timeline} / 线程 ${results.threads || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
+                showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 里程碑 ${results.milestones || 0} / 时间线 ${results.timeline || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
                 refreshSidebar();
             } catch (e) {
                 showToast(`提取失败: ${e.message}`, 'error');
@@ -3486,7 +3525,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.1.9 初始化开始...');
+    console.log('[BB-Memory] v9.2.0 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -3650,7 +3689,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.1.9 初始化完成');
+    console.log('[BB-Memory] v9.2.0 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
@@ -3778,7 +3817,7 @@ async function handleMessageDeletedByExchange(exchangeHash, details = {}) {
         if (total > 0) {
             const deletedTotal = Object.values(removed.deleted || {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
             const restoredTotal = Object.values(removed.restored || {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
-            console.log(`[BB-Memory] 自动清理已删除楼层的关联数据: 删除${deletedTotal}/回滚${restoredTotal} NPC${removed.npc}/物品${removed.items}/时间线${removed.timeline}/地点${removed.map || 0}/记忆${removed.memories}`);
+            console.log(`[BB-Memory] 自动清理已删除楼层的关联数据: 删除${deletedTotal}/回滚${restoredTotal} NPC${removed.npc}/物品${removed.items}/里程碑${removed.milestones || removed.timeline}/地点${removed.map || 0}/记忆${removed.memories}`);
             showToast(`已自动清理 ${total} 条关联数据（删除 ${deletedTotal} / 回滚 ${restoredTotal}）`, 'info');
         }
     } catch (e) {
@@ -3815,7 +3854,8 @@ function updateSidebarHitList() {
         (result.eternalInjectedCount > 0) ||
         (result.npcHits && result.npcHits.length) ||
         (result.itemHits && result.itemHits.length) ||
-        (result.timelineHits && ((result.timelineHits.foreshadow?.length || 0) + result.timelineHits.ongoing.length + result.timelineHits.ended.length)) ||
+        (result.milestoneHits && ((getMilestoneHitGroups(result).foreshadow.length || 0) + getMilestoneHitGroups(result).ongoing.length + getMilestoneHitGroups(result).ended.length)) ||
+        (Array.isArray(result.timelineHits) && result.timelineHits.length) ||
         (result.mapHits && result.mapHits.length)
     );
 
@@ -3872,10 +3912,11 @@ function updateSidebarHitList() {
         <span class="bb-hub-hit-level" style="color:#4fc3f7">${escapeHtml(loc.region || '')}</span>
     </div>`).join('');
 
+    const milestoneHits = getMilestoneHitGroups(result);
     const tlAll = [
-        ...(result.timelineHits?.foreshadow || []),
-        ...(result.timelineHits?.ongoing || []),
-        ...(result.timelineHits?.ended || []),
+        ...(milestoneHits.foreshadow || []),
+        ...(milestoneHits.ongoing || []),
+        ...(milestoneHits.ended || []),
     ];
     const timelineHtml = tlAll.map(t => {
         const isOngoing = t.status === 'ongoing';
@@ -3887,6 +3928,12 @@ function updateSidebarHitList() {
             <span class="bb-hub-hit-level" style="color:${color}">${isForeshadow ? '伏笔' : (isOngoing ? '进行中' : '已结束')}</span>
         </div>`;
     }).join('');
+    const timelineLineHtml = (Array.isArray(result.timelineHits) ? result.timelineHits : []).map(t => `
+        <div class="bb-hub-hit-item" title="${escapeHtml(t.title || t.id)}" style="cursor:default;">
+            <i class="fa-solid fa-timeline" style="color:#81c784;font-size:0.7em;"></i>
+            <span class="bb-hub-hit-title">${escapeHtml((t.title || '').length > 18 ? t.title.slice(0, 18) + '...' : (t.title || ''))}</span>
+            <span class="bb-hub-hit-level" style="color:#81c784">${escapeHtml(t.status || '')}</span>
+        </div>`).join('');
 
     listEl.innerHTML = [
         renderEternalInjectionNote(result.eternalInjectedCount),
@@ -3894,7 +3941,8 @@ function updateSidebarHitList() {
         renderHitGroup('NPC', 'fa-user', `${result.npcHits?.length || 0}条`, npcHtml),
         renderHitGroup('物品', 'fa-box', `${result.itemHits?.length || 0}条`, itemHtml),
         renderHitGroup('地图', 'fa-map', `${result.mapHits?.length || 0}处`, mapHtml),
-        renderHitGroup('时间条目', 'fa-timeline', `${tlAll.length}条`, timelineHtml),
+        renderHitGroup('里程碑', 'fa-landmark', `${tlAll.length}条`, timelineHtml),
+        renderHitGroup('时间线', 'fa-timeline', `${Array.isArray(result.timelineHits) ? result.timelineHits.length : 0}条`, timelineLineHtml),
     ].join('');
 }
 
@@ -3911,7 +3959,9 @@ globalThis.bbMemoryDebug = {
     getMemoryStats,
     getNpcProfiles,
     getItems,
+    getMilestones,
     getTimeline,
+    getTimelineEntries: getMilestones,
     getMemories,
     lastRetrievalResult: () => lastRetrievalResult,
 };

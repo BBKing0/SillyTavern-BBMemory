@@ -8,8 +8,8 @@
 import {
     getNpcProfiles, addNpcProfile, updateNpcProfile, removeNpcProfile,
     getItems, addItem, updateItem, removeItem,
-    getTimeline, addTimelineEntry, updateTimelineEntry, removeTimelineEntry,
-    getTimelineThreads, upsertTimelineThread, removeTimelineThread,
+    getMilestones as getTimeline, addMilestone as addTimelineEntry, updateMilestone as updateTimelineEntry, removeMilestone as removeTimelineEntry,
+    getTimeline as getTimelineThreads, upsertTimeline as upsertTimelineThread, removeTimeline as removeTimelineThread,
     getMemories, addMemory, updateMemory, removeMemory,
     clearAllData, deleteByExchange, getMemoryStats, getSettings, updateSettings,
     exportMemories, importMemories, updateFactContent, addHiddenNote, removeHiddenNote,
@@ -206,7 +206,7 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) 
                     <i class="fa-solid fa-box"></i> 物品
                 </button>
                 <button class="menu_button bb-mem-type-filter" data-type="timeline">
-                    <i class="fa-solid fa-clock"></i> 时间条目
+                    <i class="fa-solid fa-clock"></i> 里程碑
                 </button>
                 <button class="menu_button bb-mem-type-filter" data-type="map">
                     <i class="fa-solid fa-map"></i> 地图
@@ -237,7 +237,7 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) 
             </div>
 
             <div class="bb-mem-stats">
-                <strong>${memories.length}</strong> 条记忆 · NPC ${npc.length} / 物品 ${items.length} / 时间线 ${timeline.length}
+                <strong>${memories.length}</strong> 条记忆 · NPC ${npc.length} / 物品 ${items.length} / 里程碑 ${timeline.length}
             </div>
 
             <div class="bb-mem-list" id="bb_mgr_list">${listHTML}</div>
@@ -300,7 +300,7 @@ function buildEntryItemHTML(e) {
     const pillarConfig = {
         npc:      { icon: 'fa-user',        label: 'NPC',   color: '#ba68c8' },
         item:     { icon: 'fa-box',          label: '物品',  color: '#4fc3f7' },
-        timeline: { icon: 'fa-clock',        label: '时间线', color: '#ffb74d' },
+        timeline: { icon: 'fa-clock',        label: '里程碑', color: '#ffb74d' },
         mem:      { icon: 'fa-brain',        label: '记忆',  color: '#81c784' },
         map:      { icon: 'fa-map',          label: '地图',  color: '#4fc3f7' },
     }[pillar] || { icon: 'fa-circle', label: pillar, color: '#888' };
@@ -961,7 +961,7 @@ function rebindItemActions(overlay, chatId) {
 
 function showQuickAddForm(overlay, chatId) {
     let currentPillar = 'mem';
-    const pillarOpts = { mem: '记忆条目', npc: 'NPC档案', item: '物品', timeline: '时间线事件', map: '地图地点' };
+    const pillarOpts = { mem: '记忆条目', npc: 'NPC档案', item: '物品', timeline: '里程碑', map: '地图地点' };
 
     const formOverlay = createManagerFormOverlay();
 
@@ -1137,7 +1137,7 @@ function bindFormEvents(formOverlay, chatId, initialPillar) {
 }
 
 function buildFormHTML_inner(pillar) {
-    const pillarOpts = { mem: '记忆条目', npc: 'NPC档案', item: '物品', timeline: '时间线事件', map: '地图地点' };
+    const pillarOpts = { mem: '记忆条目', npc: 'NPC档案', item: '物品', timeline: '里程碑', map: '地图地点' };
     return `
     <div class="bb-mem-form-popup" style="background:var(--SmartThemeChatTintColor,#1e1e2e);border:1px solid var(--SmartThemeBorderColor,#444);border-radius:12px;width:100%;max-width:600px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.5);">
         <div style="display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid var(--SmartThemeBorderColor,#444);">
@@ -1573,7 +1573,7 @@ async function renderSlotsPanel(overlay, chatId, cachedData = null) {
         slotsEl.innerHTML = `
             <div class="bb-slots-info">
                 <i class="fa-solid fa-circle-info"></i>
-                记忆 <strong>${memories.length}</strong> 条 · NPC ${npc.length} / 物品 ${items.length} / 时间线 ${timeline.length} · 云端索引 ${remoteSlotCount} 个 · 角色ID: ${escapeHtml(charId)}
+                记忆 <strong>${memories.length}</strong> 条 · NPC ${npc.length} / 物品 ${items.length} / 里程碑 ${timeline.length} · 云端索引 ${remoteSlotCount} 个 · 角色ID: ${escapeHtml(charId)}
             </div>
 
             <div class="bb-slots-create" style="margin-bottom:10px;">
@@ -1976,7 +1976,7 @@ async function renderDashboardPanel(overlay, chatId) {
         const pillarConfig = {
             npc: { icon: 'fa-user', label: 'NPC', color: '#ba68c8' },
             item: { icon: 'fa-box', label: '物品', color: '#4fc3f7' },
-            timeline: { icon: 'fa-clock', label: '时间线', color: '#ffb74d' },
+            timeline: { icon: 'fa-clock', label: '里程碑', color: '#ffb74d' },
             mem: { icon: 'fa-brain', label: '记忆', color: '#81c784' },
         };
 
@@ -2013,7 +2013,7 @@ async function renderDashboardPanel(overlay, chatId) {
                 </div>
                 <div class="bb-dash-stat-card" style="background:var(--SmartThemeBlurTintColor, rgba(255,255,255,0.04));border-radius:8px;padding:10px;text-align:center;border-left:3px solid #ffb74d;">
                     <div style="font-size:1.4em;font-weight:bold;">${timeline.length}</div>
-                    <div style="font-size:0.8em;opacity:0.7;">时间线</div>
+                    <div style="font-size:0.8em;opacity:0.7;">里程碑</div>
                     <div style="font-size:0.7em;opacity:0.5;">进行中${timeline.filter(t => t.isActive).length}</div>
                 </div>
                 <div class="bb-dash-stat-card" style="background:var(--SmartThemeBlurTintColor, rgba(255,255,255,0.04));border-radius:8px;padding:10px;text-align:center;border-left:3px solid #81c784;">
@@ -2076,7 +2076,7 @@ async function renderDashboardPanel(overlay, chatId) {
             <div style="padding:0 18px;margin-top:12px;">
                 <h4 style="margin:0 0 8px;font-size:0.9em;"><i class="fa-solid fa-syringe"></i> 上次注入</h4>
                 <div style="font-size:0.82em;opacity:0.7;">
-                    NPC ${injectionInfo.npcCount || 0} 个 · 物品 ${injectionInfo.itemCount || 0} 个 · 时间线 ${injectionInfo.timelineCount || 0} 条 · 记忆 ${injectionInfo.memoryCount || 0} 条
+                    NPC ${injectionInfo.npcCount || 0} 个 · 物品 ${injectionInfo.itemCount || 0} 个 · 里程碑 ${injectionInfo.milestoneCount || injectionInfo.timelineCount || 0} 条 · 记忆 ${injectionInfo.memoryCount || 0} 条
                     ${injectionInfo.tokenEstimate != null ? ` · ~${injectionInfo.tokenEstimate} tokens` : ''}
                 </div>
             </div>` : ''}
@@ -2142,16 +2142,16 @@ async function renderThreadPanel(overlay, chatId) {
         panel.innerHTML = `
             <div class="bb-thread-empty">
                 <i class="fa-solid fa-timeline" style="font-size:2em;opacity:0.3;"></i>
-                <p>暂无时间线线程</p>
+                <p>暂无时间线</p>
                 <button class="menu_button" id="bb_thread_new_empty" style="margin-top:8px;background:#4caf50;color:#fff;margin-right:6px;">
-                    <i class="fa-solid fa-plus"></i> 新建线程
+                    <i class="fa-solid fa-plus"></i> 新建时间线
                 </button>
                 <button class="menu_button" id="bb_thread_refresh_empty" style="margin-top:8px;">
                     <i class="fa-solid fa-rotate"></i> 刷新时间线总结
                 </button>
             </div>`;
         // v7.5.0 空状态内联刷新按钮
-        // v7.9.0 空状态新建线程
+        // v7.9.0 空状态新建时间线
         panel.querySelector('#bb_thread_new_empty')?.addEventListener('click', () => {
             showThreadCreateForm(overlay, chatId);
         });
@@ -2178,9 +2178,9 @@ async function renderThreadPanel(overlay, chatId) {
 
     let html = `
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-            <span style="font-weight:bold;">${activeThreads.length} 条线程</span>
+            <span style="font-weight:bold;">${activeThreads.length} 条时间线</span>
             <button class="menu_button" id="bb_thread_new_btn" style="font-size:0.85em;background:#4caf50;color:#fff;">
-                <i class="fa-solid fa-plus"></i> 新建线程
+                <i class="fa-solid fa-plus"></i> 新建时间线
             </button>
             <button class="menu_button" id="bb_thread_refresh_inline" style="font-size:0.85em;">
                 <i class="fa-solid fa-rotate"></i> 刷新总结
@@ -2222,9 +2222,9 @@ async function renderThreadPanel(overlay, chatId) {
                 ${thread.summary ? `<span class="bb-thread-summary">— ${escapeHtml(thread.summary)}</span>` : ''}
                 <div class="bb-thread-actions">
                     ${statusBtns.join('')}
-                    <button class="menu_button bb-thread-btn-edit" data-thread-idx="${ti}" title="编辑线程"><i class="fa-solid fa-pen"></i></button>
-                    <button class="menu_button bb-thread-btn-archive" data-thread-idx="${ti}" title="归档线程"><i class="fa-solid fa-box-archive"></i></button>
-                    <button class="menu_button bb-thread-btn-delete" data-thread-idx="${ti}" title="删除线程"><i class="fa-solid fa-trash"></i></button>
+                    <button class="menu_button bb-thread-btn-edit" data-thread-idx="${ti}" title="编辑时间线"><i class="fa-solid fa-pen"></i></button>
+                    <button class="menu_button bb-thread-btn-archive" data-thread-idx="${ti}" title="归档时间线"><i class="fa-solid fa-box-archive"></i></button>
+                    <button class="menu_button bb-thread-btn-delete" data-thread-idx="${ti}" title="删除时间线"><i class="fa-solid fa-trash"></i></button>
                 </div>
             </div>
             <div class="bb-thread-entries" id="${cardId}_entries" style="${hasOngoing ? '' : 'display:none;'}">`;
@@ -2251,9 +2251,9 @@ async function renderThreadPanel(overlay, chatId) {
         html += '</div></div>';
     }
 
-    // v8.3.0 时间条目列表（默认展开，含线程归属标记）
+    // v8.3.0 里程碑列表（默认展开，含时间线归属标记）
     const tlId = 'bb_thread_detail_timeline';
-    // 构建条目→线程的映射
+    // 构建里程碑→时间线的映射
     const entryThreadMap = new Map(); // entryId → thread name
     for (const thread of activeThreads) {
         for (const entry of (thread.entries || [])) {
@@ -2266,13 +2266,13 @@ async function renderThreadPanel(overlay, chatId) {
         <div class="bb-thread-detail-section">
             <button class="bb-thread-detail-toggle" id="${tlId}_toggle" data-collapsed="false">
                 <i class="fa-solid fa-chevron-down"></i>
-                时间条目列表 (${allTimelineEntries.length}条)
+                里程碑列表 (${allTimelineEntries.length}条)
             </button>
             <div class="bb-thread-detail-list" id="${tlId}_list">
                 ${allTimelineEntries.map(t => {
                     const tStatus = t.status === 'ongoing' ? '进行中' : t.status === 'ended' ? '已结束' : t.status === 'foreshadow' ? '伏笔' : t.status || '';
                     const inThread = entryThreadMap.get(t.id);
-                    const threadTag = inThread ? `<span class="bb-thread-detail-thread" title="属于线程: ${escapeHtml(inThread)}">▪ ${escapeHtml(inThread)}</span>` : '<span class="bb-thread-detail-thread" style="opacity:0.35;">未归入线程</span>';
+                    const threadTag = inThread ? `<span class="bb-thread-detail-thread" title="属于时间线: ${escapeHtml(inThread)}">▪ ${escapeHtml(inThread)}</span>` : '<span class="bb-thread-detail-thread" style="opacity:0.35;">未归入时间线</span>';
                     return `
                     <div class="bb-thread-detail-item">
                         <span class="bb-thread-detail-time">${escapeHtml(t.storyTime || '?')}</span>
@@ -2366,37 +2366,37 @@ async function renderThreadPanel(overlay, chatId) {
                 try {
                     await handler(btn);
                 } catch (err) {
-                    console.error('[BB-Memory] 线程操作失败:', err.message || err);
+                    console.error('[BB-Memory] 时间线操作失败:', err.message || err);
                 }
             });
         });
     };
 
-    // 编辑线程
+    // 编辑时间线
     bindThreadBtn('.bb-thread-btn-edit', async (btn) => {
         const idx = parseInt(btn.dataset.threadIdx);
         const thread = activeThreads[idx];
         if (thread) showThreadEditForm(overlay, chatId, thread);
     });
 
-    // 删除线程
+    // 删除时间线
     bindThreadBtn('.bb-thread-btn-delete', async (btn) => {
         const idx = parseInt(btn.dataset.threadIdx);
         const thread = activeThreads[idx];
-        if (thread && confirm(`确认删除线程「${thread.name}」？`)) {
+        if (thread && confirm(`确认删除时间线「${thread.name}」？`)) {
             const result = await removeTimelineThread(chatId, thread.id);
-            console.log('[BB-Memory] 删除线程结果:', result, 'chatId:', chatId, 'threadId:', thread.id);
+            console.log('[BB-Memory] 删除时间线结果:', result, 'chatId:', chatId, 'timelineId:', thread.id);
             await renderThreadPanel(overlay, chatId);
         }
     });
 
-    // v7.6.0 归档线程
+    // v7.6.0 归档时间线
     bindThreadBtn('.bb-thread-btn-archive', async (btn) => {
         const idx = parseInt(btn.dataset.threadIdx);
         const thread = activeThreads[idx];
         if (thread) {
             await upsertTimelineThread(chatId, { ...thread, status: 'archived' });
-            showToast('已归档线程', 'success');
+            showToast('已归档时间线', 'success');
             await renderThreadPanel(overlay, chatId);
         }
     });
@@ -2406,7 +2406,7 @@ async function renderThreadPanel(overlay, chatId) {
         const idx = parseInt(btn.dataset.threadIdx);
         const thread = activeThreads[idx];
         if (thread) {
-            console.log('[BB-Memory] 暂停线程:', thread.name, 'chatId:', chatId);
+            console.log('[BB-Memory] 暂停时间线:', thread.name, 'chatId:', chatId);
             await upsertTimelineThread(chatId, { ...thread, status: 'paused' });
             await renderThreadPanel(overlay, chatId);
         }
@@ -2452,7 +2452,7 @@ async function renderThreadPanel(overlay, chatId) {
         }
     });
 
-    // 编辑线程条目
+    // 编辑时间线节点
     bindThreadBtn('.bb-thread-entry-edit', async (btn) => {
         const ti = parseInt(btn.dataset.threadIdx);
         const ei = parseInt(btn.dataset.entryIdx);
@@ -2462,7 +2462,7 @@ async function renderThreadPanel(overlay, chatId) {
         }
     });
 
-    // 删除线程条目
+    // 删除时间线节点
     bindThreadBtn('.bb-thread-entry-del', async (btn) => {
         const ti = parseInt(btn.dataset.threadIdx);
         const ei = parseInt(btn.dataset.entryIdx);
@@ -2476,7 +2476,7 @@ async function renderThreadPanel(overlay, chatId) {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  v7.0.0 线程编辑表单
+//  v7.0.0 时间线编辑表单
 // ═══════════════════════════════════════════════════════════
 
 function showThreadEditForm(overlay, chatId, thread) {
@@ -2485,12 +2485,12 @@ function showThreadEditForm(overlay, chatId, thread) {
     formOverlay.innerHTML = `
     <div class="bb-mem-form-popup" style="max-width:480px;">
         <div class="bb-mem-form-header">
-            <h3><i class="fa-solid fa-timeline"></i> 编辑线程</h3>
+            <h3><i class="fa-solid fa-timeline"></i> 编辑时间线</h3>
             <span class="bb-thread-form-close" style="cursor:pointer;font-size:1.2em;">&times;</span>
         </div>
         <div class="bb-mem-form-body">
             <div class="bb-mem-form-row">
-                <label>线程名称</label>
+                <label>时间线名称</label>
                 <input type="text" class="bb-input bb-thread-form-name" value="${escapeHtml(thread.name || '')}" />
             </div>
             <div class="bb-mem-form-row">
@@ -2533,28 +2533,28 @@ function showThreadEditForm(overlay, chatId, thread) {
             const priority = formOverlay.querySelector('.bb-thread-form-priority')?.value;
             const summary = formOverlay.querySelector('.bb-thread-form-summary')?.value?.trim();
             if (!name) return;
-            console.log('[BB-Memory] 保存线程编辑:', name, type, priority);
+            console.log('[BB-Memory] 保存时间线编辑:', name, type, priority);
             await upsertTimelineThread(chatId, { ...thread, name, type, priority, summary: summary || '' });
             close();
             await renderThreadPanel(overlay, chatId);
         } catch (err) {
-            console.error('[BB-Memory] 保存线程失败:', err.message || err);
+            console.error('[BB-Memory] 保存时间线失败:', err.message || err);
         }
     });
 }
 
-// v7.9.0 新建线程表单
+// v7.9.0 新建时间线表单
 function showThreadCreateForm(overlay, chatId) {
     const formOverlay = createManagerFormOverlay('bb-mem-form-overlay bb-thread-form-overlay');
     formOverlay.innerHTML = `
     <div class="bb-mem-form-popup" style="max-width:480px;">
         <div class="bb-mem-form-header">
-            <h3><i class="fa-solid fa-plus"></i> 新建线程</h3>
+            <h3><i class="fa-solid fa-plus"></i> 新建时间线</h3>
             <span class="bb-thread-form-close" style="cursor:pointer;font-size:1.2em;">&times;</span>
         </div>
         <div class="bb-mem-form-body">
             <div class="bb-mem-form-row">
-                <label>线程名称 *</label>
+                <label>时间线名称 *</label>
                 <input type="text" class="bb-input bb-thread-form-name" placeholder="如：主线·战前动员" />
             </div>
             <div class="bb-mem-form-row">
@@ -2601,7 +2601,7 @@ function showThreadCreateForm(overlay, chatId) {
             close();
             await renderThreadPanel(overlay, chatId);
         } catch (err) {
-            console.error('[BB-Memory] 创建线程失败:', err.message || err);
+            console.error('[BB-Memory] 创建时间线失败:', err.message || err);
         }
     });
 }
@@ -2613,7 +2613,7 @@ function showThreadEntryEditForm(overlay, chatId, thread, entryIdx) {
     formOverlay.innerHTML = `
     <div class="bb-mem-form-popup" style="max-width:480px;">
         <div class="bb-mem-form-header">
-            <h3><i class="fa-solid fa-clock"></i> 编辑线程条目</h3>
+            <h3><i class="fa-solid fa-clock"></i> 编辑时间线节点</h3>
             <span class="bb-thread-form-close" style="cursor:pointer;font-size:1.2em;">&times;</span>
         </div>
         <div class="bb-mem-form-body">
@@ -2715,7 +2715,7 @@ async function rerenderManagerList(overlay, chatId, cachedData = null) {
 
     const statsEl = overlay.querySelector('.bb-mem-stats');
     if (statsEl) {
-        statsEl.innerHTML = `<strong>${memories.length}</strong> 条记忆 · NPC ${npc.length} / 物品 ${items.length} / 时间线 ${timeline.length}`;
+        statsEl.innerHTML = `<strong>${memories.length}</strong> 条记忆 · NPC ${npc.length} / 物品 ${items.length} / 里程碑 ${timeline.length}`;
     }
 
     const listEl = overlay.querySelector('#bb_mgr_list');
@@ -2755,8 +2755,8 @@ async function renderArchiveWarehouse(overlay, chatId) {
         const pillarConfig = {
             npc: { icon: 'fa-user', label: 'NPC', color: '#ba68c8' },
             item: { icon: 'fa-box', label: '物品', color: '#4fc3f7' },
-            timeline: { icon: 'fa-clock', label: '时间线', color: '#ffb74d' },
-            thread: { icon: 'fa-timeline', label: '线程', color: '#ce93d8' },
+            timeline: { icon: 'fa-clock', label: '里程碑', color: '#ffb74d' },
+            thread: { icon: 'fa-timeline', label: '时间线', color: '#ce93d8' },
             mem: { icon: 'fa-brain', label: '记忆', color: '#81c784' },
             map: { icon: 'fa-map', label: '地图', color: '#4fc3f7' },
         };

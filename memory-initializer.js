@@ -14,8 +14,8 @@ const PILLARS = [
     { key: 'npc', label: 'NPC', icon: 'fa-user' },
     { key: 'items', label: '物品', icon: 'fa-box' },
     { key: 'locations', label: '地点', icon: 'fa-map-location-dot' },
+    { key: 'milestones', label: '里程碑', icon: 'fa-flag-checkered' },
     { key: 'timeline', label: '时间线', icon: 'fa-timeline' },
-    { key: 'threads', label: '时间线程', icon: 'fa-diagram-project' },
 ];
 
 const FIELD_SPECS = {
@@ -65,7 +65,7 @@ const FIELD_SPECS = {
         ['keepPermanent', '常驻/永久保留', 'checkbox'],
         ['edges', '连接 JSON', 'json'],
     ],
-    timeline: [
+    milestones: [
         ['storyTime', '故事时间', 'text'],
         ['event', '事件摘要', 'text'],
         ['summary', '详细描述', 'textarea'],
@@ -76,8 +76,8 @@ const FIELD_SPECS = {
         ['impact', '影响', 'textarea'],
         ['tags', '标签（逗号分隔）', 'tags'],
     ],
-    threads: [
-        ['name', '线程名', 'text'],
+    timeline: [
+        ['name', '时间线名', 'text'],
         ['type', '类型', 'select', ['plot', 'emotional', 'side', 'world']],
         ['status', '状态', 'select', ['ongoing', 'paused', 'ended', 'archived', 'resident']],
         ['priority', '优先级', 'select', ['high', 'medium', 'low']],
@@ -96,7 +96,7 @@ const state = {
 };
 
 function emptyDraft() {
-    return { version: '8.9.6-init-draft', npc: [], items: [], timeline: [], memories: [], locations: [], threads: [] };
+    return { version: '9.2.0-init-draft', npc: [], items: [], milestones: [], timeline: [], memories: [], locations: [] };
 }
 
 function $(root, selector) {
@@ -393,7 +393,7 @@ function renderEntryCard(pillar, entry) {
 
 function getEntryTitle(pillar, entry) {
     if (pillar === 'memories') return entry.title;
-    if (pillar === 'timeline') return entry.event;
+    if (pillar === 'milestones') return entry.event;
     return entry.name;
 }
 
@@ -402,8 +402,8 @@ function getEntryMeta(pillar, entry) {
     if (pillar === 'npc') return `${entry.npcTier || 'minor'} · ${entry.role || '身份未填'} · ${entry.location || '地点未填'}`;
     if (pillar === 'items') return `${entry.itemTier || 'consumable'} · ${entry.status || 'held'} · ${entry.owner || entry.location || '归属未填'}`;
     if (pillar === 'locations') return `${entry.region || '未分区'} · ${(entry.edges || []).length || 0} 条连接`;
-    if (pillar === 'timeline') return `${entry.status || 'ongoing'} · ${entry.storyTime || '无时间'} · ${entry.location || '地点未填'}`;
-    if (pillar === 'threads') return `${entry.type || 'plot'} · ${entry.status || 'ongoing'} · ${entry.priority || 'medium'}`;
+    if (pillar === 'milestones') return `${entry.status || 'ongoing'} · ${entry.storyTime || '无时间'} · ${entry.location || '地点未填'}`;
+    if (pillar === 'timeline') return `${entry.type || 'plot'} · ${entry.status || 'ongoing'} · ${entry.priority || 'medium'}`;
     return '';
 }
 
@@ -412,8 +412,8 @@ function getEntryBody(pillar, entry) {
     if (pillar === 'npc') return entry.indexCard || entry.personality || entry.appearance || '';
     if (pillar === 'items') return entry.significance || '';
     if (pillar === 'locations') return entry.description || '';
-    if (pillar === 'timeline') return entry.summary || entry.impact || '';
-    if (pillar === 'threads') return entry.summary || '';
+    if (pillar === 'milestones') return entry.summary || entry.impact || '';
+    if (pillar === 'timeline') return entry.summary || '';
     return '';
 }
 
@@ -570,7 +570,7 @@ async function saveDraft(root) {
             sourceInfo: { source: 'init', sourceFloor: -1 },
         });
         setProgress(root, 100, '保存完成');
-        notify(`保存完成：记忆 ${result.memories} / NPC ${result.npc} / 物品 ${result.items} / 地点 ${result.locations} / 时间线 ${result.timeline} / 线程 ${result.threads}，合并 ${result.merged}，跳过 ${result.skipped}`, 'success');
+        notify(`保存完成：记忆 ${result.memories} / NPC ${result.npc} / 物品 ${result.items} / 地点 ${result.locations} / 里程碑 ${result.milestones} / 时间线 ${result.timeline}，合并 ${result.merged}，跳过 ${result.skipped}`, 'success');
     } catch (e) {
         setProgress(root, 0, '保存失败');
         notify(`保存失败: ${e.message}`, 'error');
@@ -766,9 +766,15 @@ function normalizeDraftData(data) {
     const draft = emptyDraft();
     draft.npc = Array.isArray(data.npc) ? data.npc : [];
     draft.items = Array.isArray(data.items) ? data.items : [];
-    draft.timeline = Array.isArray(data.timeline) ? data.timeline : [];
+    const rawTimeline = Array.isArray(data.timeline) ? data.timeline : [];
+    const rawLooksLikeOldMilestones = looksLikeMilestoneDraftList(rawTimeline);
+    draft.milestones = Array.isArray(data.milestones)
+        ? data.milestones
+        : (rawLooksLikeOldMilestones ? rawTimeline : []);
+    draft.timeline = rawLooksLikeOldMilestones
+        ? (Array.isArray(data.threads) ? data.threads : (Array.isArray(data.timelineThreads) ? data.timelineThreads : (Array.isArray(data.timeThreads) ? data.timeThreads : [])))
+        : (Array.isArray(data.timeline) ? data.timeline : (Array.isArray(data.threads) ? data.threads : (Array.isArray(data.timelineThreads) ? data.timelineThreads : (Array.isArray(data.timeThreads) ? data.timeThreads : []))));
     draft.memories = Array.isArray(data.memories) ? data.memories : (Array.isArray(data.mem) ? data.mem : []);
-    draft.threads = Array.isArray(data.threads) ? data.threads : [];
     if (Array.isArray(data.locations)) draft.locations = data.locations;
     else if (data.map?.locations && typeof data.map.locations === 'object') draft.locations = Object.values(data.map.locations);
     else draft.locations = [];
@@ -776,6 +782,16 @@ function normalizeDraftData(data) {
         draft[pillar] = draft[pillar].map(e => normalizeEntry(pillar, e));
     }
     return draft;
+}
+
+function looksLikeMilestoneDraftList(list) {
+    if (!Array.isArray(list) || !list.length) return false;
+    return list.some(entry => {
+        if (!entry || typeof entry !== 'object') return false;
+        const hasMilestoneFields = entry.event || entry.storyTime || entry.impact || entry.isActive !== undefined;
+        const hasTimelineFields = entry.name || Array.isArray(entry.entries);
+        return Boolean(hasMilestoneFields && !hasTimelineFields);
+    });
 }
 
 function assignDraftIds(data) {
@@ -811,11 +827,11 @@ function normalizeEntryInPlace(pillar, entry) {
         entry.edges = Array.isArray(entry.edges) ? entry.edges : [];
         entry.memoryTier = entry.memoryTier || 'transient';
         entry.keepPermanent = Boolean(entry.keepPermanent || entry.resident);
-    } else if (pillar === 'timeline') {
+    } else if (pillar === 'milestones') {
         entry.status = entry.status || (entry.isActive === false ? 'ended' : 'ongoing');
         entry.isActive = entry.isActive !== false && entry.status !== 'ended';
         entry.participants = Array.isArray(entry.participants) ? entry.participants : [];
-    } else if (pillar === 'threads') {
+    } else if (pillar === 'timeline') {
         entry.type = entry.type || 'plot';
         entry.status = entry.status || 'ongoing';
         entry.priority = entry.priority || 'medium';
@@ -830,8 +846,8 @@ function makeDefaultEntry(pillar) {
         npc: { name: '', role: '', personality: '', appearance: '', status: '', location: '', indexCard: '', npcTier: 'minor', relationships: [], tags: [] },
         items: { name: '', owner: '', status: 'held', location: '', significance: '', itemTier: 'consumable', keepPermanent: false, tags: [] },
         locations: { name: '', region: '', description: '', realWorldRef: '', memoryTier: 'transient', keepPermanent: false, edges: [] },
-        timeline: { storyTime: '', event: '', summary: '', participants: [], location: '', status: 'ongoing', isActive: true, impact: '', tags: [] },
-        threads: { name: '', type: 'plot', status: 'ongoing', priority: 'medium', summary: '', entries: [] },
+        milestones: { storyTime: '', event: '', summary: '', participants: [], location: '', status: 'ongoing', isActive: true, impact: '', tags: [] },
+        timeline: { name: '', type: 'plot', status: 'ongoing', priority: 'medium', summary: '', entries: [] },
     };
     return normalizeEntry(pillar, defaults[pillar]);
 }
@@ -872,7 +888,7 @@ function mergeEntryInPlace(pillar, base, incoming) {
 
 function entryKey(pillar, entry) {
     if (pillar === 'memories') return `${(entry.title || '').toLowerCase().trim()}|${(entry.content || entry.summary || '').toLowerCase().trim().slice(0, 120)}`;
-    if (pillar === 'timeline') return `${(entry.event || '').toLowerCase().trim()}|${entry.storyTime || ''}`;
+    if (pillar === 'milestones') return `${(entry.event || '').toLowerCase().trim()}|${entry.storyTime || ''}`;
     return (entry.name || '').toLowerCase().trim();
 }
 

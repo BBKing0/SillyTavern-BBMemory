@@ -8,11 +8,12 @@
 import {
     getSettings,
     updateSettings,
-    getMemories, getNpcProfiles, getItems, getTimeline,
+    getMemories, getNpcProfiles, getItems, getMilestones, getTimeline,
     addMemory, updateMemory, removeMemory,
     updateNpcProfile, removeNpcProfile,
     updateItem, removeItem,
-    updateTimelineEntry, removeTimelineEntry,
+    updateMilestone, removeMilestone,
+    upsertTimeline, removeTimeline,
     addHiddenNote,
 } from './memory-store.js';
 import { cyrb53Hash } from './message-state.js';
@@ -57,7 +58,7 @@ function getContext() {
 /**
  * 1. 楼层连续性检测（含重roll检测）
  */
-export function detectFloorIssues(chatId, memories, npcs, items, timelines) {
+export function detectFloorIssues(chatId, memories, npcs, items, milestones) {
     const ctx = getContext();
     const chat = ctx?.chat || [];
     const issues = [];
@@ -77,7 +78,7 @@ export function detectFloorIssues(chatId, memories, npcs, items, timelines) {
         ...memories.map(e => ({ ...e, _collection: 'mem' })),
         ...npcs.map(e => ({ ...e, _collection: 'npc' })),
         ...items.map(e => ({ ...e, _collection: 'item' })),
-        ...timelines.map(e => ({ ...e, _collection: 'timeline' })),
+        ...milestones.map(e => ({ ...e, _collection: 'milestone' })),
     ];
 
     for (const entry of allEntries) {
@@ -286,7 +287,7 @@ export function detectStaleMemories(memories, staleDays = 7, staleHitThreshold =
 /**
  * 7. 来源完整性检测
  */
-export function detectSourceIntegrityIssues(chatId, memories, npcs, items, timelines) {
+export function detectSourceIntegrityIssues(chatId, memories, npcs, items, milestones) {
     const ctx = getContext();
     const chat = ctx?.chat || [];
 
@@ -301,7 +302,7 @@ export function detectSourceIntegrityIssues(chatId, memories, npcs, items, timel
         ...memories.map(e => ({ ...e, _collection: 'mem' })),
         ...npcs.map(e => ({ ...e, _collection: 'npc' })),
         ...items.map(e => ({ ...e, _collection: 'item' })),
-        ...timelines.map(e => ({ ...e, _collection: 'timeline' })),
+        ...milestones.map(e => ({ ...e, _collection: 'milestone' })),
     ];
 
     const issues = [];
@@ -324,11 +325,11 @@ export function detectSourceIntegrityIssues(chatId, memories, npcs, items, timel
 }
 
 // ═══════════════════════════════════════════════════════════
-//  时间线线程检测（v6.7.0 引入）
+//  时间线检测（v9.2.0，由旧线程结构演进）
 // ═══════════════════════════════════════════════════════════
 
 /**
- * 8. 空线程检测
+ * 8. 空时间线检测
  */
 export function detectEmptyThreads(threads) {
     if (!threads || !threads.length) return [];
@@ -338,7 +339,7 @@ export function detectEmptyThreads(threads) {
             id: t.id,
             title: t.name || t.id,
             type: 'thread_empty',
-            detail: '线程没有任何条目，为空壳线程',
+            detail: '时间线没有任何条目，为空壳时间线',
             severity: 'warning',
             entry: t,
             _collection: 'thread',
@@ -346,7 +347,7 @@ export function detectEmptyThreads(threads) {
 }
 
 /**
- * 9. 线程状态一致性检测
+ * 9. 时间线状态一致性检测
  */
 export function detectThreadStatusMismatch(threads) {
     if (!threads || !threads.length) return [];
@@ -362,7 +363,7 @@ export function detectThreadStatusMismatch(threads) {
                 id: t.id,
                 title: t.name || t.id,
                 type: 'thread_status_mismatch',
-                detail: `线程状态为「ended」但仍有 ${entries.filter(e => e.status === 'ongoing').length} 个进行中条目`,
+                detail: `时间线状态为「ended」但仍有 ${entries.filter(e => e.status === 'ongoing').length} 个进行中条目`,
                 severity: 'warning',
                 entry: t,
                 _collection: 'thread',
@@ -372,7 +373,7 @@ export function detectThreadStatusMismatch(threads) {
                 id: t.id,
                 title: t.name || t.id,
                 type: 'thread_status_mismatch',
-                detail: '线程状态为「ongoing」但所有条目均已结束',
+                detail: '时间线状态为「ongoing」但所有条目均已结束',
                 severity: 'warning',
                 entry: t,
                 _collection: 'thread',
@@ -383,7 +384,7 @@ export function detectThreadStatusMismatch(threads) {
 }
 
 /**
- * 10. 长期停滞线程检测
+ * 10. 长期停滞时间线检测
  */
 export function detectStaleThreads(threads, staleDays = 30) {
     if (!threads || !threads.length) return [];
@@ -411,7 +412,7 @@ export function detectStaleThreads(threads, staleDays = 30) {
 }
 
 /**
- * 11. 活跃线程过多检测
+ * 11. 活跃时间线过多检测
  */
 export function detectThreadOverload(threads, maxActiveThreads = 5) {
     if (!threads || !threads.length) return [];
@@ -420,9 +421,9 @@ export function detectThreadOverload(threads, maxActiveThreads = 5) {
 
     return [{
         id: '__thread_overload__',
-        title: '活跃线程过多',
+        title: '活跃时间线过多',
         type: 'thread_overload',
-        detail: `当前活跃线程 ${active.length} 条（ongoing+paused+resident），超过最大注入数 ${maxActiveThreads}。非 resident 线程可能不会被注入`,
+        detail: `当前活跃时间线 ${active.length} 条（ongoing+paused+resident），超过最大注入数 ${maxActiveThreads}。非 resident 时间线可能不会被注入`,
         severity: 'info',
         entry: null,
         _collection: 'thread',
@@ -552,17 +553,16 @@ export function detectMapIsolation(mapData, items = []) {
 
 export async function runHealthCheck(chatId) {
     const settings = getSettings();
-    const { getTimelineThreads } = await import('./memory-store.js');
     const [{ getMap }, { getClueBoard }] = await Promise.all([
         import('./map-store.js'),
         import('./clue-board.js'),
     ]);
-    const [memories, npcs, items, timelines, threads, mapData, clueBoard] = await Promise.all([
+    const [memories, npcs, items, milestones, timeline, mapData, clueBoard] = await Promise.all([
         getMemories(chatId),
         getNpcProfiles(chatId),
         getItems(chatId),
+        getMilestones(chatId),
         getTimeline(chatId),
-        getTimelineThreads(chatId).catch(() => []),
         getMap(chatId).catch(() => ({ locations: {} })),
         getClueBoard(chatId).catch(() => ({ nodes: [], connections: [] })),
     ]);
@@ -577,7 +577,7 @@ export async function runHealthCheck(chatId) {
     results.categories.floor = {
         label: '楼层连续性',
         icon: 'fa-solid fa-layer-group',
-        issues: detectFloorIssues(chatId, memories, npcs, items, timelines),
+        issues: detectFloorIssues(chatId, memories, npcs, items, milestones),
     };
 
     // Category 2: Missing embeddings
@@ -627,7 +627,7 @@ export async function runHealthCheck(chatId) {
     results.categories.source = {
         label: '来源完整性',
         icon: 'fa-solid fa-link',
-        issues: detectSourceIntegrityIssues(chatId, memories, npcs, items, timelines),
+        issues: detectSourceIntegrityIssues(chatId, memories, npcs, items, milestones),
     };
 
     // Category 8: Floor gaps (v8.2.1)
@@ -637,15 +637,15 @@ export async function runHealthCheck(chatId) {
         issues: detectFloorGaps(chatId),
     };
 
-    // Category 9: Timeline threads (v6.9.0)
+    // Category 9: Timeline health (v9.2.0, old thread checks)
     results.categories.threads = {
-        label: '时间线线程',
+        label: '时间线',
         icon: 'fa-solid fa-threads',
         issues: [
-            ...detectEmptyThreads(threads),
-            ...detectThreadStatusMismatch(threads),
-            ...detectStaleThreads(threads, settings.healthCheckThreadStaleDays ?? 30),
-            ...detectThreadOverload(threads, settings.maxActiveThreads ?? 5),
+            ...detectEmptyThreads(timeline),
+            ...detectThreadStatusMismatch(timeline),
+            ...detectStaleThreads(timeline, settings.healthCheckThreadStaleDays ?? 30),
+            ...detectThreadOverload(timeline, settings.maxActiveTimeline ?? settings.maxActiveThreads ?? 5),
         ],
     };
 
@@ -673,7 +673,7 @@ export async function runHealthCheck(chatId) {
             score -= severityPenalty[issue.severity] || 3;
         }
     }
-    results.summary.totalEntries = memories.length + npcs.length + items.length + timelines.length + (threads?.length || 0) + Object.keys(mapData?.locations || {}).length;
+    results.summary.totalEntries = memories.length + npcs.length + items.length + milestones.length + timeline.length + Object.keys(mapData?.locations || {}).length;
     results.summary.totalIssues = totalIssues;
     results.summary.healthScore = Math.max(0, score);
 
@@ -761,7 +761,7 @@ function getActionButtonsForIssue(issue) {
             btn('忽略', 'ignore');
             break;
         case 'thread_empty':
-            btn('删除线程', 'thread_delete', '#f44336');
+            btn('删除时间线', 'thread_delete', '#f44336');
             btn('忽略', 'ignore');
             break;
         case 'thread_status_mismatch':
@@ -1106,18 +1106,16 @@ async function handleHealthAction(op, issue, chatId, callbacks, rowEl) {
         }
         case 'thread_delete': {
             try {
-                const { removeTimelineThread } = await import('./memory-store.js');
-                await removeTimelineThread(chatId, issue.id);
+                await removeTimeline(chatId, issue.id);
                 itemEl.remove();
-                notifyCallbacks(callbacks, `已删除线程: ${(issue.title || issue.id).slice(0, 30)}`);
+                notifyCallbacks(callbacks, `已删除时间线: ${(issue.title || issue.id).slice(0, 30)}`);
             } catch (e) {
-                if (typeof toastr !== 'undefined') toastr.error('删除线程失败: ' + e.message);
+                if (typeof toastr !== 'undefined') toastr.error('删除时间线失败: ' + e.message);
             }
             break;
         }
         case 'thread_fix_status': {
             try {
-                const { upsertTimelineThread } = await import('./memory-store.js');
                 const thread = issue.entry;
                 const hasOngoingEntries = (thread.entries || []).some(e => e.status === 'ongoing');
                 const allEnded = (thread.entries || []).length > 0 && (thread.entries || []).every(e => e.status === 'ended');
@@ -1127,23 +1125,22 @@ async function handleHealthAction(op, issue, chatId, callbacks, rowEl) {
                 } else if (thread.status === 'ongoing' && allEnded) {
                     newStatus = 'ended';
                 }
-                await upsertTimelineThread(chatId, { ...thread, status: newStatus });
+                await upsertTimeline(chatId, { ...thread, status: newStatus });
                 itemEl.remove();
-                notifyCallbacks(callbacks, `线程状态已修正为「${newStatus}」`);
+                notifyCallbacks(callbacks, `时间线状态已修正为「${newStatus}」`);
             } catch (e) {
-                if (typeof toastr !== 'undefined') toastr.error('修正线程状态失败: ' + e.message);
+                if (typeof toastr !== 'undefined') toastr.error('修正时间线状态失败: ' + e.message);
             }
             break;
         }
         case 'thread_pause': {
             try {
-                const { upsertTimelineThread } = await import('./memory-store.js');
                 const thread = issue.entry;
-                await upsertTimelineThread(chatId, { ...thread, status: 'paused' });
+                await upsertTimeline(chatId, { ...thread, status: 'paused' });
                 itemEl.remove();
-                notifyCallbacks(callbacks, `线程已标记为暂停: ${(issue.title || issue.id).slice(0, 30)}`);
+                notifyCallbacks(callbacks, `时间线已标记为暂停: ${(issue.title || issue.id).slice(0, 30)}`);
             } catch (e) {
-                if (typeof toastr !== 'undefined') toastr.error('暂停线程失败: ' + e.message);
+                if (typeof toastr !== 'undefined') toastr.error('暂停时间线失败: ' + e.message);
             }
             break;
         }
@@ -1301,7 +1298,8 @@ async function updateEntry(chatId, collection, id, patch) {
         case 'mem': return updateMemory(chatId, id, patch);
         case 'npc': return updateNpcProfile(chatId, id, patch);
         case 'item': return updateItem(chatId, id, patch);
-        case 'timeline': return updateTimelineEntry(chatId, id, patch);
+        case 'milestone': return updateMilestone(chatId, id, patch);
+        case 'timeline': return upsertTimeline(chatId, { id, ...(patch || {}) });
         case 'map': { const { updateLocation } = await import('./map-store.js'); return updateLocation(chatId, id, patch); }
     }
 }
@@ -1311,7 +1309,8 @@ async function removeEntry(chatId, collection, id) {
         case 'mem': return removeMemory(chatId, id);
         case 'npc': return removeNpcProfile(chatId, id);
         case 'item': return removeItem(chatId, id);
-        case 'timeline': return removeTimelineEntry(chatId, id);
+        case 'milestone': return removeMilestone(chatId, id);
+        case 'timeline': return removeTimeline(chatId, id);
         case 'map': { const { removeLocation } = await import('./map-store.js'); return removeLocation(chatId, id); }
     }
 }

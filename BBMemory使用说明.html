@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>BB-Memory 使用说明</title>
+  <style>
+    body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.65;margin:0;background:#11131a;color:#eceff4}
+    main{max-width:920px;margin:0 auto;padding:28px 18px 48px}
+    h1{font-size:1.8rem;margin:0 0 8px}
+    h2{font-size:1.15rem;margin:28px 0 8px;border-bottom:1px solid #303646;padding-bottom:6px}
+    h3{font-size:1rem;margin:18px 0 6px}
+    p,li{color:#d8dee9}
+    .muted{color:#9aa4b2}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+    .card{border:1px solid #303646;border-radius:8px;padding:12px;background:#171a23}
+    code{background:#242936;border-radius:4px;padding:1px 4px}
+    a{color:#8ab4ff}
+  </style>
+</head>
+<body>
+<main>
+  <h1>BB-Memory 使用说明</h1>
+  <p class="muted">适用于 v9.2.0。BB-Memory 是 SillyTavern 角色扮演长期记忆扩展，核心目标是把剧情、关系、物品、地点和推理线索整理成可检索、可注入的上下文。</p>
+
+  <h2>核心数据</h2>
+  <div class="grid">
+    <section class="card"><h3>记忆条目</h3><p>记录长期有用的事实、事件、情绪和习惯。核心/永恒记忆会常驻注入，其余按相关性命中。</p></section>
+    <section class="card"><h3>NPC 档案</h3><p>记录角色身份、性格、外貌、状态、位置和关系。核心/重要 NPC 会优先注入。</p></section>
+    <section class="card"><h3>物品栏</h3><p>记录关键物品、装备、线索物、消耗品和背景物品。关键/装备物品会优先注入。</p></section>
+    <section class="card"><h3>里程碑</h3><p>记录关系质变、阶段转折、重大冲突起止、关键揭示等重要时间点。默认常驻注入，也可设置为向量命中。</p></section>
+    <section class="card"><h3>时间线</h3><p>记录持续存在的叙事线，如主线、感情线、支线、世界观线。时间线用于整理故事脉络，不替代里程碑。</p></section>
+    <section class="card"><h3>地图与线索板</h3><p>地图管理地点与路径；线索板允许手动建立节点和连线，把玩家推理注入给 AI。</p></section>
+  </div>
+
+  <h2>常用操作</h2>
+  <ul>
+    <li><strong>手动提取</strong>：从当前上下文提取记忆、NPC、物品、里程碑、地点和时间线。</li>
+    <li><strong>记忆管理</strong>：查看、搜索、新增、编辑、删除、归档各类条目，并管理存档槽。</li>
+    <li><strong>刷新时间线</strong>：根据现有里程碑重新整理时间线。</li>
+    <li><strong>记忆维护</strong>：检查重复、陈旧、缺少来源、空时间线等问题，并按建议修复。</li>
+    <li><strong>备份/恢复</strong>：把当前聊天的 BB-Memory 数据保存到聊天元数据，便于跨设备同步。</li>
+  </ul>
+
+  <h2>里程碑注入模式</h2>
+  <p><strong>常驻</strong>：每轮全部注入，适合少量关键节点。<strong>向量命中</strong>：仅在当前消息相关时注入，适合数量较多但仍重要的节点。设置中的“向量命中里程碑上限”会限制本轮最多注入多少条向量命中里程碑。</p>
+
+  <h2>建议工作流</h2>
+  <ol>
+    <li>先用“手动提取”或初始化工具建立基础数据。</li>
+    <li>在“记忆管理”中检查里程碑是否足够克制，删除普通流水账。</li>
+    <li>点击“刷新时间线”，让系统把里程碑整理成叙事线。</li>
+    <li>用“线索板”补充玩家推理，用“世界地图”补充空间关系。</li>
+    <li>阶段结束后做一次备份，换楼前可执行“换楼刷新”。</li>
+  </ol>
+
+  <h2>旧存档转换</h2>
+  <p>v9.2.0 起，旧“时间条目”改为 <code>milestones</code>，旧“时间线程”改为 <code>timeline</code>。如果你有旧 JSON 备份，可使用 <code>tools/bbmemory-v9.2-save-converter.html</code> 转换后再导入。</p>
+</main>
+</body>
+</html>

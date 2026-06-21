@@ -1,5 +1,5 @@
 /**
- * memory-agent.js —— BB-Memory v9.1.9 记忆管家 Agent（测试版）
+ * memory-agent.js —— BB-Memory v9.2.0 记忆管家 Agent（测试版）
  *
  * 混合模式：读操作直接注入数据给 LLM 自由回答，写操作保留轻量工具。
  * 支持分类管理 UI 内嵌于 Agent 面板。
@@ -8,9 +8,10 @@
 import { normalizeEndpoint } from './auto-generator.js';
 import {
     getSettings, updateSettings,
-    getNpcProfiles, getItems, getTimeline, getMemories,
-    removeNpcProfile, removeItem, removeTimelineEntry, removeMemory,
-    updateNpcProfile, updateItem, updateTimelineEntry, updateMemory,
+    getNpcProfiles, getItems, getMilestones, getTimeline, getMemories,
+    removeNpcProfile, removeItem, removeMilestone, removeTimeline, removeMemory,
+    updateNpcProfile, updateItem, updateMilestone, updateMemory,
+    upsertTimeline,
     archiveEntry, restoreEntry, addHiddenNote,
     addCategory, removeCategory, renameCategory, toggleCategory,
     getCategoryStats,
@@ -32,9 +33,10 @@ async function prepareContext(chatId, userMessage) {
     ]);
 
     // 并行加载所有数据
-    const [npcs, items, timeline, memories, mapData, clueBoard] = await Promise.all([
+    const [npcs, items, milestones, timeline, memories, mapData, clueBoard] = await Promise.all([
         getNpcProfiles(chatId),
         getItems(chatId),
+        getMilestones(chatId),
         getTimeline(chatId),
         getMemories(chatId),
         getMap(chatId).catch(() => ({ locations: {} })),
@@ -48,6 +50,7 @@ async function prepareContext(chatId, userMessage) {
     const allEntries = [
         ...npcs.filter(e => !e.archived).map(e => ({ ...e, _pillar: 'npc' })),
         ...items.filter(e => !e.archived).map(e => ({ ...e, _pillar: 'item' })),
+        ...milestones.filter(e => !e.archived).map(e => ({ ...e, _pillar: 'milestone' })),
         ...timeline.filter(e => !e.archived).map(e => ({ ...e, _pillar: 'timeline' })),
         ...memories.filter(e => !e.archived && e.status !== 'deleted').map(e => ({ ...e, _pillar: 'mem' })),
         ...mapLocations.map(e => ({ ...e, title: e.name, content: e.description, _pillar: 'map' })),
@@ -59,6 +62,7 @@ async function prepareContext(chatId, userMessage) {
     const stats = {
         npc: npcs.filter(e => !e.archived).length,
         item: items.filter(e => !e.archived).length,
+        milestone: milestones.filter(e => !e.archived).length,
         timeline: timeline.filter(e => !e.archived).length,
         mem: memories.filter(e => !e.archived && e.status !== 'deleted').length,
         map: mapLocations.length,
@@ -69,13 +73,13 @@ async function prepareContext(chatId, userMessage) {
     const categories = (settings.categories || []).map(name => ({
         name,
         enabled: enabled[name] === true,
-        counts: catStats[name] || { mem: 0, npc: 0, item: 0, timeline: 0 },
+        counts: catStats[name] || { mem: 0, npc: 0, item: 0, milestone: 0, timeline: 0 },
     }));
     const enabledList = hasEnabled ? (settings.categories || []).filter(c => enabled[c]).join('、') || '(无)' : '';
     const filterStatus = hasEnabled ? '已开启: ' + enabledList : '全部显示';
 
     // 构建数据上下文
-    const pillars = ['mem', 'npc', 'item', 'timeline', 'map', 'clue'];
+    const pillars = ['mem', 'npc', 'item', 'milestone', 'timeline', 'map', 'clue'];
     const grouped = {};
     for (const p of pillars) grouped[p] = [];
 
@@ -88,7 +92,8 @@ async function prepareContext(chatId, userMessage) {
         if (p === 'mem') detail = (r.content || r.summary || '').slice(0, 300);
         else if (p === 'npc') detail = [r.role, r.personality, (r.notes || []).join('; ')].filter(Boolean).join(' | ').slice(0, 200);
         else if (p === 'item') detail = (r.significance || '').slice(0, 200);
-        else if (p === 'timeline') detail = (r.summary || r.event || '').slice(0, 200);
+        else if (p === 'milestone') detail = (r.summary || r.event || '').slice(0, 200);
+        else if (p === 'timeline') detail = [r.status, r.priority, r.summary].filter(Boolean).join(' | ').slice(0, 200);
         else if (p === 'map') detail = [r.region, r.description, r.realWorldRef].filter(Boolean).join(' | ').slice(0, 220);
         else if (p === 'clue') detail = [r.note, r.refType ? `引用:${r.refType}/${r.refId}` : ''].filter(Boolean).join(' | ').slice(0, 220);
         grouped[p].push('- ' + label + cat + tierBadge + '\n  ' + detail + '\n  ID: ' + r.id);
@@ -98,14 +103,14 @@ async function prepareContext(chatId, userMessage) {
     if (categories.length > 0) {
         catListText = categories.map(function (c) {
             var statusIcon = c.enabled ? '✅注入' : '⏸暂停';
-            var counts = '记忆' + (c.counts.mem || 0) + ' NPC' + (c.counts.npc || 0) + ' 物品' + (c.counts.item || 0) + ' 时间线' + (c.counts.timeline || 0);
+            var counts = '记忆' + (c.counts.mem || 0) + ' NPC' + (c.counts.npc || 0) + ' 物品' + (c.counts.item || 0) + ' 里程碑' + (c.counts.milestone || c.counts.timeline || 0);
             return '- ' + c.name + ': ' + statusIcon + ' (' + counts + ')';
         }).join('\n');
     }
 
-    let contextText = '【数据概览】\n记忆:' + stats.mem + '条 NPC:' + stats.npc + '个 物品:' + stats.item + '件 时间线:' + stats.timeline + '条 地图:' + stats.map + '处 线索:' + stats.clue + '节点/' + stats.clueConnection + '连线\n注入过滤: ' + filterStatus + '\n\n【分类】\n' + catListText;
+    let contextText = '【数据概览】\n记忆:' + stats.mem + '条 NPC:' + stats.npc + '个 物品:' + stats.item + '件 里程碑:' + stats.milestone + '条 时间线:' + stats.timeline + '条 地图:' + stats.map + '处 线索:' + stats.clue + '节点/' + stats.clueConnection + '连线\n注入过滤: ' + filterStatus + '\n\n【分类】\n' + catListText;
 
-    const pillarLabels = { mem: '记忆', npc: 'NPC', item: '物品', timeline: '时间线', map: '地图地点', clue: '线索板节点' };
+    const pillarLabels = { mem: '记忆', npc: 'NPC', item: '物品', milestone: '里程碑', timeline: '时间线', map: '地图地点', clue: '线索板节点' };
     for (const p of pillars) {
         if (grouped[p].length > 0) {
             contextText += '\n\n【' + pillarLabels[p] + ' (' + grouped[p].length + '条)】\n' + grouped[p].join('\n');
@@ -123,7 +128,7 @@ async function prepareContext(chatId, userMessage) {
         }
     }
 
-    return { contextText, stats, categories, searchResults, hasEnabled, data: { npcs, items, timeline, memories, mapLocations, clueNodes, clueConnections } };
+    return { contextText, stats, categories, searchResults, hasEnabled, data: { npcs, items, milestones, timeline, memories, mapLocations, clueNodes, clueConnections } };
 }
 
 function formatBriefEntry(entry, pillar) {
@@ -132,7 +137,8 @@ function formatBriefEntry(entry, pillar) {
         mem: entry.summary || entry.content || '',
         npc: [entry.role, entry.status, entry.location].filter(Boolean).join(' | '),
         item: [entry.owner ? '持有:' + entry.owner : '', entry.status, entry.location, entry.significance].filter(Boolean).join(' | '),
-        timeline: [entry.status, entry.storyTime, entry.summary || entry.event].filter(Boolean).join(' | '),
+        milestone: [entry.status, entry.storyTime, entry.summary || entry.event].filter(Boolean).join(' | '),
+        timeline: [entry.status, entry.priority, entry.summary || entry.name].filter(Boolean).join(' | '),
         map: [entry.region, entry.description].filter(Boolean).join(' | '),
         clue: [entry.note, entry.refType ? `引用:${entry.refType}/${entry.refId}` : ''].filter(Boolean).join(' | '),
     }[pillar] || '';
@@ -147,22 +153,23 @@ async function tryLocalAgentAnswer(chatId, userMessage) {
         import('./map-store.js'),
         import('./clue-board.js'),
     ]);
-    const [npcs, items, timeline, memories, mapData, clueBoard] = await Promise.all([
-        getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+    const [npcs, items, milestones, timeline, memories, mapData, clueBoard] = await Promise.all([
+        getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getTimeline(chatId), getMemories(chatId),
         getMap(chatId).catch(() => ({ locations: {} })),
         getClueBoard(chatId).catch(() => ({ nodes: [], connections: [] })),
     ]);
     const activeMemories = memories.filter(m => !m.archived && m.status !== 'deleted');
     const activeNpcs = npcs.filter(n => !n.archived);
     const activeItems = items.filter(i => !i.archived);
+    const activeMilestones = milestones.filter(t => !t.archived);
     const activeTimeline = timeline.filter(t => !t.archived);
     const mapLocations = Object.values(mapData?.locations || {}).filter(l => l && !l.archived);
     const clueNodes = Array.isArray(clueBoard?.nodes) ? clueBoard.nodes : [];
 
     if (/统计|概况|概览|多少/.test(text)) {
         return [
-            `当前共有：记忆 ${activeMemories.length} 条，NPC ${activeNpcs.length} 个，物品 ${activeItems.length} 件，时间线 ${activeTimeline.length} 条，地图地点 ${mapLocations.length} 处，线索板 ${clueNodes.length} 个节点。`,
-            `核心/永恒记忆：${activeMemories.filter(m => m.memoryTier === 'core' || m.memoryTier === 'eternal').length} 条；进行中/伏笔时间线：${activeTimeline.filter(t => t.status === 'ongoing' || t.status === 'foreshadow' || t.isActive).length} 条。`,
+            `当前共有：记忆 ${activeMemories.length} 条，NPC ${activeNpcs.length} 个，物品 ${activeItems.length} 件，里程碑 ${activeMilestones.length} 条，时间线 ${activeTimeline.length} 条，地图地点 ${mapLocations.length} 处，线索板 ${clueNodes.length} 个节点。`,
+            `核心/永恒记忆：${activeMemories.filter(m => m.memoryTier === 'core' || m.memoryTier === 'eternal').length} 条；进行中/伏笔里程碑：${activeMilestones.filter(t => t.status === 'ongoing' || t.status === 'foreshadow' || t.isActive).length} 条。`,
         ].join('\n');
     }
 
@@ -182,12 +189,19 @@ async function tryLocalAgentAnswer(chatId, userMessage) {
         return list.length ? list.join('\n') : '目前没有记忆条目。';
     }
 
-    if (/活跃.*时间线|进行中.*时间线|伏笔/.test(text)) {
-        const list = activeTimeline
+    if (/活跃.*里程碑|进行中.*里程碑|活跃.*时间点|伏笔/.test(text)) {
+        const list = activeMilestones
             .filter(t => t.status === 'ongoing' || t.status === 'foreshadow' || t.isActive)
             .slice(0, 30)
+            .map(t => formatBriefEntry(t, 'milestone'));
+        return list.length ? list.join('\n') : '目前没有进行中或伏笔里程碑。';
+    }
+
+    if (/时间线|叙事线|故事线/.test(text) && /活跃|进行中|所有|列/.test(text)) {
+        const list = activeTimeline
+            .slice(0, 30)
             .map(t => formatBriefEntry(t, 'timeline'));
-        return list.length ? list.join('\n') : '目前没有进行中或伏笔时间线。';
+        return list.length ? list.join('\n') : '目前没有时间线。';
     }
 
     if (/地图|地点/.test(text) && /孤立|断开|无路径/.test(text)) {
@@ -220,7 +234,7 @@ async function callAgentApi(contextText, conversationHistory) {
 
     const systemPrompt = getPromptTemplate(settings, 'agent.systemPrompt', DEFAULT_AGENT_SYSTEM_PROMPT) || `你是 BB-Memory 记忆管家，帮助用户管理 SillyTavern 角色扮演的长期记忆。
 
-你能读取并解释：记忆、NPC、物品、时间线、地图地点、线索板节点。
+你能读取并解释：记忆、NPC、物品、里程碑、时间线、地图地点、线索板节点。
 当用户只是询问或列举时，直接基于数据快照回答，不要编造。
 
 只有用户明确要求修改、删除、归档、分类、升降级或添加隐藏备注时，才执行写操作。
@@ -228,10 +242,10 @@ async function callAgentApi(contextText, conversationHistory) {
 JSON_ACTION: {"action":"update_entry","pillar":"mem","id":"条目ID","patch":{"summary":"新摘要"}}
 
 可用 action：
-- assign_category: {"action":"assign_category","pillar":"mem|npc|item|timeline|map","id":"...","category":"分类名或null"}
-- update_entry: {"action":"update_entry","pillar":"mem|npc|item|timeline|map","id":"...","patch":{...}}
+- assign_category: {"action":"assign_category","pillar":"mem|npc|item|milestone|timeline|map","id":"...","category":"分类名或null"}
+- update_entry: {"action":"update_entry","pillar":"mem|npc|item|milestone|timeline|map","id":"...","patch":{...}}
 - set_tier: {"action":"set_tier","pillar":"mem|npc|item|map","id":"...","tier":"stable/core/eternal 或 core/important/minor/background 或 key/equipped/clue/consumable/background"}
-- archive_entry / restore_entry / delete_entry: {"action":"archive_entry","pillar":"mem|npc|item|timeline|map","id":"..."}
+- archive_entry / restore_entry / delete_entry: {"action":"archive_entry","pillar":"mem|npc|item|milestone|timeline|map","id":"..."}
 - add_hidden_note: {"action":"add_hidden_note","id":"记忆ID","content":"隐藏备注","type":"note","allowInjection":true}
 - toggle_category: {"action":"toggle_category","name":"分类名","enabled":true}
 - manage_category: {"action":"manage_category","mode":"add|remove|rename","name":"分类名","newName":"新名称"}
@@ -281,7 +295,8 @@ function getUpdaterForPillar(pillar) {
         mem: updateMemory,
         npc: updateNpcProfile,
         item: updateItem,
-        timeline: updateTimelineEntry,
+        milestone: updateMilestone,
+        timeline: (chatId, id, patch) => upsertTimeline(chatId, { id, ...(patch || {}) }),
         map: async (chatId, id, patch) => {
             const { updateLocation } = await import('./map-store.js');
             return updateLocation(chatId, id, patch);
@@ -363,7 +378,8 @@ async function executeAction(actionSpec, chatId) {
                     mem: removeMemory,
                     npc: removeNpcProfile,
                     item: removeItem,
-                    timeline: removeTimelineEntry,
+                    milestone: removeMilestone,
+                    timeline: removeTimeline,
                     map: async (chatId, id) => {
                         const { removeLocation } = await import('./map-store.js');
                         return removeLocation(chatId, id);
@@ -499,7 +515,7 @@ function buildAgentHTML(chatId) {
                 <button class="bb-agent-quick menu_button" data-cmd="列出所有分类及每个分类下的条目数">🏷 分类概况</button>
                 <button class="bb-agent-quick menu_button" data-cmd="列出最近的10条记忆">📝 最近记忆</button>
                 <button class="bb-agent-quick menu_button" data-cmd="列出所有核心NPC">👤 核心NPC</button>
-                <button class="bb-agent-quick menu_button" data-cmd="列出所有活跃的时间线事件">⏱ 活跃时间线</button>
+                <button class="bb-agent-quick menu_button" data-cmd="列出所有活跃的里程碑">⏱ 活跃里程碑</button>
             </div>
             <div class="bb-agent-input-row">
                 <textarea id="bb_agent_input" class="bb-input" rows="2" placeholder="输入自然语言指令..."></textarea>

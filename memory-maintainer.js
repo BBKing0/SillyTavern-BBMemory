@@ -7,10 +7,10 @@
 
 import {
     getSettings, updateSettings,
-    getNpcProfiles, getItems, getTimeline, getMemories,
-    updateNpcProfile, updateItem, updateTimelineEntry, updateMemory,
-    removeNpcProfile, removeItem, removeTimelineEntry, removeMemory,
-    getTimelineThreads, saveTimelineThreads,
+    getNpcProfiles, getItems, getMilestones, getTimeline, getMemories,
+    updateNpcProfile, updateItem, updateMilestone, updateMemory,
+    removeNpcProfile, removeItem, removeMilestone, removeMemory,
+    saveTimeline,
     getCalendarDescription,
 } from './memory-store.js';
 import { callCustomApi, callMainApi } from './auto-generator.js';
@@ -72,14 +72,14 @@ export async function autoMaintainSilent(chatId) {
         }
     }
 
-    // 2. 自动压缩已结束的时间线
-    const timeline = await getTimeline(chatId);
-    for (const t of timeline) {
+    // 2. 自动压缩已结束的里程碑
+    const milestones = await getMilestones(chatId);
+    for (const t of milestones) {
         if (t.memoryTier === 'eternal' || t.isActive || t.status === 'ongoing') continue;
         const roundsSinceEnd = Math.floor((now - t.updatedAt) / roundMs);
         if (roundsSinceEnd >= 60) {
-            await updateTimelineEntry(chatId, t.id, { isActive: false, status: 'ended' });
-            if (settings.debugLogging) log(`压缩时间线: ${(t.event || t.id).slice(0, 30)}`);
+            await updateMilestone(chatId, t.id, { isActive: false, status: 'ended' });
+            if (settings.debugLogging) log(`压缩里程碑: ${(t.event || t.id).slice(0, 30)}`);
         }
     }
 
@@ -95,8 +95,8 @@ export async function checkMaintenanceNeeded(chatId) {
     const cache = getCache(chatId);
     cleanResolved(cache);
 
-    const [npc, items, timeline, memories] = await Promise.all([
-        getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+    const [npc, items, milestones, memories] = await Promise.all([
+        getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId),
     ]);
 
     const issues = [];
@@ -125,12 +125,12 @@ export async function checkMaintenanceNeeded(chatId) {
         });
     }
 
-    // 3. 可压缩时间线
-    for (const t of timeline) {
+    // 3. 可压缩里程碑
+    for (const t of milestones) {
         if (t.isActive || t.status === 'ongoing') continue;
         if (t.memoryTier === 'eternal') continue;
         issues.push({
-            type: 'compressible_timeline', collection: 'timeline', item: t,
+            type: 'compressible_timeline', collection: 'milestone', item: t,
             reason: `${t.event} — 已结束，可压缩归档`,
             severity: 'info',
         });
@@ -149,10 +149,10 @@ export async function checkMaintenanceNeeded(chatId) {
     }
 
     // 5. 伏笔
-    for (const t of timeline) {
+    for (const t of milestones) {
         if (t.status !== 'foreshadow') continue;
         issues.push({
-            type: 'foreshadow', collection: 'timeline', item: t,
+            type: 'foreshadow', collection: 'milestone', item: t,
             reason: `${t.event} — 待确认伏笔`,
             severity: 'info',
         });
@@ -164,7 +164,7 @@ export async function checkMaintenanceNeeded(chatId) {
     const thresholdNpc = settings.maintenanceNpcThreshold || 5;
     const thresholdItem = settings.maintenanceItemThreshold || 20;
     const thresholdMem = settings.maintenanceMemThreshold || 20;
-    const totalCount = npc.length + items.length + timeline.length + memories.length;
+    const totalCount = npc.length + items.length + milestones.length + memories.length;
 
     const needsReminder = issues.length > 0 && (
         npc.length >= thresholdNpc || items.length >= thresholdItem ||
@@ -176,7 +176,7 @@ export async function checkMaintenanceNeeded(chatId) {
         totalItems: totalCount,
         issueCount: issues.length,
         issues,
-        stats: { npc: npc.length, items: items.length, timeline: timeline.length, memories: memories.length },
+        stats: { npc: npc.length, items: items.length, milestones: milestones.length, timeline: milestones.length, memories: memories.length },
     };
 }
 
@@ -184,9 +184,9 @@ export async function checkMaintenanceNeeded(chatId) {
 //  维护操作
 // ═══════════════════════════════════════════════════════════
 
-const loadFns = { npc: getNpcProfiles, item: getItems, timeline: getTimeline, mem: getMemories };
-const updateFns = { npc: updateNpcProfile, item: updateItem, timeline: updateTimelineEntry, mem: updateMemory };
-const removeFns = { npc: removeNpcProfile, item: removeItem, timeline: removeTimelineEntry, mem: removeMemory };
+const loadFns = { npc: getNpcProfiles, item: getItems, milestone: getMilestones, timeline: getMilestones, mem: getMemories };
+const updateFns = { npc: updateNpcProfile, item: updateItem, milestone: updateMilestone, timeline: updateMilestone, mem: updateMemory };
+const removeFns = { npc: removeNpcProfile, item: removeItem, milestone: removeMilestone, timeline: removeMilestone, mem: removeMemory };
 
 export async function performMaintenance(chatId, actions) {
     const cache = getCache(chatId);
@@ -230,9 +230,9 @@ export async function performMaintenance(chatId, actions) {
                 break;
             }
             case 'compress_timeline':
-                await updateTimelineEntry(chatId, id, {
+                await updateMilestone(chatId, id, {
                     isActive: false, status: 'ended',
-                    summary: `[归档] ${(await getTimeline(chatId)).find(t => t.id === id)?.event || ''}: ${(await getTimeline(chatId)).find(t => t.id === id)?.summary || ''}`,
+                    summary: `[归档] ${(await getMilestones(chatId)).find(t => t.id === id)?.event || ''}: ${(await getMilestones(chatId)).find(t => t.id === id)?.summary || ''}`,
                 });
                 results.compressed++;
                 break;
@@ -285,20 +285,20 @@ export async function restoreMemory(chatId, memoryId) {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  v6.7.0 命名线程系统 — 线程总结生成
+//  v9.2.0 时间线系统 — 时间线总结生成
 // ═══════════════════════════════════════════════════════════
 
 /**
- * 从时间线条目重新生成线程总结
- * 读取所有时间线条目 + 现有线程，让 LLM 输出更新后的线程列表
+ * 从里程碑重新生成时间线总结
+ * 读取所有里程碑 + 现有时间线，让 LLM 输出更新后的时间线列表
  */
 export async function regenerateThreadSummary(chatId, options = {}) {
-    const timeline = await getTimeline(chatId);
-    const existingThreads = await getTimelineThreads(chatId);
+    const milestones = await getMilestones(chatId);
+    const existingTimeline = await getTimeline(chatId);
     const settings = getSettings();
 
-    // 将时间线条目按重要性排序：ongoing + foreshadow 优先，ended 次之
-    const sorted = [...timeline].sort((a, b) => {
+    // 将里程碑按重要性排序：ongoing + foreshadow 优先，ended 次之
+    const sorted = [...milestones].sort((a, b) => {
         const scoreA = (a.status === 'ongoing' || a.status === 'foreshadow' ? 2 : a.status === 'ended' ? 1 : 0);
         const scoreB = (b.status === 'ongoing' || b.status === 'foreshadow' ? 2 : b.status === 'ended' ? 1 : 0);
         if (scoreA !== scoreB) return scoreB - scoreA;
@@ -308,20 +308,20 @@ export async function regenerateThreadSummary(chatId, options = {}) {
     // 取最近的重要条目（最多 30 条，避免 prompt 太长）
     const recentEntries = sorted.slice(0, 30);
 
-    // 构建时间线条目文本
+    // 构建里程碑文本
     const entriesText = recentEntries.map((t, i) =>
         `${i + 1}. [${t.storyTime || '?'}] ${t.event} (${t.status || 'ongoing'})\n   ${t.summary}${t.impact ? ' // 影响: ' + t.impact : ''}`
     ).join('\n');
 
-    // 构建已有线程文本
-    const threadsText = existingThreads.length > 0
-        ? existingThreads.map(t => {
+    // 构建已有时间线文本
+    const timelineText = existingTimeline.length > 0
+        ? existingTimeline.map(t => {
             const entries = (t.entries || []).map(e => `  ${e.period || ''} ${e.event || ''} [${e.status || ''}]`).join('\n');
             return `- [${t.id}] ${t.name} (type:${t.type}, status:${t.status}, priority:${t.priority})${t.parentThreadId ? ', parent:' + t.parentThreadId : ''}\n${entries || '  (无条目)'}`;
         }).join('\n')
-        : '(无已有线程)';
+        : '(无已有时间线)';
 
-    const maxActive = options.maxActiveThreads || settings.maxActiveThreads || 5;
+    const maxActive = options.maxActiveTimeline ?? options.maxActiveThreads ?? settings.maxActiveTimeline ?? settings.maxActiveThreads ?? 5;
     const calDesc2 = (await getCalendarDescription(chatId))?.trim();
     const calRef2 = calDesc2
         ? `\n**世界历法参考**：${calDesc2}\n（仅用于推断和整理故事时间，无需计算天数）\n` : '';
@@ -332,38 +332,39 @@ export async function regenerateThreadSummary(chatId, options = {}) {
             calRef: calRef2,
             CONCRETE_TIME_RULE: getPromptTemplate(settings, 'extract.concreteTimeRule', DEFAULT_CONCRETE_TIME_RULE),
             entriesText: entriesText || '(无)',
-            threadsText,
+            threadsText: timelineText,
+            timelineText,
             maxActive,
         }
-    ) || `你是一个故事时间线组织助手。根据时间线条目和已有线程，重新整理故事线程。${calRef2}
+    ) || `你是一个故事时间线组织助手。根据里程碑和已有时间线，重新整理故事时间线。${calRef2}
 
 ═══════════════════════════════════════════════════════
-## 时间线条目（按重要性排序）
+## 里程碑（按重要性排序）
 ═══════════════════════════════════════════════════════
 ${entriesText || '(无)'}
 
 ═══════════════════════════════════════════════════════
-## 已有线程
+## 已有时间线
 ═══════════════════════════════════════════════════════
-${threadsText}
+${timelineText}
 
 ═══════════════════════════════════════════════════════
 ## 任务
 ═══════════════════════════════════════════════════════
 
-根据时间线条目，重新整理为命名线程。每条线程是一个独立的故事线索。
+根据里程碑，重新整理为命名时间线。每条时间线是一条持续存在的故事线索。
 
 规则：
-1. 每个线程有独立的 name（如"第一幕·战前"、"感情线·charA"、"支线·寻找圣剑"）
-2. 将相关的时间线条目归入对应线程的 entries 中
+1. 每条时间线有独立的 name（如"第一幕·战前"、"感情线·charA"、"支线·寻找圣剑"）
+2. 将相关的里程碑归入对应时间线的 entries 中
 3. 合并同类项——时间相近、主题相同的事件合并为一条 entry
-4. 保持活跃线程在 ${maxActive} 条以内（resident 不计入）
-5. 已结束的线程标记 status:"ended"（不注入，但可被向量检索）
-6. 重要的、贯穿始终的线程标记 status:"resident"（永远注入，永不降级）
-7. 线程类型 type: plot(主线剧情) / emotional(感情线) / side(支线) / world(世界观)
+4. 保持活跃时间线在 ${maxActive} 条以内（resident 不计入）
+5. 已结束的时间线标记 status:"ended"（不注入，但可被向量检索）
+6. 重要的、贯穿始终的时间线标记 status:"resident"（永远注入）
+7. 时间线类型 type: plot(主线剧情) / emotional(感情线) / side(支线) / world(世界观)
 
 返回纯JSON对象（不要markdown代码块）：
-{"threads":[{"id":"保留已有ID或生成新ID","name":"线程名","type":"plot|emotional|side|world","status":"ongoing|ended|paused|resident","priority":"high|medium|low","parentThreadId":null或父线程ID,"entries":[{"period":"时间区间","event":"事件描述","status":"ongoing|ended|milestone"}]}]}
+{"timeline":[{"id":"保留已有ID或生成新ID","name":"时间线名","type":"plot|emotional|side|world","status":"ongoing|ended|paused|resident","priority":"high|medium|low","parentThreadId":null或父时间线ID,"entries":[{"refId":"可选的里程碑ID","period":"时间区间","event":"事件描述","status":"ongoing|ended|milestone"}]}]}
 只输出JSON。`;
 
     let responseText;
@@ -374,8 +375,8 @@ ${threadsText}
             responseText = await callMainApi(prompt);
         }
     } catch (e) {
-        console.warn('[BB-Memory] 线程总结生成API调用失败:', e.message);
-        return { threadCount: 0, error: e.message };
+        console.warn('[BB-Memory] 时间线总结生成API调用失败:', e.message);
+        return { timelineCount: 0, threadCount: 0, error: e.message };
     }
 
     try {
@@ -383,29 +384,31 @@ ${threadsText}
         text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
         const match = text.match(/\{[\s\S]*\}/);
         if (!match) {
-            console.warn('[BB-Memory] 线程总结响应未找到JSON');
-            return { threadCount: 0, error: 'No JSON found in response' };
+            console.warn('[BB-Memory] 时间线总结响应未找到JSON');
+            return { timelineCount: 0, threadCount: 0, error: 'No JSON found in response' };
         }
         const parsed = JSON.parse(match[0]);
-        const newThreads = Array.isArray(parsed.threads) ? parsed.threads : [];
+        const newTimeline = Array.isArray(parsed.timeline) ? parsed.timeline : (Array.isArray(parsed.threads) ? parsed.threads : []);
 
-        // 保留已有线程的 id 和 createdAt
-        for (const nt of newThreads) {
-            const existing = existingThreads.find(t => t.id === nt.id);
+        // 保留已有时间线的 id 和 createdAt
+        for (const nt of newTimeline) {
+            const existing = existingTimeline.find(t => t.id === nt.id);
             if (existing) {
                 nt.createdAt = existing.createdAt;
             }
             nt.updatedAt = Date.now();
         }
 
-        await saveTimelineThreads(chatId, newThreads);
-        console.log(`[BB-Memory] 线程总结更新: ${newThreads.length} 条线程`);
-        return { threadCount: newThreads.length };
+        await saveTimeline(chatId, newTimeline);
+        console.log(`[BB-Memory] 时间线总结更新: ${newTimeline.length} 条时间线`);
+        return { timelineCount: newTimeline.length, threadCount: newTimeline.length };
     } catch (e) {
-        console.warn('[BB-Memory] 线程总结JSON解析失败:', e.message);
-        return { threadCount: 0, error: e.message };
+        console.warn('[BB-Memory] 时间线总结JSON解析失败:', e.message);
+        return { timelineCount: 0, threadCount: 0, error: e.message };
     }
 }
+
+export const regenerateTimelineSummary = regenerateThreadSummary;
 
 // ═══ 已维护记录 ═══
 
