@@ -1,5 +1,5 @@
 /**
- * memory-agent.js —— BB-Memory v8.6.0 记忆管家 Agent
+ * memory-agent.js —— BB-Memory v9.1.9 记忆管家 Agent（测试版）
  *
  * 混合模式：读操作直接注入数据给 LLM 自由回答，写操作保留轻量工具。
  * 支持分类管理 UI 内嵌于 Agent 面板。
@@ -468,7 +468,7 @@ function buildAgentHTML(chatId) {
     return `
     <div class="bb-agent-panel">
         <div class="bb-agent-header">
-            <span><i class="fa-solid fa-robot"></i> 记忆管家</span>
+            <span class="bb-agent-title"><i class="fa-solid fa-robot"></i> 记忆管家 Agent <em>测试版</em></span>
             <div style="display:flex;gap:4px;">
                 <button class="bb-agent-btn-clear menu_button" style="font-size:0.72em;" title="清空对话"><i class="fa-solid fa-eraser"></i></button>
                 <button class="bb-agent-btn-close menu_button" style="font-size:0.72em;"><i class="fa-solid fa-times"></i></button>
@@ -476,8 +476,12 @@ function buildAgentHTML(chatId) {
         </div>
 
         <div class="bb-agent-body" id="bb_agent_body">
+            <div class="bb-agent-beta-note">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                测试版功能：Agent 可能按你的明确指令执行分类、编辑、归档等写操作。建议先备份，完成后复核记忆数据。
+            </div>
             <div class="bb-agent-msg bb-agent-msg-system">
-                <i class="fa-solid fa-circle-info"></i> 你好！我是记忆管家。你可以用自然语言问我：
+                <i class="fa-solid fa-circle-info"></i> 你好！我是记忆管家 Agent 测试版。你可以用自然语言问我：
                 <div style="margin:4px 0 0 4px;font-size:0.85em;opacity:0.7;">
                     · "有哪些记忆？"<br>
                     · "列出所有NPC"<br>
@@ -582,7 +586,7 @@ export function openAgent(chatId) {
     overlay.querySelector('.bb-agent-btn-clear')?.addEventListener('click', () => {
         conversationHistory.length = 0;
         const body = document.querySelector('#bb_agent_body');
-        if (body) body.innerHTML = `<div class="bb-agent-msg bb-agent-msg-system">💬 对话已清空。有什么可以帮你的？</div>`;
+        if (body) body.innerHTML = `<div class="bb-agent-beta-note"><i class="fa-solid fa-triangle-exclamation"></i> 测试版功能：Agent 可能按你的明确指令执行写操作。建议先备份并复核结果。</div><div class="bb-agent-msg bb-agent-msg-system"><i class="fa-solid fa-comment-dots"></i> 对话已清空。有什么可以帮你的？</div>`;
     });
     overlay.addEventListener('click', (e) => {
         if (e.target === overlay) overlay.remove();

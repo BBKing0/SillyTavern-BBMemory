@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.1.8</b>
+            <b>BB-Memory v9.1.9</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -63,9 +63,6 @@
                 </button>
                 <button id="bb_map_btn" class="menu_button" title="打开世界地图——管理地点和路径">
                     <i class="fa-solid fa-map"></i> 世界地图
-                </button>
-                <button id="bb_agent_btn" class="menu_button" title="打开记忆管家 Agent——用自然语言管理记忆">
-                    <i class="fa-solid fa-robot"></i> 记忆管家
                 </button>
             </div>
 
@@ -527,7 +524,22 @@
                     <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
                 </div>
                 <div class="bb-settings-section-body">
-                    <div class="bb-mem-empty">暂无测试功能发布</div>
+                    <div class="bb-experimental-card">
+                        <div class="bb-experimental-card-head">
+                            <i class="fa-solid fa-robot"></i>
+                            <div>
+                                <strong>记忆管家 Agent（测试版）</strong>
+                                <small>用自然语言检索、分类和管理记忆</small>
+                            </div>
+                        </div>
+                        <div class="bb-experimental-risk">
+                            <i class="fa-solid fa-triangle-exclamation"></i>
+                            实验功能，可能执行写操作；建议先备份当前聊天记忆，并在操作后复核结果。
+                        </div>
+                        <button id="bb_agent_btn" class="menu_button bb-experimental-action" title="打开记忆管家 Agent 测试版——实验功能，建议备份后使用">
+                            <i class="fa-solid fa-flask"></i> 打开 Agent 测试版
+                        </button>
+                    </div>
                 </div>
             </div>
 

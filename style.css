@@ -3479,6 +3479,54 @@
     padding: 4px 0;
 }
 
+.bb-experimental-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    border: 1px solid rgba(255, 152, 0, 0.35);
+    border-radius: 8px;
+    background: rgba(255, 152, 0, 0.06);
+}
+
+.bb-experimental-card-head {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+.bb-experimental-card-head > i {
+    color: #ffb74d;
+    margin-top: 2px;
+}
+
+.bb-experimental-card-head strong,
+.bb-experimental-card-head small {
+    display: block;
+}
+
+.bb-experimental-card-head small {
+    margin-top: 2px;
+    font-size: 0.78em;
+    opacity: 0.68;
+}
+
+.bb-experimental-risk {
+    display: flex;
+    gap: 6px;
+    align-items: flex-start;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: rgba(255, 152, 0, 0.1);
+    color: #ffb74d;
+    font-size: 0.78em;
+    line-height: 1.45;
+}
+
+.bb-experimental-action {
+    width: 100%;
+}
+
 .bb-extract-tag-options {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
@@ -4902,7 +4950,7 @@
 }
 
 /* ═══════════════════════════════════════════════════════
-   v8.6.0 记忆管家 Agent 面板
+   v9.1.9 记忆管家 Agent 测试版面板
    ═══════════════════════════════════════════════════════ */
 
 .bb-agent-overlay {
@@ -4946,6 +4994,24 @@
     font-size: 1.05em;
 }
 
+.bb-agent-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+.bb-agent-title em {
+    padding: 1px 6px;
+    border: 1px solid rgba(255, 152, 0, 0.45);
+    border-radius: 999px;
+    color: #ffb74d;
+    font-size: 0.7em;
+    font-style: normal;
+    font-weight: normal;
+}
+
 .bb-agent-body {
     flex: 1;
     overflow-y: auto;
@@ -4954,6 +5020,19 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
+}
+
+.bb-agent-beta-note {
+    display: flex;
+    gap: 7px;
+    align-items: flex-start;
+    padding: 8px 10px;
+    border: 1px solid rgba(255, 152, 0, 0.35);
+    border-radius: 8px;
+    background: rgba(255, 152, 0, 0.08);
+    color: #ffb74d;
+    font-size: 0.82em;
+    line-height: 1.45;
 }
 
 .bb-agent-footer {

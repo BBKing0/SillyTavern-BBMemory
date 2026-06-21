@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.1.8 主入口
+ * index.js —— BB-Memory v9.1.9 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 时间线 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -90,7 +90,7 @@ let chatSwitchPromptOpen = false;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.1.8';
+const SETTINGS_EXPORT_VERSION = '9.1.9';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
@@ -1834,6 +1834,7 @@ function bindSidebarEvents() {
     document.querySelector('#bb_agent_btn')?.addEventListener('click', () => {
         const chatId = getChatId();
         if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        showToast('正在打开 Agent 测试版；实验功能可能执行写操作，建议先备份。', 'warning');
         import('./memory-agent.js').then(m => m.openAgent(chatId));
     });
 
@@ -2838,9 +2839,10 @@ function registerSlashCommands() {
     addCmd('bb-agent', async () => {
         const chatId = getChatId();
         if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        showToast('正在打开 Agent 测试版；实验功能可能执行写操作，建议先备份。', 'warning');
         const { openAgent } = await import('./memory-agent.js');
         openAgent(chatId);
-    }, '打开记忆管家 Agent — 用自然语言管理记忆');
+    }, '测试功能：打开记忆管家 Agent（实验功能，可能执行写操作，建议备份后使用）');
 
     if (getSettings().debugLogging) {
         console.log('[BB-Memory] 斜杠命令已注册');
@@ -3484,7 +3486,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.1.8 初始化开始...');
+    console.log('[BB-Memory] v9.1.9 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -3648,7 +3650,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.1.8 初始化完成');
+    console.log('[BB-Memory] v9.1.9 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
