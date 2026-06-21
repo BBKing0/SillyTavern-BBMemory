@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.2.0 主入口
+ * index.js —— BB-Memory v9.2.1 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -17,7 +17,7 @@ import {
     exportMemoriesToChatMetadata, importMemoriesFromChatMetadata, cleanupChatMetadataBloat,
     migrateV4ToV5,
     exportMemories, importMemories, updateFactContent, addHiddenNote, removeHiddenNote,
-    scheduleAutoBackup,
+    scheduleAutoBackup, recordHits,
     getCalendarDescription, setCalendarDescription,
 } from './memory-store.js';
 
@@ -41,7 +41,7 @@ import {
 
 import {
     syncMessageVisibility, refreshExtractionMarkers,
-    markExchangeExtracted, unmarkExchangeProcessed, computeExchangeHash,
+    markExchangeExtracted, unmarkExchangeProcessed, computeExchangeHash, cyrb53Hash,
     getExtractionFloorStatus, setPluginHiddenState,
 } from './message-state.js';
 
@@ -90,7 +90,7 @@ let chatSwitchPromptOpen = false;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.2.0';
+const SETTINGS_EXPORT_VERSION = '9.2.1';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
@@ -435,19 +435,8 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     if (suppressHitScore) {
         clearHitFrameMetadataLocal(hitFrameMsg);
         if (settings.debugLogging) console.log(`[BB-Memory] skip meta-dialogue hit frame: ${hitFrameKey}`);
-    } else if (hitFrameMsg && hitFrameMsg._bbmem_hitFrameKey === hitFrameKey) {
-        if (settings.debugLogging) console.log(`[BB-Memory] skip repeated hit frame: ${hitFrameKey}`);
     } else {
-        if (hitFrameMsg) {
-            hitFrameMsg._bbmem_hitFrameKey = hitFrameKey;
-            hitFrameMsg._bbmem_hitRecords = hitRecords.map(h => `${h.collection}:${h.id}`);
-            hitFrameMsg._bbmem_hitRecordedAt = Date.now();
-            try {
-                if (typeof ctx.saveChatDebounced === 'function') ctx.saveChatDebounced();
-                else if (typeof ctx.saveChat === 'function') ctx.saveChat();
-            } catch {}
-        }
-        if (settings.debugLogging) console.log(`[BB-Memory] queued hit frame until extraction: ${hitFrameKey}`);
+        await recordInjectionHitFrame(chatId, hitFrameMsg, hitFrameKey, hitRecords, ctx, settings);
     }
 
     // 10. 注入
@@ -1043,11 +1032,61 @@ function isMetaDialogueHitFrame(chat, userFloor) {
     return false;
 }
 
+function saveHitFrameChat(ctx) {
+    try {
+        if (typeof ctx?.saveChatDebounced === 'function') ctx.saveChatDebounced();
+        else if (typeof ctx?.saveChat === 'function') ctx.saveChat();
+    } catch { /* ignore */ }
+}
+
+async function recordInjectionHitFrame(chatId, msg, frameKey, hitRecords, ctx, settings) {
+    if (!chatId || !frameKey) return false;
+    const isSameFrame = msg && msg._bbmem_hitFrameKey === frameKey;
+    const alreadyHandled = isSameFrame && (msg._bbmem_hitAppliedKey === frameKey || msg._bbmem_hitRecordingKey === frameKey);
+    if (alreadyHandled) {
+        if (settings.debugLogging) console.log(`[BB-Memory] skip repeated hit frame: ${frameKey}`);
+        return false;
+    }
+
+    if (msg) {
+        msg._bbmem_hitFrameKey = frameKey;
+        msg._bbmem_hitRecords = (hitRecords || []).map(h => `${h.collection}:${h.id}`);
+        msg._bbmem_hitRecordedAt = Date.now();
+        msg._bbmem_hitRecordingKey = frameKey;
+        saveHitFrameChat(ctx);
+    }
+
+    try {
+        const result = await recordHits(chatId, hitRecords, { countMisses: true, frameKey });
+        if (msg && msg._bbmem_hitFrameKey === frameKey) {
+            msg._bbmem_hitAppliedKey = frameKey;
+            delete msg._bbmem_hitRecordingKey;
+            saveHitFrameChat(ctx);
+        }
+        if (settings.debugLogging) {
+            const total = (hitRecords || []).length;
+            const updated = result?.updated?.length || 0;
+            const mapText = result?.mapChanged ? ' map+1' : '';
+            console.log(`[BB-Memory] recorded hit frame: ${frameKey} hits=${total} updated=${updated}${mapText}`);
+        }
+        return true;
+    } catch (err) {
+        if (msg && msg._bbmem_hitFrameKey === frameKey) {
+            delete msg._bbmem_hitRecordingKey;
+            saveHitFrameChat(ctx);
+        }
+        console.warn('[BB-Memory] 命中升降格记录失败:', err?.message || err);
+        return false;
+    }
+}
+
 function clearHitFrameMetadataLocal(msg) {
     if (!msg || typeof msg !== 'object') return;
     delete msg._bbmem_hitFrameKey;
     delete msg._bbmem_hitRecords;
     delete msg._bbmem_hitRecordedAt;
+    delete msg._bbmem_hitAppliedKey;
+    delete msg._bbmem_hitRecordingKey;
 }
 
 function formatCompactFloorRange(floors = []) {
@@ -1135,6 +1174,99 @@ function getExtensionFolder() {
 //  初始化记忆（新功能）
 // ═══════════════════════════════════════════════════════════
 
+const SWITCH_EXTRACT_MODE = 'switch_latest';
+
+function isRealSystemFloorMessage(msg) {
+    return !!msg && msg.is_system === true && msg._bbmem_hideSource !== 'plugin';
+}
+
+function isManualAiFloorMessage(msg) {
+    return !!msg && !msg.is_user && !isRealSystemFloorMessage(msg);
+}
+
+function findPreviousUserFloor(chat, aiIndex) {
+    for (let j = aiIndex - 1; j >= 0; j--) {
+        const msg = chat[j];
+        if (msg?.is_user && String(msg.mes || '').trim()) {
+            return { userIndex: j, userText: msg.mes || '' };
+        }
+    }
+    return { userIndex: -1, userText: '' };
+}
+
+function getOpeningContextFloors(chat, userIndex) {
+    if (userIndex <= 0) return [];
+    const indices = [];
+    for (let i = 0; i < userIndex; i++) {
+        const msg = chat[i];
+        if (!isManualAiFloorMessage(msg) || !String(msg.mes || '').trim()) continue;
+        const prev = findPreviousUserFloor(chat, i);
+        if (prev.userIndex === -1 && !msg._bbmem_extracted && !msg._bbmem_skipped && !msg._bbmem_meta_marker) {
+            indices.push(i);
+        }
+    }
+    return indices;
+}
+
+function isSwitchExtractableAiFloor(chat, aiIndex) {
+    const msg = chat?.[aiIndex];
+    if (!isManualAiFloorMessage(msg) || !String(msg.mes || '').trim()) return false;
+    if (msg._bbmem_extracted || msg._bbmem_skipped || msg._bbmem_meta_marker) return false;
+    const prev = findPreviousUserFloor(chat, aiIndex);
+    if (prev.userIndex < 0) return false;
+    const userMsg = chat[prev.userIndex];
+    return !userMsg?._bbmem_skipped && !userMsg?._bbmem_meta_pair;
+}
+
+function buildSwitchFloorPlan(chat = []) {
+    let latestAi = -1;
+    const pending = [];
+    const untreated = [];
+    const candidates = [];
+
+    for (let i = 0; i < chat.length; i++) {
+        const msg = chat[i];
+        if (!isManualAiFloorMessage(msg)) continue;
+        latestAi = i;
+        if (msg._bbmem_pendingExtraction && !msg._bbmem_extracted && !msg._bbmem_meta_marker) pending.push(i);
+        else if (!msg._bbmem_extracted && !msg._bbmem_skipped && !msg._bbmem_meta_marker) untreated.push(i);
+        if (!isSwitchExtractableAiFloor(chat, i)) continue;
+
+        const prev = findPreviousUserFloor(chat, i);
+        const aiText = msg.mes || '';
+        candidates.push({
+            userIndex: prev.userIndex,
+            aiIndex: i,
+            userMessage: prev.userText,
+            aiMessage: aiText,
+            hash: computeExchangeHash(prev.userText, aiText),
+        });
+    }
+
+    const first = candidates[0];
+    const last = candidates[candidates.length - 1];
+    if (first) {
+        first.extraIndices = getOpeningContextFloors(chat, first.userIndex);
+    }
+    const start = first ? first.userIndex : -1;
+    const end = last ? last.aiIndex : -1;
+    return {
+        latestAi,
+        pending,
+        untreated,
+        candidates,
+        start,
+        end,
+        range: start >= 0 && end >= start ? `${start}-${end}` : '',
+    };
+}
+
+function formatFloorPreview(floors, emptyText, fromEnd = false) {
+    if (!floors?.length) return emptyText;
+    const list = fromEnd ? floors.slice(-12) : floors.slice(0, 12);
+    return list.join(', ') + (floors.length > 12 ? ` 等${floors.length}层` : '');
+}
+
 function promptFloorRange() {
     return new Promise((resolve) => {
         const summary = getFloorRangeSummary();
@@ -1152,9 +1284,14 @@ function promptFloorRange() {
             <div style="font-size:0.78em;line-height:1.5;margin-bottom:10px;padding:8px 10px;border:1px solid var(--SmartThemeBorderColor,#444);border-radius:6px;background:rgba(255,255,255,0.04);color:var(--SmartThemeTextColor,#ddd);">
                 ${summary.html}
             </div>
+            <button id="bb_floor_switch_extract" class="menu_button bb-floor-switch-extract" ${summary.switchRange ? '' : 'disabled'}
+                title="${summary.switchRange ? '从尚未提取的第一个 exchange 开始，逐层提取到最新可提取 AI 楼层' : '当前没有需要换楼提取的楼层'}">
+                <i class="fa-solid fa-forward-fast"></i>
+                ${summary.switchRange ? `换楼提取到最新（${summary.switchRange}）` : '换楼提取：暂无可补提楼层'}
+            </button>
             <input id="bb_floor_range_input" type="text" placeholder="${summary.placeholder}"
                 style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid var(--SmartThemeBorderColor,#555);background:var(--SmartThemeInputColor,#1a1a2e);color:var(--SmartThemeTextColor,#ddd);font-size:0.95em;box-sizing:border-box;margin-bottom:14px;" />
-            <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
                 <button id="bb_floor_range_cancel" class="menu_button" style="opacity:0.6;">取消</button>
                 <button id="bb_floor_range_ok" class="menu_button" style="background:var(--SmartThemeQuoteColor,#4caf50);color:#fff;">开始提取</button>
             </div>
@@ -1165,6 +1302,7 @@ function promptFloorRange() {
         const input = dialog.querySelector('#bb_floor_range_input');
         const okBtn = dialog.querySelector('#bb_floor_range_ok');
         const cancelBtn = dialog.querySelector('#bb_floor_range_cancel');
+        const switchBtn = dialog.querySelector('#bb_floor_switch_extract');
 
         const cleanup = (value) => {
             overlay.remove();
@@ -1172,6 +1310,10 @@ function promptFloorRange() {
         };
 
         okBtn.addEventListener('click', () => cleanup(input.value.trim()));
+        switchBtn?.addEventListener('click', () => {
+            if (!summary.switchRange) return;
+            cleanup({ mode: SWITCH_EXTRACT_MODE, range: summary.switchRange });
+        });
         cancelBtn.addEventListener('click', () => cleanup(null));
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') cleanup(input.value.trim());
@@ -1188,34 +1330,27 @@ function getFloorRangeSummary() {
     try {
         const ctx = SillyTavern.getContext();
         const chat = ctx.chat || [];
-        let latestAi = -1;
-        const pending = [];
-        const untreated = [];
-        for (let i = 0; i < chat.length; i++) {
-            const msg = chat[i];
-            if (!msg || msg.is_user || msg.is_system) continue;
-            latestAi = i;
-            if (msg._bbmem_pendingExtraction && !msg._bbmem_extracted && !msg._bbmem_meta_marker) pending.push(i);
-            else if (!msg._bbmem_extracted && !msg._bbmem_skipped && !msg._bbmem_meta_marker) untreated.push(i);
-        }
+        const plan = buildSwitchFloorPlan(chat);
+        const latestAi = plan.latestAi;
         const start = latestAi >= 0 ? Math.max(0, latestAi - 15) : 0;
         const suggest = latestAi >= 0 ? `${start}-${latestAi}` : '';
-        const pendingText = pending.length
-            ? pending.slice(0, 12).join(', ') + (pending.length > 12 ? ` 等${pending.length}层` : '')
-            : '暂无已入队楼层';
-        const untreatedText = untreated.length
-            ? untreated.slice(-12).join(', ') + (untreated.length > 12 ? ` 等${untreated.length}层` : '')
-            : '暂无明显未提取楼层';
+        const pendingText = formatFloorPreview(plan.pending, '暂无已入队楼层');
+        const untreatedText = formatFloorPreview(plan.untreated, '暂无明显未提取楼层', true);
+        const switchText = plan.range
+            ? `建议范围：<b>${plan.range}</b>，预计 ${plan.candidates.length} 个 exchange`
+            : '暂无需要补提到最新的 AI 楼层';
         return {
             placeholder: suggest ? `建议 ${suggest}；留空=最近8轮` : '如 0-10（留空=最近8轮）',
+            switchRange: plan.range,
             html: [
                 `<div><i class="fa-solid fa-location-dot"></i> 最新 AI 楼层：<b>${latestAi >= 0 ? latestAi : '无'}</b>${suggest ? `，建议范围：<b>${suggest}</b>` : ''}</div>`,
+                `<div><i class="fa-solid fa-forward-fast"></i> 换楼提取：${switchText}</div>`,
                 `<div><i class="fa-solid fa-spinner"></i> 待提取楼层：${escapeHtml(pendingText)}</div>`,
                 `<div><i class="fa-regular fa-circle"></i> 尚未提取楼层：${escapeHtml(untreatedText)}</div>`,
             ].join(''),
         };
     } catch {
-        return { placeholder: '如 0-10（留空=最近8轮）', html: '无法读取当前聊天楼层；可手动输入范围，留空使用最近 8 轮。' };
+        return { placeholder: '如 0-10（留空=最近8轮）', switchRange: '', html: '无法读取当前聊天楼层；可手动输入范围，留空使用最近 8 轮。' };
     }
 }
 
@@ -1259,13 +1394,37 @@ async function toggleMetaMarkerForMessage(chat, aiIdx) {
     showToast(msg._bbmem_meta_marker ? '已标记为元对话：窗口内正常显示，进入提取窗口后跳过' : '已恢复为可提取楼层', 'info');
 }
 
-async function handleInitMemory(chatId, rangeStr = '') {
-    const ctx = SillyTavern.getContext();
+function normalizeManualExtractionRequest(input) {
+    if (input && typeof input === 'object') {
+        return {
+            mode: input.mode || 'range',
+            range: String(input.range || ''),
+        };
+    }
+    return { mode: 'range', range: String(input || '') };
+}
 
-    // 收集上下文
+function parseManualFloorRange(rangeStr, chatLength) {
+    if (!rangeStr || !String(rangeStr).includes('-') || chatLength <= 0) return null;
+    const parts = String(rangeStr).split('-');
+    const rawStart = parseInt(parts[0], 10);
+    const rawEnd = parseInt(parts[1], 10);
+    const a = Number.isFinite(rawStart) ? rawStart : 0;
+    const b = Number.isFinite(rawEnd) ? rawEnd : chatLength - 1;
+    const start = Math.max(0, Math.min(chatLength - 1, Math.min(a, b)));
+    const end = Math.max(0, Math.min(chatLength - 1, Math.max(a, b)));
+    return { start, end };
+}
+
+function formatManualChatMessage(msg, index = -1) {
+    const role = msg?.is_user ? '用户' : (msg?.name || '角色');
+    const floor = Number.isInteger(index) && index >= 0 ? ` ${index}楼` : '';
+    return `${role}${floor}: ${msg?.mes || ''}`;
+}
+
+function buildManualBaseContext(ctx) {
     let contextText = '';
 
-    // 角色卡信息
     try {
         if (ctx.characters && ctx.characterId !== undefined) {
             const char = ctx.characters[ctx.characterId];
@@ -1279,32 +1438,144 @@ async function handleInitMemory(chatId, rangeStr = '') {
         }
     } catch { /* ignore */ }
 
-    // 世界书
     try {
         if (ctx.worldInfo && ctx.worldInfo.entries) {
             const entries = Object.values(ctx.worldInfo.entries);
-            contextText += `【世界书】\n${entries.map(e => `${e.key?.join(',') || ''}: ${e.content}`).join('\n')}\n\n`;
+            contextText += `【世界书】\n${entries.map(e => {
+                const key = Array.isArray(e.key) ? e.key.join(',') : (e.key || '');
+                return `${key}: ${e.content || ''}`;
+            }).join('\n')}\n\n`;
         }
     } catch { /* ignore */ }
 
-    // 聊天记录 — 支持楼层范围
+    return contextText;
+}
+
+function buildManualRangeContext(ctx, rangeStr = '') {
+    let contextText = buildManualBaseContext(ctx);
     let sourceFloor = undefined;
+    let range = null;
     try {
         const chat = ctx.chat || [];
-        let messages;
-        if (rangeStr && rangeStr.includes('-')) {
-            const parts = rangeStr.split('-');
-            const start = Math.max(0, parseInt(parts[0], 10) || 0);
-            const end = Math.min(chat.length - 1, parseInt(parts[1], 10) || chat.length - 1);
-            messages = chat.slice(start, end + 1).filter(m => m.mes?.trim());
-            sourceFloor = start; // 标记为范围起始楼层
+        range = parseManualFloorRange(rangeStr, chat.length);
+        let messagePairs;
+        if (range) {
+            messagePairs = chat
+                .slice(range.start, range.end + 1)
+                .map((msg, idx) => ({ msg, index: range.start + idx }))
+                .filter(item => item.msg?.mes?.trim());
+            sourceFloor = range.start; // 标记为范围起始楼层
         } else {
-            messages = chat.filter(m => m.mes?.trim()).slice(-8);
+            messagePairs = chat
+                .map((msg, index) => ({ msg, index }))
+                .filter(item => item.msg?.mes?.trim())
+                .slice(-8);
         }
-        if (messages.length) {
-            contextText += `【最近对话】\n${messages.map(m => `${m.is_user ? '用户' : m.name || '角色'}: ${m.mes}`).join('\n')}`;
+        if (messagePairs.length) {
+            contextText += `【最近对话】\n${messagePairs.map(item => formatManualChatMessage(item.msg, item.index)).join('\n')}`;
         }
     } catch { /* ignore */ }
+    return { contextText, sourceInfo: typeof sourceFloor === 'number' ? { sourceFloor } : {} };
+}
+
+function emptyExtractionResult() {
+    return { npc: 0, items: 0, milestones: 0, timeline: 0, threads: 0, locations: 0, memories: 0 };
+}
+
+function mergeExtractionResult(total, next = {}) {
+    for (const key of ['npc', 'items', 'milestones', 'timeline', 'threads', 'locations', 'memories']) {
+        total[key] = (total[key] || 0) + (Number(next[key]) || 0);
+    }
+    return total;
+}
+
+function formatExtractionResultSummary(results = {}) {
+    return `NPC ${results.npc || 0} / 物品 ${results.items || 0} / 里程碑 ${results.milestones || 0} / 时间线 ${results.timeline || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories || 0}`;
+}
+
+async function handleSwitchFloorExtraction(chatId, request = {}) {
+    const ctx = SillyTavern.getContext();
+    const chat = ctx.chat || [];
+    const plan = buildSwitchFloorPlan(chat);
+    const requestedRange = parseManualFloorRange(request.range || plan.range, chat.length);
+    const candidates = requestedRange
+        ? plan.candidates.filter(ex => ex.aiIndex >= requestedRange.start && ex.aiIndex <= requestedRange.end)
+        : plan.candidates;
+
+    if (!candidates.length) {
+        throw new Error('当前没有需要换楼提取的楼层');
+    }
+
+    const baseContext = buildManualBaseContext(ctx);
+    const totals = emptyExtractionResult();
+    const progressEl = createProgressToast(`换楼提取: 准备中（0/${candidates.length}）...`);
+    let done = 0;
+
+    try {
+        for (let i = 0; i < candidates.length; i++) {
+            const ex = candidates[i];
+            const userMsg = chat[ex.userIndex];
+            const aiMsg = chat[ex.aiIndex];
+            const floorLabel = `${ex.userIndex}-${ex.aiIndex}`;
+            const contextText = [
+                baseContext,
+                `【换楼提取】\n目标范围：${plan.range || floorLabel}\n当前处理：${floorLabel}楼\n`,
+                '【最近对话】',
+                ...(ex.extraIndices || []).map(idx => formatManualChatMessage(chat[idx], idx)),
+                formatManualChatMessage(userMsg, ex.userIndex),
+                formatManualChatMessage(aiMsg, ex.aiIndex),
+            ].filter(Boolean).join('\n');
+
+            const updateProgress = (info) => {
+                if (progressEl) progressEl.textContent = `换楼提取: ${i + 1}/${candidates.length}（第 ${ex.aiIndex} 楼）${info.progress ? ` - ${info.progress}` : ''}`;
+            };
+
+            const results = await extractFromContext(chatId, contextText, {
+                onProgress: updateProgress,
+                sourceInfo: {
+                    sourceExchange: ex.hash,
+                    sourceFloor: ex.aiIndex,
+                    sourceChatId: chatId,
+                    sourceMessageHash: cyrb53Hash(ex.aiMessage || ''),
+                },
+            });
+
+            if (results?.failed) {
+                throw new Error(`第 ${ex.aiIndex} 楼提取失败：${results.error || '未知错误'}`);
+            }
+
+            mergeExtractionResult(totals, results);
+            await markExchangeExtracted(ex.userIndex, ex.aiIndex, ex.hash, ex.extraIndices || []);
+            done++;
+            if (progressEl) progressEl.textContent = `换楼提取: 已完成 ${done}/${candidates.length}（最新第 ${ex.aiIndex} 楼）`;
+            refreshExtractionFloorStatus();
+        }
+    } catch (e) {
+        if (progressEl) {
+            progressEl.textContent = `换楼提取失败：${e.message || '未知错误'}（已完成 ${done}/${candidates.length}）`;
+            setTimeout(() => progressEl.remove(), 5000);
+        }
+        throw e;
+    }
+
+    totals.switchFloors = done;
+    totals.sourceRange = plan.range;
+    if (progressEl) {
+        progressEl.textContent = `换楼提取完成！已处理 ${done} 个 exchange；${formatExtractionResultSummary(totals)}`;
+        setTimeout(() => progressEl.remove(), 3000);
+    }
+    showToast(`换楼提取完成：已处理 ${done} 个 exchange；${formatExtractionResultSummary(totals)}`, 'success');
+    return totals;
+}
+
+async function handleInitMemory(chatId, requestInput = '') {
+    const request = normalizeManualExtractionRequest(requestInput);
+    if (request.mode === SWITCH_EXTRACT_MODE) {
+        return handleSwitchFloorExtraction(chatId, request);
+    }
+
+    const ctx = SillyTavern.getContext();
+    const { contextText, sourceInfo } = buildManualRangeContext(ctx, request.range);
 
     if (!contextText.trim()) {
         throw new Error('没有可用的上下文（角色卡、世界书、对话记录均为空）');
@@ -1317,15 +1588,21 @@ async function handleInitMemory(chatId, rangeStr = '') {
         if (progressEl) progressEl.textContent = `手动提取: ${info.progress || ''}`;
     };
 
-    const sourceInfo = typeof sourceFloor === 'number' ? { sourceFloor } : {};
     const results = await extractFromContext(chatId, contextText, { onProgress: updateProgress, sourceInfo });
+    if (results?.failed) {
+        if (progressEl) {
+            progressEl.textContent = `提取失败：${results.error || '未知错误'}`;
+            setTimeout(() => progressEl.remove(), 5000);
+        }
+        throw new Error(results.error || 'AI 提取失败');
+    }
 
     if (progressEl) {
-        progressEl.textContent = `提取完成！NPC ${results.npc} / 物品 ${results.items} / 里程碑 ${results.milestones || 0} / 时间线 ${results.timeline || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`;
+        progressEl.textContent = `提取完成！${formatExtractionResultSummary(results)}`;
         setTimeout(() => progressEl.remove(), 3000);
     }
 
-    showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 里程碑 ${results.milestones || 0} / 时间线 ${results.timeline || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
+    showToast(`提取完成！${formatExtractionResultSummary(results)}`, 'success');
     return results;
 }
 
@@ -1771,8 +2048,8 @@ function bindSidebarEvents() {
         if (range === null) return; // 用户取消
         showToast('正在收集上下文并提取记忆...', 'info');
         try {
-            const results = await handleInitMemory(chatId, range);
-            showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 里程碑 ${results.milestones || 0} / 时间线 ${results.timeline || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
+            await handleInitMemory(chatId, range);
+            refreshSidebar();
         } catch (e) {
             showToast(`提取失败: ${e.message}`, 'error');
         }
@@ -3421,8 +3698,7 @@ async function handleFloatingMenuAction(action) {
             if (range === null) return;
             showToast('正在提取记忆...', 'info');
             try {
-                const results = await handleInitMemory(chatId, range);
-                showToast(`提取完成！NPC ${results.npc} / 物品 ${results.items} / 里程碑 ${results.milestones || 0} / 时间线 ${results.timeline || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories}`, 'success');
+                await handleInitMemory(chatId, range);
                 refreshSidebar();
             } catch (e) {
                 showToast(`提取失败: ${e.message}`, 'error');
@@ -3525,7 +3801,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.2.0 初始化开始...');
+    console.log('[BB-Memory] v9.2.1 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -3689,7 +3965,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.2.0 初始化完成');
+    console.log('[BB-Memory] v9.2.1 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆

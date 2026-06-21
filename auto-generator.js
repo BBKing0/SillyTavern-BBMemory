@@ -1951,6 +1951,8 @@ export async function extractFromContext(chatId, contextText, options = {}) {
         if (typeof globalThis.bbShowErrorPopup === 'function') {
             globalThis.bbShowErrorPopup('AI 提取失败', e.message || '未知错误', '端点: ' + (getSettings().autoGenMode === 'custom' ? (getSettings().autoGenEndpoint || '未配置') : '主 API'));
         }
+        results.failed = true;
+        results.error = e.message || '未知错误';
     }
 
     return results;

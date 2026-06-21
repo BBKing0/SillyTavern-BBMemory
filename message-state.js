@@ -59,7 +59,7 @@ function saveChat() {
 function clearHitFrameMetadata(msg) {
     if (!msg || typeof msg !== 'object') return false;
     let changed = false;
-    for (const key of ['_bbmem_hitFrameKey', '_bbmem_hitRecords', '_bbmem_hitRecordedAt']) {
+    for (const key of ['_bbmem_hitFrameKey', '_bbmem_hitRecords', '_bbmem_hitRecordedAt', '_bbmem_hitAppliedKey', '_bbmem_hitRecordingKey']) {
         if (Object.prototype.hasOwnProperty.call(msg, key)) {
             delete msg[key];
             changed = true;
@@ -95,7 +95,9 @@ async function flushHitFrameMetadata(chatId, msg, hash) {
     const hits = parseHitFrameRecords(msg._bbmem_hitRecords);
     const frameKey = msg._bbmem_hitFrameKey || hash || '';
     try {
-        await recordHits(chatId, hits, { countMisses: true, frameKey });
+        if (msg._bbmem_hitAppliedKey !== frameKey && msg._bbmem_hitRecordingKey !== frameKey) {
+            await recordHits(chatId, hits, { countMisses: true, frameKey });
+        }
     } catch (err) {
         console.warn(`${LOG_TAG} 命中升降格记录失败:`, err?.message || err);
     }

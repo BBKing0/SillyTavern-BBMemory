@@ -2474,6 +2474,22 @@
     overflow-y: auto;
 }
 
+.bb-floor-switch-extract {
+    width: 100%;
+    margin: 0 0 10px;
+    justify-content: center;
+    background: var(--SmartThemeQuoteColor, #4caf50);
+    color: #fff;
+    font-weight: 600;
+}
+
+.bb-floor-switch-extract:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+    background: var(--SmartThemeBlurTintColor, rgba(255,255,255,0.08));
+    color: var(--SmartThemeBodyColor, #ddd);
+}
+
 .bb-mem-form-header {
     display: flex;
     justify-content: space-between;

@@ -1109,12 +1109,12 @@ function applyOrderedEntityTierScore(entry, delta, tierKey, order, now) {
 }
 
 async function recordMapHits(chatId, ids, now) {
-    if (!ids.size) return;
+    if (!ids.size) return false;
     const { getMap, setMap } = await import('./map-store.js');
     const map = await getMap(chatId);
     let changed = false;
     for (const id of ids) {
-        const entry = map?.locations?.[id];
+        const entry = map?.locations?.[String(id)];
         if (!entry || entry.archived) continue;
         entry.hitCount = (entry.hitCount || 0) + 1;
         entry.lastHitAt = now;
@@ -1122,12 +1122,13 @@ async function recordMapHits(chatId, ids, now) {
         changed = true;
     }
     if (changed) await setMap(chatId, map);
+    return changed;
 }
 
 export async function recordHit(chatId, collection, id) {
     const normalized = collection === 'timeline_entry' ? 'milestone' : collection;
     const result = await recordHits(chatId, [{ collection: normalized, id }], { countMisses: false });
-    return result?.updated?.find(e => e.collection === normalized && e.id === id)?.entry || null;
+    return result?.updated?.find(e => e.collection === normalized && String(e.id) === String(id))?.entry || null;
 }
 
 export async function recordHits(chatId, hits, options = {}) {
@@ -1144,7 +1145,7 @@ export async function recordHits(chatId, hits, options = {}) {
     for (const hit of hits || []) {
         const collection = hit?.collection === 'timeline_entry' ? 'milestone' : hit?.collection;
         if (!hit?.id || !hitSets[collection]) continue;
-        hitSets[collection].add(hit.id);
+        hitSets[collection].add(String(hit.id));
     }
 
     const collections = [
@@ -1163,7 +1164,7 @@ export async function recordHits(chatId, hits, options = {}) {
 
         for (const entry of items) {
             if (!isEntryActiveForHitCycle(entry)) continue;
-            const isHit = ids.has(entry.id);
+            const isHit = ids.has(String(entry.id));
             if (!isHit && !countMisses) continue;
             const delta = isHit ? 1 : -1;
             if (await cfg.apply(entry, delta)) {
@@ -1174,9 +1175,9 @@ export async function recordHits(chatId, hits, options = {}) {
         if (changed) await cfg.saver(items);
     }
 
-    await recordMapHits(chatId, hitSets.map, now);
-    if (updated.length) scheduleAutoBackup(chatId);
-    return { updated, skipped: false };
+    const mapChanged = await recordMapHits(chatId, hitSets.map, now);
+    if (updated.length || mapChanged) scheduleAutoBackup(chatId);
+    return { updated, mapChanged, skipped: false };
 }
 
 /**
@@ -1240,7 +1241,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.2.0',
+        version: '9.2.1',
         timestamp: Date.now(),
         npc: [],
         items: [],
@@ -1564,7 +1565,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
 
     const includeEmbeddings = options.includeEmbeddings === true;
     const backup = {
-        version: '9.2.0',
+        version: '9.2.1',
         timestamp: Date.now(),
         embeddingsIncluded: includeEmbeddings,
         npc: includeEmbeddings ? npc : stripEmbeddings(npc),
@@ -2289,7 +2290,7 @@ export async function exportMemories(chatId) {
         getTimeline(chatId), getMap(chatId), getClueBoard(chatId),
     ]);
     return JSON.stringify({
-        version: '9.2.0',
+        version: '9.2.1',
         npc,
         items,
         milestones,
