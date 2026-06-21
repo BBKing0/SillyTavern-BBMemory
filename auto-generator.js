@@ -672,6 +672,111 @@ export function clearPendingAutoCandidates() {
     pendingAutoCandidates = [];
 }
 
+const CANDIDATE_PILLARS = {
+    npc: { group: 'npc', label: 'NPC' },
+    item: { group: 'item', label: '物品' },
+    timeline: { group: 'timeline', label: '时间线' },
+    thread: { group: 'timeline', label: '故事线程' },
+    location: { group: 'location', label: '地点' },
+    memory: { group: 'memory', label: '记忆' },
+};
+
+function cloneCandidatePayload(payload) {
+    if (!payload || typeof payload !== 'object') return {};
+    try {
+        return JSON.parse(JSON.stringify(payload));
+    } catch {
+        return { ...payload };
+    }
+}
+
+function makeCandidateId(pillar, index, sourceInfo = {}) {
+    const floor = Number.isInteger(sourceInfo.sourceFloor) ? sourceInfo.sourceFloor : 'x';
+    return `cand_${pillar}_${floor}_${Date.now().toString(36)}_${index}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function formatTagNames(tags) {
+    if (!Array.isArray(tags)) return '';
+    return tags
+        .map(tag => typeof tag === 'string' ? tag : tag?.name)
+        .filter(Boolean)
+        .join(', ');
+}
+
+function buildCandidateDisplay(pillar, payload = {}) {
+    switch (pillar) {
+        case 'npc':
+            return {
+                type: payload.npcTier || 'minor',
+                title: payload.name || '未命名 NPC',
+                summary: [payload.role, payload.personality, payload.status, payload.location].filter(Boolean).join(' / '),
+            };
+        case 'item':
+            return {
+                type: payload.itemTier || payload.status || 'item',
+                title: payload.name || '未命名物品',
+                summary: [payload.owner ? `持有者:${payload.owner}` : '', payload.status, payload.location, payload.significance].filter(Boolean).join(' / '),
+            };
+        case 'timeline':
+            return {
+                type: payload.status || 'timeline',
+                title: payload.event || payload.summary || '未命名事件',
+                summary: [payload.storyTime, payload.location, payload.impact, formatTagNames(payload.tags)].filter(Boolean).join(' / '),
+            };
+        case 'thread':
+            return {
+                type: payload.type || payload.status || 'thread',
+                title: payload.name || '未命名线程',
+                summary: [payload.status, payload.priority, payload.summary].filter(Boolean).join(' / '),
+            };
+        case 'location':
+            return {
+                type: payload.region || 'location',
+                title: payload.name || '未命名地点',
+                summary: [payload.region, payload.description, payload.realWorldRef].filter(Boolean).join(' / '),
+            };
+        case 'memory':
+        default:
+            return {
+                type: payload.type || 'event',
+                title: payload.title || payload.summary || payload.content?.slice(0, 40) || '未命名记忆',
+                summary: [payload.summary, payload.storyTime, payload.subject, payload.target, formatTagNames(payload.tags)].filter(Boolean).join(' / '),
+            };
+    }
+}
+
+export function buildExtractedCandidates(results, chatId, sourceInfo = {}) {
+    const out = [];
+    const push = (pillar, payload, index) => {
+        if (!payload || typeof payload !== 'object') return;
+        const meta = CANDIDATE_PILLARS[pillar] || CANDIDATE_PILLARS.memory;
+        const display = buildCandidateDisplay(pillar, payload);
+        out.push({
+            id: makeCandidateId(pillar, index, sourceInfo),
+            pillar,
+            group: meta.group,
+            label: meta.label,
+            type: display.type,
+            title: display.title,
+            summary: display.summary,
+            payload: cloneCandidatePayload(payload),
+            sourceInfo: { ...(sourceInfo || {}) },
+            sourceFloor: sourceInfo?.sourceFloor,
+            selected: true,
+            _selected: true,
+            _chatId: chatId,
+        });
+    };
+
+    (results?.npc || []).forEach((entry, index) => push('npc', entry, index));
+    (results?.items || []).forEach((entry, index) => push('item', entry, index));
+    (results?.timeline || []).forEach((entry, index) => push('timeline', entry, index));
+    (results?.threads || []).forEach((entry, index) => push('thread', entry, index));
+    (results?.locations || []).forEach((entry, index) => push('location', entry, index));
+    (results?.memories || []).forEach((entry, index) => push('memory', entry, index));
+    return out;
+}
+
 // ═══ 进度回调 ═══
 
 let onAutoExtractProgress = null;
@@ -1329,6 +1434,7 @@ async function saveExtractedLocations(chatId, locations, sourceInfo = {}) {
                 if (Object.keys(patch).length) {
                     const updated = await updateLocation(chatId, locId, { ...patch, ...(sourceInfo || {}) });
                     Object.assign(existing, updated || patch);
+                    count++;
                 }
             } else {
                 const newLoc = await addLocation(chatId, { ...loc, embedding, ...(sourceInfo || {}) });
@@ -1468,26 +1574,9 @@ async function processLatestExchange(chatId) {
                         sourceChatId: chatId,
                         sourceMessageHash: cyrb53Hash(ex.aiMessage || ''),
                     };
-                    const settings = getSettings();
-                    const hasEmbedding = settings.embeddingEnabled && settings.embeddingEndpoint;
-                    // NPC/物品/时间线直接保存
-                    for (const npc of results.npc) {
-                        const embedding = hasEmbedding ? await embedMemoryEntry(npc) : null;
-                        await upsertNpcProfile(chatId, { ...npc, embedding, ...sourceInfo });
-                    }
-                    for (const item of results.items) {
-                        const embedding = hasEmbedding ? await embedMemoryEntry(item) : null;
-                        await upsertItem(chatId, { ...item, embedding, ...sourceInfo });
-                    }
-                    for (const tl of results.timeline) {
-                        const embedding = hasEmbedding ? await embedMemoryEntry(tl) : null;
-                        await upsertTimelineEntry(chatId, { ...tl, embedding, ...sourceInfo });
-                    }
-                    await saveExtractedLocations(chatId, results.locations, sourceInfo);
-                    await saveInitialThreads(chatId, results.threads || [], sourceInfo, { threads: 0, merged: 0, skipped: 0 });
-                    // 记忆条目存入待审核队列
-                    if (results.memories.length > 0) {
-                        pendingAutoCandidates.push(...results.memories.map(c => ({ ...c, _chatId: chatId, _sourceInfo: sourceInfo })));
+                    const candidates = buildExtractedCandidates(results, chatId, sourceInfo);
+                    if (candidates.length > 0) {
+                        pendingAutoCandidates.push(...candidates);
                     }
                     succeeded.push(ex);
                 } catch (e) {
@@ -1863,39 +1952,141 @@ export function stopAutoGenerator() {
 
 // ═══ Active 模式：保存候选人 ═══
 
-export async function saveExtractedMemories(chatId, candidateMemories, onProgress) {
-    let count = 0;
-    const existingMemories = await getMemories(chatId);
-    const activeMemories = existingMemories.filter(m => m.embedding);
+function shouldSaveCandidate(candidate) {
+    return candidate && candidate._selected !== false && candidate.selected !== false;
+}
 
-    for (const mem of candidateMemories) {
-        if (mem._selected === false) continue;
-        const sourceInfo = mem._sourceInfo || {};
+function normalizeCandidatePillar(candidate) {
+    const raw = String(candidate?.pillar || candidate?.collection || candidate?.typeKey || 'memory').toLowerCase();
+    if (raw === 'mem' || raw === 'memories') return 'memory';
+    if (raw === 'items') return 'item';
+    if (raw === 'locations' || raw === 'map') return 'location';
+    if (raw === 'threads') return 'thread';
+    if (raw === 'timeline_entry') return 'timeline';
+    return CANDIDATE_PILLARS[raw] ? raw : 'memory';
+}
 
-        const embedding = getSettings().embeddingEnabled && getSettings().embeddingEndpoint
-            ? await embedMemoryEntry(mem)
-            : null;
+function getCandidatePayload(candidate) {
+    if (candidate?.payload && typeof candidate.payload === 'object') {
+        return cloneCandidatePayload(candidate.payload);
+    }
+    const {
+        id: _candidateId,
+        pillar: _pillar,
+        group: _group,
+        label: _label,
+        payload: _payload,
+        sourceInfo: _sourceInfo,
+        selected: _selectedPublic,
+        _selected,
+        _chatId,
+        _sourceInfo: _legacySourceInfo,
+        sourceFloor: _candidateSourceFloor,
+        ...payload
+    } = candidate || {};
+    return cloneCandidatePayload(payload);
+}
 
-        if (getSettings().dedupEnabled && embedding) {
-            const similar = findMostSimilarMemory(embedding, activeMemories);
-            if (similar) {
-                if (similar.similarity >= getDedupConfig().mergeThreshold) {
-                    const updates = mergeMemoryFields(similar.memory, mem);
-                    await updateMemory(chatId, similar.memory.id, { ...updates, ...sourceInfo });
-                    count++;
-                    continue;
-                } else if (similar.similarity >= getDedupConfig().reduceThreshold) {
-                    mem.importance = Math.max(0.3, (mem.importance || 0.5) - 0.15);
-                }
+function getCandidateSourceInfo(candidate) {
+    return { ...(candidate?._sourceInfo || {}), ...(candidate?.sourceInfo || {}) };
+}
+
+async function saveMemoryCandidate(chatId, mem, sourceInfo, activeMemories) {
+    const vectorPool = activeMemories || (await getMemories(chatId)).filter(m => m.embedding);
+
+    const embedding = getSettings().embeddingEnabled && getSettings().embeddingEndpoint
+        ? await embedMemoryEntry(mem)
+        : null;
+
+    if (getSettings().dedupEnabled && embedding) {
+        const similar = findMostSimilarMemory(embedding, vectorPool);
+        if (similar) {
+            if (similar.similarity >= getDedupConfig().mergeThreshold) {
+                const updates = mergeMemoryFields(similar.memory, mem);
+                await updateMemory(chatId, similar.memory.id, { ...updates, ...sourceInfo });
+                return { saved: 1, merged: 1 };
+            } else if (similar.similarity >= getDedupConfig().reduceThreshold) {
+                mem.importance = Math.max(0.3, (mem.importance || 0.5) - 0.15);
             }
         }
-
-        const saved = await addMemory(chatId, { ...mem, embedding, memoryTier: 'stable', source: mem.source || 'auto', ...sourceInfo });
-        if (embedding) activeMemories.push(saved);
-        count++;
-        if (onProgress) onProgress(count, candidateMemories.length);
     }
-    return count;
+
+    const saved = await addMemory(chatId, { ...mem, embedding, memoryTier: mem.memoryTier || 'stable', source: mem.source || 'auto', ...sourceInfo });
+    if (embedding && vectorPool) vectorPool.push(saved);
+    return { saved: 1, merged: 0 };
+}
+
+export async function saveExtractedCandidates(chatId, candidates, onProgress) {
+    const result = { npc: 0, items: 0, timeline: 0, locations: 0, threads: 0, memories: 0, merged: 0, skipped: 0, total: 0 };
+    const selected = (Array.isArray(candidates) ? candidates : []).filter(shouldSaveCandidate);
+    const settings = getSettings();
+    const hasEmbedding = settings.embeddingEnabled && settings.embeddingEndpoint;
+    const existingMemories = await getMemories(chatId);
+    const activeMemories = existingMemories.filter(m => m.embedding);
+    let done = 0;
+    const reportCandidateProgress = (candidate) => {
+        done++;
+        if (onProgress) onProgress(done, selected.length, result, candidate);
+    };
+
+    for (const candidate of selected) {
+        const pillar = normalizeCandidatePillar(candidate);
+        const payload = getCandidatePayload(candidate);
+        const sourceInfo = getCandidateSourceInfo(candidate);
+
+        if (pillar === 'npc') {
+            if (!payload.name) { result.skipped++; reportCandidateProgress(candidate); continue; }
+            const embedding = hasEmbedding ? await embedMemoryEntry(payload) : null;
+            await upsertNpcProfile(chatId, { ...payload, embedding, ...sourceInfo });
+            result.npc++;
+            result.total++;
+        } else if (pillar === 'item') {
+            if (!payload.name) { result.skipped++; reportCandidateProgress(candidate); continue; }
+            const embedding = hasEmbedding ? await embedMemoryEntry(payload) : null;
+            await upsertItem(chatId, { ...payload, embedding, ...sourceInfo });
+            result.items++;
+            result.total++;
+        } else if (pillar === 'timeline') {
+            if (!payload.event && !payload.summary) { result.skipped++; reportCandidateProgress(candidate); continue; }
+            const embedding = hasEmbedding ? await embedMemoryEntry(payload) : null;
+            await upsertTimelineEntry(chatId, { ...payload, embedding, ...sourceInfo });
+            result.timeline++;
+            result.total++;
+        } else if (pillar === 'location') {
+            if (!payload.name) { result.skipped++; reportCandidateProgress(candidate); continue; }
+            const saved = await saveExtractedLocations(chatId, [payload], sourceInfo);
+            result.locations += saved;
+            result.total += saved;
+        } else if (pillar === 'thread') {
+            if (!payload.name) { result.skipped++; reportCandidateProgress(candidate); continue; }
+            const beforeThreads = result.threads;
+            const beforeMerged = result.merged;
+            await saveInitialThreads(chatId, [payload], sourceInfo, result);
+            result.total += (result.threads - beforeThreads) + (result.merged - beforeMerged);
+        } else {
+            if (!payload.content && !payload.summary) { result.skipped++; reportCandidateProgress(candidate); continue; }
+            const saved = await saveMemoryCandidate(chatId, payload, sourceInfo, activeMemories);
+            result.memories += saved.saved;
+            result.merged += saved.merged;
+            result.total += saved.saved;
+        }
+
+        reportCandidateProgress(candidate);
+    }
+
+    return result;
+}
+
+export async function saveExtractedMemories(chatId, candidateMemories, onProgress) {
+    const wrapped = (Array.isArray(candidateMemories) ? candidateMemories : []).map(mem => ({
+        pillar: 'memory',
+        payload: getCandidatePayload(mem),
+        sourceInfo: getCandidateSourceInfo(mem),
+        selected: mem?._selected !== false && mem?.selected !== false,
+        _selected: mem?._selected !== false && mem?.selected !== false,
+    }));
+    const result = await saveExtractedCandidates(chatId, wrapped, onProgress);
+    return result.memories;
 }
 
 /**

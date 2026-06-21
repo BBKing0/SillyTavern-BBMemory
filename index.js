@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.1.6 主入口
+ * index.js —— BB-Memory v9.1.7 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 时间线 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -32,7 +32,7 @@ import { MEMORY_TYPES, TRUTH_STATUS } from './memory-types.js';
 import { NPC_TIERS, ITEM_TIERS, expandMemoriesForEntityKeyword } from './entity-tiers.js';
 
 import {
-    initAutoGenerator, stopAutoGenerator, extractFromContext, saveExtractedMemories,
+    initAutoGenerator, stopAutoGenerator, extractFromContext, saveExtractedCandidates,
     setAutoExtractProgressCallback, getPendingAutoCandidates, clearPendingAutoCandidates,
     callEmbeddingApi, embedExistingMemories,
     lastExtractFailedFloor, clearLastExtractFailedFloor,
@@ -90,7 +90,7 @@ let chatSwitchPromptOpen = false;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.1.6';
+const SETTINGS_EXPORT_VERSION = '9.1.7';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'maxResults', 'npcInjectionMax', 'itemInjectionMax', 'timelineEndedMax',
@@ -523,19 +523,231 @@ function mergeResidentMemoryResults(residentMems, relevantResults) {
 //  悬浮审核面板（Active 模式）
 // ═══════════════════════════════════════════════════════════
 
+function getReviewGroup(candidate) {
+    if (candidate?.group) return candidate.group;
+    const pillar = candidate?.pillar || 'memory';
+    if (pillar === 'thread') return 'timeline';
+    if (pillar === 'item') return 'item';
+    if (pillar === 'location' || pillar === 'map') return 'location';
+    if (pillar === 'npc') return 'npc';
+    return 'memory';
+}
+
+function getReviewPillarLabel(candidate) {
+    if (candidate?.label) return candidate.label;
+    const labels = {
+        npc: 'NPC',
+        item: '物品',
+        timeline: '时间线',
+        thread: '故事线程',
+        location: '地点',
+        memory: '记忆',
+    };
+    return labels[candidate?.pillar] || '记忆';
+}
+
+function formatReviewSaveResult(result) {
+    const parts = [
+        result.npc ? `NPC ${result.npc}` : '',
+        result.items ? `物品 ${result.items}` : '',
+        result.timeline ? `时间线 ${result.timeline}` : '',
+        result.threads ? `线程 ${result.threads}` : '',
+        result.locations ? `地点 ${result.locations}` : '',
+        result.memories ? `记忆 ${result.memories}` : '',
+    ].filter(Boolean);
+    if (result.merged) parts.push(`合并 ${result.merged}`);
+    if (result.skipped) parts.push(`跳过 ${result.skipped}`);
+    return parts.join(' / ') || '无新增写入';
+}
+
 function showFloatingReviewPanel(chatId, candidates) {
-    if (!candidates.length) return;
-    // 简化实现：使用 ST 的确认弹窗
-    const ctx = SillyTavern.getContext();
-    const lines = candidates.slice(0, 5).map((c, i) =>
-        `${i + 1}. [${c.type || 'event'}] ${c.title || c.summary?.slice(0, 40) || '(无标题)'}`
-    ).join('\n');
-    if (typeof ctx.callPopup === 'function') {
-        ctx.callPopup(`[BB-Memory] 提取到 ${candidates.length} 条候选记忆：\n${lines}\n是否保存？`, 'confirm')
-            .then(result => {
-                if (result) saveExtractedMemories(chatId, candidates.map(c => ({ ...c, _selected: true })));
-            });
+    if (!Array.isArray(candidates) || !candidates.length) return;
+    document.getElementById('bb_active_review_overlay')?.remove();
+
+    const groups = [
+        { key: 'all', label: '全部' },
+        { key: 'npc', label: 'NPC' },
+        { key: 'item', label: '物品' },
+        { key: 'timeline', label: '时间线' },
+        { key: 'location', label: '地点' },
+        { key: 'memory', label: '记忆' },
+    ];
+    const state = candidates.map((candidate, index) => ({
+        ...candidate,
+        _reviewId: candidate.id || `bb_review_${Date.now()}_${index}`,
+        _reviewIndex: index,
+        _reviewGroup: getReviewGroup(candidate),
+        selected: candidate._selected !== false && candidate.selected !== false,
+        _selected: candidate._selected !== false && candidate.selected !== false,
+    }));
+    let activeGroup = 'all';
+    let saving = false;
+
+    const overlay = document.createElement('div');
+    overlay.id = 'bb_active_review_overlay';
+    overlay.className = 'bb-active-review-overlay';
+    overlay.innerHTML = `
+        <div class="bb-active-review-panel">
+            <div class="bb-active-review-header">
+                <div>
+                    <div class="bb-active-review-title"><i class="fa-solid fa-clipboard-check"></i> 主动审核候选</div>
+                    <div class="bb-active-review-subtitle">保存前请逐条确认，未勾选项不会入库。</div>
+                </div>
+                <button class="menu_button bb-active-review-close" type="button" title="关闭">×</button>
+            </div>
+            <div class="bb-active-review-tabs"></div>
+            <div class="bb-active-review-toolbar">
+                <button class="menu_button" type="button" data-action="select_visible">全选当前</button>
+                <button class="menu_button" type="button" data-action="invert_visible">反选当前</button>
+                <span class="bb-active-review-status"></span>
+            </div>
+            <div class="bb-active-review-list"></div>
+            <div class="bb-active-review-footer">
+                <button class="menu_button danger" type="button" data-action="discard">全部丢弃</button>
+                <button class="menu_button" type="button" data-action="save">保存选中</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const tabEl = overlay.querySelector('.bb-active-review-tabs');
+    const listEl = overlay.querySelector('.bb-active-review-list');
+    const statusEl = overlay.querySelector('.bb-active-review-status');
+    const saveBtn = overlay.querySelector('[data-action="save"]');
+    const discardBtn = overlay.querySelector('[data-action="discard"]');
+
+    const visibleCandidates = () => state.filter(c => activeGroup === 'all' || c._reviewGroup === activeGroup);
+    const selectedCount = () => state.filter(c => c.selected).length;
+
+    function updateStatus(text) {
+        if (text) {
+            statusEl.textContent = text;
+            return;
+        }
+        statusEl.textContent = `已选 ${selectedCount()} / ${state.length}`;
     }
+
+    function renderTabs() {
+        const counts = groups.reduce((acc, group) => {
+            acc[group.key] = group.key === 'all'
+                ? state.length
+                : state.filter(c => c._reviewGroup === group.key).length;
+            return acc;
+        }, {});
+        tabEl.innerHTML = groups.map(group => `
+            <button class="bb-active-review-tab ${activeGroup === group.key ? 'active' : ''}" type="button" data-group="${group.key}" ${counts[group.key] ? '' : 'disabled'}>
+                ${escapeHtml(group.label)} <span>${counts[group.key]}</span>
+            </button>
+        `).join('');
+    }
+
+    function renderList() {
+        const visible = visibleCandidates();
+        if (!visible.length) {
+            listEl.innerHTML = '<div class="bb-active-review-empty">这一类没有候选项。</div>';
+            updateStatus();
+            return;
+        }
+        listEl.innerHTML = visible.map(candidate => {
+            const source = Number.isInteger(candidate.sourceFloor) ? `第 ${candidate.sourceFloor} 楼` : '';
+            const type = [getReviewPillarLabel(candidate), candidate.type].filter(Boolean).join(' / ');
+            return `
+                <label class="bb-active-review-item" data-index="${candidate._reviewIndex}">
+                    <input type="checkbox" ${candidate.selected ? 'checked' : ''} />
+                    <div class="bb-active-review-item-body">
+                        <div class="bb-active-review-item-head">
+                            <span class="bb-active-review-type">${escapeHtml(type)}</span>
+                            ${source ? `<span class="bb-active-review-source">${escapeHtml(source)}</span>` : ''}
+                        </div>
+                        <div class="bb-active-review-item-title">${escapeHtml(candidate.title || '(无标题)')}</div>
+                        <div class="bb-active-review-item-summary">${escapeHtml(candidate.summary || '')}</div>
+                    </div>
+                </label>
+            `;
+        }).join('');
+        updateStatus();
+    }
+
+    function render() {
+        renderTabs();
+        renderList();
+    }
+
+    function setBusy(nextSaving) {
+        saving = nextSaving;
+        if (!nextSaving) {
+            render();
+            return;
+        }
+        overlay.querySelectorAll('button, input').forEach(el => { el.disabled = true; });
+    }
+
+    tabEl.addEventListener('click', (event) => {
+        const btn = event.target.closest('[data-group]');
+        if (!btn || btn.disabled || saving) return;
+        activeGroup = btn.dataset.group || 'all';
+        render();
+    });
+
+    listEl.addEventListener('change', (event) => {
+        const checkbox = event.target.closest('input[type="checkbox"]');
+        const item = event.target.closest('[data-index]');
+        if (!checkbox || !item) return;
+        const candidate = state[Number(item.dataset.index)];
+        if (candidate) {
+            candidate.selected = checkbox.checked;
+            candidate._selected = checkbox.checked;
+        }
+        updateStatus();
+    });
+
+    overlay.querySelector('[data-action="select_visible"]').addEventListener('click', () => {
+        visibleCandidates().forEach(c => { c.selected = true; c._selected = true; });
+        renderList();
+    });
+    overlay.querySelector('[data-action="invert_visible"]').addEventListener('click', () => {
+        visibleCandidates().forEach(c => { c.selected = !c.selected; c._selected = c.selected; });
+        renderList();
+    });
+    overlay.querySelector('.bb-active-review-close').addEventListener('click', () => {
+        overlay.remove();
+        showToast(`已暂时关闭审核面板，${state.length} 条候选未保存`, 'info');
+    });
+    discardBtn.addEventListener('click', () => {
+        overlay.remove();
+        showToast(`已丢弃 ${state.length} 条候选`, 'info');
+    });
+    saveBtn.addEventListener('click', async () => {
+        const selected = state.filter(c => c.selected);
+        if (!selected.length) {
+            showToast('请至少勾选一条候选再保存', 'warning');
+            return;
+        }
+        try {
+            setBusy(true);
+            updateStatus(`正在保存 0 / ${selected.length}...`);
+            const result = await saveExtractedCandidates(chatId, selected.map(c => ({ ...c, selected: true, _selected: true })), (done, total) => {
+                updateStatus(`正在保存 ${done} / ${total}...`);
+            });
+            overlay.remove();
+            const summary = formatReviewSaveResult(result);
+            showToast(`审核保存完成：${summary}`, result.total ? 'success' : 'info');
+            recordActivity('success', '主动审核保存完成', summary);
+        } catch (e) {
+            setBusy(false);
+            updateStatus();
+            showToast(`审核保存失败: ${e.message || '未知错误'}`, 'error');
+        }
+    });
+
+    overlay.addEventListener('click', (event) => {
+        if (event.target === overlay && !saving) {
+            overlay.remove();
+            showToast(`已暂时关闭审核面板，${state.length} 条候选未保存`, 'info');
+        }
+    });
+
+    render();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -3254,7 +3466,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.1.6 初始化开始...');
+    console.log('[BB-Memory] v9.1.7 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -3418,7 +3630,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.1.6 初始化完成');
+    console.log('[BB-Memory] v9.1.7 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆

@@ -2221,6 +2221,193 @@
     font-size: 0.85em;
 }
 
+.bb-active-review-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: clamp(0.5rem, 3vh, 1.25rem);
+    background: rgba(0, 0, 0, 0.58);
+    box-sizing: border-box;
+}
+
+.bb-active-review-panel {
+    width: min(44rem, calc(100vw - 1rem));
+    max-height: min(44rem, calc(100dvh - 1rem));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 8px;
+    background: var(--SmartThemeChatTintColor, #1e1e2e);
+    color: var(--SmartThemeBodyColor, #ddd);
+    box-shadow: 0 1rem 2.5rem rgba(0, 0, 0, 0.42);
+}
+
+.bb-active-review-header,
+.bb-active-review-toolbar,
+.bb-active-review-footer {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #444);
+}
+
+.bb-active-review-header {
+    justify-content: space-between;
+}
+
+.bb-active-review-title {
+    font-weight: 700;
+    font-size: 1rem;
+}
+
+.bb-active-review-subtitle,
+.bb-active-review-status,
+.bb-active-review-source,
+.bb-active-review-item-summary {
+    font-size: 0.84rem;
+    opacity: 0.72;
+}
+
+.bb-active-review-tabs {
+    display: flex;
+    gap: 0.4rem;
+    padding: 0.65rem 0.75rem 0;
+    overflow-x: auto;
+}
+
+.bb-active-review-tab {
+    flex: 0 0 auto;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 999px;
+    padding: 0.35rem 0.65rem;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+}
+
+.bb-active-review-tab.active {
+    border-color: #ba68c8;
+    background: rgba(186, 104, 200, 0.18);
+}
+
+.bb-active-review-tab:disabled {
+    cursor: not-allowed;
+    opacity: 0.42;
+}
+
+.bb-active-review-toolbar {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+}
+
+.bb-active-review-status {
+    margin-left: auto;
+}
+
+.bb-active-review-list {
+    flex: 1;
+    min-height: 8rem;
+    overflow-y: auto;
+    padding: 0.75rem;
+}
+
+.bb-active-review-empty {
+    padding: 1.5rem 0.75rem;
+    text-align: center;
+    opacity: 0.65;
+}
+
+.bb-active-review-item {
+    display: flex;
+    gap: 0.65rem;
+    align-items: flex-start;
+    padding: 0.65rem;
+    margin-bottom: 0.55rem;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 8px;
+    background: var(--SmartThemeBlurTintColor, rgba(255, 255, 255, 0.04));
+    cursor: pointer;
+}
+
+.bb-active-review-item input {
+    flex: 0 0 auto;
+    margin-top: 0.25rem;
+}
+
+.bb-active-review-item-body {
+    min-width: 0;
+    flex: 1;
+}
+
+.bb-active-review-item-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.25rem;
+    flex-wrap: wrap;
+}
+
+.bb-active-review-type {
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: #ba68c8;
+}
+
+.bb-active-review-item-title {
+    font-weight: 650;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+.bb-active-review-item-summary {
+    margin-top: 0.2rem;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
+.bb-active-review-footer {
+    justify-content: flex-end;
+    border-top: 1px solid var(--SmartThemeBorderColor, #444);
+    border-bottom: 0;
+}
+
+.bb-active-review-footer .danger {
+    border-color: rgba(244, 67, 54, 0.55);
+    color: #ff8a80;
+}
+
+@media (max-width: 480px) {
+    .bb-active-review-overlay {
+        align-items: flex-end;
+        padding: 0.5rem;
+    }
+
+    .bb-active-review-panel {
+        width: 100%;
+        max-height: calc(100dvh - 1rem);
+    }
+
+    .bb-active-review-header,
+    .bb-active-review-toolbar,
+    .bb-active-review-footer {
+        padding: 0.6rem;
+    }
+
+    .bb-active-review-status {
+        width: 100%;
+        margin-left: 0;
+    }
+
+    .bb-active-review-footer .menu_button {
+        flex: 1;
+    }
+}
+
 /* ═══════════════════════════════════════
    v2.7: 手动添加记忆表单
    ═══════════════════════════════════════ */
