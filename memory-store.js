@@ -387,10 +387,13 @@ export async function updateNpcProfile(chatId, id, patch) {
     const entry = profiles.find(p => p.id === id);
     if (!entry) return null;
     patch = attachSourceRollback(entry, patch);
-    const { id: _id, createdAt: _ca, ...safe } = patch;
+    const normalizedNpcTier = Object.prototype.hasOwnProperty.call(patch, 'npcTier')
+        ? normalizeNpcTier(patch.npcTier)
+        : '';
+    const { id: _id, createdAt: _ca, npcTier: _npcTier, ...safe } = patch;
     Object.assign(entry, safe);
     entry.updatedAt = Date.now();
-    if (patch.npcTier) entry.npcTier = normalizeNpcTier(patch.npcTier) || entry.npcTier;
+    if (normalizedNpcTier) entry.npcTier = normalizedNpcTier;
     await saveCollection('npc', chatId, profiles);
     scheduleAutoBackup(chatId);
     return entry;
@@ -467,10 +470,13 @@ export async function updateItem(chatId, id, patch) {
     const entry = items.find(i => i.id === id);
     if (!entry) return null;
     patch = attachSourceRollback(entry, patch);
-    const { id: _id, createdAt: _ca, ...safe } = patch;
+    const normalizedItemTier = Object.prototype.hasOwnProperty.call(patch, 'itemTier')
+        ? normalizeItemTier(patch.itemTier)
+        : '';
+    const { id: _id, createdAt: _ca, itemTier: _itemTier, ...safe } = patch;
     Object.assign(entry, safe);
     entry.updatedAt = Date.now();
-    if (patch.itemTier) entry.itemTier = normalizeItemTier(patch.itemTier) || entry.itemTier;
+    if (normalizedItemTier) entry.itemTier = normalizedItemTier;
     await saveCollection('item', chatId, items);
     scheduleAutoBackup(chatId);
     return entry;
@@ -897,85 +903,6 @@ export async function getCategoryStats(chatId) {
 //  升降格系统
 // ═══════════════════════════════════════════════════════════
 
-const TIER_ORDER = ['transient', 'stable', 'core', 'eternal'];
-const PROMOTE_THRESHOLDS = { stable: 3, core: 8 };
-const DEMOTE_MISS_ROUNDS = { core: 30, stable: 20 };    // N 轮未命中触发降格 (v7.8.0 stable 60→20)
-const MAINTENANCE_MISS_ROUNDS = 30;                      // transient 未命中提醒
-const PROMOTION_COOLDOWN_MS = 15 * 60 * 1000;            // 15 分钟冷却（模拟"轮"）
-
-/**
- * 记录命中（interceptor 检索到某条记忆/NPC/物品时调用）
- * 自动处理升格。
- */
-async function legacyRecordHit(chatId, collection, id) {
-    let items;
-    switch (collection) {
-        case 'npc': items = await getNpcProfiles(chatId); break;
-        case 'item': items = await getItems(chatId); break;
-        case 'timeline': items = await getTimeline(chatId); break;
-        case 'mem': items = await getMemories(chatId); break;
-        case 'map': {
-            const { getMap, setMap } = await import('./map-store.js');
-            const map = await getMap(chatId);
-            const entry = map?.locations?.[id];
-            if (!entry) return null;
-            entry.hitCount = (entry.hitCount || 0) + 1;
-            entry.lastHitAt = Date.now();
-            entry.updatedAt = Date.now();
-            await setMap(chatId, map);
-            return entry;
-        }
-        default: return null;
-    }
-    const entry = items.find(e => e.id === id);
-    if (!entry) return null;
-
-    entry.hitCount = (entry.hitCount || 0) + 1;
-    entry.lastHitAt = Date.now();
-
-    // 检查升格
-    const currentTier = entry.memoryTier || 'transient';
-    const currentIdx = TIER_ORDER.indexOf(currentTier);
-
-    if (currentTier !== 'eternal' && currentIdx < TIER_ORDER.length - 1) {
-        const nextTier = TIER_ORDER[currentIdx + 1];
-        const threshold = PROMOTE_THRESHOLDS[nextTier];
-        if (threshold && entry.hitCount >= threshold) {
-            // 冷却检查
-            const cooldown = getSettings().promotionCooldownRounds * 60 * 1000;
-            if (!entry.lastPromotedAt || (Date.now() - entry.lastPromotedAt) > cooldown) {
-                // 多样性检查
-                if (await checkDiversityLimit(chatId, collection, entry, nextTier)) {
-                    entry.memoryTier = nextTier;
-                    entry.lastPromotedAt = Date.now();
-                    if (getSettings().debugLogging) {
-                        console.log(`[BB-Memory] 升格: ${entry.name || entry.title || entry.id} → ${nextTier}`);
-                    }
-                }
-            }
-        }
-    }
-
-    const saveFn = {
-        npc: (d) => saveCollection('npc', chatId, d),
-        item: (d) => saveCollection('item', chatId, d),
-        timeline: (d) => saveCollection('timeline', chatId, d),
-        mem: (d) => saveCollection('mem', chatId, d),
-    }[collection];
-
-    await saveFn(items);
-    return entry;
-}
-
-/**
- * 批量记录命中
- */
-async function legacyRecordHits(chatId, hits) {
-    for (const hit of hits) {
-        await legacyRecordHit(chatId, hit.collection, hit.id);
-    }
-}
-
 const MEMORY_TIER_ORDER_V905 = ['transient', 'stable', 'core', 'eternal'];
 const NPC_TIER_ORDER_V905 = ['background', 'minor', 'important', 'core'];
 const ITEM_TIER_ORDER_V905 = ['background', 'consumable', 'clue', 'equipped', 'key'];
@@ -1178,62 +1105,6 @@ async function checkDiversityLimit(chatId, collection, entry, targetTier) {
     return true;
 }
 
-/**
- * 检查降格（在拦截器中每轮调用）
- * 长期未命中 → 自动降格
- */
-async function legacyCheckDemotions(chatId) {
-    const settings = getSettings();
-    const now = Date.now();
-    const roundMs = 60 * 1000; // 近似每轮 1 分钟
-
-    const collections = [
-        { name: 'npc', loader: getNpcProfiles, saver: (d) => saveCollection('npc', chatId, d) },
-        { name: 'item', loader: getItems, saver: (d) => saveCollection('item', chatId, d) },
-        { name: 'timeline', loader: getTimeline, saver: (d) => saveCollection('timeline', chatId, d) },
-        { name: 'mem', loader: getMemories, saver: (d) => saveCollection('mem', chatId, d) },
-    ];
-
-    const results = { demoted: [], maintenanceCandidates: [] };
-
-    for (const { name, loader, saver } of collections) {
-        const items = await loader(chatId);
-        let changed = false;
-
-        for (const item of items) {
-            if (item.memoryTier === 'eternal') continue;
-
-            const lastHit = item.lastHitAt || item.createdAt;
-            const roundsSinceHit = Math.floor((now - lastHit) / roundMs);
-
-            if (item.memoryTier === 'core' && roundsSinceHit >= DEMOTE_MISS_ROUNDS.core) {
-                item.memoryTier = 'stable';
-                item.updatedAt = now;
-                changed = true;
-                results.demoted.push({ collection: name, id: item.id, from: 'core', to: 'stable' });
-                if (settings.debugLogging) {
-                    console.log(`[BB-Memory] 降格: ${item.name || item.title || item.id} core→stable (${roundsSinceHit}轮未命中)`);
-                }
-            } else if (item.memoryTier === 'stable' && roundsSinceHit >= DEMOTE_MISS_ROUNDS.stable) {
-                item.memoryTier = 'transient';
-                item.updatedAt = now;
-                changed = true;
-                results.demoted.push({ collection: name, id: item.id, from: 'stable', to: 'transient' });
-            } else if (item.memoryTier === 'transient' && roundsSinceHit >= MAINTENANCE_MISS_ROUNDS) {
-                results.maintenanceCandidates.push({ collection: name, item });
-            }
-        }
-
-        if (changed) await saver(items);
-    }
-
-    return results;
-}
-
-export async function checkDemotions(chatId) {
-    return { demoted: [], maintenanceCandidates: [], mode: 'hitScore', chatId };
-}
-
 // ═══════════════════════════════════════════════════════════
 //  批量清除
 // ═══════════════════════════════════════════════════════════
@@ -1254,7 +1125,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.1.5',
+        version: '9.1.6',
         timestamp: Date.now(),
         npc: [],
         items: [],
@@ -1567,7 +1438,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
 
     const includeEmbeddings = options.includeEmbeddings === true;
     const backup = {
-        version: '9.1.5',
+        version: '9.1.6',
         timestamp: Date.now(),
         embeddingsIncluded: includeEmbeddings,
         npc: includeEmbeddings ? npc : stripEmbeddings(npc),
@@ -2286,7 +2157,7 @@ export async function exportMemories(chatId) {
         getTimelineThreads(chatId), getMap(chatId), getClueBoard(chatId),
     ]);
     return JSON.stringify({
-        version: '9.1.5',
+        version: '9.1.6',
         npc,
         items,
         timeline,

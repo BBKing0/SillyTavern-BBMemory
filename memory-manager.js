@@ -56,6 +56,39 @@ function createManagerFormOverlay(extraClass = '') {
     return formOverlay;
 }
 
+function normalizeConfirmResult(result) {
+    if (result === true) return true;
+    if (result === false || result === null || result === undefined) return false;
+    if (typeof result === 'string') {
+        const v = result.toLowerCase();
+        if (['ok', 'yes', 'true', 'confirm', 'confirmed', 'affirmative'].includes(v)) return true;
+        if (['cancel', 'cancelled', 'canceled', 'no', 'false', 'negative'].includes(v)) return false;
+    }
+    return !!result;
+}
+
+async function confirmManagerAction(title, message) {
+    let ctx = null;
+    try { ctx = SillyTavern.getContext(); } catch { /* ignore */ }
+
+    if (typeof ctx?.Popup?.show?.confirm === 'function') {
+        try {
+            return normalizeConfirmResult(await ctx.Popup.show.confirm(title, message));
+        } catch { /* fall through */ }
+    }
+
+    if (typeof ctx?.callPopup === 'function') {
+        try {
+            return normalizeConfirmResult(await ctx.callPopup(`[BB-Memory] ${title}\n${message}`, 'confirm'));
+        } catch { /* fall through */ }
+    }
+
+    if (typeof confirm === 'function') {
+        return confirm(`${title}\n${message}`);
+    }
+    return false;
+}
+
 // ═══ 入口 ═══
 
 export async function openMemoryManager(chatId) {
@@ -621,8 +654,7 @@ function bindManagerEvents(overlay, chatId) {
 
     // 清空
     overlay.querySelector('#bb_mgr_clear')?.addEventListener('click', async () => {
-        const ctx = SillyTavern.getContext();
-        const ok = await ctx.Popup?.show?.confirm('确认清空', '确定要删除所有记忆数据吗？此操作不可撤销。');
+        const ok = await confirmManagerAction('确认清空', '确定要删除所有记忆数据吗？此操作不可撤销。');
         if (!ok) return;
         await clearAllData(chatId);
         showToast('所有记忆已清空', 'warning');
@@ -738,8 +770,7 @@ function bindBatchEvents(overlay, chatId) {
     overlay.querySelector('#bb_batch_delete')?.addEventListener('click', async () => {
         const checked = overlay.querySelectorAll('.bb-mem-batch-cb:checked');
         if (!checked.length) return;
-        const ctx = SillyTavern.getContext();
-        const ok = await ctx.Popup?.show?.confirm('批量删除', `确定删除选中的 ${checked.length} 条吗？`);
+        const ok = await confirmManagerAction('批量删除', `确定删除选中的 ${checked.length} 条吗？`);
         if (!ok) return;
         for (const cb of checked) {
             const id = cb.dataset.id;
@@ -1464,6 +1495,37 @@ function bindFormEvents_inner(formOverlay, chatId, pillar, editInfo) {
 
 // ═══ 存档标签页 ═══
 
+function isRemoteIndexOnlySlot(slot) {
+    return slot?.remoteIndexOnly === true || (slot?.localAvailable === false && slot?.remotePayloadAvailable !== true);
+}
+
+function buildSlotBadgesHTML(slot, currentSlot) {
+    const badges = [];
+    if (slot.name === currentSlot) {
+        badges.push('<span class="bb-slot-default-badge">当前</span>');
+    }
+    if (isRemoteIndexOnlySlot(slot)) {
+        badges.push('<span class="bb-slot-default-badge" style="background:#607d8b;"><i class="fa-solid fa-cloud"></i> 仅索引</span>');
+    } else if (slot.remoteOnly && slot.remotePayloadAvailable) {
+        badges.push('<span class="bb-slot-default-badge" style="background:#2196f3;"><i class="fa-solid fa-cloud-arrow-down"></i> 云端有数据</span>');
+    } else if (slot.remoteAvailable) {
+        badges.push('<span class="bb-slot-default-badge" style="background:#2196f3;"><i class="fa-solid fa-cloud"></i> 索引已同步</span>');
+    }
+    if (slot.remoteEmbeddings || slot.embeddingCount) {
+        badges.push('<span class="bb-slot-default-badge" style="background:#4caf50;color:#fff;"><i class="fa-solid fa-vector-square"></i> 向量</span>');
+    }
+    return badges.join('');
+}
+
+function buildSlotCountText(slot) {
+    const parts = [`${slot.count || 0} 条记忆`];
+    if (slot.remoteOnly && slot.remotePayloadAvailable) parts.push('云端可加载');
+    if (isRemoteIndexOnlySlot(slot)) parts.push('云端数据不可用');
+    if (slot.embeddingCount) parts.push(`本地向量 ${slot.embeddingCount}`);
+    if (slot.remoteEmbeddings) parts.push(`云端向量 ${slot.remoteEmbeddings}`);
+    return parts.join(' · ');
+}
+
 async function renderSlotsPanel(overlay, chatId, cachedData = null) {
     const slotsEl = overlay.querySelector('#bb_mgr_slots');
     if (!slotsEl) return;
@@ -1541,9 +1603,9 @@ async function renderSlotsPanel(overlay, chatId, cachedData = null) {
                         <div class="bb-slot-info">
                             <span class="bb-slot-name">
                                 <i class="fa-solid fa-floppy-disk"></i> ${escapeHtml(s.name)}
-                                ${s.name === currentSlot ? '<span class="bb-slot-default-badge">当前</span>' : ''}${s.remoteIndexOnly ? '<span class="bb-slot-default-badge" style="background:#607d8b;"><i class="fa-solid fa-cloud"></i> 仅索引</span>' : (s.remoteAvailable ? '<span class="bb-slot-default-badge" style="background:#2196f3;"><i class="fa-solid fa-cloud"></i> 索引已同步</span>' : '')}${s.remoteEmbeddings || s.embeddingCount ? '<span class="bb-slot-default-badge" style="background:#4caf50;color:#fff;"><i class="fa-solid fa-vector-square"></i> 向量</span>' : ''}
+                                ${buildSlotBadgesHTML(s, currentSlot)}
                             </span>
-                            <span class="bb-slot-count">${s.count} 条记忆${s.remote && s.localCount === 0 ? ' · 来自云端' : ''}${s.embeddingCount ? ` · 本地向量 ${s.embeddingCount}` : ''}${s.remoteEmbeddings ? ` · 云端向量 ${s.remoteEmbeddings}` : ''}</span>
+                            <span class="bb-slot-count">${escapeHtml(buildSlotCountText(s))}</span>
                         </div>
                         <div class="bb-slot-actions">
                             <button class="menu_button bb-slot-btn-save" data-slot="${escapeHtml(s.name)}" title="将当前数据保存到此槽（云端同步不含向量）">
@@ -1552,7 +1614,7 @@ async function renderSlotsPanel(overlay, chatId, cachedData = null) {
                             <button class="menu_button bb-slot-btn-save-vector" data-slot="${escapeHtml(s.name)}" title="将当前数据保存到此槽，并把向量也上传到云端（可能很大）">
                                 <i class="fa-solid fa-cloud-arrow-up"></i> 含向量
                             </button>
-                            <button class="menu_button bb-slot-btn-load" data-slot="${escapeHtml(s.name)}" data-remote="${s.remoteIndexOnly ? 'true' : 'false'}" title="${s.remoteIndexOnly ? '从云端拉取存档数据并加载（覆盖当前）' : '从此槽加载数据（覆盖当前）'}">
+                            <button class="menu_button bb-slot-btn-load" data-slot="${escapeHtml(s.name)}" data-index-only="${isRemoteIndexOnlySlot(s) ? 'true' : 'false'}" title="${isRemoteIndexOnlySlot(s) ? '云端只有索引，没有完整存档数据，无法加载' : '从此槽加载数据（覆盖当前）'}" ${isRemoteIndexOnlySlot(s) ? 'disabled' : ''}>
                                 <i class="fa-solid fa-arrow-down"></i> 加载
                             </button>
                             <button class="menu_button bb-slot-btn-export" data-slot="${escapeHtml(s.name)}" title="导出此存档为JSON文件">
@@ -1633,6 +1695,10 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
     slotsEl.querySelectorAll('.bb-slot-btn-load').forEach(btn => {
         btn.addEventListener('click', async () => {
             const slotName = btn.dataset.slot;
+            if (btn.dataset.indexOnly === 'true') {
+                showToast(`存档「${slotName}」只有云端索引，没有可加载数据`, 'warning');
+                return;
+            }
             const ok = confirm(`确定从「${slotName}」加载吗？当前数据将被覆盖！`);
             if (!ok) return;
             try {

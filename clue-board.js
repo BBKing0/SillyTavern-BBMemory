@@ -7,7 +7,7 @@
 
 import {
     getNpcProfiles, getItems, getTimeline, getMemories,
-    scheduleAutoBackup, getSettings,
+    scheduleAutoBackup, getSettings, isArchived,
 } from './memory-store.js';
 import { getPromptTemplate } from './prompt-templates.js';
 import {
@@ -29,6 +29,14 @@ function getLocalForage() {
 
 function generateId() {
     return 'cb_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+}
+
+function isClueSourceActive(entry) {
+    if (!entry) return false;
+    if (isArchived(entry)) return false;
+    if (entry.deleted === true || entry.status === 'deleted') return false;
+    if (entry.memoryTier === 'archived') return false;
+    return true;
 }
 
 async function loadBoard(chatId) {
@@ -1205,10 +1213,10 @@ function showAddNodeDialog(chatId, onDone) {
             mapLocations = [];
         }
         const allEntries = [
-            ...memories.map(e => ({ ...e, _pillar: 'mem', _label: e.title || e.summary?.slice(0, 40) || e.id, _preview: (e.content || e.summary || '').slice(0, 80) })),
-            ...npc.map(e => ({ ...e, _pillar: 'npc', _label: e.name || e.id, _preview: e.role || e.personality || '' })),
-            ...items.map(e => ({ ...e, _pillar: 'item', _label: e.name || e.id, _preview: e.significance || e.status || '' })),
-            ...timeline.map(e => ({ ...e, _pillar: 'timeline', _label: e.event || e.summary?.slice(0, 40) || e.id, _preview: e.summary || e.storyTime || '' })),
+            ...memories.filter(isClueSourceActive).map(e => ({ ...e, _pillar: 'mem', _label: e.title || e.summary?.slice(0, 40) || e.id, _preview: (e.content || e.summary || '').slice(0, 80) })),
+            ...npc.filter(isClueSourceActive).map(e => ({ ...e, _pillar: 'npc', _label: e.name || e.id, _preview: e.role || e.personality || '' })),
+            ...items.filter(isClueSourceActive).map(e => ({ ...e, _pillar: 'item', _label: e.name || e.id, _preview: e.significance || e.status || '' })),
+            ...timeline.filter(isClueSourceActive).map(e => ({ ...e, _pillar: 'timeline', _label: e.event || e.summary?.slice(0, 40) || e.id, _preview: e.summary || e.storyTime || '' })),
             ...mapLocations.map(e => ({ ...e, _pillar: 'map', _label: e.name || e.id, _preview: e.description || e.region || '' })),
         ];
 

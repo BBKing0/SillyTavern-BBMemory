@@ -321,11 +321,13 @@ export async function listSlots(charId) {
     if (Array.isArray(known) && known.length > 0) {
         for (const name of known) {
             const data = await lf.getItem(slotKey(charId, name));
+            if (data === null || data === undefined) continue;
             const slot = {
                 name,
                 count: totalCount(data),
                 key: slotKey(charId, name),
                 remote: false,
+                localAvailable: true,
                 localCount: totalCount(data),
                 embeddingCount: countSlotEmbeddings(data),
                 createdAt: data?._slotCreatedAt || data?.createdAt || 0,
@@ -347,6 +349,7 @@ export async function listSlots(charId) {
                         count,
                         key,
                         remote: false,
+                        localAvailable: true,
                         localCount: count,
                         embeddingCount: countSlotEmbeddings(value),
                         createdAt: value?._slotCreatedAt || value?.createdAt || 0,
@@ -360,7 +363,7 @@ export async function listSlots(charId) {
     }
 
     if (!slots.find(s => s.name === 'default')) {
-        const defaultSlot = { name: 'default', count: 0, key: slotKey(charId, 'default'), remote: false, localCount: 0, virtualLocal: true };
+        const defaultSlot = { name: 'default', count: 0, key: slotKey(charId, 'default'), remote: false, localAvailable: false, localCount: 0, virtualLocal: true };
         slots.unshift(defaultSlot);
         localByName.set('default', defaultSlot);
     }
@@ -369,9 +372,18 @@ export async function listSlots(charId) {
     const remoteIndex = getRemoteSlotIndex(charId);
     for (const [name, meta] of Object.entries(remoteIndex.slots || {})) {
         const total = (meta.npc || 0) + (meta.items || 0) + (meta.timeline || 0) + (meta.mem || 0) + (meta.threads || 0) + (meta.map || 0) + (meta.clues || 0);
+        const remotePayloadAvailable = slotPayloadExistsInChatMetadata(charId, name);
         const local = localByName.get(name);
         if (local) {
             local.remoteAvailable = true;
+            local.remotePayloadAvailable = remotePayloadAvailable;
+            local.remoteIndexOnly = local.localAvailable === false ? !remotePayloadAvailable : false;
+            if (local.localAvailable === false) {
+                local.remote = true;
+                local.remoteOnly = true;
+                local.count = total;
+                local.localCount = 0;
+            }
             local.remoteCount = total;
             local.remoteTs = meta.ts || 0;
             local.remoteEmbeddings = meta.embeddings || 0;
@@ -381,9 +393,12 @@ export async function listSlots(charId) {
             name,
             count: total,
             key: slotKey(charId, name),
-            remote: false,
-            remoteIndexOnly: true,
+            remote: true,
+            localAvailable: false,
+            remoteOnly: true,
+            remoteIndexOnly: !remotePayloadAvailable,
             remoteAvailable: true,
+            remotePayloadAvailable,
             remoteCount: total,
             remoteEmbeddings: meta.embeddings || 0,
             remoteTs: meta.ts || 0,
@@ -399,7 +414,7 @@ export async function listSlots(charId) {
 async function updateSlotIndex(charId, slots) {
     try {
         const names = slots
-            .filter(s => !s.remoteIndexOnly)
+            .filter(s => s.localAvailable !== false && !s.remoteIndexOnly)
             .map(s => s.name);
         await getLocalForage().setItem('bb_memory_slot_list_' + charId, names);
     } catch { /* ignore */ }
@@ -473,10 +488,10 @@ export async function cloneSlot(charId, sourceSlotName, targetSlotName, options 
     let raw = await lf.getItem(slotKey(charId, sourceName));
     if (raw === null || raw === undefined) {
         const pulled = await pullSlotFromChatMetadata(charId, sourceName);
-        if (pulled && pulled > 0) raw = await lf.getItem(slotKey(charId, sourceName));
+        if (pulled !== null && pulled !== undefined) raw = await lf.getItem(slotKey(charId, sourceName));
     }
     if (raw === null || raw === undefined) {
-        throw new Error(`未找到来源存档 "${sourceName}"`);
+        throw new Error(`未找到来源存档 "${sourceName}"，或云端仅保留索引但没有可加载数据`);
     }
 
     const now = Date.now();
@@ -532,10 +547,14 @@ export async function loadFromSlot(charId, chatId, slotName, options = {}) {
     let pulledFromCloud = false;
     if (raw === null || raw === undefined) {
         const pulled = await pullSlotFromChatMetadata(charId, slotName);
-        if (pulled && pulled > 0) {
+        if (pulled !== null && pulled !== undefined) {
             raw = await lf.getItem(slotKey(charId, slotName));
             pulledFromCloud = true;
         }
+    }
+
+    if (raw === null || raw === undefined) {
+        throw new Error(`存档 "${slotName}" 没有本地数据，云端也没有可加载的完整数据；当前记忆未被覆盖`);
     }
 
     // 兼容旧格式（扁平记忆数组）和新格式（五柱对象，v8.9.0 含地图/线索板）
@@ -686,9 +705,13 @@ export async function exportSlot(charId, slotName) {
 
     if (raw === null || raw === undefined) {
         const pulled = await pullSlotFromChatMetadata(charId, slotName);
-        if (pulled && pulled > 0) {
+        if (pulled !== null && pulled !== undefined) {
             raw = await lf.getItem(slotKey(charId, slotName));
         }
+    }
+
+    if (raw === null || raw === undefined) {
+        throw new Error(`存档 "${slotName}" 没有本地数据，云端也没有可导出的完整数据`);
     }
 
     const data = normalizeSlotData(raw);
@@ -729,6 +752,15 @@ function getSlotDataKeys(charId, slotName) {
     if (charId !== null && charId !== undefined) keys.push(scopedSlotDataKey(charId, slotName));
     keys.push(legacySlotDataKey(slotName));
     return [...new Set(keys)];
+}
+
+function slotPayloadExistsInChatMetadata(charId, slotName, context = null) {
+    const ctx = context || getSTContext();
+    if (!ctx || !ctx.chatMetadata) return false;
+    return getSlotDataKeys(charId, slotName).some(key => {
+        const raw = ctx.chatMetadata[key];
+        return typeof raw === 'string' && raw.trim().length > 0;
+    });
 }
 
 function getSTContext() {
@@ -795,9 +827,13 @@ async function syncSlotIndexToChatMetadata(charId, options = {}) {
     const index = { charId, slots: { ...(previousIndex.slots || {}) } };
     if (options.removeSlotName) delete index.slots[options.removeSlotName];
     for (const s of slots) {
-        if (s.remoteIndexOnly) continue;
+        if (s.localAvailable === false || s.remoteIndexOnly) continue;
         const counts = await getSlotPillarCounts(charId, s.name);
-        index.slots[s.name] = { ts: Date.now(), ...counts };
+        index.slots[s.name] = {
+            ts: Date.now(),
+            ...counts,
+            payloadAvailable: slotPayloadExistsInChatMetadata(charId, s.name, ctx),
+        };
     }
     ctx.chatMetadata[SLOT_INDEX_KEY] = JSON.stringify(index);
     return saveChatMeta(ctx);
@@ -842,6 +878,7 @@ async function pushSlotDataToChatMetadata(charId, slotName, data, context = null
     const limit = getSlotDataSizeLimit();
     if (json.length > limit) {
         console.warn(`[BB-Memory] 槽 "${slotName}" 数据大小 ${(json.length / 1024).toFixed(1)}KB 超过上限 ${(limit / 1024).toFixed(0)}KB，跳过云端同步`);
+        await removeSlotDataFromChatMetadata(slotName, ctx, charId);
         return false;
     }
     const key = scopedSlotDataKey(charId, slotName);

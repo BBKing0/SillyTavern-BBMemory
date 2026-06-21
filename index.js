@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.1.5 主入口
+ * index.js —— BB-Memory v9.1.6 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 时间线 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -15,7 +15,7 @@ import {
     getMemories, addMemory, updateMemory, removeMemory,
     clearAllData, deleteByExchange, getMemoryStats, refreshAllSourceFloors,
     exportMemoriesToChatMetadata, importMemoriesFromChatMetadata, cleanupChatMetadataBloat,
-    migrateV4ToV5, checkDemotions,
+    migrateV4ToV5,
     exportMemories, importMemories, updateFactContent, addHiddenNote, removeHiddenNote,
     scheduleAutoBackup,
     getCalendarDescription, setCalendarDescription,
@@ -87,9 +87,10 @@ let lastObservedCharId = null;
 let chatSwitchFallbackTimer = null;
 let chatSwitchFallbackRunning = false;
 let chatSwitchPromptOpen = false;
+let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.1.5';
+const SETTINGS_EXPORT_VERSION = '9.1.6';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'maxResults', 'npcInjectionMax', 'itemInjectionMax', 'timelineEndedMax',
@@ -343,8 +344,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     const hasData = npc.length + items.length + timeline.length + memories.length + threads.length > 0 || hasMapData || hasClueData;
     if (!hasData) { clearInjection(); return chat; }
 
-    // 5. 降格检查
-    try { await checkDemotions(chatId); } catch (e) { /* ignore */ }
+    // 5. 自动维护
     try { await autoMaintainSilent(chatId); } catch (e) { /* ignore */ }
 
     // 6. Embedding（如有）
@@ -3254,7 +3254,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.1.5 初始化开始...');
+    console.log('[BB-Memory] v9.1.6 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -3418,7 +3418,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.1.5 初始化完成');
+    console.log('[BB-Memory] v9.1.6 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
@@ -3567,7 +3567,9 @@ function refreshSidebar() {
         } catch { /* ignore */ }
     };
     updateCount();
-    setInterval(updateCount, 30000); // 30秒刷新
+    if (!sidebarRefreshTimer) {
+        sidebarRefreshTimer = setInterval(updateCount, 30000); // 30秒刷新
+    }
 }
 
 function updateSidebarHitList() {
