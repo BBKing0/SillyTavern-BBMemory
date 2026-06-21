@@ -53,6 +53,31 @@ const DEFAULT_INJECTION_SECTION_HEADERS = Object.freeze({
     map: '【世界地图 —— 空间关系{{worldRefSuffix}}】',
 });
 
+const TOKEN_BUDGET_MODES = Object.freeze({
+    RESIDENT_UNLIMITED: 'resident_unlimited',
+    STRICT_TOTAL: 'strict_total',
+});
+
+const SECTION_BUDGET_RATIOS = Object.freeze({
+    thread: 0.25,
+    npc: 0.30,
+    item: 0.20,
+    timeline: 0.25,
+    memory: 0.70,
+    map: 0.18,
+    clue: 0.15,
+});
+
+const SECTION_LABELS = Object.freeze({
+    thread: '线程地图',
+    npc: 'NPC',
+    item: '物品',
+    timeline: '时间线',
+    memory: '记忆',
+    map: '地图',
+    clue: '线索板',
+});
+
 function getInjectionHeader(settings, key, replacements = {}) {
     const template = getPromptTemplate(settings || getSettings(), `injection.${key}Header`, DEFAULT_INJECTION_SECTION_HEADERS[key] || '');
     return fillPromptTemplate(template, replacements).trim();
@@ -502,7 +527,9 @@ export function getThreadSummaryForInjection(threads, maxActive = 5) {
 
     if (!forInjection.length) return { text: '', threads: [] };
 
-    const lines = [getInjectionHeader(getSettings(), 'thread') || DEFAULT_INJECTION_SECTION_HEADERS.thread];
+    const header = getInjectionHeader(getSettings(), 'thread') || DEFAULT_INJECTION_SECTION_HEADERS.thread;
+    const lines = [header];
+    const blocks = [];
     for (const thread of forInjection) {
         const statusMark = thread.status === 'resident' ? '★常驻' :
                           thread.status === 'ongoing' ? '●进行中' :
@@ -511,18 +538,20 @@ export function getThreadSummaryForInjection(threads, maxActive = 5) {
                          thread.type === 'side' ? '[支线]' :
                          thread.type === 'world' ? '[世界]' : '';
         const summarySuffix = thread.summary ? ` — ${thread.summary}` : '';
-        lines.push(`${statusMark} ${typeMark} ${thread.name}${summarySuffix}`);
+        const blockLines = [`${statusMark} ${typeMark} ${thread.name}${summarySuffix}`];
         for (const entry of (thread.entries || [])) {
             const entryStatus = entry.status === 'ongoing' ? '→' :
                                entry.status === 'ended' ? '✓' :
                                entry.status === 'milestone' ? '◆' : '·';
             const period = entry.period || entry.storyTime || entry.time || '';
             const event = entry.event || entry.title || entry.summary || entry.note || '';
-            lines.push(`  ${entryStatus} ${period} ${event}`);
+            blockLines.push(`  ${entryStatus} ${period} ${event}`);
         }
+        lines.push(...blockLines);
+        blocks.push({ text: blockLines.join('\n'), thread });
     }
 
-    return { text: lines.join('\n'), threads: forInjection };
+    return { text: lines.join('\n'), threads: forInjection, header, blocks };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -575,7 +604,17 @@ function formatHiddenNotesForInjection(m) {
     return lines.length ? '\n' + lines.join('\n') : '';
 }
 
-function formatMemoryLine(m, chatLength = 0, level = 'L2') {
+function isRecentSourceMemory(m, chatLength = 0, settings = getSettings()) {
+    const windowSize = Number(settings?.floorRecentWindow ?? 6);
+    const sourceFloor = Number(m?.sourceFloor);
+    const totalFloors = Number(chatLength);
+    if (!Number.isFinite(windowSize) || windowSize <= 0) return false;
+    if (!Number.isFinite(sourceFloor) || sourceFloor < 0) return false;
+    if (!Number.isFinite(totalFloors) || totalFloors <= 0) return false;
+    return sourceFloor >= Math.max(0, totalFloors - windowSize);
+}
+
+function formatMemoryLine(m, chatLength = 0, level = 'L2', settings = getSettings()) {
     const parts = [];
     if (m.title) parts.push(`[${m.title}]`);
     const typeLabel = MEMORY_TYPES[m.type]?.label || '';
@@ -586,7 +625,8 @@ function formatMemoryLine(m, chatLength = 0, level = 'L2') {
     }
     const isResident = isResidentEntry(m);
     const isFuzzy = m.memoryTier === 'transient' && !isResident;
-    const shouldUseFull = !isFuzzy && (isResident || level === 'L3' || level === 'L4');
+    const recentFull = isRecentSourceMemory(m, chatLength, settings);
+    const shouldUseFull = !isFuzzy && (isResident || recentFull || level === 'L3' || level === 'L4');
 
     if (isFuzzy) {
         parts.push(m.summary || buildDefaultIndexCard(m) || (m.content || '').slice(0, 120));
@@ -612,11 +652,11 @@ function formatMapEdgeMeta(edge) {
 
 function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 800, queryEmbedding = null) {
     if (!mapData || typeof mapData !== 'object' || Object.keys(mapData.locations || {}).length === 0) {
-        return { lines: [], tokens: 0, truncated: false, ids: [] };
+        return { lines: [], blocks: [], tokens: 0, truncated: false, ids: [] };
     }
 
     const locs = Object.values(mapData.locations || {}).filter(loc => loc && !loc.archived);
-    if (!locs.length) return { lines: [], tokens: 0, truncated: false, ids: [] };
+    if (!locs.length) return { lines: [], blocks: [], tokens: 0, truncated: false, ids: [] };
 
     const locById = new Map(locs.map(loc => [loc.id, loc]));
     const incoming = new Map(locs.map(loc => [loc.id, []]));
@@ -660,7 +700,7 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
         .filter(loc => isResidentEntry(loc) || locMatchesQuery(loc))
         .sort((a, b) => scoreLoc(b) - scoreLoc(a));
 
-    if (!baseMatches.length) return { lines: [], tokens: 0, truncated: false, ids: [] };
+    if (!baseMatches.length) return { lines: [], blocks: [], tokens: 0, truncated: false, ids: [] };
 
     const selectedMap = new Map();
     const addSelected = (loc, reason) => {
@@ -693,8 +733,8 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
         worldRefSuffix: worldRef ? `｜现实参考：${worldRef}` : '',
     }) || (worldRef ? `【世界地图 — 空间关系】(现实参考: ${worldRef})` : '【世界地图 — 空间关系】');
     const lines = [header];
+    const blocks = [];
     let tokens = 0;
-    const maxTokens = tokenBudget * 0.18;
 
     const chainFor = (loc) => {
         const prev = (incoming.get(loc.id) || [])[0];
@@ -738,19 +778,240 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
 
         const line = [parts.join(' | '), ...relationLines].join('\n');
         const lt = estimateTokens(line);
-        if (tokens + lt > maxTokens && !isResidentEntry(loc)) {
-            return { lines, tokens, truncated: true, ids: selected.slice(0, lines.length - 1).map(l => l.id) };
-        }
         lines.push(line);
+        blocks.push({
+            text: line,
+            id: loc.id,
+            resident: isResidentEntry(loc),
+            reason: loc._bbMapInjectReason || '',
+        });
         tokens += lt;
     }
 
-    return { lines, tokens, truncated: selected.length < baseMatches.length, ids: selected.map(l => l.id) };
+    return { lines, blocks, tokens, truncated: selected.length < baseMatches.length, ids: blocks.map(l => l.id) };
 }
 
 // ═══════════════════════════════════════════════════════════
 //  统一注入构建
 // ═══════════════════════════════════════════════════════════
+
+function normalizeTokenBudget(settings) {
+    const n = Number(settings?.tokenBudget);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 800;
+}
+
+function normalizeBudgetMode(settings) {
+    return settings?.tokenBudgetMode === TOKEN_BUDGET_MODES.STRICT_TOTAL
+        ? TOKEN_BUDGET_MODES.STRICT_TOTAL
+        : TOKEN_BUDGET_MODES.RESIDENT_UNLIMITED;
+}
+
+function tagText(entry) {
+    return (entry?.tags || [])
+        .map(t => typeof t === 'string' ? t : t?.name)
+        .filter(Boolean)
+        .join(' ');
+}
+
+function hasClueOrForeshadowSignal(entry) {
+    const text = [
+        entry?.type,
+        entry?.cognitiveType,
+        entry?.status,
+        entry?.itemTier,
+        entry?.title,
+        entry?.summary,
+        tagText(entry),
+    ].filter(Boolean).join(' ').toLowerCase();
+    return /clue|hint|foreshadow|线索|伏笔|疑点|谜/.test(text);
+}
+
+function priorityForThread(thread) {
+    if (isResidentEntry(thread) || thread?.status === 'resident') return 0;
+    if (thread?.status === 'ongoing' || thread?.priority === 'high') return 1;
+    return 2;
+}
+
+function priorityForNpc(npc) {
+    if (isResidentEntry(npc) || npc?.npcTier === 'core') return 0;
+    if (npc?.npcTier === 'important') return 1;
+    return 2;
+}
+
+function priorityForItem(item) {
+    if (isResidentEntry(item) || item?.itemTier === 'key' || item?.itemTier === 'equipped' || item?.keepPermanent) return 0;
+    if (item?.itemTier === 'clue' || hasClueOrForeshadowSignal(item)) return 1;
+    return 2;
+}
+
+function priorityForTimelineEntry(entry) {
+    if (isResidentEntry(entry)) return 0;
+    if (entry?.status === 'ongoing' || entry?.isActive || isForeshadowTimeline(entry)) return 1;
+    return 2;
+}
+
+function priorityForMemory(memory) {
+    if (isResidentEntry(memory)) return 0;
+    if (hasClueOrForeshadowSignal(memory)) return 1;
+    return 2;
+}
+
+function makeBudgetItem(text, options = {}) {
+    const cleanText = String(text || '').trimEnd();
+    return {
+        text: cleanText,
+        tokens: estimateTokens(cleanText),
+        resident: !!options.resident,
+        priority: Number.isFinite(options.priority) ? options.priority : 2,
+        collection: options.collection || '',
+        id: options.id || '',
+        flagKey: options.flagKey || '',
+    };
+}
+
+function makeBudgetSection(key, header, items, options = {}) {
+    const normalizedItems = (items || []).filter(item => item && String(item.text || '').trim());
+    return {
+        key,
+        label: options.label || SECTION_LABELS[key] || key,
+        header: String(header || '').trim(),
+        headerTokens: estimateTokens(header || ''),
+        items: normalizedItems,
+        extraTruncated: options.extraTruncated || '',
+    };
+}
+
+function getThreadBudgetBlocks(threadSummary) {
+    if (!threadSummary?.text) return [];
+    if (Array.isArray(threadSummary.blocks) && threadSummary.blocks.length) return threadSummary.blocks;
+
+    const lines = String(threadSummary.text || '').split('\n');
+    const body = lines.slice(1).join('\n').trim();
+    return body ? [{ text: body, thread: null }] : [];
+}
+
+function allocateBudgetSections(sections, settings, tokenBudget) {
+    const mode = normalizeBudgetMode(settings);
+    const flat = [];
+    let order = 0;
+
+    sections.forEach((section, sectionIndex) => {
+        section.items.forEach((item, itemIndex) => {
+            flat.push({ section, sectionIndex, item, itemIndex, order: order++ });
+        });
+    });
+
+    flat.sort((a, b) => {
+        if (a.item.priority !== b.item.priority) return a.item.priority - b.item.priority;
+        return a.order - b.order;
+    });
+
+    const selectedKeys = new Set();
+    const selectedSections = new Set();
+    const sectionBudgetUsed = new Map();
+    let budgetUsed = 0;
+    let tokenEstimate = 0;
+
+    for (const entry of flat) {
+        const { section, sectionIndex, item, itemIndex } = entry;
+        const hasHeader = selectedSections.has(sectionIndex);
+        const headerCost = hasHeader ? 0 : section.headerTokens;
+        const actualCost = item.tokens + headerCost;
+        const unlimited = mode === TOKEN_BUDGET_MODES.RESIDENT_UNLIMITED && item.resident;
+
+        let fits = true;
+        if (!unlimited) {
+            if (mode === TOKEN_BUDGET_MODES.RESIDENT_UNLIMITED) {
+                const ratio = SECTION_BUDGET_RATIOS[section.key] ?? 1;
+                const sectionCap = Math.max(1, Math.floor(tokenBudget * ratio));
+                const nextSectionUsed = (sectionBudgetUsed.get(section.key) || 0) + actualCost;
+                fits = budgetUsed + actualCost <= tokenBudget && nextSectionUsed <= sectionCap;
+            } else {
+                fits = budgetUsed + actualCost <= tokenBudget;
+            }
+        }
+
+        if (!fits) continue;
+
+        selectedKeys.add(`${sectionIndex}:${itemIndex}`);
+        if (!selectedSections.has(sectionIndex)) {
+            selectedSections.add(sectionIndex);
+            tokenEstimate += section.headerTokens;
+        }
+        tokenEstimate += item.tokens;
+        if (!unlimited) {
+            budgetUsed += actualCost;
+            if (mode === TOKEN_BUDGET_MODES.RESIDENT_UNLIMITED) {
+                sectionBudgetUsed.set(section.key, (sectionBudgetUsed.get(section.key) || 0) + actualCost);
+            }
+        }
+    }
+
+    const renderedSections = [];
+    const selectedItems = [];
+    const truncated = [];
+
+    sections.forEach((section, sectionIndex) => {
+        const selected = section.items.filter((_, itemIndex) => selectedKeys.has(`${sectionIndex}:${itemIndex}`));
+        if (selected.length) {
+            renderedSections.push([section.header, ...selected.map(item => item.text)].filter(Boolean).join('\n'));
+            selectedItems.push(...selected);
+        }
+        if (selected.length < section.items.length) {
+            truncated.push(`${section.label}(${selected.length}/${section.items.length})`);
+        }
+        if (selected.length && section.extraTruncated) {
+            truncated.push(section.extraTruncated);
+        }
+    });
+
+    return { renderedSections, selectedItems, tokenEstimate, truncated, budgetMode: mode };
+}
+
+function buildInjectionStats(selectedItems) {
+    const stats = {
+        npcCount: 0,
+        itemCount: 0,
+        timelineCount: 0,
+        memoryCount: 0,
+        threadCount: 0,
+        mapCount: 0,
+        npcIds: [],
+        itemIds: [],
+        timelineIds: [],
+        memoryIds: [],
+        threadIds: [],
+        mapLocationIds: [],
+    };
+    const seen = {
+        npc: new Set(),
+        item: new Set(),
+        timeline: new Set(),
+        mem: new Set(),
+        thread: new Set(),
+        map: new Set(),
+    };
+
+    const addUnique = (collection, id, listKey, countKey) => {
+        const safeId = String(id || '');
+        if (!safeId || seen[collection].has(safeId)) return;
+        seen[collection].add(safeId);
+        stats[listKey].push(safeId);
+        stats[countKey] = stats[listKey].length;
+    };
+
+    for (const item of selectedItems) {
+        if (item.flagKey) stats[item.flagKey] = true;
+        if (item.collection === 'npc') addUnique('npc', item.id, 'npcIds', 'npcCount');
+        else if (item.collection === 'item') addUnique('item', item.id, 'itemIds', 'itemCount');
+        else if (item.collection === 'timeline') addUnique('timeline', item.id, 'timelineIds', 'timelineCount');
+        else if (item.collection === 'mem') addUnique('mem', item.id, 'memoryIds', 'memoryCount');
+        else if (item.collection === 'thread') addUnique('thread', item.id, 'threadIds', 'threadCount');
+        else if (item.collection === 'map') addUnique('map', item.id, 'mapLocationIds', 'mapCount');
+    }
+    stats.mapInjected = stats.mapCount > 0;
+    return stats;
+}
 
 /**
  * 构建四柱注入文本
@@ -763,144 +1024,148 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
  * @returns {{ text: string, tokenEstimate: number, stats: object }}
  */
 export async function buildMemoryInjectionPrompt({ npcProfiles, items, timeline, threadSummary, relevantResults, settings, chatLength = 0, clueBoard = null, mapData = null, queryText = '', queryEmbedding = null }) {
-    const tokenBudget = settings.tokenBudget || 800;
-    let tokenUsed = 0;
-    const stats = { npcCount: 0, itemCount: 0, timelineCount: 0, memoryCount: 0, threadCount: 0, mapCount: 0, mapLocationIds: [] };
-    const truncated = [];
+    const activeSettings = settings || getSettings();
+    const tokenBudget = normalizeTokenBudget(activeSettings);
+    const budgetSections = [];
 
-    const sections = [];
-
-    // ── 区块 0：故事线程地图（v6.7.0 — 最前，给 LLM 全局叙事视野）──
-    if (threadSummary && threadSummary.text) {
-        const threadText = threadSummary.text;
-        const threadTokens = estimateTokens(threadText);
-        sections.push(threadText);
-        tokenUsed += threadTokens;
-        stats.threadCount = threadSummary.threads?.length || 0;
-        if (threadTokens > tokenBudget * 0.25) truncated.push('线程地图(超过建议预算但已保留)');
+    const threadBlocks = getThreadBudgetBlocks(threadSummary);
+    if (threadBlocks.length) {
+        const header = threadSummary?.header || getInjectionHeader(activeSettings, 'thread') || DEFAULT_INJECTION_SECTION_HEADERS.thread;
+        budgetSections.push(makeBudgetSection('thread', header, threadBlocks.map((block, index) => {
+            const thread = block.thread || threadSummary?.threads?.[index] || null;
+            return makeBudgetItem(block.text, {
+                resident: isResidentEntry(thread),
+                priority: priorityForThread(thread),
+                collection: 'thread',
+                id: thread?.id || thread?.name || `thread_${index}`,
+            });
+        })));
     }
 
-    // ── 区块 1：角色档案 ──
     if (npcProfiles?.length) {
-        const lines = [getInjectionHeader(settings, 'npc') || DEFAULT_INJECTION_SECTION_HEADERS.npc];
-        let sectionTokens = 0;
-        for (const npc of npcProfiles) {
-            const line = formatNpcLine(npc);
-            const lt = estimateTokens(line);
-            if (sectionTokens + lt > tokenBudget * 0.3 && !isResidentEntry(npc)) break;
-            lines.push(line);
-            sectionTokens += lt;
-            stats.npcCount++;
-        }
-        tokenUsed += sectionTokens;
-        if (lines.length > 1) sections.push(lines.join('\n'));
-        if (stats.npcCount < npcProfiles.length) {
-            truncated.push(`角色(${stats.npcCount}/${npcProfiles.length})`);
-        }
+        budgetSections.push(makeBudgetSection(
+            'npc',
+            getInjectionHeader(activeSettings, 'npc') || DEFAULT_INJECTION_SECTION_HEADERS.npc,
+            npcProfiles.map(npc => makeBudgetItem(formatNpcLine(npc), {
+                resident: isResidentEntry(npc) || npc.npcTier === 'core',
+                priority: priorityForNpc(npc),
+                collection: 'npc',
+                id: npc.id,
+            }))
+        ));
     }
 
-    // ── 区块 2：重要物品 ──
     if (items?.length) {
-        const lines = [getInjectionHeader(settings, 'item') || DEFAULT_INJECTION_SECTION_HEADERS.item];
-        let sectionTokens = 0;
-        for (const item of items) {
-            const line = formatItemLine(item);
-            const lt = estimateTokens(line);
-            if (sectionTokens + lt > tokenBudget * 0.2 && !isResidentEntry(item)) break;
-            lines.push(line);
-            sectionTokens += lt;
-            stats.itemCount++;
-        }
-        tokenUsed += sectionTokens;
-        if (lines.length > 1) sections.push(lines.join('\n'));
-        if (stats.itemCount < items.length) {
-            truncated.push(`物品(${stats.itemCount}/${items.length})`);
-        }
+        budgetSections.push(makeBudgetSection(
+            'item',
+            getInjectionHeader(activeSettings, 'item') || DEFAULT_INJECTION_SECTION_HEADERS.item,
+            items.map(item => makeBudgetItem(formatItemLine(item), {
+                resident: isResidentEntry(item) || item.itemTier === 'key' || item.itemTier === 'equipped' || item.keepPermanent,
+                priority: priorityForItem(item),
+                collection: 'item',
+                id: item.id,
+            }))
+        ));
     }
 
-    // ── 区块 3：故事时间线 ──
     if (timeline) {
-        const { ongoing, ended, foreshadow } = timeline;
+        const { ongoing = [], ended = [], foreshadow = [] } = timeline;
         const threadIndex = buildThreadTimelineIndex(threadSummary?.threads || []);
-        const all = [...foreshadow, ...ongoing, ...ended].filter(t =>
+        const allTimeline = [...foreshadow, ...ongoing, ...ended].filter(t =>
             isResidentEntry(t) || isForeshadowTimeline(t) || !isTimelineCoveredByThread(t, threadIndex)
         );
-        if (all.length) {
-            const lines = [getInjectionHeader(settings, 'timeline') || DEFAULT_INJECTION_SECTION_HEADERS.timeline];
-            let sectionTokens = 0;
-            for (const t of all) {
-                const line = formatTimelineLine(t);
-                const lt = estimateTokens(line);
-                if (sectionTokens + lt > tokenBudget * 0.25 && !isResidentEntry(t) && t.status !== 'ongoing' && t.status !== 'foreshadow') break;
-                lines.push(line);
-                sectionTokens += lt;
-                stats.timelineCount++;
-            }
-            tokenUsed += sectionTokens;
-            if (lines.length > 1) sections.push(lines.join('\n'));
-            if (stats.timelineCount < all.length) {
-                truncated.push(`时间线(${stats.timelineCount}/${all.length})`);
-            }
+        if (allTimeline.length) {
+            budgetSections.push(makeBudgetSection(
+                'timeline',
+                getInjectionHeader(activeSettings, 'timeline') || DEFAULT_INJECTION_SECTION_HEADERS.timeline,
+                allTimeline.map(t => makeBudgetItem(formatTimelineLine(t), {
+                    resident: isResidentEntry(t),
+                    priority: priorityForTimelineEntry(t),
+                    collection: 'timeline',
+                    id: t.id,
+                }))
+            ));
         }
     }
 
-    // ── 区块 4：相关记忆 ──
     if (relevantResults?.length) {
-        const lines = [getInjectionHeader(settings, 'memory') || DEFAULT_INJECTION_SECTION_HEADERS.memory];
-        const MAX_MEM = (settings.maxResults || 10) + 4;
-        let count = 0;
-        let sectionTokens = 0;
-        for (const { memory, level } of relevantResults) {
-            if (count >= MAX_MEM && !isResidentEntry(memory)) break;
-            const line = (count + 1) + '. ' + formatMemoryLine(memory, chatLength, level);
-            const lt = estimateTokens(line);
-            if (sectionTokens + lt > tokenBudget * 0.7 && !isResidentEntry(memory)) break;
-            lines.push(line);
-            sectionTokens += lt;
-            count++;
-            stats.memoryCount++;
+        const maxMemories = (activeSettings.maxResults || 10) + 4;
+        const memoryItems = [];
+        let nonResidentCount = 0;
+        let displayIndex = 0;
+        for (const result of relevantResults) {
+            const memory = result?.memory;
+            if (!memory) continue;
+            const resident = isResidentEntry(memory);
+            if (!resident) {
+                if (nonResidentCount >= maxMemories) continue;
+                nonResidentCount++;
+            }
+            displayIndex++;
+            const line = `${displayIndex}. ${formatMemoryLine(memory, chatLength, result.level, activeSettings)}`;
+            memoryItems.push(makeBudgetItem(line, {
+                resident,
+                priority: priorityForMemory(memory),
+                collection: 'mem',
+                id: memory.id,
+            }));
         }
-        tokenUsed += sectionTokens;
-        if (lines.length > 1) sections.push(lines.join('\n'));
-        if (stats.memoryCount < relevantResults.length) {
-            truncated.push(`记忆(${stats.memoryCount}/${relevantResults.length})`);
-        }
+        budgetSections.push(makeBudgetSection(
+            'memory',
+            getInjectionHeader(activeSettings, 'memory') || DEFAULT_INJECTION_SECTION_HEADERS.memory,
+            memoryItems
+        ));
     }
 
-    // ── 区块 5：线索板（v8.4.0）──
-    // ── 区块6：世界地图 v8.7.0 ──
-    const mapContext = buildMapContextLines(mapData, settings, queryText, tokenBudget, queryEmbedding);
-    if (mapContext.lines.length > 1) {
-        sections.push(mapContext.lines.join('\n'));
-        tokenUsed += mapContext.tokens;
-        stats.mapInjected = true;
-        stats.mapCount = mapContext.ids.length;
-        stats.mapLocationIds = mapContext.ids;
-        if (mapContext.truncated) truncated.push('地图(按空间关系截断)');
+    const mapContext = buildMapContextLines(mapData, activeSettings, queryText, tokenBudget, queryEmbedding);
+    if (mapContext.blocks?.length) {
+        budgetSections.push(makeBudgetSection(
+            'map',
+            mapContext.lines[0] || getInjectionHeader(activeSettings, 'map') || DEFAULT_INJECTION_SECTION_HEADERS.map,
+            mapContext.blocks.map(block => makeBudgetItem(block.text, {
+                resident: block.resident,
+                priority: block.resident ? 0 : 3,
+                collection: 'map',
+                id: block.id,
+            })),
+            { extraTruncated: mapContext.truncated ? '地图(按空间关系截断)' : '' }
+        ));
     }
 
     if (clueBoard && typeof clueBoard === 'object') {
         const { hasActiveClues, buildClueBoardInjection } = await import('./clue-board.js');
         if (hasActiveClues(clueBoard)) {
-            const clueText = buildClueBoardInjection(clueBoard);
-            const clueTokens = estimateTokens(clueText);
-            if (clueTokens <= tokenBudget * 0.15) {
-                sections.push(clueText);
-                tokenUsed += clueTokens;
-                stats.clueBoard = true;
-            } else {
-                sections.push(clueText);
-                tokenUsed += clueTokens;
-                stats.clueBoard = true;
-                truncated.push('线索板(超过建议预算但已保留)');
+            const clueLines = buildClueBoardInjection(clueBoard)
+                .split('\n')
+                .map(line => line.trimEnd())
+                .filter(line => line.trim());
+            if (clueLines.length) {
+                const clueHeader = clueLines.length > 1 ? clueLines[0] : '';
+                const clueBody = clueLines.length > 1 ? clueLines.slice(1) : clueLines;
+                budgetSections.push(makeBudgetSection(
+                    'clue',
+                    clueHeader,
+                    clueBody.map(line => makeBudgetItem(line, {
+                        priority: 4,
+                        flagKey: 'clueBoard',
+                    }))
+                ));
             }
         }
     }
 
-    const text = sections.join('\n\n');
-    const tokenEstimate = tokenUsed;
+    const allocation = allocateBudgetSections(budgetSections, activeSettings, tokenBudget);
+    const text = allocation.renderedSections.join('\n\n');
+    const stats = buildInjectionStats(allocation.selectedItems);
 
-    return { text, tokenEstimate, stats, truncated, tokenBudget };
+    return {
+        text,
+        tokenEstimate: allocation.tokenEstimate,
+        stats,
+        truncated: allocation.truncated,
+        tokenBudget,
+        budgetMode: allocation.budgetMode,
+    };
 }
 
 // ═══════════════════════════════════════════════════════════

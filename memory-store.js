@@ -27,7 +27,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
     injectionTemplate: '[BB-Memory 长期记忆]\n{{memories}}',
     // 检索
     tokenBudget: 800,
+    tokenBudgetMode: 'resident_unlimited', // 'resident_unlimited' | 'strict_total'
     maxResults: 10,
+    minScoreThreshold: 0.05,
     // v8.0.0 各柱注入上限（独立于 maxResults，后者仅控制记忆条目）
     npcInjectionMax: 8,
     itemInjectionMax: 5,
@@ -1125,7 +1127,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.1.7',
+        version: '9.1.8',
         timestamp: Date.now(),
         npc: [],
         items: [],
@@ -1438,7 +1440,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
 
     const includeEmbeddings = options.includeEmbeddings === true;
     const backup = {
-        version: '9.1.7',
+        version: '9.1.8',
         timestamp: Date.now(),
         embeddingsIncluded: includeEmbeddings,
         npc: includeEmbeddings ? npc : stripEmbeddings(npc),
@@ -2157,7 +2159,7 @@ export async function exportMemories(chatId) {
         getTimelineThreads(chatId), getMap(chatId), getClueBoard(chatId),
     ]);
     return JSON.stringify({
-        version: '9.1.7',
+        version: '9.1.8',
         npc,
         items,
         timeline,

@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.1.7</b>
+            <b>BB-Memory v9.1.8</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -145,6 +145,27 @@
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_token_budget">Token 预算</label>
                         <input id="bb_token_budget" type="number" class="bb-input" min="100" max="4000" step="50" value="800" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_token_budget_mode">Token 预算模式</label>
+                        <small class="bb-mem-hint">常驻不限：核心/永恒/常驻内容可超出总预算；严格总量：所有内容共享 tokenBudget。</small>
+                        <select id="bb_token_budget_mode" class="bb-input" style="width:100%;">
+                            <option value="resident_unlimited" selected>resident_unlimited — 常驻不限</option>
+                            <option value="strict_total">strict_total — 严格总预算</option>
+                        </select>
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_min_score_threshold">最低相关分</label>
+                        <small class="bb-mem-hint">记忆条目低于此分数不会进入候选，范围 0-1，默认 0.05。</small>
+                        <input id="bb_min_score_threshold" type="number" class="bb-input" min="0" max="1" step="0.01" value="0.05" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_floor_recent_window">近楼层完整内容窗口</label>
+                        <small class="bb-mem-hint">来源楼层在最近 N 楼内的记忆优先使用完整内容；0 表示关闭。</small>
+                        <input id="bb_floor_recent_window" type="number" class="bb-input" min="0" max="50" step="1" value="6" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">

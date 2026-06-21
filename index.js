@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.1.7 主入口
+ * index.js —— BB-Memory v9.1.8 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 时间线 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -90,10 +90,11 @@ let chatSwitchPromptOpen = false;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.1.7';
+const SETTINGS_EXPORT_VERSION = '9.1.8';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
-    'injectionTemplate', 'tokenBudget', 'maxResults', 'npcInjectionMax', 'itemInjectionMax', 'timelineEndedMax',
+    'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
+    'npcInjectionMax', 'itemInjectionMax', 'timelineEndedMax',
     'mapInjectionMax', 'worldRealWorldRef', 'clueBoardInjectionEnabled',
     'autoGenEnabled', 'autoGenMode', 'autoGenEndpoint', 'autoGenModel', 'autoGenMaxExchanges',
     'maxMemoriesPerExchange', 'extractionConfirmMode', 'activeConfirmStyle', 'contextWindowExchanges',
@@ -130,7 +131,10 @@ const SETTING_CONTROL_BINDINGS = {
     batchExtractionCount: ['#bb_batch_extraction', 'value'],
     sourceRollbackFloorWindow: ['#bb_source_rollback_floor_window', 'value'],
     tokenBudget: ['#bb_token_budget', 'value'],
+    tokenBudgetMode: ['#bb_token_budget_mode', 'value'],
     maxResults: ['#bb_max_results', 'value'],
+    minScoreThreshold: ['#bb_min_score_threshold', 'value'],
+    floorRecentWindow: ['#bb_floor_recent_window', 'value'],
     npcInjectionMax: ['#bb_npc_injection_max', 'value'],
     itemInjectionMax: ['#bb_item_injection_max', 'value'],
     timelineEndedMax: ['#bb_timeline_ended_max', 'value'],
@@ -411,11 +415,17 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     if (!text.trim()) { clearInjection(); return chat; }
 
     // 8. 记录实际注入命中
+    const injectedNpcIds = Array.isArray(stats.npcIds) ? new Set(stats.npcIds) : null;
+    const injectedItemIds = Array.isArray(stats.itemIds) ? new Set(stats.itemIds) : null;
+    const injectedTimelineIds = Array.isArray(stats.timelineIds) ? new Set(stats.timelineIds) : null;
+    const injectedMemoryIds = Array.isArray(stats.memoryIds) ? new Set(stats.memoryIds) : null;
     const hitRecords = [];
-    for (const n of npcForInjection) hitRecords.push({ collection: 'npc', id: n.id });
-    for (const i of itemsForInjection) hitRecords.push({ collection: 'item', id: i.id });
-    for (const t of [...tlForInjection.foreshadow, ...tlForInjection.ongoing, ...tlForInjection.ended]) hitRecords.push({ collection: 'timeline', id: t.id });
-    for (const r of merged) hitRecords.push({ collection: 'mem', id: r.memory.id });
+    for (const n of npcForInjection) if (!injectedNpcIds || injectedNpcIds.has(String(n.id))) hitRecords.push({ collection: 'npc', id: n.id });
+    for (const i of itemsForInjection) if (!injectedItemIds || injectedItemIds.has(String(i.id))) hitRecords.push({ collection: 'item', id: i.id });
+    for (const t of [...tlForInjection.foreshadow, ...tlForInjection.ongoing, ...tlForInjection.ended]) {
+        if (!injectedTimelineIds || injectedTimelineIds.has(String(t.id))) hitRecords.push({ collection: 'timeline', id: t.id });
+    }
+    for (const r of merged) if (!injectedMemoryIds || injectedMemoryIds.has(String(r.memory.id))) hitRecords.push({ collection: 'mem', id: r.memory.id });
     for (const id of stats.mapLocationIds || []) hitRecords.push({ collection: 'map', id });
     const hitFrameKey = buildHitFrameKey(chatId, userFloor, userMessage);
     const hitFrameMsg = userFloor >= 0 ? chat[userFloor] : null;
@@ -453,7 +463,12 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     }
 
     // 11. 存储命中追踪
-    const memoryHitRecords = merged.map(r => ({
+    const injectedMerged = injectedMemoryIds ? merged.filter(r => injectedMemoryIds.has(String(r.memory.id))) : merged;
+    const injectedNpcs = injectedNpcIds ? npcForInjection.filter(n => injectedNpcIds.has(String(n.id))) : npcForInjection;
+    const injectedItems = injectedItemIds ? itemsForInjection.filter(i => injectedItemIds.has(String(i.id))) : itemsForInjection;
+    const filterTimelineHits = (entries) => injectedTimelineIds ? entries.filter(t => injectedTimelineIds.has(String(t.id))) : entries;
+
+    const memoryHitRecords = injectedMerged.map(r => ({
         id: r.memory.id,
         title: r.memory.title,
         type: r.memory.type,
@@ -469,12 +484,12 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         hits: visibleMemoryHits,
         memoryHitsAll: memoryHitRecords,
         eternalInjectedCount,
-        npcHits: npcForInjection.map(n => ({ id: n.id, name: n.name, npcTier: n.npcTier })),
-        itemHits: itemsForInjection.map(i => ({ id: i.id, name: i.name, itemTier: i.itemTier })),
+        npcHits: injectedNpcs.map(n => ({ id: n.id, name: n.name, npcTier: n.npcTier })),
+        itemHits: injectedItems.map(i => ({ id: i.id, name: i.name, itemTier: i.itemTier })),
         timelineHits: {
-            foreshadow: tlForInjection.foreshadow.map(t => ({ id: t.id, title: t.title || t.event, status: t.status })),
-            ongoing: tlForInjection.ongoing.map(t => ({ id: t.id, title: t.title || t.event, status: t.status })),
-            ended: tlForInjection.ended.map(t => ({ id: t.id, title: t.title || t.event, status: t.status })),
+            foreshadow: filterTimelineHits(tlForInjection.foreshadow).map(t => ({ id: t.id, title: t.title || t.event, status: t.status })),
+            ongoing: filterTimelineHits(tlForInjection.ongoing).map(t => ({ id: t.id, title: t.title || t.event, status: t.status })),
+            ended: filterTimelineHits(tlForInjection.ended).map(t => ({ id: t.id, title: t.title || t.event, status: t.status })),
         },
         mapHits: (stats.mapLocationIds || []).map(id => {
             const loc = mapData?.locations?.[id];
@@ -1626,7 +1641,10 @@ function bindSidebarEvents() {
     bindInput('#bb_batch_extraction', 'batchExtractionCount', 'number');
     bindInput('#bb_source_rollback_floor_window', 'sourceRollbackFloorWindow', 'number');
     bindInput('#bb_token_budget', 'tokenBudget', 'number');
+    bindSelect('#bb_token_budget_mode', 'tokenBudgetMode');
     bindInput('#bb_max_results', 'maxResults', 'number');
+    bindInput('#bb_min_score_threshold', 'minScoreThreshold', 'number');
+    bindInput('#bb_floor_recent_window', 'floorRecentWindow', 'number');
     bindInput('#bb_npc_injection_max', 'npcInjectionMax', 'number');
     bindInput('#bb_item_injection_max', 'itemInjectionMax', 'number');
     bindInput('#bb_timeline_ended_max', 'timelineEndedMax', 'number');
@@ -3466,7 +3484,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.1.7 初始化开始...');
+    console.log('[BB-Memory] v9.1.8 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -3630,7 +3648,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.1.7 初始化完成');
+    console.log('[BB-Memory] v9.1.8 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
