@@ -22,6 +22,7 @@ import {
     fillPromptTemplate,
     getPromptTemplate,
 } from './prompt-templates.js';
+import { hydrateCollectionEmbeddings, hydrateMapEmbeddings } from './vector-store.js';
 
 // ═══════════════════════════════════════════════════════════
 //  工具函数
@@ -246,7 +247,7 @@ export function detectNearDuplicates(memories, threshold = 0.95) {
 export function detectMissingEmbeddings(memories, embeddingEnabled) {
     if (!embeddingEnabled) return [];
     return memories
-        .filter(m => !m.embedding || !Array.isArray(m.embedding) || m.embedding.length === 0)
+        .filter(m => !m.embeddingRef?.id && (!m.embedding || !Array.isArray(m.embedding) || m.embedding.length === 0))
         .map(m => ({
             id: m.id,
             title: m.title || m.id,
@@ -565,6 +566,11 @@ export async function runHealthCheck(chatId) {
         getTimeline(chatId),
         getMap(chatId).catch(() => ({ locations: {} })),
         getClueBoard(chatId).catch(() => ({ nodes: [], connections: [] })),
+    ]);
+
+    await Promise.all([
+        hydrateCollectionEmbeddings(chatId, memories),
+        hydrateMapEmbeddings(chatId, mapData),
     ]);
 
     const results = {

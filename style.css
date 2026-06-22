@@ -2437,7 +2437,7 @@
     padding: clamp(8px, 3vh, 20px) !important;
     box-sizing: border-box;
     isolation: isolate;
-    z-index: 1000100 !important;
+    z-index: 1000200 !important;
 }
 
 .bb-form-overlay .bb-mem-form-popup,
@@ -2450,7 +2450,7 @@
 .bb-form-overlay .bb-mem-form-popup,
 .bb-manager-form-overlay .bb-mem-form-popup {
     position: relative;
-    z-index: 1000101 !important;
+    z-index: 1000201 !important;
 }
 
 .bb-mem-form-popup {
@@ -5267,5 +5267,31 @@
         max-height: 100vh !important;
         max-height: 100dvh !important;
         border-radius: 0 !important;
+    }
+}
+
+/* v9.2.2: manager edit forms must stay above the manager overlay on mobile. */
+@media (max-width: 768px) {
+    .bb-form-overlay,
+    .bb-manager-form-overlay {
+        position: fixed !important;
+        inset: 0 !important;
+        z-index: 1000200 !important;
+        align-items: flex-start !important;
+        overflow-y: auto !important;
+        padding: max(0.5rem, env(safe-area-inset-top)) max(0.5rem, env(safe-area-inset-right)) max(0.5rem, env(safe-area-inset-bottom)) max(0.5rem, env(safe-area-inset-left)) !important;
+    }
+
+    .bb-form-overlay .bb-mem-form-popup,
+    .bb-manager-form-overlay .bb-mem-form-popup {
+        z-index: 1000201 !important;
+        max-height: calc(100dvh - 1rem) !important;
+        overflow: hidden !important;
+    }
+
+    .bb-form-overlay .bb-mem-form-body,
+    .bb-manager-form-overlay .bb-mem-form-body {
+        min-height: 0;
+        overflow-y: auto !important;
     }
 }

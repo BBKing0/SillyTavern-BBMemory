@@ -115,9 +115,22 @@ export async function checkMaintenanceNeeded(chatId) {
         });
     }
 
-    // 2. 状态变更物品（排除永久保留）
+    // 2. 积灰物品：连续未命中达到阈值后提示用户裁决
+    const dustyThreshold = Number(settings.itemDustyMissRounds) || 30;
     for (const item of items) {
-        if (item.status === 'held' || item.keepPermanent) continue;
+        if (item.archived || item.keepPermanent || item.memoryTier === 'eternal') continue;
+        const missStreak = Math.max(0, Number(item.missStreak) || 0);
+        if (item.memoryTier !== 'transient' && missStreak < dustyThreshold) continue;
+        issues.push({
+            type: 'dusty_item', collection: 'item', item,
+            reason: `${item.name} — ${item.memoryTier === 'transient' ? '已积灰' : `连续 ${missStreak} 轮未命中`}，可归档或升级注入层级`,
+            severity: 'warning',
+        });
+    }
+
+    // 3. 状态变更物品（排除永久保留）
+    for (const item of items) {
+        if (item.archived || item.status === 'held' || item.keepPermanent) continue;
         issues.push({
             type: 'status_changed_item', collection: 'item', item,
             reason: `${item.name} — 状态：${item.status}${item.keepPermanent ? '（永久保留）' : ''}`,
@@ -125,7 +138,7 @@ export async function checkMaintenanceNeeded(chatId) {
         });
     }
 
-    // 3. 可压缩里程碑
+    // 4. 可压缩里程碑
     for (const t of milestones) {
         if (t.isActive || t.status === 'ongoing') continue;
         if (t.memoryTier === 'eternal') continue;
@@ -136,7 +149,7 @@ export async function checkMaintenanceNeeded(chatId) {
         });
     }
 
-    // 4. 低 tier NPC
+    // 5. 低 tier NPC
     for (const n of npc) {
         if (n.memoryTier === 'eternal') continue;
         if (n.npcTier === 'background' || (n.npcTier === 'minor' && n.memoryTier === 'transient')) {
@@ -148,7 +161,7 @@ export async function checkMaintenanceNeeded(chatId) {
         }
     }
 
-    // 5. 伏笔
+    // 6. 伏笔
     for (const t of milestones) {
         if (t.status !== 'foreshadow') continue;
         issues.push({
@@ -190,7 +203,7 @@ const removeFns = { npc: removeNpcProfile, item: removeItem, milestone: removeMi
 
 export async function performMaintenance(chatId, actions) {
     const cache = getCache(chatId);
-    const results = { kept: 0, deleted: 0, promoted: 0, demoted: 0, compressed: 0 };
+    const results = { kept: 0, deleted: 0, promoted: 0, demoted: 0, compressed: 0, archived: 0 };
 
     for (const action of actions) {
         const { collection, id, op } = action;
@@ -235,6 +248,18 @@ export async function performMaintenance(chatId, actions) {
                     summary: `[归档] ${(await getMilestones(chatId)).find(t => t.id === id)?.event || ''}: ${(await getMilestones(chatId)).find(t => t.id === id)?.summary || ''}`,
                 });
                 results.compressed++;
+                break;
+            case 'archive_item':
+                await updateItem(chatId, id, { archived: true });
+                results.archived++;
+                break;
+            case 'item_to_vector':
+                await updateItem(chatId, id, { memoryTier: 'stable', keepPermanent: false, missStreak: 0, hitScore: 0, archived: false });
+                results.promoted++;
+                break;
+            case 'item_to_eternal':
+                await updateItem(chatId, id, { memoryTier: 'eternal', keepPermanent: true, missStreak: 0, hitScore: 0, archived: false });
+                results.promoted++;
                 break;
         }
     }

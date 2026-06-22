@@ -6,6 +6,14 @@
  */
 
 import { normalizeNpcTier, normalizeItemTier } from './entity-tiers.js';
+import {
+    buildVectorPack,
+    countEmbeddingRefs,
+    importVectorPack,
+    normalizeDataEmbeddingsToRefs,
+    stripRuntimeEmbeddings,
+    convertCollectionEmbeddingsToRefs,
+} from './vector-store.js';
 
 // ═══ 模块名与存储键 ═══
 export const MODULE_NAME = 'bb_memory';
@@ -40,6 +48,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     itemInjectionMax: 5,
     milestoneVectorMax: 3,
     milestoneDefaultInjectionMode: 'resident', // 'resident' | 'vector'
+    itemDustyMissRounds: 30,
+    cloudVectorSlotMaxKb: 2048,
     mapInjectionMax: 8,             // v8.7.0 地图地点注入上限
     worldRealWorldRef: '',           // v8.7.1 全局现实原型参考
     floorRecentWindow: 6,            // 近 N 轮内的记忆用完整内容
@@ -102,7 +112,6 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // 自动备份
     autoBackupEnabled: false,
     chatMetadataBackupMaxKb: 2048,
-    cloudBackupIncludeEmbeddings: false,
     lastBackupTimestamp: 0,
     // v8.2.3 API 预设配置
     apiProfiles: [],
@@ -237,7 +246,13 @@ async function loadCollection(type, chatId) {
         return migratedTimeline;
     }
     if (Array.isArray(data)) {
-        return normalized === 'milestone' ? data.map(normalizeMilestoneEntry) : data;
+        const loaded = normalized === 'milestone' ? data.map(normalizeMilestoneEntry) : data;
+        if (loaded.some(entry => Array.isArray(entry?.embedding) && entry.embedding.length)) {
+            const migrated = await convertCollectionEmbeddingsToRefs(chatId, loaded);
+            await lf.setItem(storageKey(normalized, chatId), stripRuntimeEmbeddings(migrated));
+            return stripRuntimeEmbeddings(migrated);
+        }
+        return loaded;
     }
 
     const legacyKey = legacyStorageKey(normalized, chatId);
@@ -248,12 +263,13 @@ async function loadCollection(type, chatId) {
             const migrated = normalized === 'milestone'
                 ? legacyData.map(normalizeMilestoneEntry)
                 : legacyData;
-            await lf.setItem(storageKey(normalized, chatId), migrated);
+            await convertCollectionEmbeddingsToRefs(chatId, migrated);
+            await lf.setItem(storageKey(normalized, chatId), stripRuntimeEmbeddings(migrated));
             if (normalized === 'milestone') {
                 const legacyTimeline = await lf.getItem(legacyStorageKey('timeline', chatId));
                 await lf.setItem(storageKey('timeline', chatId), Array.isArray(legacyTimeline) ? legacyTimeline : []);
             }
-            return migrated;
+            return stripRuntimeEmbeddings(migrated);
         }
     }
     return [];
@@ -262,9 +278,13 @@ async function loadCollection(type, chatId) {
 async function saveCollection(type, chatId, data) {
     const lf = getLocalForage();
     const normalized = normalizeCollectionType(type);
-    const normalizedData = normalized === 'milestone' && Array.isArray(data)
+    let normalizedData = normalized === 'milestone' && Array.isArray(data)
         ? data.map(normalizeMilestoneEntry)
         : data;
+    if (Array.isArray(normalizedData)) {
+        normalizedData = await convertCollectionEmbeddingsToRefs(chatId, normalizedData);
+        normalizedData = stripRuntimeEmbeddings(normalizedData);
+    }
     await lf.setItem(storageKey(normalized, chatId), normalizedData);
 }
 
@@ -349,7 +369,7 @@ function restoreSourceRollback(current, rollback) {
     const previous = deepClonePlain(rollback?.previous);
     if (!previous || typeof previous !== 'object') return null;
     previous.id = previous.id || current.id;
-    previous.embedding = previous.embedding ?? null;
+    if (current.embeddingRef && !previous.embeddingRef) previous.embeddingRef = current.embeddingRef;
     delete previous[SOURCE_ROLLBACK_KEY];
     return previous;
 }
@@ -438,6 +458,7 @@ export async function addNpcProfile(chatId, data) {
         hitCount: data.hitCount || 0,
         hitScore: normalizeHitScore(data.hitScore),
         memoryTier: defaultActiveTier(data.memoryTier),
+        missStreak: Math.max(0, Number(data.missStreak) || 0),
         archived: data.archived || false,
         createdAt: now,
         updatedAt: now,
@@ -1108,6 +1129,49 @@ function applyOrderedEntityTierScore(entry, delta, tierKey, order, now) {
     return changed;
 }
 
+function applyItemInjectionScore(entry, delta, now) {
+    if (!isEntryActiveForHitCycle(entry)) return false;
+    const tier = entry.memoryTier || 'stable';
+    if ((entry.keepPermanent || tier === 'eternal') && delta < 0) return false;
+
+    let changed = false;
+    if (delta > 0) {
+        changed = bumpHitScore(entry, delta, now);
+        if (entry.missStreak) {
+            entry.missStreak = 0;
+            entry.updatedAt = now;
+            changed = true;
+        }
+        const eternalThreshold = getPositiveSetting('hitScoreEternalThreshold', 40);
+        if (tier === 'stable' && entry.hitScore >= eternalThreshold) {
+            entry.memoryTier = 'eternal';
+            entry.hitScore = 0;
+            entry.lastPromotedAt = now;
+            entry.updatedAt = now;
+            changed = true;
+        }
+        return changed;
+    }
+
+    if (tier === 'transient') return false;
+    const beforeMiss = Math.max(0, Number(entry.missStreak) || 0);
+    entry.missStreak = beforeMiss + 1;
+    changed = true;
+    bumpHitScore(entry, delta, now);
+
+    const dustyThreshold = getPositiveSetting('itemDustyMissRounds', 30);
+    if (entry.missStreak >= dustyThreshold && entry.memoryTier !== 'transient') {
+        entry.memoryTier = 'transient';
+        entry.hitScore = 0;
+        entry.updatedAt = now;
+        changed = true;
+        if (getSettings().debugLogging) {
+            console.log(`[BB-Memory] item dusty: ${entry.name || entry.id}`);
+        }
+    }
+    return changed;
+}
+
 async function recordMapHits(chatId, ids, now) {
     if (!ids.size) return false;
     const { getMap, setMap } = await import('./map-store.js');
@@ -1150,7 +1214,7 @@ export async function recordHits(chatId, hits, options = {}) {
 
     const collections = [
         { name: 'npc', loader: getNpcProfiles, saver: (d) => saveCollection('npc', chatId, d), apply: (entry, delta) => applyOrderedEntityTierScore(entry, delta, 'npcTier', NPC_TIER_ORDER_V905, now) },
-        { name: 'item', loader: getItems, saver: (d) => saveCollection('item', chatId, d), apply: (entry, delta) => applyOrderedEntityTierScore(entry, delta, 'itemTier', ITEM_TIER_ORDER_V905, now) },
+        { name: 'item', loader: getItems, saver: (d) => saveCollection('item', chatId, d), apply: (entry, delta) => applyItemInjectionScore(entry, delta, now) },
         { name: 'milestone', loader: getMilestones, saver: (d) => saveCollection('milestone', chatId, d), apply: (entry, delta) => applyMemoryTierScore(chatId, 'milestone', entry, delta, now) },
         { name: 'mem', loader: getMemories, saver: (d) => saveCollection('mem', chatId, d), apply: (entry, delta) => applyMemoryTierScore(chatId, 'mem', entry, delta, now) },
     ];
@@ -1241,15 +1305,20 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.2.1',
+        version: '9.2.2',
+        schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
-        npc: [],
-        items: [],
-        milestones: [],
-        timeline: [],
-        memories: [],
-        map: { locations: {} },
-        clueBoard: { nodes: [], connections: [] },
+        embeddingsIncluded: false,
+        vectorRefs: 0,
+        data: {
+            npc: [],
+            items: [],
+            milestones: [],
+            timeline: [],
+            memories: [],
+            map: { locations: {} },
+            clueBoard: { nodes: [], connections: [] },
+        },
     });
     await saveChatMetadata(ctx);
 }
@@ -1446,14 +1515,16 @@ function getChatMetadataBackupLimit() {
 }
 
 function countBackupEntries(backup) {
-    const mapCount = Object.keys(backup.map?.locations || {}).length;
-    const clueCount = Array.isArray(backup.clueBoard?.nodes) ? backup.clueBoard.nodes.length : 0;
-    const milestones = backup.milestones || [];
-    const timeline = backup.timeline || backup.threads || [];
-    return (backup.npc?.length || 0)
-        + (backup.items?.length || 0)
+    const source = backup?.schema === 'bb-memory-vector-ref-v1' && backup.data ? backup.data : backup;
+    const mapCount = Object.keys(source?.map?.locations || {}).length
+        || (Array.isArray(source?.locations) ? source.locations.length : 0);
+    const clueCount = Array.isArray(source?.clueBoard?.nodes) ? source.clueBoard.nodes.length : 0;
+    const milestones = source?.milestones || [];
+    const timeline = source?.timeline || source?.threads || [];
+    return (source?.npc?.length || 0)
+        + (source?.items?.length || 0)
         + (milestones.length || 0)
-        + (backup.memories?.length || 0)
+        + (source?.memories?.length || 0)
         + (timeline.length || 0)
         + mapCount
         + clueCount;
@@ -1481,14 +1552,16 @@ function stripMapEmbeddings(map) {
 }
 
 function countBackupEmbeddings(backup) {
-    const hasEmbedding = (entry) => Array.isArray(entry?.embedding) && entry.embedding.length > 0;
+    const source = backup?.schema === 'bb-memory-vector-ref-v1' && backup.data ? backup.data : backup;
+    const hasEmbedding = (entry) => (Array.isArray(entry?.embedding) && entry.embedding.length > 0) || !!entry?.embeddingRef?.id;
     let count = 0;
     for (const key of ['npc', 'items', 'memories']) {
-        count += (backup[key] || []).filter(hasEmbedding).length;
+        count += (source?.[key] || []).filter(hasEmbedding).length;
     }
-    count += (backup.milestones || []).filter(hasEmbedding).length;
-    count += (backup.timeline || backup.threads || []).filter(hasEmbedding).length;
-    count += Object.values(backup.map?.locations || {}).filter(hasEmbedding).length;
+    count += (source?.milestones || []).filter(hasEmbedding).length;
+    count += (source?.timeline || source?.threads || []).filter(hasEmbedding).length;
+    count += Object.values(source?.map?.locations || {}).filter(hasEmbedding).length;
+    count += (Array.isArray(source?.locations) ? source.locations : []).filter(hasEmbedding).length;
     return count;
 }
 
@@ -1563,20 +1636,25 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
         getClueBoard(chatId),
     ]);
 
-    const includeEmbeddings = options.includeEmbeddings === true;
-    const backup = {
-        version: '9.2.1',
-        timestamp: Date.now(),
-        embeddingsIncluded: includeEmbeddings,
-        npc: includeEmbeddings ? npc : stripEmbeddings(npc),
-        items: includeEmbeddings ? items : stripEmbeddings(items),
-        milestones: includeEmbeddings ? milestones : stripEmbeddings(milestones),
-        timeline: includeEmbeddings ? timeline : stripEmbeddings(timeline),
-        memories: includeEmbeddings ? memories : stripEmbeddings(memories),
-        map: includeEmbeddings ? map : stripMapEmbeddings(map),
+    await normalizeDataEmbeddingsToRefs(chatId, { npc, items, milestones, timeline, memories, map });
+    const cleanData = {
+        npc: stripEmbeddings(npc),
+        items: stripEmbeddings(items),
+        milestones: stripEmbeddings(milestones),
+        timeline: stripEmbeddings(timeline),
+        memories: stripEmbeddings(memories),
+        map: stripMapEmbeddings(map),
         clueBoard,
     };
-    backup.embeddingCount = includeEmbeddings ? countBackupEmbeddings(backup) : 0;
+    const backup = {
+        version: '9.2.2',
+        schema: 'bb-memory-vector-ref-v1',
+        timestamp: Date.now(),
+        embeddingsIncluded: false,
+        vectorRefs: countEmbeddingRefs({ npc, items, milestones, timeline, memories, map }),
+        data: cleanData,
+    };
+    backup.embeddingCount = backup.vectorRefs;
 
     const json = JSON.stringify(backup);
     const ctx = getContext();
@@ -1596,7 +1674,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
             skipped: true,
             reason: 'size-limit',
             cleanup,
-            embeddingsIncluded: includeEmbeddings,
+            embeddingsIncluded: false,
             embeddingCount: backup.embeddingCount,
         };
     }
@@ -1609,13 +1687,22 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
     settings.lastBackupTimestamp = Date.now();
     updateSettings({ lastBackupTimestamp: settings.lastBackupTimestamp });
 
-    return { count, size: json.length, limit, skipped: false, cleanup, embeddingsIncluded: includeEmbeddings, embeddingCount: backup.embeddingCount };
+    return { count, size: json.length, limit, skipped: false, cleanup, embeddingsIncluded: false, embeddingCount: backup.embeddingCount };
 }
 
 async function restoreMapBackup(chatId, backupMap) {
     const idMap = new Map();
     if (!backupMap || typeof backupMap !== 'object' || !backupMap.locations) {
         return { restored: 0, skipped: 0, idMap };
+    }
+    if (Array.isArray(backupMap.locations)) {
+        const locations = {};
+        for (const loc of backupMap.locations) {
+            if (!loc || typeof loc !== 'object') continue;
+            const key = loc.id || loc.name || generateId();
+            locations[key] = { ...loc, id: loc.id || key };
+        }
+        backupMap = { ...backupMap, locations };
     }
 
     const { getMap, setMap } = await import('./map-store.js');
@@ -1753,8 +1840,12 @@ async function restoreClueBoardBackup(chatId, backupBoard, idMaps = {}) {
 
 async function restoreBackupPayload(chatId, backup) {
     if (!backup || typeof backup !== 'object') return { restored: 0, skipped: 0, merged: 0 };
+    const source = backup.schema === 'bb-memory-vector-ref-v1' && backup.data && typeof backup.data === 'object'
+        ? backup.data
+        : backup;
+    const vectorImport = await importVectorPack(chatId, backup.vectorPack || source.vectorPack);
     let restored = 0, skipped = 0, merged = 0;
-    const importOptions = { externalInit: isExternalInitPayload(backup) };
+    const importOptions = { externalInit: isExternalInitPayload(source) };
     const idMaps = {};
     const restorePart = async (type, entries, loader, keyFn, transform = null) => {
         const idMap = new Map();
@@ -1815,12 +1906,12 @@ async function restoreBackupPayload(chatId, backup) {
         if (changed) await saveCollection(type, chatId, next);
     };
 
-    await restorePart('npc', backup.npc, getNpcProfiles, e => (e.name || '').toLowerCase().trim());
-    await restorePart('item', backup.items, getItems, e => (e.name || '').toLowerCase().trim());
-    const backupMilestones = backup.milestones || (looksLikeLegacyMilestoneList(backup.timeline) ? backup.timeline : []);
-    const backupTimeline = backup.milestones ? (backup.timeline || backup.threads) : (looksLikeLegacyMilestoneList(backup.timeline) ? backup.threads : backup.timeline || backup.threads);
+    await restorePart('npc', source.npc, getNpcProfiles, e => (e.name || '').toLowerCase().trim());
+    await restorePart('item', source.items, getItems, e => (e.name || '').toLowerCase().trim());
+    const backupMilestones = source.milestones || (looksLikeLegacyMilestoneList(source.timeline) ? source.timeline : []);
+    const backupTimeline = source.milestones ? (source.timeline || source.threads) : (looksLikeLegacyMilestoneList(source.timeline) ? source.threads : source.timeline || source.threads);
     await restorePart('milestone', backupMilestones, getMilestones, e => `${(e.event || '').toLowerCase().trim()}|${e.storyTime || ''}`);
-    await restorePart('mem', backup.memories, getMemories, e => `${(e.title || '').toLowerCase().trim()}|${(e.content || '').toLowerCase().trim().slice(0, 80)}`);
+    await restorePart('mem', source.memories, getMemories, e => `${(e.title || '').toLowerCase().trim()}|${(e.content || '').toLowerCase().trim().slice(0, 80)}`);
     await restorePart('timeline', backupTimeline, getTimeline, e => (e.name || '').toLowerCase().trim(), timeline => {
         if (timeline.parentThreadId && idMaps.timeline?.has(timeline.parentThreadId)) {
             timeline.parentThreadId = idMaps.timeline.get(timeline.parentThreadId);
@@ -1845,11 +1936,11 @@ async function restoreBackupPayload(chatId, backup) {
         if (changed) await saveCollection('timeline', chatId, timeline);
     }
 
-    const mapResult = await restoreMapBackup(chatId, backup.map || backup.mapData);
+    const mapResult = await restoreMapBackup(chatId, source.map || source.mapData || (Array.isArray(source.locations) ? { locations: source.locations } : null));
     restored += mapResult.restored;
     skipped += mapResult.skipped;
 
-    const clueResult = await restoreClueBoardBackup(chatId, backup.clueBoard || backup.clues, {
+    const clueResult = await restoreClueBoardBackup(chatId, source.clueBoard || source.clues, {
         ...idMaps,
         items: idMaps.item,
         memory: idMaps.mem,
@@ -1859,7 +1950,7 @@ async function restoreBackupPayload(chatId, backup) {
     restored += clueResult.restored;
     skipped += clueResult.skipped;
 
-    return { restored, skipped, merged };
+    return { restored, skipped, merged, vectorImported: vectorImport.imported || 0, vectorSkipped: vectorImport.skipped || 0 };
 }
 
 export async function importMemoriesFromChatMetadata(chatId) {
@@ -1875,8 +1966,9 @@ export async function importMemoriesFromChatMetadata(chatId) {
     }
 
     const result = await restoreBackupPayload(chatId, backup);
-    result.embeddingsIncluded = backup.embeddingsIncluded === true;
-    result.embeddingCount = countBackupEmbeddings(backup);
+    const source = backup.schema === 'bb-memory-vector-ref-v1' && backup.data ? backup.data : backup;
+    result.embeddingsIncluded = false;
+    result.embeddingCount = countBackupEmbeddings(source);
 
     // v8.2.7 恢复后清除 chatMetadata 中的备份数据，避免聊天文件持续膨胀
     if (ctx.chatMetadata?.[BACKUP_METADATA_KEY]) {
@@ -2289,15 +2381,15 @@ export async function exportMemories(chatId) {
         getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId),
         getTimeline(chatId), getMap(chatId), getClueBoard(chatId),
     ]);
+    const data = { npc, items, milestones, timeline, memories, map, clueBoard };
+    await normalizeDataEmbeddingsToRefs(chatId, data);
+    const vectorPack = await buildVectorPack(chatId, data);
     return JSON.stringify({
-        version: '9.2.1',
-        npc,
-        items,
-        milestones,
-        timeline,
-        memories,
-        map,
-        clueBoard,
+        version: '9.2.2',
+        schema: 'bb-memory-vector-ref-v1',
+        exportedAt: Date.now(),
+        data: stripRuntimeEmbeddings(data),
+        vectorPack,
     });
 }
 

@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.2.1</b>
+            <b>BB-Memory v9.2.2</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -82,8 +82,8 @@
                 备份将记忆数据保存到服务器（跨设备同步）。开启下方"自动备份"后可自动执行，无需手动操作。
             </div>
             <label class="checkbox_label" style="margin: 4px 0 2px;">
-                <input id="bb_backup_include_embeddings" type="checkbox" />
-                <span>手动云备份包含当前存档向量 <small>仅手动备份生效，可能显著增大聊天文件</small></span>
+                <input id="bb_backup_include_embeddings" type="checkbox" disabled />
+                <span>云备份不再内联向量 <small>向量请使用存档页的单一云端向量槽同步</small></span>
             </label>
             <div id="bb_auto_backup_status" style="font-size:0.7em;margin-bottom:6px;color:#ff9800;">
                 <i class="fa-solid fa-circle"></i> 自动备份已关闭
@@ -225,6 +225,12 @@
                     </div>
 
                     <div class="bb-mem-sidebar-section">
+                        <label for="bb_item_dusty_miss_rounds">物品积灰未命中轮数</label>
+                        <small class="bb-mem-hint">物品连续这么多轮未命中后降为“积灰”（默认30）</small>
+                        <input id="bb_item_dusty_miss_rounds" type="number" class="bb-input" min="1" max="200" value="30" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
                         <label for="bb_diversity_limit">多样性限制</label>
                         <small class="bb-mem-hint">同一标签最多允许多少条核心记忆（默认5）</small>
                         <input id="bb_diversity_limit" type="number" class="bb-input" min="2" max="20" value="5" />
@@ -280,6 +286,12 @@
                         <label for="bb_chat_metadata_backup_max_kb">聊天元数据备份上限（KB）</label>
                         <small class="bb-mem-hint">超过此大小会跳过云端备份，避免聊天文件膨胀；大存档请用本地 JSON 导出。</small>
                         <input id="bb_chat_metadata_backup_max_kb" type="number" class="bb-input" min="128" max="8192" step="128" value="2048" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_cloud_vector_slot_max_kb">云端向量槽上限（KB）</label>
+                        <small class="bb-mem-hint">每个角色只有一个云端向量槽，上传会覆盖旧向量包（默认2048）。</small>
+                        <input id="bb_cloud_vector_slot_max_kb" type="number" class="bb-input" min="128" max="16384" step="128" value="2048" />
                     </div>
 
                 </div>

@@ -214,7 +214,13 @@ function isForeshadowTimeline(entry) {
 function isResidentMilestone(entry) {
     if (!entry) return false;
     if (isResidentEntry(entry)) return true;
+    if (entry.memoryTier === 'stable' || entry.injectionMode === 'vector') return false;
+    if (entry.memoryTier === 'transient' || entry.status === 'dusty') return false;
     return entry.injectionMode !== 'vector';
+}
+
+function isDustyItem(item) {
+    return item?.memoryTier === 'transient' || item?.status === 'dusty';
 }
 
 function isTimelineCoveredByThread(entry, threadIndex) {
@@ -474,7 +480,7 @@ export function getNpcForInjection(npcProfiles, queryText, queryEmbedding = null
 }
 
 /**
- * 物品栏：key+equipped+kp 全注入，其余按命中
+ * 物品栏：eternal/core/keepPermanent 常驻；stable 按关键词/向量命中；transient/积灰不主动注入。
  */
 export function getItemsForInjection(items, queryText, queryEmbedding = null) {
     const required = [];
@@ -482,8 +488,8 @@ export function getItemsForInjection(items, queryText, queryEmbedding = null) {
     for (const item of items) {
         if (isArchived(item) || !matchesActiveCategory(item)) continue;
         const resident = isResidentEntry(item);
-        const alwaysIndex = item.itemTier === 'key' || item.itemTier === 'equipped' || item.keepPermanent;
-        const hit = entryTextMatches(item, queryText, ['name', 'owner', 'status', 'significance', 'location'], queryEmbedding);
+        const alwaysIndex = resident || item.keepPermanent;
+        const hit = !isDustyItem(item) && entryTextMatches(item, queryText, ['name', 'owner', 'status', 'significance', 'location'], queryEmbedding);
         if (resident || hit) {
             const target = resident || alwaysIndex ? required : optional;
             target.push(cloneForInjection(item, 'full', resident ? 'resident' : 'hit'));
@@ -868,8 +874,8 @@ function priorityForNpc(npc) {
 }
 
 function priorityForItem(item) {
-    if (isResidentEntry(item) || item?.itemTier === 'key' || item?.itemTier === 'equipped' || item?.keepPermanent) return 0;
-    if (item?.itemTier === 'clue' || hasClueOrForeshadowSignal(item)) return 1;
+    if (isResidentEntry(item) || item?.keepPermanent) return 0;
+    if (item?.itemTier === 'key' || item?.itemTier === 'equipped' || item?.itemTier === 'clue' || hasClueOrForeshadowSignal(item)) return 1;
     return 2;
 }
 
@@ -1097,7 +1103,7 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, milestone
             'item',
             getInjectionHeader(activeSettings, 'item') || DEFAULT_INJECTION_SECTION_HEADERS.item,
             items.map(item => makeBudgetItem(formatItemLine(item), {
-                resident: isResidentEntry(item) || item.itemTier === 'key' || item.itemTier === 'equipped' || item.keepPermanent,
+                resident: isResidentEntry(item) || item.keepPermanent,
                 priority: priorityForItem(item),
                 collection: 'item',
                 id: item.id,

@@ -13,6 +13,13 @@
  */
 
 import { getSettings, updateSettings } from './memory-store.js';
+import {
+    buildVectorPack,
+    countEmbeddingRefs,
+    importVectorPack,
+    normalizeDataEmbeddingsToRefs,
+    stripRuntimeEmbeddings,
+} from './vector-store.js';
 
 // ═══ localforage 访问 ═══
 
@@ -24,6 +31,7 @@ function getLocalForage() {
 
 const SLOT_PREFIX = 'bb_memory_slot_';
 const CHAT_SLOT_BINDINGS_VERSION = 1;
+const CLOUD_VECTOR_SLOT_KEY_PREFIX = 'bb_memory_cloud_vector_slot_';
 
 // v9.2.0 存储键：旧时间条目已改为里程碑，旧时间线程已改为时间线
 const NPC_KEY = 'bb_npc_chat_';
@@ -196,7 +204,7 @@ async function readAllPillarData(chatId) {
     const timeline = looksLikeLegacyMilestoneList(rawTimeline)
         ? (Array.isArray(legacyThreads) ? legacyThreads : [])
         : (Array.isArray(rawTimeline) ? rawTimeline : (Array.isArray(legacyThreads) ? legacyThreads : []));
-    return {
+    const data = {
         npc: Array.isArray(npc) ? npc : [],
         items: Array.isArray(items) ? items : [],
         milestones: Array.isArray(rawMilestones) && rawMilestones.length ? rawMilestones : legacyMilestones,
@@ -205,20 +213,25 @@ async function readAllPillarData(chatId) {
         map: normalizeMapData(map),
         clueBoard: normalizeClueBoardData(clueBoard),
     };
+    await normalizeDataEmbeddingsToRefs(chatId, data);
+    return stripRuntimeEmbeddings(data);
 }
 
 async function writeAllPillarData(chatId, data) {
     const lf = getLocalForage();
     const normalized = normalizeSlotData(data);
+    await importVectorPack(chatId, data?.vectorPack);
+    await normalizeDataEmbeddingsToRefs(chatId, normalized);
+    const clean = stripRuntimeEmbeddings(normalized);
     await Promise.all([
-        lf.setItem(NPC_KEY + chatId, normalized.npc),
-        lf.setItem(ITEM_KEY + chatId, normalized.items),
-        lf.setItem(MILESTONE_KEY + chatId, normalized.milestones),
-        lf.setItem(TIMELINE_KEY + chatId, normalized.timeline),
-        lf.setItem(MEMORY_KEY + chatId, normalized.memories),
+        lf.setItem(NPC_KEY + chatId, clean.npc),
+        lf.setItem(ITEM_KEY + chatId, clean.items),
+        lf.setItem(MILESTONE_KEY + chatId, clean.milestones),
+        lf.setItem(TIMELINE_KEY + chatId, clean.timeline),
+        lf.setItem(MEMORY_KEY + chatId, clean.memories),
         lf.removeItem(LEGACY_THREAD_KEY + chatId),
-        lf.setItem(MAP_KEY + chatId, normalized.map),
-        lf.setItem(CLUE_BOARD_KEY + chatId, normalized.clueBoard),
+        lf.setItem(MAP_KEY + chatId, clean.map),
+        lf.setItem(CLUE_BOARD_KEY + chatId, clean.clueBoard),
     ]);
 }
 
@@ -240,6 +253,11 @@ function normalizeClueBoardData(board) {
 }
 
 function normalizeSlotData(raw) {
+    if (raw?.schema === 'bb-memory-vector-ref-v1' && raw.data && typeof raw.data === 'object') {
+        const data = normalizeSlotData(raw.data);
+        data.vectorPack = raw.vectorPack || raw.data.vectorPack || null;
+        return data;
+    }
     const now = Date.now();
     if (Array.isArray(raw)) {
         return { ...createEmptySlotData(), memories: clonePlain(raw), _slotEmpty: raw.length === 0 };
@@ -289,18 +307,12 @@ function totalCount(data) {
 function countSlotEmbeddings(data) {
     if (!data || typeof data !== 'object') return 0;
     const normalized = normalizeSlotData(data);
-    const hasEmbedding = (entry) => Array.isArray(entry?.embedding) && entry.embedding.length > 0;
-    let count = 0;
-    for (const key of ['npc', 'items', 'milestones', 'timeline', 'memories']) {
-        count += normalized[key].filter(hasEmbedding).length;
-    }
-    count += Object.values(normalized.map.locations || {}).filter(hasEmbedding).length;
-    return count;
+    return countEmbeddingRefs(normalized);
 }
 
-function buildCloudSlotPayload(data, includeEmbeddings = false) {
+function buildCloudSlotPayload(data) {
     const normalized = normalizeSlotData(data);
-    return includeEmbeddings ? clonePlain(normalized) : stripSlotEmbeddings(normalized);
+    return stripRuntimeEmbeddings(stripSlotEmbeddings(normalized));
 }
 
 export async function getChatSlotDataSummary(chatId) {
@@ -462,7 +474,9 @@ export async function saveToSlot(charId, chatId, slotName, options = {}) {
     data._slotEmpty = totalCount(data) === 0;
     data._slotCreatedAt = existing?._slotCreatedAt || existing?.createdAt || now;
     data._slotUpdatedAt = now;
-    await lf.setItem(slotKey(charId, slotName), data);
+    await normalizeDataEmbeddingsToRefs(chatId, data);
+    const cleanData = stripRuntimeEmbeddings(data);
+    await lf.setItem(slotKey(charId, slotName), cleanData);
     if (options.bindChat !== false) bindChatToSlot(charId, chatId, slotName);
 
     const slots = await listSlots(charId);
@@ -471,25 +485,24 @@ export async function saveToSlot(charId, chatId, slotName, options = {}) {
     }
     await updateSlotIndex(charId, slots);
 
-    const includeEmbeddings = options.includeEmbeddings === true;
     const syncCloud = options.syncCloud !== false;
     let dataSynced = false;
     let indexSynced = false;
     let jsonSize = 0;
     if (syncCloud) {
-        dataSynced = await pushSlotDataToChatMetadata(charId, slotName, data, options.context || null, { includeEmbeddings });
+        dataSynced = await pushSlotDataToChatMetadata(charId, slotName, cleanData, options.context || null);
         indexSynced = await syncSlotIndexToChatMetadata(charId);
-        jsonSize = JSON.stringify(buildCloudSlotPayload(data, includeEmbeddings)).length;
+        jsonSize = JSON.stringify(buildCloudSlotPayload(cleanData)).length;
     }
 
     return {
-        count: totalCount(data),
-        data,
+        count: totalCount(cleanData),
+        data: cleanData,
         cloudSynced: indexSynced,
         cloudDataSynced: dataSynced,
         cloudDataSize: jsonSize,
-        embeddingsIncluded: includeEmbeddings,
-        embeddingCount: countSlotEmbeddings(data),
+        embeddingsIncluded: false,
+        embeddingCount: countSlotEmbeddings(cleanData),
     };
 }
 
@@ -526,7 +539,9 @@ export async function cloneSlot(charId, sourceSlotName, targetSlotName, options 
     data._slotCreatedAt = now;
     data._slotUpdatedAt = now;
     data._slotBranchedFrom = sourceName;
-    await lf.setItem(slotKey(charId, targetName), data);
+    await normalizeDataEmbeddingsToRefs('', data);
+    const cleanData = stripRuntimeEmbeddings(data);
+    await lf.setItem(slotKey(charId, targetName), cleanData);
 
     const slots = await listSlots(charId);
     if (!slots.find(s => s.name === targetName)) {
@@ -534,27 +549,26 @@ export async function cloneSlot(charId, sourceSlotName, targetSlotName, options 
     }
     await updateSlotIndex(charId, slots);
 
-    const includeEmbeddings = options.includeEmbeddings === true;
     const syncCloud = options.syncCloud !== false;
     let dataSynced = false;
     let indexSynced = false;
     let jsonSize = 0;
     if (syncCloud) {
-        dataSynced = await pushSlotDataToChatMetadata(charId, targetName, data, options.context || null, { includeEmbeddings });
+        dataSynced = await pushSlotDataToChatMetadata(charId, targetName, cleanData, options.context || null);
         indexSynced = await syncSlotIndexToChatMetadata(charId);
-        jsonSize = JSON.stringify(buildCloudSlotPayload(data, includeEmbeddings)).length;
+        jsonSize = JSON.stringify(buildCloudSlotPayload(cleanData)).length;
     }
 
     return {
         name: targetName,
         source: sourceName,
-        count: totalCount(data),
-        data,
+        count: totalCount(cleanData),
+        data: cleanData,
         cloudSynced: indexSynced,
         cloudDataSynced: dataSynced,
         cloudDataSize: jsonSize,
-        embeddingsIncluded: includeEmbeddings,
-        embeddingCount: countSlotEmbeddings(data),
+        embeddingsIncluded: false,
+        embeddingCount: countSlotEmbeddings(cleanData),
     };
 }
 
@@ -741,7 +755,20 @@ export async function exportSlot(charId, slotName) {
     }
 
     const data = normalizeSlotData(raw);
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    if (data.vectorPack) await importVectorPack('', data.vectorPack);
+    await normalizeDataEmbeddingsToRefs('', data);
+    const cleanData = stripRuntimeEmbeddings(stripSlotEmbeddings(data));
+    const vectorPack = await buildVectorPack('', cleanData, { sourceSlot: slotName });
+    const archive = {
+        version: '9.2.2',
+        schema: 'bb-memory-vector-ref-v1',
+        exportedAt: Date.now(),
+        source: 'slot',
+        slotName,
+        data: cleanData,
+        vectorPack,
+    };
+    const blob = new Blob([JSON.stringify(archive, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -751,7 +778,7 @@ export async function exportSlot(charId, slotName) {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
-    return totalCount(data);
+    return totalCount(cleanData);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -888,17 +915,16 @@ async function removeSlotDataFromChatMetadata(slotName = null, context = null, c
  * 将槽完整数据推送到 chatMetadata（跨设备共享）
  * v9.0.2 恢复数据同步，默认去除 embedding 向量以控制体积
  * v9.0.3 添加大小上限守卫，超过 chatMetadataBackupMaxKb 限制则跳过
- * v9.0.6 支持用户显式选择 includeEmbeddings
+ * v9.2.2 固定为文本+embeddingRef，同步向量请使用单一云端向量槽
  */
-async function pushSlotDataToChatMetadata(charId, slotName, data, context = null, options = {}) {
+async function pushSlotDataToChatMetadata(charId, slotName, data, context = null) {
     const ctx = context || getSTContext();
     if (!ctx) return false;
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
 
-    const includeEmbeddings = options.includeEmbeddings === true;
-    const payload = buildCloudSlotPayload(data, includeEmbeddings);
-    payload._cloudEmbeddingsIncluded = includeEmbeddings;
-    payload._cloudEmbeddingCount = includeEmbeddings ? countSlotEmbeddings(data) : 0;
+    const payload = buildCloudSlotPayload(data);
+    payload._cloudEmbeddingsIncluded = false;
+    payload._cloudEmbeddingCount = countSlotEmbeddings(data);
     payload._cloudUpdatedAt = Date.now();
     const json = JSON.stringify(payload);
     const limit = getSlotDataSizeLimit();
@@ -920,6 +946,78 @@ function getSlotDataSizeLimit() {
         const kb = Number(ctx?.extensionSettings?.bb_memory?.chatMetadataBackupMaxKb) || 2048;
         return Math.max(128, Math.min(8192, kb)) * 1024;
     } catch { return 2048 * 1024; }
+}
+
+function cloudVectorSlotKey(charId) {
+    return CLOUD_VECTOR_SLOT_KEY_PREFIX + String(charId || 'global');
+}
+
+function getCloudVectorSlotSizeLimit() {
+    try {
+        const ctx = getSTContext();
+        const kb = Number(ctx?.extensionSettings?.bb_memory?.cloudVectorSlotMaxKb)
+            || Number(ctx?.extensionSettings?.bb_memory?.chatMetadataBackupMaxKb)
+            || 2048;
+        return Math.max(128, Math.min(16384, kb)) * 1024;
+    } catch { return 2048 * 1024; }
+}
+
+export function getCloudVectorSlot(charId) {
+    const ctx = getSTContext();
+    const raw = ctx?.chatMetadata?.[cloudVectorSlotKey(charId)];
+    if (!raw) return null;
+    try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? { ...parsed, size: raw.length } : null;
+    } catch {
+        return null;
+    }
+}
+
+export async function pushSlotVectorsToCloud(charId, slotName) {
+    if (!charId) throw new Error('无法获取角色ID');
+    const name = String(slotName || '').trim();
+    if (!name) throw new Error('存档名不能为空');
+    const ctx = getSTContext();
+    if (!ctx) throw new Error('无法访问 SillyTavern 上下文');
+    if (!ctx.chatMetadata) ctx.chatMetadata = {};
+
+    const lf = getLocalForage();
+    let data = await lf.getItem(slotKey(charId, name));
+    if (data === null || data === undefined) {
+        const pulled = await pullSlotFromChatMetadata(charId, name);
+        if (pulled) data = await lf.getItem(slotKey(charId, name));
+    }
+    if (data === null || data === undefined) throw new Error(`未找到本地存档 "${name}"`);
+
+    const normalized = normalizeSlotData(data);
+    await normalizeDataEmbeddingsToRefs('', normalized);
+    const vectorPack = await buildVectorPack('', normalized, { sourceSlot: name });
+    const payload = {
+        version: '9.2.2',
+        schema: 'bb-memory-cloud-vector-slot-v1',
+        charId,
+        slotName: name,
+        count: totalCount(normalized),
+        embeddingCount: vectorPack.records.length,
+        vectorPack,
+        updatedAt: Date.now(),
+    };
+    const json = JSON.stringify(payload);
+    const limit = getCloudVectorSlotSizeLimit();
+    if (json.length > limit) {
+        return { synced: false, skipped: true, reason: 'size-limit', size: json.length, limit, ...payload };
+    }
+    ctx.chatMetadata[cloudVectorSlotKey(charId)] = json;
+    await saveChatMeta(ctx);
+    return { synced: true, skipped: false, size: json.length, limit, ...payload };
+}
+
+export async function pullCloudVectors(charId) {
+    const payload = getCloudVectorSlot(charId);
+    if (!payload?.vectorPack) return { imported: 0, skipped: 0, payload: null };
+    const result = await importVectorPack('', payload.vectorPack);
+    return { ...result, payload };
 }
 
 /**
@@ -944,7 +1042,7 @@ async function scheduleSlotReembed(chatId) {
 
         const needs = pillars.map(p => ({
             ...p,
-            missing: p.entries.filter(e => e && !e.embedding),
+            missing: p.entries.filter(e => e && !e.embeddingRef?.id && !e.embedding),
         }));
         const total = needs.reduce((sum, n) => sum + n.missing.length, 0);
         if (total === 0) return;

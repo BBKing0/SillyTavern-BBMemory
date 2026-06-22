@@ -26,6 +26,7 @@ import {
     fillPromptTemplate,
     getPromptTemplate,
 } from './prompt-templates.js';
+import { hydrateCollectionEmbeddings } from './vector-store.js';
 
 // ═══ 语义去重（保留 v4.1.0 逻辑） ═══
 
@@ -115,7 +116,7 @@ const STYLE_BIAS_DAILY = `
 - 角色特征（习惯/仪式/偏好锚点）——记住TA喜欢什么、怕什么、每天做什么
 - 情感节拍中的温暖与脆弱面——被关心的瞬间、小小的喜悦、安全感
 - 关系温度的微妙变化——默契的建立、内部梗的诞生、无声的理解
-- 感官锚点——让回忆能有"气味"和"温度"
+- 具体事实锚点——人物、地点、约定、物品状态、关键原话
 
 适度提取：
 - 冲突种子和未兑现承诺（日常中的小承诺也算："明天我给你带早饭"）
@@ -864,9 +865,10 @@ const DEFAULT_CORE_PRINCIPLES = `## 核心原则
   → 记录每一把"枪"的存在（承诺、威胁、预言、可疑物品）。
   → 标记它的状态：待发射 / 已发射 / 哑火。
 
-**2. 展示而非说教（Show, Don't Tell）**：
-  → 记忆不是事件报告，而是让阅读者"感受到"发生了什么。
-  → ✗ "玩家很恐惧" ✓ "玩家的指尖微微颤抖，只一瞬，便攥紧了拳头"
+**2. 事实摘要优先**：
+  → 记忆是给后续检索和注入使用的事实记录，不写文学化描写。
+  → 保留人物、地点、事件、物品状态、关系变化和关键原话。
+  → 时间写入 st/storyTime 字段，正文不要反复铺陈时间。
 
 **3. 潜台词即内容（Subtext is Content）**：
   → 角色没说出口的往往比说出口的更重要。
@@ -932,10 +934,10 @@ const DEFAULT_EXTRACTION_DIMENSIONS = `## 记忆提取维度（满足任一即�
 - 道具/场所的隐藏属性或历史渊源
 - 民间传说、歌谣、典籍中提及的人/事/物
 
-**▎⑩ 感官锚点 (Sensory Anchors)：**
-- 能唤起记忆的感官细节：特定的气味、光线、温度、声响
-- 这些细节让记忆在检索时能"身临其境"
-- 示例："雨打在铁皮屋顶上的声音""她身上淡淡的栀子花香"`;
+**▎⑩ 事实锚点 (Factual Anchors)：**
+- 需要后续稳定复用的人物、地点、事件、物品状态、关系状态
+- 关键原话：承诺、拒绝、威胁、告白、预言、规则说明
+- 示例："贝找雅赫摩斯要商场会员卡""雅赫摩斯回复：不去"`;
 
 const MERGED_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个叙事记忆提取助手。从角色扮演对话中识别**情感流动**和**叙事线索**，
 提取构成故事血肉的关键时刻。
@@ -965,8 +967,8 @@ const MERGED_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个叙事记忆�
 ═══════════════════════════════════════════════════════
 n=标题(3-8字，精准概括情感核心或线索核心)
 tp=类型(event/emotion/habit/fact)
-m=一句话摘要(10-20字，突出情感变化本质或线索关键)
-c=完整内容(2-5句话，用展示而非说教的语言，保留上下文和感官细节)
+m=一句话摘要(10-20字，概括事实和长期复用点)
+c=完整内容(1-3句事实摘要；保留人物、地点、事件、关键原话；不要文学化描写；时间留在st字段，不在正文重复铺陈)
 v=重要原话(无则""，优先保留承诺/威胁/告白/预言/关键对白)
 s=主体名 | a=目标名
 i=重要性(0-1，对角色弧线/关系弧线或未来剧情的影响)
@@ -981,14 +983,14 @@ g=标签数组(结构标签可选：情感类[恐惧/喜悦/愤怒/悲伤/温柔
 ═══════════════════════════════════════════════════════
 
 【正剧场景示例】
-{"n":"指尖的颤抖","tp":"emotion","m":"宣战后玩家难以掩饰恐惧，用握拳来压制","c":"雅赫摩斯宣布宣战后，玩家站在王座厅的阴影中，右手无意识地摩挲着剑柄上的缠绳。当侍从递上征召令时，他的指尖微微颤抖——只一瞬，便握紧了拳头。","v":"","s":"玩家","a":"","i":0.7,"e":0.8,"st":"王国历123年4月15日","g":["恐惧","压抑","战争前夕","内心挣扎"]}
+{"n":"宣战反应","tp":"emotion","m":"雅赫摩斯宣战后玩家表现出恐惧并压制情绪","c":"雅赫摩斯宣布宣战。玩家听到征召令后表现出恐惧，并通过握紧拳头压制情绪。","v":"","s":"玩家","a":"雅赫摩斯","i":0.7,"e":0.8,"st":"王国历123年4月15日","g":["恐惧","战争前夕","关系状态"]}
 
-{"n":"老兵的苦笑","tp":"event","m":"酒馆老兵对速胜论露出意味深长的苦笑——暗示战争没那么简单","c":"玩家在酒馆谈论“一个月结束战争”时，邻桌老兵放下酒杯，嘴角扯出一丝苦笑，低声说“我三十年前也这么想”便起身离去。这句轻描淡写的话与主流论调形成尖锐反差。","v":"我三十年前也这么想","s":"无名老兵","a":"玩家","i":0.55,"e":0.4,"st":"王国历123年4月15日","g":["伏笔","反差","老兵","暗示","世界观的复杂性"]}
+{"n":"老兵警告","tp":"event","m":"酒馆老兵用亲历经验否定速胜论","c":"玩家在酒馆谈到“一个月结束战争”。邻桌老兵回应：“我三十年前也这么想”，暗示战争不会如众人预期那样简单。","v":"我三十年前也这么想","s":"无名老兵","a":"玩家","i":0.55,"e":0.4,"st":"王国历123年4月15日","g":["伏笔","老兵","战争"]}
 
 【日常场景示例】
-{"n":"雨天的默契","tp":"habit","m":"每周三下午他都会在咖啡馆靠窗的位子等她——一个未说破的约定","c":"2025年7月16日下午三点十五分，他坐在咖啡馆靠窗的第二个位子上，面前摆着两杯咖啡——一杯已经凉了。门推开时带来一阵潮湿的风，她的伞还在滴水。他什么也没说，把热的那杯推了过去。","v":"","s":"他","a":"她","i":0.5,"e":0.45,"st":"2025年7月16日下午3点15分","g":["习惯","默契","等待","温柔","潜台词"]}
+{"n":"咖啡馆约定","tp":"habit","m":"他固定在咖啡馆靠窗座位等她并准备咖啡","c":"他每周三下午会在咖啡馆靠窗的第二个位子等她，并准备两杯咖啡。她到达后，他把热咖啡推给她。","v":"","s":"他","a":"她","i":0.5,"e":0.45,"st":"2025年7月16日下午3点15分","g":["习惯","默契","咖啡馆"]}
 
-{"n":"栀子花香","tp":"emotion","m":"她在花市闻到了童年外婆院子里的栀子花香，一时恍惚","c":"花市的人潮中，她突然停下脚步。是栀子花的味道——很淡，混在潮湿的空气里，差点就错过了。她闭上眼站了几秒，再睁开时眼眶有点红。“外婆走以后，我再也没闻到过这个味道了”，她小声说。","v":"外婆走以后，我再也没闻到过这个味道了","s":"她","a":"","i":0.4,"e":0.7,"st":"时间未明","g":["思念","感官锚点","童年记忆","脆弱时刻"]}
+{"n":"栀子花记忆","tp":"emotion","m":"她闻到栀子花后提到外婆去世后的思念","c":"她在花市闻到栀子花后想起外婆。她说：“外婆走以后，我再也没闻到过这个味道了。”","v":"外婆走以后，我再也没闻到过这个味道了","s":"她","a":"外婆","i":0.4,"e":0.7,"st":"时间未明","g":["思念","童年记忆","亲情"]}
 
 若无值得记忆的内容（极罕见），返回空数组 []。
 
@@ -1135,7 +1137,7 @@ export function getAutoGeneratorPromptTemplates() {
             key: 'extract.styleDaily',
             title: '日常陪伴风格偏置',
             category: '记忆提取',
-            description: '当提取风格选择“日常陪伴”时追加，强调习惯、情感温度和感官锚点。',
+            description: '当提取风格选择“日常陪伴”时追加，强调习惯、关系温度和事实锚点。',
             defaultValue: STYLE_BIAS_DAILY,
         },
         {
@@ -1235,6 +1237,7 @@ export async function attachEntryEmbedding(entry, options = {}) {
     if (!entry || typeof entry !== 'object') return entry;
     if (!settings.embeddingEnabled || !settings.embeddingEndpoint) return entry;
     if (!force && Array.isArray(entry.embedding) && entry.embedding.length) return entry;
+    if (!force && entry.embeddingRef?.id) return entry;
     const embedding = await embedMemoryEntry(entry);
     return embedding ? { ...entry, embedding } : entry;
 }
@@ -1377,13 +1380,14 @@ function buildInitializationPrompt(settings, styleBias, calDesc, selectedPillars
 - 时间线 timeline 是持续叙事线地图；普通线索节点优先放进 timeline.entries。
 - 里程碑 milestones 只输出未被 timeline.entries 覆盖的关键时间点、伏笔或阶段转折。
 - 每个已输出条目都要优先、尽量填写完整字段；能从上下文推断的时间、地点、主体、目标、参与者、状态和标签不要留空。
+- memories[].c 写事实摘要，保留人物、地点、事件和关键原话；不要写文学化、感官化描写；时间留在 st/storyTime 字段。
 
 本次勾选的提取范围：
 ${selectedLines}
 
 字段格式：
 1. memories 数组：
-{ "n":"标题", "tp":"event/emotion/habit/fact", "m":"一句话摘要", "c":"完整内容", "v":"重要原话", "s":"主体", "a":"目标", "i":0.6, "e":0.2, "st":"具体故事时间", "g":["标签"] }
+{ "n":"标题", "tp":"event/emotion/habit/fact", "m":"一句话摘要", "c":"1-3句事实摘要", "v":"重要原话", "s":"主体", "a":"目标", "i":0.6, "e":0.2, "st":"具体故事时间", "g":["标签"] }
 
 2. npc 数组：
 { "n":"姓名", "r":"身份/职业", "p":"性格", "a":"外貌", "s":"状态", "l":"所在地", "rt":[{"n":"关联角色","r":"关系","a":"态度"}], "nt":"core/important/minor/background", "ic":"一句话索引卡", "g":["标签"] }
@@ -1536,6 +1540,7 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
         const maxPerExchange = settings.maxMemoriesPerExchange ?? 3;
         const limited = results.memories.slice(0, maxPerExchange);
         const existingMemories = await getMemories(chatId);
+        await hydrateCollectionEmbeddings(chatId, existingMemories);
         const activeMemories = existingMemories.filter(m => m.embedding);
         reportProgress('merged', 3, 5, hasEmbedding ? '正在向量化记忆...' : '正在保存记忆条目...');
         for (const mem of limited) {
@@ -1781,6 +1786,7 @@ async function saveInitialMemories(chatId, memories, sourceInfo, result) {
     if (!Array.isArray(memories) || memories.length === 0) return;
     const settings = getSettings();
     const existingMemories = await getMemories(chatId);
+    await hydrateCollectionEmbeddings(chatId, existingMemories);
     const activeMemories = existingMemories.filter(m => m.embedding);
     const exactKeys = new Map();
     for (const mem of existingMemories) {
@@ -1925,6 +1931,7 @@ export async function extractFromContext(chatId, contextText, options = {}) {
         results.threads += timelineSave.threads + timelineSave.merged;
 
         const existingMemories = await getMemories(chatId);
+        await hydrateCollectionEmbeddings(chatId, existingMemories);
         const activeMemories = existingMemories.filter(m => m.embedding);
         for (const mem of parsed.memories) {
             const embedding = hasEmbedding
@@ -2036,7 +2043,9 @@ function getCandidateSourceInfo(candidate) {
 }
 
 async function saveMemoryCandidate(chatId, mem, sourceInfo, activeMemories) {
-    const vectorPool = activeMemories || (await getMemories(chatId)).filter(m => m.embedding);
+    const existing = activeMemories ? null : await getMemories(chatId);
+    if (existing) await hydrateCollectionEmbeddings(chatId, existing);
+    const vectorPool = activeMemories || existing.filter(m => m.embedding);
 
     const embedding = getSettings().embeddingEnabled && getSettings().embeddingEndpoint
         ? await embedMemoryEntry(mem)
@@ -2066,6 +2075,7 @@ export async function saveExtractedCandidates(chatId, candidates, onProgress) {
     const settings = getSettings();
     const hasEmbedding = settings.embeddingEnabled && settings.embeddingEndpoint;
     const existingMemories = await getMemories(chatId);
+    await hydrateCollectionEmbeddings(chatId, existingMemories);
     const activeMemories = existingMemories.filter(m => m.embedding);
     let done = 0;
     const reportCandidateProgress = (candidate) => {
@@ -2178,8 +2188,9 @@ export async function embedExistingMemories(chatIdOrMemories, memoriesOrProgress
     let done = 0;
     let updated = 0;
     let failed = 0;
+    if (chatId) await hydrateCollectionEmbeddings(chatId, memories);
     for (const mem of memories) {
-        if (!mem.embedding) {
+        if (!mem.embedding && !mem.embeddingRef?.id) {
             const embedding = await embedMemoryEntry(mem);
             if (embedding) {
                 mem.embedding = embedding;

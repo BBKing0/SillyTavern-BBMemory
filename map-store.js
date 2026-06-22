@@ -6,6 +6,7 @@
  */
 
 import { getSettings } from './memory-store.js';
+import { convertMapEmbeddingsToRefs, stripRuntimeEmbeddings } from './vector-store.js';
 
 // ═══ 存储键 ═══
 const MAP_KEY = 'bb_map_chat_';
@@ -103,12 +104,19 @@ async function loadMap(chatId) {
     if (!chatId) return { locations: {} };
     const lf = getLocalForage();
     const data = await lf.getItem(MAP_KEY + chatId);
-    return (data && typeof data === 'object' && data.locations) ? data : { locations: {} };
+    const map = (data && typeof data === 'object' && data.locations) ? data : { locations: {} };
+    if (Object.values(map.locations || {}).some(loc => Array.isArray(loc?.embedding) && loc.embedding.length)) {
+        await convertMapEmbeddingsToRefs(chatId, map);
+        await lf.setItem(MAP_KEY + chatId, stripRuntimeEmbeddings(map));
+        return stripRuntimeEmbeddings(map);
+    }
+    return map;
 }
 
 async function saveMap(chatId, data, options = {}) {
     const lf = getLocalForage();
-    await lf.setItem(MAP_KEY + chatId, data);
+    await convertMapEmbeddingsToRefs(chatId, data);
+    await lf.setItem(MAP_KEY + chatId, stripRuntimeEmbeddings(data));
     if (!options.skipBackup) {
         import('./memory-store.js')
             .then(m => m.scheduleAutoBackup?.(chatId))

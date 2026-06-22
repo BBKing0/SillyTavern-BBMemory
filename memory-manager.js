@@ -15,7 +15,10 @@ import {
     exportMemories, importMemories, updateFactContent, addHiddenNote, removeHiddenNote,
     isArchived, archiveEntry, restoreEntry,
 } from './memory-store.js';
-import { getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot, exportSlot, getRemoteSlotIndex } from './memory-slots.js';
+import {
+    getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot, exportSlot, getRemoteSlotIndex,
+    getCloudVectorSlot, pushSlotVectorsToCloud, pullCloudVectors,
+} from './memory-slots.js';
 import { simpleSearch } from './retriever.js';
 import { MEMORY_TYPES, TRUTH_STATUS, HIDDEN_NOTE_TYPES, TIMELINE_STATUS, ITEM_STATUS } from './memory-types.js';
 import { NPC_TIERS, ITEM_TIERS, normalizeNpcTier, normalizeItemTier } from './entity-tiers.js';
@@ -26,8 +29,8 @@ import { fuzzyMemory, archiveMemory, restoreMemory } from './memory-maintainer.j
 // ═══ 全局状态 ═══
 let activeFilter = 'all';
 
-const MANAGER_FORM_OVERLAY_Z = 1000100;
-const MANAGER_FORM_POPUP_Z = 1000101;
+const MANAGER_FORM_OVERLAY_Z = 1000200;
+const MANAGER_FORM_POPUP_Z = 1000201;
 
 function closeManagerFormOverlays() {
     document.querySelectorAll('.bb-manager-form-overlay, .bb-form-overlay, .bb-thread-form-overlay')
@@ -321,11 +324,21 @@ function buildEntryItemHTML(e) {
     } else if (pillar === 'item') {
         const tier = ITEM_TIERS[e.itemTier];
         if (tier) statusBadges += `<span class="bb-item-badge" style="background:${pillarConfig.color}22;color:${pillarConfig.color};border:1px solid ${pillarConfig.color}44;">${tier.label}</span>`;
+        const injectTier = e.keepPermanent || e.memoryTier === 'eternal' || e.memoryTier === 'core' || e.resident
+            ? { label: '永恒·常驻', color: '#ff9800' }
+            : e.memoryTier === 'transient'
+                ? { label: '积灰', color: '#9e9e9e' }
+                : { label: '稳定·向量命中', color: '#4caf50' };
+        statusBadges += `<span class="bb-item-badge" style="background:${injectTier.color}22;color:${injectTier.color};border:1px solid ${injectTier.color}44;">${injectTier.label}</span>`;
         if (e.status) statusBadges += `<span class="bb-item-badge" style="font-size:0.7em;">${escapeHtml(e.status)}</span>`;
         if (e.owner) statusBadges += `<span style="font-size:0.75em;opacity:0.5;">持有: ${escapeHtml(e.owner)}</span>`;
         if (e.location) statusBadges += `<span style="font-size:0.72em;opacity:0.45;">📍 ${escapeHtml(e.location)}</span>`;
     } else if (pillar === 'timeline') {
         statusBadges += `<span class="bb-item-badge" style="background:${e.isActive ? '#4caf5022' : '#ff980022'};color:${e.isActive ? '#4caf50' : '#ff9800'};border:1px solid ${e.isActive ? '#4caf5044' : '#ff980044'};">${e.isActive ? '进行中' : '已结束'}</span>`;
+        const milestoneTier = e.memoryTier === 'stable' || e.memoryTier === 'transient' || e.injectionMode === 'vector'
+            ? { label: '稳定·向量命中', color: '#4caf50' }
+            : { label: '永恒·常驻', color: '#ff9800' };
+        statusBadges += `<span class="bb-item-badge" style="background:${milestoneTier.color}22;color:${milestoneTier.color};border:1px solid ${milestoneTier.color}44;">${milestoneTier.label}</span>`;
         if (e.storyTime) statusBadges += `<span style="font-size:0.75em;opacity:0.5;">${escapeHtml(e.storyTime)}</span>`;
     } else if (pillar === 'map') {
         if (e.memoryTier === 'core' || e.memoryTier === 'eternal' || e.keepPermanent || e.resident) {
@@ -420,9 +433,12 @@ function buildEntryItemHTML(e) {
     const fuzzyFullHTML = (isFuzzy && e.content) ? `<div class="bb-mem-fuzzy-full" data-id="${escapeHtml(e.id)}" style="display:none;margin-top:4px;padding:8px;background:rgba(255,152,0,0.06);border:1px dashed var(--SmartThemeBorderColor,#555);border-radius:6px;font-size:0.85em;line-height:1.5;color:var(--SmartThemeTextColor,#ddd);opacity:0.75;">${escapeHtml(e.content.slice(0, 500))}</div>` : '';
 
     // 命中次数
-    const hitCountHTML = pillar === 'mem'
+    const hitCountHTML = pillar === 'mem' || pillar === 'item'
         ? `<span title="命中次数"><i class="fa-solid fa-bullseye"></i> ${e.hitCount || 0}</span>`
         : (e.hitCount ? `<span title="命中次数"><i class="fa-solid fa-bullseye"></i> ${e.hitCount}</span>` : '');
+    const itemMissHTML = pillar === 'item'
+        ? `<span title="连续未命中轮数"><i class="fa-regular fa-hourglass-half"></i> ${e.missStreak || 0}</span>`
+        : '';
 
     const hitScore = Number.isFinite(Number(e.hitScore)) ? Number(e.hitScore) : 0;
     const hitScoreText = `${hitScore > 0 ? '+' : ''}${hitScore}`;
@@ -452,6 +468,7 @@ function buildEntryItemHTML(e) {
             ${storyTimeHTML}
             ${sourceFloorHTML}
             ${hitCountHTML}
+            ${itemMissHTML}
             ${hitScoreHTML}
             ${createdDate ? `<span><i class="fa-regular fa-calendar-plus"></i> ${escapeHtml(createdDate)}</span>` : ''}
             ${updatedDate ? `<span><i class="fa-solid fa-pen"></i> ${escapeHtml(updatedDate)}</span>` : ''}
@@ -1021,7 +1038,7 @@ function showQuickAddForm(overlay, chatId) {
                 <input class="bb-input bb-f-significance" placeholder="对剧情的重要性" style="width:100%;margin-bottom:8px;" />
                 <div style="display:flex;gap:8px;">
                     <div style="flex:1;"><label style="font-size:0.85em;">物品等级</label><select class="bb-input bb-f-itemTier" style="width:100%;margin-bottom:8px;">${Object.values(ITEM_TIERS).map(t => `<option value="${t.id}" ${t.id === 'consumable' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div>
-                    <div style="flex:1;display:flex;align-items:flex-end;padding-bottom:8px;"><label style="font-size:0.85em;display:flex;align-items:center;gap:4px;"><input type="checkbox" class="bb-f-keepPermanent" /> 永久保留</label></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">注入层级</label><select class="bb-input bb-f-memoryTier" style="width:100%;margin-bottom:8px;"><option value="transient">积灰</option><option value="stable" selected>稳定·向量命中</option><option value="eternal">永恒·常驻</option></select></div>
                 </div>
                 <label style="font-size:0.85em;">标签</label>
                 <input class="bb-input bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
@@ -1038,6 +1055,8 @@ function showQuickAddForm(overlay, chatId) {
                     <div style="flex:1;"><label style="font-size:0.85em;">参与者</label><input class="bb-input bb-f-participants" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" /></div>
                     <div style="flex:1;"><label style="font-size:0.85em;">地点</label><input class="bb-input bb-f-location" placeholder="事件地点" list="bb-location-datalist" style="width:100%;margin-bottom:8px;" /></div>
                 </div>
+                <label style="font-size:0.85em;">注入层级</label>
+                <select class="bb-input bb-f-memoryTier" style="width:100%;margin-bottom:8px;"><option value="stable" selected>稳定·向量命中</option><option value="eternal">永恒·常驻</option></select>
                 <label style="font-size:0.85em;">影响</label>
                 <input class="bb-input bb-f-impact" placeholder="对剧情的影响" style="width:100%;margin-bottom:8px;" />
                 <label style="font-size:0.85em;">标签</label>
@@ -1174,13 +1193,14 @@ function buildPillarFormFields_inner(p) {
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">持有者</label><input class="bb-input bb-f-owner" placeholder="当前持有者" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">状态</label><select class="bb-input bb-f-status" style="width:100%;margin-bottom:8px;"><option value="held">持有中</option><option value="used">已使用</option><option value="lost">已丢失</option><option value="destroyed">已销毁</option></select></div></div>
             <label style="font-size:0.85em;">所在地点</label><input class="bb-input bb-f-location" placeholder="物品所在的地图地点" list="bb-location-datalist" style="width:100%;margin-bottom:8px;" />
             <label style="font-size:0.85em;">重要性</label><input class="bb-input bb-f-significance" placeholder="对剧情的重要性" style="width:100%;margin-bottom:8px;" />
-            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">物品等级</label><select class="bb-input bb-f-itemTier" style="width:100%;margin-bottom:8px;">${Object.values(ITEM_TIERS).map(t => `<option value="${t.id}" ${t.id === 'consumable' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div><div style="flex:1;display:flex;align-items:flex-end;padding-bottom:8px;"><label style="font-size:0.85em;display:flex;align-items:center;gap:4px;"><input type="checkbox" class="bb-f-keepPermanent" /> 永久保留</label></div></div>
+            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">物品等级</label><select class="bb-input bb-f-itemTier" style="width:100%;margin-bottom:8px;">${Object.values(ITEM_TIERS).map(t => `<option value="${t.id}" ${t.id === 'consumable' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div><div style="flex:1;"><label style="font-size:0.85em;">注入层级</label><select class="bb-input bb-f-memoryTier" style="width:100%;margin-bottom:8px;"><option value="transient">积灰</option><option value="stable" selected>稳定·向量命中</option><option value="eternal">永恒·常驻</option></select></div></div>
             <label style="font-size:0.85em;">标签</label><input class="bb-input bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
         case 'timeline': return `
             <label style="font-size:0.85em;">标题 <span style="color:#f44336;">*</span></label><input class="bb-input bb-f-title" placeholder="事件标题" style="width:100%;margin-bottom:8px;" />
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">故事时间</label><input class="bb-input bb-f-storyTime" placeholder="如：第三天清晨" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">状态</label><select class="bb-input bb-f-status" style="width:100%;margin-bottom:8px;"><option value="ongoing" selected>进行中</option><option value="ended">已结束</option><option value="foreshadow">伏笔</option></select></div></div>
             <label style="font-size:0.85em;">事件描述</label><textarea class="bb-input bb-f-event" placeholder="事件内容..." rows="3" style="width:100%;margin-bottom:8px;"></textarea>
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">参与者</label><input class="bb-input bb-f-participants" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">地点</label><input class="bb-input bb-f-location" placeholder="事件地点" list="bb-location-datalist" style="width:100%;margin-bottom:8px;" /></div></div>
+            <label style="font-size:0.85em;">注入层级</label><select class="bb-input bb-f-memoryTier" style="width:100%;margin-bottom:8px;"><option value="stable" selected>稳定·向量命中</option><option value="eternal">永恒·常驻</option></select>
             <label style="font-size:0.85em;">影响</label><input class="bb-input bb-f-impact" placeholder="对剧情的影响" style="width:100%;margin-bottom:8px;" />
             <label style="font-size:0.85em;">子条目</label>
             <div class="bb-subentries-container" style="margin-bottom:8px;"></div>
@@ -1220,15 +1240,19 @@ function collectFormData(formEl, pillar) {
             relationships: g('bb-f-relationships').split(/[,，]/).map(s => s.trim()).filter(Boolean),
             npcTier: formEl.querySelector('.bb-f-npcTier')?.value || 'minor', tags, source: 'manual',
         };
-        case 'item': return {
-            name: g('bb-f-name'), owner: g('bb-f-owner'),
-            location: g('bb-f-location'),
-            status: formEl.querySelector('.bb-f-status')?.value || 'held',
-            significance: g('bb-f-significance'),
-            itemTier: formEl.querySelector('.bb-f-itemTier')?.value || 'consumable',
-            keepPermanent: formEl.querySelector('.bb-f-keepPermanent')?.checked || false,
-            tags, source: 'manual',
-        };
+        case 'item': {
+            const memoryTier = formEl.querySelector('.bb-f-memoryTier')?.value || 'stable';
+            return {
+                name: g('bb-f-name'), owner: g('bb-f-owner'),
+                location: g('bb-f-location'),
+                status: formEl.querySelector('.bb-f-status')?.value || 'held',
+                significance: g('bb-f-significance'),
+                itemTier: formEl.querySelector('.bb-f-itemTier')?.value || 'consumable',
+                memoryTier,
+                keepPermanent: memoryTier === 'eternal',
+                tags, source: 'manual',
+            };
+        }
         case 'map': return {
             name: g('bb-f-name'), description: g('bb-f-desc'),
             region: g('bb-f-region'), parentId: formEl.querySelector('.bb-f-parentid')?.value || null,
@@ -1244,6 +1268,7 @@ function collectFormData(formEl, pillar) {
                 const id = row.dataset.subId || '';
                 if (desc) subs.push({ id: id || generateSubEntryId(), description: desc, createdAt: Date.now() });
             });
+            const memoryTier = formEl.querySelector('.bb-f-memoryTier')?.value || 'stable';
             return {
                 title: g('bb-f-title'), storyTime: g('bb-f-storyTime'),
                 status: formEl.querySelector('.bb-f-status')?.value || 'ongoing',
@@ -1251,6 +1276,8 @@ function collectFormData(formEl, pillar) {
                 participants: g('bb-f-participants').split(/[,，]/).map(s => s.trim()).filter(Boolean),
                 location: g('bb-f-location'), impact: g('bb-f-impact'),
                 isActive: (formEl.querySelector('.bb-f-status')?.value || 'ongoing') === 'ongoing',
+                memoryTier,
+                injectionMode: memoryTier === 'eternal' ? 'resident' : 'vector',
                 subEntries: subs, tags, source: 'manual',
             };
         }
@@ -1359,7 +1386,12 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
                     if (prefill.status) { const el = formOverlay.querySelector('.bb-f-status'); if (el) el.value = prefill.status; }
                     setVal('bb-f-significance', prefill.significance);
                     if (prefill.itemTier) { const el = formOverlay.querySelector('.bb-f-itemTier'); if (el) el.value = prefill.itemTier; }
-                    setCheck('bb-f-keepPermanent', prefill.keepPermanent);
+                    {
+                        const el = formOverlay.querySelector('.bb-f-memoryTier');
+                        if (el) el.value = (prefill.keepPermanent || prefill.memoryTier === 'core' || prefill.memoryTier === 'eternal')
+                            ? 'eternal'
+                            : (prefill.memoryTier === 'transient' ? 'transient' : 'stable');
+                    }
                     setVal('bb-f-tags', tagsStr);
                     break;
                 case 'timeline':
@@ -1371,6 +1403,7 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
                     setVal('bb-f-participants', Array.isArray(prefill.participants) ? prefill.participants.join(', ') : '');
                     setVal('bb-f-location', prefill.location);
                     setVal('bb-f-impact', prefill.impact);
+                    { const el = formOverlay.querySelector('.bb-f-memoryTier'); if (el) el.value = (prefill.memoryTier === 'stable' || prefill.injectionMode === 'vector') ? 'stable' : 'eternal'; }
                     setVal('bb-f-tags', tagsStr);
                     // v8.0.0 预填子条目
                     if (Array.isArray(prefill.subEntries)) {
@@ -1512,7 +1545,7 @@ function buildSlotBadgesHTML(slot, currentSlot) {
         badges.push('<span class="bb-slot-default-badge" style="background:#2196f3;"><i class="fa-solid fa-cloud"></i> 索引已同步</span>');
     }
     if (slot.remoteEmbeddings || slot.embeddingCount) {
-        badges.push('<span class="bb-slot-default-badge" style="background:#4caf50;color:#fff;"><i class="fa-solid fa-vector-square"></i> 向量</span>');
+        badges.push('<span class="bb-slot-default-badge" style="background:#4caf50;color:#fff;"><i class="fa-solid fa-vector-square"></i> 向量引用</span>');
     }
     return badges.join('');
 }
@@ -1521,8 +1554,8 @@ function buildSlotCountText(slot) {
     const parts = [`${slot.count || 0} 条记忆`];
     if (slot.remoteOnly && slot.remotePayloadAvailable) parts.push('云端可加载');
     if (isRemoteIndexOnlySlot(slot)) parts.push('云端数据不可用');
-    if (slot.embeddingCount) parts.push(`本地向量 ${slot.embeddingCount}`);
-    if (slot.remoteEmbeddings) parts.push(`云端向量 ${slot.remoteEmbeddings}`);
+    if (slot.embeddingCount) parts.push(`向量引用 ${slot.embeddingCount}`);
+    if (slot.remoteEmbeddings) parts.push(`云端引用 ${slot.remoteEmbeddings}`);
     return parts.join(' · ');
 }
 
@@ -1540,6 +1573,7 @@ async function renderSlotsPanel(overlay, chatId, cachedData = null) {
         const slots = await listSlots(charId);
         const remoteIndex = getRemoteSlotIndex(charId);
         const remoteSlotCount = Object.keys(remoteIndex.slots || {}).length;
+        const cloudVector = getCloudVectorSlot(charId);
         const [npc, items, timeline, memories] = cachedData
             ? [cachedData.npc || [], cachedData.items || [], cachedData.timeline || [], cachedData.memories || []]
             : await Promise.all([
@@ -1574,6 +1608,24 @@ async function renderSlotsPanel(overlay, chatId, cachedData = null) {
             <div class="bb-slots-info">
                 <i class="fa-solid fa-circle-info"></i>
                 记忆 <strong>${memories.length}</strong> 条 · NPC ${npc.length} / 物品 ${items.length} / 里程碑 ${timeline.length} · 云端索引 ${remoteSlotCount} 个 · 角色ID: ${escapeHtml(charId)}
+            </div>
+
+            <div class="bb-slots-info bb-cloud-vector-slot" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+                <span>
+                    <i class="fa-solid fa-vector-square"></i>
+                    云端向量槽：
+                    ${cloudVector
+                        ? `<strong>${escapeHtml(cloudVector.slotName || '未命名')}</strong> · ${cloudVector.count || 0} 条文本 · ${cloudVector.embeddingCount || 0} 条向量 · ${((cloudVector.size || 0) / 1024).toFixed(0)}KB`
+                        : '<strong>空</strong> · 切换设备前可上传当前存档向量'}
+                </span>
+                <span style="display:flex;gap:6px;flex-wrap:wrap;">
+                    <button class="menu_button bb-cloud-vector-upload" type="button" title="上传当前存档的压缩向量到云端向量槽">
+                        <i class="fa-solid fa-cloud-arrow-up"></i> 上传当前向量
+                    </button>
+                    <button class="menu_button bb-cloud-vector-load" type="button" ${cloudVector ? '' : 'disabled'} title="加载云端向量槽到本地向量库">
+                        <i class="fa-solid fa-cloud-arrow-down"></i> 加载云端向量
+                    </button>
+                </span>
             </div>
 
             <div class="bb-slots-create" style="margin-bottom:10px;">
@@ -1611,9 +1663,6 @@ async function renderSlotsPanel(overlay, chatId, cachedData = null) {
                             <button class="menu_button bb-slot-btn-save" data-slot="${escapeHtml(s.name)}" title="将当前数据保存到此槽（云端同步不含向量）">
                                 <i class="fa-solid fa-arrow-up"></i> 保存
                             </button>
-                            <button class="menu_button bb-slot-btn-save-vector" data-slot="${escapeHtml(s.name)}" title="将当前数据保存到此槽，并把向量也上传到云端（可能很大）">
-                                <i class="fa-solid fa-cloud-arrow-up"></i> 含向量
-                            </button>
                             <button class="menu_button bb-slot-btn-load" data-slot="${escapeHtml(s.name)}" data-index-only="${isRemoteIndexOnlySlot(s) ? 'true' : 'false'}" title="${isRemoteIndexOnlySlot(s) ? '云端只有索引，没有完整存档数据，无法加载' : '从此槽加载数据（覆盖当前）'}" ${isRemoteIndexOnlySlot(s) ? 'disabled' : ''}>
                                 <i class="fa-solid fa-arrow-down"></i> 加载
                             </button>
@@ -1643,6 +1692,51 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
         await renderSlotsPanel(overlay, chatId);
     });
 
+    slotsEl.querySelector('.bb-cloud-vector-upload')?.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        const slotName = getSettings().currentSlotName || 'default';
+        const ok = confirm(`确定上传当前存档「${slotName}」的压缩向量到唯一云端向量槽吗？\n旧的云端向量槽会被覆盖。`);
+        if (!ok) return;
+        const origHTML = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 上传中...';
+        try {
+            const saved = await saveToSlot(charId, chatId, slotName);
+            const result = await pushSlotVectorsToCloud(charId, slotName);
+            if (result.synced) {
+                showToast(`已上传云端向量槽：${result.embeddingCount || 0} 条向量，${(result.size / 1024).toFixed(0)}KB`, 'success');
+            } else {
+                showToast(`云端向量槽过大，已跳过：${(result.size / 1024).toFixed(0)}KB / 上限 ${(result.limit / 1024).toFixed(0)}KB`, 'warning');
+            }
+            updateSettings({ currentSlotName: slotName });
+            await renderSlotsPanel(overlay, chatId, saved.data);
+            updateCurrentSlotBar(overlay, chatId, saved.data);
+        } catch (err) {
+            showToast(`云端向量上传失败: ${err.message}`, 'error');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = origHTML;
+        }
+    });
+
+    slotsEl.querySelector('.bb-cloud-vector-load')?.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        const origHTML = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 加载中...';
+        try {
+            const result = await pullCloudVectors(charId);
+            const slot = result.payload?.slotName ? `「${result.payload.slotName}」` : '';
+            showToast(`已加载云端向量槽${slot}：导入 ${result.imported || 0} 条，复用 ${result.skipped || 0} 条`, 'success');
+            await renderSlotsPanel(overlay, chatId);
+        } catch (err) {
+            showToast(`云端向量加载失败: ${err.message}`, 'error');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = origHTML;
+        }
+    });
+
     slotsEl.querySelectorAll('.bb-slot-btn-save').forEach(btn => {
         btn.addEventListener('click', async () => {
             const slotName = btn.dataset.slot;
@@ -1665,33 +1759,6 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
         });
     });
 
-    slotsEl.querySelectorAll('.bb-slot-btn-save-vector').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            const slotName = btn.dataset.slot;
-            const ok = confirm(`确定将「${slotName}」上传到云端并包含向量吗？\n这会显著增加聊天元数据体积，建议只在换设备前手动执行。`);
-            if (!ok) return;
-            const origHTML = btn.innerHTML;
-            btn.disabled = true;
-            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 上传中...';
-            try {
-                const result = await saveToSlot(charId, chatId, slotName, { includeEmbeddings: true });
-                if (result.cloudDataSynced) {
-                    showToast(`已保存并上传「${slotName}」：${result.count} 条，向量 ${result.embeddingCount || 0} 条，${(result.cloudDataSize / 1024).toFixed(0)}KB`, 'success');
-                } else {
-                    showToast(`已本地保存，但含向量云同步被跳过：${(result.cloudDataSize / 1024).toFixed(0)}KB 超过上限`, 'warning');
-                }
-                updateSettings({ currentSlotName: slotName });
-                await renderSlotsPanel(overlay, chatId, result.data);
-                updateCurrentSlotBar(overlay, chatId, result.data);
-            } catch (err) {
-                showToast(`含向量上传失败: ${err.message}`, 'error');
-            } finally {
-                btn.disabled = false;
-                btn.innerHTML = origHTML;
-            }
-        });
-    });
-
     slotsEl.querySelectorAll('.bb-slot-btn-load').forEach(btn => {
         btn.addEventListener('click', async () => {
             const slotName = btn.dataset.slot;
@@ -1703,7 +1770,7 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
             if (!ok) return;
             try {
                 const result = await loadFromSlot(charId, chatId, slotName);
-                const vectorTip = result.embeddingCount ? `，含向量 ${result.embeddingCount} 条` : (result.pulledFromCloud ? '，无向量则后台补全' : '');
+                const vectorTip = result.embeddingCount ? `，向量引用 ${result.embeddingCount} 条` : (result.pulledFromCloud ? '，无向量引用则后台补全' : '');
                 showToast(`已从「${slotName}」加载 ${result.count} 条${vectorTip}`, 'success');
                 updateSettings({ currentSlotName: slotName });
                 // v8.0.0 传入缓存数据，避免重复读 localforage

@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.2.1 主入口
+ * index.js —— BB-Memory v9.2.2 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -47,6 +47,7 @@ import {
 
 import { getClueBoard, getClueBoardPromptTemplates } from './clue-board.js';
 import { getMap } from './map-store.js';  // v8.7.0
+import { hydrateCollectionEmbeddings, hydrateMapEmbeddings } from './vector-store.js';
 import {
     DEFAULT_AGENT_SYSTEM_PROMPT,
     DEFAULT_HEALTH_TAG_PROMPT,
@@ -90,7 +91,7 @@ let chatSwitchPromptOpen = false;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.2.1';
+const SETTINGS_EXPORT_VERSION = '9.2.2';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
@@ -105,11 +106,11 @@ const SETTINGS_EXPORT_KEYS = [
     'reduceSimilarityThreshold',
     'diversityLimitPerTag', 'promotionCooldownRounds', 'hitScorePromoteThreshold', 'hitScoreEternalThreshold',
     'hitScoreDemoteThreshold', 'entityTierPromoteThreshold', 'entityTierDemoteThreshold',
-    'maintenanceMode', 'maintenanceMemThreshold', 'maintenanceNpcThreshold', 'maintenanceItemThreshold',
+    'maintenanceMode', 'maintenanceMemThreshold', 'maintenanceNpcThreshold', 'maintenanceItemThreshold', 'itemDustyMissRounds',
     'healthCheckDuplicateThreshold', 'healthCheckIsolationThreshold', 'healthCheckStaleDays',
     'healthCheckStaleHitThreshold', 'healthCheckThreadStaleDays', 'healthCheckClueStaleDays',
-    'timelineSummaryEnabled', 'maxActiveTimeline', 'autoBackupEnabled', 'chatMetadataBackupMaxKb',
-    'cloudBackupIncludeEmbeddings', 'apiProfiles', 'activeApiProfile', 'categories', 'enabledCategories',
+    'timelineSummaryEnabled', 'maxActiveTimeline', 'autoBackupEnabled', 'chatMetadataBackupMaxKb', 'cloudVectorSlotMaxKb',
+    'apiProfiles', 'activeApiProfile', 'categories', 'enabledCategories',
     'debugLogging',
 ];
 
@@ -122,7 +123,6 @@ const SETTING_CONTROL_BINDINGS = {
     timelineSummaryEnabled: ['#bb_timeline_summary_enabled', 'checkbox'],
     clueBoardInjectionEnabled: ['#bb_clue_board_injection_enabled', 'checkbox'],
     autoBackupEnabled: ['#bb_auto_backup_enabled', 'checkbox'],
-    cloudBackupIncludeEmbeddings: ['#bb_backup_include_embeddings', 'checkbox'],
     autoGenMode: ['#bb_auto_gen_mode', 'value'],
     extractionConfirmMode: ['#bb_extraction_confirm_mode', 'value'],
     activeConfirmStyle: ['#bb_active_confirm_style', 'value'],
@@ -143,6 +143,7 @@ const SETTING_CONTROL_BINDINGS = {
     maintenanceMemThreshold: ['#bb_maintenance_mem_threshold', 'value'],
     maintenanceNpcThreshold: ['#bb_maintenance_npc_threshold', 'value'],
     maintenanceItemThreshold: ['#bb_maintenance_item_threshold', 'value'],
+    itemDustyMissRounds: ['#bb_item_dusty_miss_rounds', 'value'],
     maintenanceMode: ['#bb_maintenance_mode', 'value'],
     diversityLimitPerTag: ['#bb_diversity_limit', 'value'],
     hitScorePromoteThreshold: ['#bb_hit_score_promote_threshold', 'value'],
@@ -152,6 +153,7 @@ const SETTING_CONTROL_BINDINGS = {
     entityTierDemoteThreshold: ['#bb_entity_tier_demote_threshold', 'value'],
     maxActiveTimeline: ['#bb_max_active_timeline', 'value'],
     chatMetadataBackupMaxKb: ['#bb_chat_metadata_backup_max_kb', 'value'],
+    cloudVectorSlotMaxKb: ['#bb_cloud_vector_slot_max_kb', 'value'],
     healthCheckDuplicateThreshold: ['#bb_health_check_duplicate_threshold', 'value'],
     healthCheckIsolationThreshold: ['#bb_health_check_isolation_threshold', 'value'],
     healthCheckStaleDays: ['#bb_health_check_stale_days', 'value'],
@@ -348,6 +350,19 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     const hasClueData = Array.isArray(activeClueBoard?.nodes) && activeClueBoard.nodes.length > 0;
     const hasData = npc.length + items.length + milestones.length + memories.length + timeline.length > 0 || hasMapData || hasClueData;
     if (!hasData) { clearInjection(); return chat; }
+
+    try {
+        await Promise.all([
+            hydrateCollectionEmbeddings(chatId, npc),
+            hydrateCollectionEmbeddings(chatId, items),
+            hydrateCollectionEmbeddings(chatId, milestones),
+            hydrateCollectionEmbeddings(chatId, timeline),
+            hydrateCollectionEmbeddings(chatId, memories),
+            hydrateMapEmbeddings(chatId, mapData),
+        ]);
+    } catch (e) {
+        if (settings.debugLogging) console.warn('[BB-Memory] vector hydration skipped:', e.message || e);
+    }
 
     // 5. 自动维护
     try { await autoMaintainSilent(chatId); } catch (e) { /* ignore */ }
@@ -1816,7 +1831,6 @@ function bindSidebarEvents() {
     bindCheckbox('#bb_timeline_summary_enabled', 'timelineSummaryEnabled');
     bindCheckbox('#bb_clue_board_injection_enabled', 'clueBoardInjectionEnabled');
     bindCheckbox('#bb_auto_backup_enabled', 'autoBackupEnabled');
-    bindCheckbox('#bb_backup_include_embeddings', 'cloudBackupIncludeEmbeddings');
 
     // v7.9.0 自动备份状态指示器
     const updateAutoBackupStatus = () => {
@@ -1938,6 +1952,7 @@ function bindSidebarEvents() {
     bindInput('#bb_maintenance_mem_threshold', 'maintenanceMemThreshold', 'number');
     bindInput('#bb_maintenance_npc_threshold', 'maintenanceNpcThreshold', 'number');
     bindInput('#bb_maintenance_item_threshold', 'maintenanceItemThreshold', 'number');
+    bindInput('#bb_item_dusty_miss_rounds', 'itemDustyMissRounds', 'number');
     bindSelect('#bb_maintenance_mode', 'maintenanceMode');
     bindInput('#bb_diversity_limit', 'diversityLimitPerTag', 'number');
     bindInput('#bb_hit_score_promote_threshold', 'hitScorePromoteThreshold', 'number');
@@ -1947,6 +1962,7 @@ function bindSidebarEvents() {
     bindInput('#bb_entity_tier_demote_threshold', 'entityTierDemoteThreshold', 'number');
     bindInput('#bb_max_active_timeline', 'maxActiveTimeline', 'number');
     bindInput('#bb_chat_metadata_backup_max_kb', 'chatMetadataBackupMaxKb', 'number');
+    bindInput('#bb_cloud_vector_slot_max_kb', 'cloudVectorSlotMaxKb', 'number');
     bindInput('#bb_health_check_duplicate_threshold', 'healthCheckDuplicateThreshold', 'number');
     bindInput('#bb_health_check_isolation_threshold', 'healthCheckIsolationThreshold', 'number');
     bindInput('#bb_health_check_stale_days', 'healthCheckStaleDays', 'number');
@@ -1985,14 +2001,11 @@ function bindSidebarEvents() {
         this.disabled = true;
         this.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 备份中...';
         try {
-            const includeEmbeddings = getSettings().cloudBackupIncludeEmbeddings === true;
-            const result = await exportMemoriesToChatMetadata(chatId, { includeEmbeddings });
+            const result = await exportMemoriesToChatMetadata(chatId);
             if (result.skipped) {
-                const vectorTip = result.embeddingsIncluded ? '（本次包含向量）' : '';
-                showToast(`备份已跳过${vectorTip}：${(result.size / 1024).toFixed(1)}KB 超过上限 ${(result.limit / 1024).toFixed(0)}KB，请提高上限或使用本地 JSON 导出`, 'warning');
+                showToast(`备份已跳过：${(result.size / 1024).toFixed(1)}KB 超过上限 ${(result.limit / 1024).toFixed(0)}KB，请提高上限或使用本地 JSON 导出`, 'warning');
             } else {
-                const vectorTip = result.embeddingsIncluded ? `，含向量 ${result.embeddingCount || 0} 条` : '';
-                showToast(`备份完成：${result.count} 条${vectorTip} (${(result.size / 1024).toFixed(1)}KB) → 已保存到服务器`, 'success');
+                showToast(`备份完成：${result.count} 条文本/引用 (${(result.size / 1024).toFixed(1)}KB) → 已保存到服务器；向量请在存档页使用云端向量槽同步`, 'success');
             }
         } catch (e) {
             showToast(`备份失败: ${e.message}`, 'error');
@@ -2012,7 +2025,7 @@ function bindSidebarEvents() {
             if (result.restored === 0 && result.skipped === 0) {
                 showToast('暂无备份数据可恢复', 'info');
             } else {
-                const vectorTip = result.embeddingsIncluded ? `，恢复向量 ${result.embeddingCount || 0} 条` : '';
+                const vectorTip = result.vectorImported ? `，恢复向量 ${result.vectorImported} 条` : '';
                 showToast(`恢复完成：${result.restored} 条新增，${result.skipped} 条跳过${vectorTip}`, 'success');
             }
         } catch (e) {
@@ -2732,6 +2745,7 @@ function showMaintenancePopup(chatId, result) {
 
     const issueTypeDefs = {
         idle_transient_memory: { icon: 'fa-regular fa-clock', label: '瞬时记忆（长期未命中）' },
+        dusty_item:           { icon: 'fa-solid fa-box-archive', label: '积灰物品' },
         status_changed_item:   { icon: 'fa-solid fa-box',     label: '状态变更的物品' },
         compressible_timeline: { icon: 'fa-solid fa-compress', label: '可压缩的里程碑' },
         low_tier_npc:          { icon: 'fa-solid fa-user',     label: '低优先级NPC' },
@@ -2777,7 +2791,7 @@ function showMaintenancePopup(chatId, result) {
         legend.className = 'bb-maint-legend';
         legend.style.cssText = 'padding:0 0 12px;border:none;display:flex;gap:14px;flex-wrap:wrap;font-size:0.8em;opacity:0.7;';
         legend.innerHTML = [
-            ['#4caf50','保留'],['#2196f3','升级'],['#ff9800','降级'],['#f44336','删除'],['#9c27b0','压缩']
+            ['#4caf50','保留'],['#2196f3','升级'],['#ff9800','降级'],['#9e9e9e','归档'],['#f44336','删除'],['#9c27b0','压缩']
         ].map(([c,l]) => `<span style="display:inline-flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:${c};display:inline-block;"></span>${l}</span>`).join('');
         body.appendChild(legend);
 
@@ -2829,10 +2843,16 @@ function showMaintenancePopup(chatId, result) {
                     });
                     actionDiv.appendChild(btn);
                 };
-                addBtn('keep', '#4caf50', '保留');
-                addBtn('promote', '#2196f3', '升级');
-                addBtn('demote', '#ff9800', '降级');
-                addBtn('delete', '#f44336', '删除');
+                if (type === 'dusty_item') {
+                    addBtn('archive_item', '#9e9e9e', '归档');
+                    addBtn('item_to_vector', '#2196f3', '升稳定');
+                    addBtn('item_to_eternal', '#ff9800', '升永恒');
+                } else {
+                    addBtn('keep', '#4caf50', '保留');
+                    addBtn('promote', '#2196f3', '升级');
+                    addBtn('demote', '#ff9800', '降级');
+                    addBtn('delete', '#f44336', '删除');
+                }
                 if (type === 'compressible_timeline') {
                     addBtn('compress_timeline', '#9c27b0', '压缩');
                 }
@@ -2980,23 +3000,19 @@ function registerSlashCommands() {
     addCmd('bb-backup', async (args = '') => {
         const chatId = getChatId();
         if (!chatId) return;
-        const includeEmbeddings = getSettings().cloudBackupIncludeEmbeddings === true
-            || /\b(vector|vectors|embedding|embeddings)\b|向量/.test(String(args || '').toLowerCase());
-        const result = await exportMemoriesToChatMetadata(chatId, { includeEmbeddings });
+        const result = await exportMemoriesToChatMetadata(chatId);
         if (result.skipped) {
-            const vectorTip = result.embeddingsIncluded ? '（本次包含向量）' : '';
-            showToast(`备份已跳过${vectorTip}：${(result.size / 1024).toFixed(1)}KB 超过上限 ${(result.limit / 1024).toFixed(0)}KB，请使用本地 JSON 导出`, 'warning');
+            showToast(`备份已跳过：${(result.size / 1024).toFixed(1)}KB 超过上限 ${(result.limit / 1024).toFixed(0)}KB，请使用本地 JSON 导出`, 'warning');
         } else {
-            const vectorTip = result.embeddingsIncluded ? `，含向量 ${result.embeddingCount || 0} 条` : '';
-            showToast(`备份完成：${result.count} 条${vectorTip} (${(result.size / 1024).toFixed(1)}KB)`, 'success');
+            showToast(`备份完成：${result.count} 条文本/引用 (${(result.size / 1024).toFixed(1)}KB)，不内联向量`, 'success');
         }
-    }, '手动备份记忆到服务器；传入 vector/向量 可临时包含向量');
+    }, '手动备份记忆文本到服务器；向量请在存档页使用云端向量槽');
 
     addCmd('bb-restore', async () => {
         const chatId = getChatId();
         if (!chatId) return;
         const result = await importMemoriesFromChatMetadata(chatId);
-        const vectorTip = result.embeddingsIncluded ? `，向量 ${result.embeddingCount || 0} 条` : '';
+        const vectorTip = result.vectorImported ? `，向量 ${result.vectorImported} 条` : '';
         showToast(`恢复：${result.restored} 新增，${result.skipped} 跳过${vectorTip}`, 'success');
     }, '从服务器恢复记忆');
 
@@ -3801,7 +3817,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.2.1 初始化开始...');
+    console.log('[BB-Memory] v9.2.2 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -3965,7 +3981,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.2.1 初始化完成');
+    console.log('[BB-Memory] v9.2.2 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
