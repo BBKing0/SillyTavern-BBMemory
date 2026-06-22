@@ -24,7 +24,8 @@ import {
 // ═══ localforage 访问 ═══
 
 function getLocalForage() {
-    return SillyTavern.libs.localforage;
+    const ctx = SillyTavern.getContext();
+    return ctx?.libs?.localforage || globalThis.localforage || globalThis.SillyTavern?.libs?.localforage;
 }
 
 // ═══ 存储键 ═══

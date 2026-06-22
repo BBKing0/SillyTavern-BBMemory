@@ -135,7 +135,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
 // ═══ SillyTavern 接口 ═══
 
 function getLocalForage() {
-    return SillyTavern.libs.localforage;
+    const ctx = SillyTavern.getContext();
+    return ctx?.libs?.localforage || globalThis.localforage || globalThis.SillyTavern?.libs?.localforage;
 }
 
 function getContext() {

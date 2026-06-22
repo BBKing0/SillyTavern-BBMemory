@@ -36,7 +36,8 @@ function getChatId() {
 }
 
 function getLocalForage() {
-    return SillyTavern.libs.localforage;
+    const ctx = getContext();
+    return ctx?.libs?.localforage || globalThis.localforage || globalThis.SillyTavern?.libs?.localforage;
 }
 
 function saveChat() {

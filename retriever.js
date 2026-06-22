@@ -364,7 +364,8 @@ export function getRelevantMemories(memories, queryText, options = {}) {
     // Fuse 模糊匹配
     let fuseBoostMap = new Map();
     try {
-        const Fuse = SillyTavern.libs.Fuse;
+        const ctx = SillyTavern.getContext();
+        const Fuse = ctx?.libs?.Fuse || globalThis.SillyTavern?.libs?.Fuse;
         if (Fuse) {
             const fuse = new Fuse(candidates, {
                 keys: ['content', 'title', 'summary', 'subject', 'target'],

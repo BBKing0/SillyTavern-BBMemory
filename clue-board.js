@@ -24,7 +24,8 @@ import {
 const CLUE_BOARD_KEY = 'bb_clue_board_';
 
 function getLocalForage() {
-    return SillyTavern.libs.localforage;
+    const ctx = SillyTavern.getContext();
+    return ctx?.libs?.localforage || globalThis.localforage || globalThis.SillyTavern?.libs?.localforage;
 }
 
 function generateId() {

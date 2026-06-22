@@ -4273,7 +4273,23 @@ try {
     const ctx = SillyTavern.getContext();
     const evType = ctx.eventTypes?.APP_READY || ctx.event_types?.APP_READY;
     if (evType && ctx.eventSource) {
-        ctx.eventSource.once(evType, initOnce);
+        if (typeof ctx.eventSource.once === 'function') {
+            ctx.eventSource.once(evType, initOnce);
+        } else if (typeof ctx.eventSource.on === 'function') {
+            const onReady = async (...args) => {
+                try {
+                    if (typeof ctx.eventSource.removeListener === 'function') {
+                        ctx.eventSource.removeListener(evType, onReady);
+                    } else if (typeof ctx.eventSource.off === 'function') {
+                        ctx.eventSource.off(evType, onReady);
+                    }
+                } catch { /* ignore missing event cleanup */ }
+                await initOnce(...args);
+            };
+            ctx.eventSource.on(evType, onReady);
+        } else {
+            throw new Error('SillyTavern eventSource does not support once/on');
+        }
         // 兜底：如果 APP_READY 10 秒后仍未触发，直接初始化
         setTimeout(() => {
             if (!_bbInitCalled) {
