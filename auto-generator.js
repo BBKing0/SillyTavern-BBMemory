@@ -432,6 +432,10 @@ function fetchWithTimeout(url, options, timeoutMs = 10000) {
 
 export function normalizeEndpoint(url) {
     let cleaned = url.trim().replace(/\/+$/, '');
+    // 安全检查：必须是 http 或 https 协议
+    if (!cleaned.startsWith('http://') && !cleaned.startsWith('https://')) {
+        throw new Error('API endpoint 必须使用 http:// 或 https:// 协议');
+    }
     if (cleaned.endsWith('/chat/completions')) return cleaned;
     if (cleaned.endsWith('/v1')) return cleaned + '/chat/completions';
     return cleaned + '/v1/chat/completions';
@@ -439,6 +443,10 @@ export function normalizeEndpoint(url) {
 
 function normalizeEmbeddingEndpoint(url) {
     let cleaned = url.trim().replace(/\/+$/, '');
+    // 安全检查：必须是 http 或 https 协议
+    if (!cleaned.startsWith('http://') && !cleaned.startsWith('https://')) {
+        throw new Error('Embedding endpoint 必须使用 http:// 或 https:// 协议');
+    }
     if (cleaned.endsWith('/embeddings')) return cleaned;
     if (cleaned.endsWith('/v1')) return cleaned + '/embeddings';
     return cleaned + '/v1/embeddings';
@@ -1551,7 +1559,11 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
                 const similar = findMostSimilarMemory(embedding, activeMemories);
                 if (similar) {
                     if (similar.similarity >= getDedupConfig().mergeThreshold) {
-                        await updateMemory(chatId, similar.memory.id, { ...mergeMemoryFields(similar.memory, mem), ...(sourceInfo || {}) });
+                        const merged = { ...mergeMemoryFields(similar.memory, mem), embedding, ...(sourceInfo || {}) };
+                        await updateMemory(chatId, similar.memory.id, merged);
+                        // 更新缓存中的条目
+                        const idx = activeMemories.findIndex(m => m.id === similar.memory.id);
+                        if (idx >= 0) activeMemories[idx] = { ...activeMemories[idx], ...merged };
                         continue;
                     } else if (similar.similarity >= getDedupConfig().reduceThreshold) {
                         mem.importance = Math.max(0.3, (mem.importance || 0.5) - 0.15);

@@ -313,7 +313,8 @@ export function calculateMemoryScore(memory, query, context = {}, queryEmbedding
         ? cosineSimilarity(queryEmbedding, memory.embedding) : 0;
 
     // 时效性
-    const age = now - (memory.lastHitAt || memory.createdAt || now);
+    const createTime = memory.lastHitAt || memory.createdAt || Date.now();
+    const age = Math.max(0, now - createTime);
     let recencyScore;
     if (age <= 0) recencyScore = 1.0;
     else if (age >= RECENCY_WINDOW_MS) recencyScore = Math.max(0.1, 1 - Math.log10(age / RECENCY_WINDOW_MS + 1) * 0.5);
@@ -635,7 +636,8 @@ function formatHiddenNotesForInjection(m) {
         .slice(0, 4)
         .map(note => {
             const type = note.type ? `[${note.type}]` : '';
-            return `  [AI隐藏备注${type}] ${String(note.content).trim().slice(0, 180)}`;
+            const content = String(note.content).trim().slice(0, 180).replace(/[\r\n]+/g, ' ');
+            return `  [AI隐藏备注${type}] ${content}`;
         });
     return lines.length ? '\n' + lines.join('\n') : '';
 }

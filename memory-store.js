@@ -27,9 +27,12 @@ const STORAGE_KEYS = {
     timeline: 'bb_timeline_chat_',      // v9.2.0 时间线（原时间线程）
 };
 
+// ⚠️ LEGACY_STORAGE_KEYS 仅用于迁移时的只读数据源，不会写入到这些键
+// v9.1.x → v9.2.x 迁移：milestone 数据从 'bb_timeline_chat_' 读取后写入 STORAGE_KEYS.milestone
+// timeline 数据从 'bb_timeline_threads_' 读取后写入 STORAGE_KEYS.timeline
 const LEGACY_STORAGE_KEYS = {
-    milestone: 'bb_timeline_chat_',     // v9.1.x 时间条目
-    timeline: 'bb_timeline_threads_',   // v9.1.x 时间线程
+    milestone: 'bb_timeline_chat_',     // v9.1.x 时间条目（只读）
+    timeline: 'bb_timeline_threads_',   // v9.1.x 时间线程（只读）
 };
 
 const OLD_STORAGE_KEY = 'bb_memory_chat_';
@@ -1073,7 +1076,9 @@ async function applyMemoryTierScore(chatId, collection, entry, delta, now) {
     if (delta > 0) {
         let nextTier = '';
         const threshold = tier === 'core' ? eternalThreshold : promoteThreshold;
-        if (entry.hitScore >= threshold) {
+        const cooldownRounds = getPositiveSetting('promotionCooldownRounds', 15);
+        const hitCountSincePromotion = entry.hitCount - (entry.hitCountAtLastPromotion || 0);
+        if (entry.hitScore >= threshold && hitCountSincePromotion >= cooldownRounds) {
             const idx = MEMORY_TIER_ORDER_V905.indexOf(tier);
             if (idx >= 0 && idx < MEMORY_TIER_ORDER_V905.length - 1) {
                 nextTier = MEMORY_TIER_ORDER_V905[idx + 1];
@@ -1082,6 +1087,7 @@ async function applyMemoryTierScore(chatId, collection, entry, delta, now) {
         if (nextTier && await checkDiversityLimit(chatId, collection, entry, nextTier)) {
             entry.memoryTier = nextTier;
             entry.hitScore = 0;
+            entry.hitCountAtLastPromotion = entry.hitCount;
             entry.lastPromotedAt = now;
             entry.updatedAt = now;
             changed = true;

@@ -664,6 +664,7 @@ function bindManagerEvents(overlay, chatId) {
                     await rerenderManagerList(overlay, chatId);
                 } catch (err) { showToast(`导入失败: ${err.message}`, 'error'); }
             };
+            reader.onerror = () => showToast(`文件读取失败: ${reader.error?.message || '未知错误'}`, 'error');
             reader.readAsText(file);
         });
         input.click();
@@ -784,46 +785,67 @@ function bindBatchEvents(overlay, chatId) {
         updateUI();
     });
 
-    overlay.querySelector('#bb_batch_delete')?.addEventListener('click', async () => {
+    overlay.querySelector('#bb_batch_delete')?.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        if (btn.disabled) return;
         const checked = overlay.querySelectorAll('.bb-mem-batch-cb:checked');
         if (!checked.length) return;
         const ok = await confirmManagerAction('批量删除', `确定删除选中的 ${checked.length} 条吗？`);
         if (!ok) return;
-        for (const cb of checked) {
-            const id = cb.dataset.id;
-            const pillar = cb.dataset.pillar;
-            if (pillar === 'npc') await removeNpcProfile(chatId, id);
-            else if (pillar === 'item') await removeItem(chatId, id);
-            else if (pillar === 'timeline') await removeTimelineEntry(chatId, id);
-            else await removeMemory(chatId, id);
-        }
-        showToast(`已删除 ${checked.length} 条`, 'success');
-        batchMode = false;
-        await rerenderManagerList(overlay, chatId);
-        updateUI();
-    });
-
-    overlay.querySelector('#bb_batch_archive')?.addEventListener('click', async () => {
-        const checked = overlay.querySelectorAll('.bb-mem-batch-cb:checked');
-        if (!checked.length) return;
-        for (const cb of checked) {
-            await archiveEntry(chatId, cb.dataset.pillar, cb.dataset.id);
-        }
-        showToast(`已归档 ${checked.length} 条`, 'success');
-        batchMode = false;
-        await rerenderManagerList(overlay, chatId);
-        updateUI();
-    });
-
-    overlay.querySelector('#bb_batch_fuzzy')?.addEventListener('click', async () => {
-        const checked = overlay.querySelectorAll('.bb-mem-batch-cb:checked');
-        if (!checked.length) return;
-        for (const cb of checked) {
-            if (cb.dataset.pillar === 'mem') {
-                await fuzzyMemory(chatId, cb.dataset.id);
+        btn.disabled = true;
+        try {
+            for (const cb of checked) {
+                const id = cb.dataset.id;
+                const pillar = cb.dataset.pillar;
+                if (pillar === 'npc') await removeNpcProfile(chatId, id);
+                else if (pillar === 'item') await removeItem(chatId, id);
+                else if (pillar === 'timeline') await removeTimelineEntry(chatId, id);
+                else await removeMemory(chatId, id);
             }
+            showToast(`已删除 ${checked.length} 条`, 'success');
+        } finally {
+            btn.disabled = false;
         }
-        showToast(`已模糊化 ${checked.length} 条`, 'success');
+        batchMode = false;
+        await rerenderManagerList(overlay, chatId);
+        updateUI();
+    });
+
+    overlay.querySelector('#bb_batch_archive')?.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        if (btn.disabled) return;
+        const checked = overlay.querySelectorAll('.bb-mem-batch-cb:checked');
+        if (!checked.length) return;
+        btn.disabled = true;
+        try {
+            for (const cb of checked) {
+                await archiveEntry(chatId, cb.dataset.pillar, cb.dataset.id);
+            }
+            showToast(`已归档 ${checked.length} 条`, 'success');
+        } finally {
+            btn.disabled = false;
+        }
+        batchMode = false;
+        await rerenderManagerList(overlay, chatId);
+        updateUI();
+    });
+
+    overlay.querySelector('#bb_batch_fuzzy')?.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        if (btn.disabled) return;
+        const checked = overlay.querySelectorAll('.bb-mem-batch-cb:checked');
+        if (!checked.length) return;
+        btn.disabled = true;
+        try {
+            for (const cb of checked) {
+                if (cb.dataset.pillar === 'mem') {
+                    await fuzzyMemory(chatId, cb.dataset.id);
+                }
+            }
+            showToast(`已模糊化 ${checked.length} 条`, 'success');
+        } finally {
+            btn.disabled = false;
+        }
         batchMode = false;
         await rerenderManagerList(overlay, chatId);
         updateUI();

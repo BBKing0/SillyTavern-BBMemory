@@ -4,9 +4,9 @@
     "js": "index.js",
     "css": "style.css",
     "author": "BB-Memory Dev",
-    "version": "9.2.2",
+    "version": "9.2.3",
     "homePage": "https://github.com/BBKing0/SillyTavern-BBMemory",
     "auto_update": true,
     "generate_interceptor": "bbMemoryInterceptor",
-    "description": "Smart long-term memory extension v9.2.2 - Vector store refactor and cloud vector slot"
+    "description": "Smart long-term memory extension v9.2.3 - Bug fixes and security improvements"
 }
