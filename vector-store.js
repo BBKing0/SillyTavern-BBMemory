@@ -1,5 +1,5 @@
 /**
- * vector-store.js — compressed embedding storage for BB-Memory v9.2.2.
+ * vector-store.js — compressed embedding storage for BB-Memory v9.2.4.
  *
  * Entries keep only embeddingRef. The actual vector is stored once per
  * character/group scope as Float16 + Base64 records.

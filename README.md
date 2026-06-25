@@ -1,512 +1,622 @@
-# BB-Memory — SillyTavern 智能长期记忆扩展
+# BB-Memory
 
-让你的 AI 角色真正"记住"故事中的关键信息——事件、NPC、物品、地点和角色关系。
+**当前版本：v9.2.4**  
+**上次更新时间：2026-06-25**
 
-## 功能概览
+BB-Memory 是 SillyTavern 的浏览器端长期记忆扩展。它会把角色扮演中的 NPC、物品、里程碑、时间线、地点、线索和普通记忆整理为结构化数据，并在生成回复前按相关性注入给 AI。
 
-### 核心功能
-- **智能记忆检索** — 发送消息时自动从记忆库中找出相关内容注入到 prompt
-- **AI 自动生成** — AI 回复后自动提取值得记忆的信息（副 API 方案）
-- **外置初始化工具** — 上传角色卡、世界书、聊天记录或旧存档，由 LLM 提取可审阅草稿
-- **多类型记忆** — 事件、里程碑、时间线、物品栏、NPC、地点、关系，各有专属格式
-- **向量化标签** — 每条记忆带有权重标签，提高检索精度
-- **记忆衰减** — 模拟人脑遗忘曲线，不重要的记忆逐渐变淡
-- **记忆强化** — 被检索到的记忆会变得更牢固（越回忆越深刻）
+本仓库是纯浏览器 ES Module 扩展：
 
-### 管理功能
-- **记忆管家** — 悬浮窗助手，提供仪表盘、分类浏览、健康分析、批量操作
-- **初始化与合并** — 外置工具可选择提取记忆、NPC、物品、地点、里程碑、时间线，支持多波次草稿合并
-- **手动管理** — 添加、编辑、删除、搜索记忆
-- **导入/导出** — JSON 格式备份和恢复
-- **斜杠命令** — 在聊天框直接 `/memory add/search/count/clear`
+- 无构建步骤
+- 无 package manager
+- SillyTavern 通过 `manifest.json` 加载 `index.js`
+- 主数据存放在浏览器 localforage / IndexedDB
+- 轻量设置存放在 `extensionSettings['bb_memory']`
 
----
+## 目录
 
-## 安装方法
+- [安装](#安装)
+- [快速开始](#快速开始)
+- [运行顺序与工作原理](#运行顺序与工作原理)
+- [扩展面板长什么样](#扩展面板长什么样)
+- [核心数据](#核心数据)
+- [常用功能](#常用功能)
+- [设置说明](#设置说明)
+- [斜杠命令](#斜杠命令)
+- [备份与跨设备同步](#备份与跨设备同步)
+- [外置工具](#外置工具)
+- [开发与架构](#开发与架构)
+- [常见问题](#常见问题)
 
-### 方法一：通过 SillyTavern 安装（推荐）
+## 安装
 
-1. 打开 SillyTavern
-2. 进入 **扩展** → **安装扩展**
-3. 输入本仓库的 Git URL
-4. 点击安装
+### 通过 SillyTavern 安装
 
-### 方法二：手动安装
+1. 打开 SillyTavern。
+2. 进入扩展安装页面。
+3. 输入本仓库 Git URL。
+4. 安装后刷新页面或重启 SillyTavern 前端。
 
-1. 将本仓库解压/克隆到酒馆前端扩展目录（与[官方文档](https://docs.sillytavern.app/for-contributors/writing-extensions)一致）：
-   ```
-   <SillyTavern>/public/scripts/extensions/third-party/
-   ```
-2. **文件夹名称**应与解压后的目录一致（例如 `BB-Memory`）。程序会通过 SillyTavern 内置的 `findExtension('BB-Memory')` 解析真实路径，用于加载 `settings.html`；请勿随意改名除非你清楚自己在改挂载路径。
-3. 完全重启 SillyTavern（刷新页面或重启 Node 服务）。
+### 手动安装
 
-### SillyTavern 兼容性说明（重要）
+将本仓库放入 SillyTavern 前端扩展目录：
 
-本扩展面向官方「UI 扩展」模型编写（`manifest.json` + `generate_interceptor` + `renderExtensionTemplateAsync`）。若你在酒馆里**看不到设置面板**或**命令列表里没有 `/memory`**，通常是下列原因之一：
+```text
+<SillyTavern>/public/scripts/extensions/third-party/BB-Memory
+```
 
-| 现象 | 常见原因 |
-|------|-----------|
-| 扩展设置区没有 BB-Memory | `renderExtensionTemplateAsync` 的第一个参数必须是当前安装目录的内部键（如 `third-party/BB-Memory`）。v2.6.1 起已改为优先使用官方 `findExtension` 解析，并会对 `#extensions_settings` / `#extensions_settings2` 做短暂重试挂载。 |
-| 酒馆版本过旧 | 请尽量使用 [SillyTavern 发行版](https://github.com/SillyTavern/SillyTavern/releases) 的最新稳定版；过旧内核可能没有 `SlashCommandParser`、`POPUP_RESULT` 等接口。 |
-| 扩展被禁用 | **扩展** 菜单中确认 BB-Memory 已勾选启用。 |
+注意：
 
----
+- 文件夹名建议保持为 `BB-Memory`。
+- 扩展通过 `findExtension('BB-Memory')` 和 `import.meta.url` 解析安装路径。
+- 如果设置面板没有出现，先确认扩展已启用，再刷新页面。
 
-## 使用指南
+## 快速开始
 
-### 基本使用
+1. 进入任意角色聊天。
+2. 打开右侧扩展设置，展开 **BB-Memory v9.2.4**。
+3. 确认 **启用 BB-Memory** 已勾选。
+4. 点 **手动提取**，输入楼层范围，例如 `0-80`；留空会提取最近 8 轮。
+5. 提取完成后进入 **记忆管理**，检查和整理新增条目。
+6. 正常聊天时，BB-Memory 会在生成前检索相关内容并注入 prompt。
+7. 阶段结束后执行 **备份** 或在管理器 **存档** 页保存槽位。
 
-1. **启用扩展** — 在 SillyTavern 侧边栏找到 "BB-Memory v2"，确保开关已开启
-2. **添加记忆** — 点击"添加记忆"按钮，输入内容
-3. **管理记忆** — 点击"管理记忆"按钮，打开记忆管理面板
-4. **正常聊天** — 发送消息时，扩展会自动检索相关记忆并注入上下文
+新角色长篇开局时，推荐先用 `tools/bbmemory-initializer.html` 从角色卡、世界书、聊天记录或旧 JSON 生成导入文件，再通过 **记忆管理** 导入。
 
-### AI 自动生成记忆
+## 运行顺序与工作原理
 
-1. 在设置面板启用"AI 自动提取记忆"
-2. 选择 API 模式：
-   - **主 API（推荐）**：使用当前已配置的 AI 接口
-   - **自定义 API**：填写第三方 OpenAI 兼容接口
-3. AI 每次回复后，会自动分析并记录重要信息
+### 自动提取开启后发生什么
 
-### 记忆管家（悬浮窗）
+自动提取不是 AI 每回复一层就立刻保存记忆，而是先保留一个短期窗口，再把更早的完整 exchange 送去提取。
 
-通过侧边栏的"管理记忆"按钮打开，提供：
-- **仪表盘** — 记忆总量、类型分布、强度统计
-- **浏览** — 按类型分类查看，支持搜索
-- **健康** — 检测弱记忆、疑似重复、老旧记忆
-- **批量** — 多选删除、选择弱记忆快速清理
+默认 `上下文保留窗口` 为 3。由于最新 AI 回复会额外保留给用户检查，通常到第 5 条 AI 回复出现后，最早的一组“用户消息 + AI 回复”才会开始自动提取；之后每新增一条 AI 回复，就继续把更早的一组送入队列。
 
-### 记忆初始化
+流程如下：
 
-1. 侧边栏的"初始化记忆"按钮会提示使用外置 HTML 转化工具，不再打开内置初始化工作台。
-2. 请打开 `tools/bbmemory-initializer.html`，上传角色卡、世界书、聊天记录、已有草稿 JSON 或 BB-Memory 导出 JSON。
-3. 在外置工具中检查、编辑、合并草稿后，点击"下载导入 JSON"，再通过 BB-Memory 管理器导入当前聊天。
+| 顺序 | 发生什么 | 相关开关 |
+| --- | --- | --- |
+| 1 | AI 回复完成，SillyTavern 触发消息接收事件，BB-Memory 等待约 2.5 秒后处理 | 启用 BB-Memory、启用 AI 自动提取 |
+| 2 | 从聊天末尾往前数，保留最近若干个未处理 exchange，窗口外更早的 exchange 标记为待提取 | 上下文保留窗口 |
+| 3 | 每个 exchange 由最近一条用户消息和后续 AI 回复组成；开场白会并入第一个 exchange | 楼层状态、标记消息 |
+| 4 | 如果 AI 回复命中选中的 XML 标签，例如 `<content>`、`<context>`、`<status>`，只读取这些标签内容；否则读取普通回复文本 | AI 提取读取标签、自定义读取标签 |
+| 5 | 构建合并提取提示词，调用主 API 或自定义 OpenAI 兼容 API | API 模式、API 预设、自定义 API |
+| 6 | 解析模型返回的 JSON，对 NPC、物品、里程碑、地点、时间线和普通记忆分别保存 | 提取确认模式 |
+| 7 | 成功后标记用户楼层、AI 楼层和开场白上下文为已提取，并按显示模式隐藏或显示 | 楼层可见 |
+| 8 | 成功处理若干 exchange 后，如果启用时间线总结，会在后台尝试刷新时间线 | 启用时间线总结 |
 
-### 外置初始化提取工具
+### BB-Memory 会发什么给 AI
 
-1. 打开 `tools/bbmemory-initializer.html`，上传角色卡、世界书、聊天记录，或上传已有 BB-Memory JSON/草稿 JSON 继续合并。
-2. 勾选本轮要提取的类型：记忆、NPC、物品、地点、里程碑、时间线。工具支持多波次合并，例如第一轮只提记忆，第二轮只提地点和物品。
-3. 世界书 JSON 会解析成可开关条目；关闭不希望 AI 读取的条目后，再进行提取或分段。
-4. 可以先用"记忆世界书分段"让 AI 按 5 天/10 天/自然时间段切分，检查分段后再并行提取。
-5. "跨世界观转换"支持上传原世界观、记忆存档、新世界观，按 10/20 条记忆一组转换，再总结 NPC、物品、地点、里程碑和时间线。
-6. 可填写"时间线 / 历法提示"，说明 DAY1 起点、季节轮换、纪年规则；提取里程碑和时间线时会发送给 AI。里程碑只用于真正重要的关系变化、剧情拐点或阶段性结果；时间线用于持续推进的主线、支线、情感线或世界线。
-7. 配置 OpenAI 兼容 API 后运行提取。外置工具不会自动读取酒馆内容，也不会直接写入 IndexedDB。
-8. 可配置 Embedding 端点和模型，勾选"提取完成后自动向量化新增草稿"，或手动点击"向量化草稿"。向量会写入导出的 `embedding` 字段。
-9. 提取结果会进入草稿池，可按类型搜索、编辑、复制、删除、新增，并可保存到浏览器本地草稿。外置工具导出的记忆和地图等级最低为 `stable`，AI 可升格为 `core` / `eternal`。
-10. 最终点击"下载导入 JSON"生成 BB-Memory 可导入文件；地点会同时写入 `map.locations`，用于恢复地图节点和连接。
+自动提取和手动提取共用“合并提取总模板”。完整模板可以在 **自定义设置 -> 提示词模板** 中查看和编辑。
 
-### 斜杠命令
+实际调用分为两层：
 
-| 命令 | 说明 |
-|------|------|
-| `/memory add <内容>` | 快速添加一条事件记忆 |
-| `/memory search <关键词>` | 搜索相关记忆 |
-| `/memory count` | 查看记忆统计 |
-| `/memory clear` | 清空当前聊天所有记忆 |
+| 部分 | 内容 | 作用 |
+| --- | --- | --- |
+| System prompt | 要求模型扮演 JSON 格式的记忆提取助手，只输出纯 JSON 对象 | 防止返回解释、markdown 或闲聊 |
+| User prompt | 包含元对话防护、核心原则、提取维度、具体时间规则、故事日历、风格偏置、当前用户消息和 AI 回复 | 指导模型提取哪些内容 |
 
----
+模型正常返回：
+
+```json
+{
+  "memories": [],
+  "npc": [],
+  "items": [],
+  "milestones": [],
+  "locations": [],
+  "timeline": []
+}
+```
+
+如果整段都是 OOC、格式修复、工具说明或纯元指令，模型可以返回：
+
+```text
+META_DIALOGUE
+```
+
+此时 BB-Memory 会把该楼层标为跳过，不保存剧情记忆。
+
+### 重复和相似内容怎么处理
+
+BB-Memory 有两层重复保护：
+
+| 情况 | 处理方式 |
+| --- | --- |
+| 同一楼层重复触发 | 用“用户消息 + AI 回复”计算 exchange hash。已处理 hash 不再调用提取 API，只补齐楼层标记和隐藏状态 |
+| 纯元对话 | 返回 `META_DIALOGUE` 或手动标记后，该 exchange 会跳过并加入已处理集合 |
+| NPC、物品、地点重名 | 保存时按名称或 ID upsert，尽量更新旧条目而不是新增同名条目 |
+| 普通记忆高度相似 | 启用语义向量和语义去重时，先生成 embedding；相似度达到合并阈值会合并进旧记忆 |
+| 普通记忆中度相似 | 相似但不足合并时，新记忆仍可保存，但重要性会降低 |
+| 未开启向量 | 普通记忆无法语义去重，主要依赖人工整理和记忆体检 |
+| API 失败或 JSON 解析失败 | 本次 exchange 不会标记为成功，失败楼层会保留，之后可重试 |
+
+### 生成回复前的注入顺序
+
+用户发送消息后，BB-Memory 的生成拦截器会在 AI 回复生成前运行：
+
+| 顺序 | 发生什么 | 相关设置 |
+| --- | --- | --- |
+| 1 | 读取最后一条用户消息。扩展关闭或当前聊天没有记忆时清空注入 | 启用 BB-Memory |
+| 2 | 加载 NPC、物品、里程碑、时间线、记忆、地图和线索板 | 线索板注入、语义向量 |
+| 3 | 尝试执行轻量自动维护 | 维护模式、维护阈值 |
+| 4 | 如果启用语义向量，为用户最新消息请求一次 embedding；失败则降级关键词检索 | 启用语义向量检索 |
+| 5 | 分别检索 NPC、物品、里程碑、时间线、地图、线索板和普通记忆 | 最大检索数、最低相关分、各类注入上限 |
+| 6 | 用户消息命中实体名时，额外展开关联记忆 | 最大检索数、Token 预算 |
+| 7 | 按 Token 预算裁剪内容，核心、永恒、常驻内容优先保留 | Token 预算、Token 预算模式 |
+| 8 | 用注入模板包裹结果，通过 `setExtensionPrompt` 写入 SillyTavern 生成上下文 | 注入模板 |
+| 9 | 对实际注入的条目记录命中；未命中的活跃条目可能累积未命中计数并触发升降格 | 升级/降级阈值、多样性限制 |
+
+### 哪些开关会改变流程
+
+| 开关或数值 | 影响 | 关闭或调低后 |
+| --- | --- | --- |
+| 启用 AI 自动提取 | 控制 AI 回复后是否进入提取队列 | 不自动提取，但仍可手动提取 |
+| 上下文保留窗口 | 决定旧楼层多早进入自动提取 | 调大更安全，调小更快沉淀 |
+| 并行提取数 | 一次处理多少个待提取 exchange | 调低更稳更慢，调高更快但更吃限速 |
+| 提取确认模式 | 决定提取结果是否先给用户审核 | 主动确认最可控，全自动最快 |
+| AI 提取读取标签 | 决定读取 AI 回复全文还是指定标签 | 不命中标签时回退普通文本 |
+| 启用语义向量检索 | 影响检索、去重、地图匹配和重建索引 | 关闭后依赖关键词、标签、模糊搜索 |
+| 启用语义去重 | 保存新普通记忆时是否做相似合并 | 关闭后相似记忆更容易并存 |
+| 启用线索板注入 | 玩家推理是否进入生成 prompt | 关闭后线索板保存但 AI 看不到 |
+| 启用时间线总结 | 持续叙事线是否注入，自动提取后是否尝试后台刷新 | 关闭后只靠里程碑和普通记忆 |
+| Token 预算模式 | 常驻内容是否可以超出总预算 | 严格总量更省上下文，但可能截掉常驻信息 |
+
+## 扩展面板长什么样
+
+在 SillyTavern 扩展设置中展开 BB-Memory 后，大致会看到这样的区域：
+
+```text
+BB-Memory v9.2.4
+[x] 启用 BB-Memory
+当前记忆数：0
+提取状态：空闲
+楼层状态：暂无可统计楼层
+
+[初始化记忆] [记忆管理] [使用说明] [记忆维护]
+[手动提取]   [标记消息] [楼层可见]
+[刷新时间线] [换楼刷新] [线索板] [世界地图]
+[备份]       [恢复]
+
+命中条目
+AI 自动提取
+语义向量
+注入设置
+升降格与维护
+记忆体检
+故事日历
+自定义设置
+BBTel 小手机同步
+```
+
+最常用的按钮位置：
+
+| 按钮 | 位置 | 用途 |
+| --- | --- | --- |
+| 手动提取 | 快捷按钮第二排左侧 | 从当前聊天提取记忆、NPC、物品、里程碑、时间线、地点 |
+| 记忆管理 | 快捷按钮第一排 | 打开完整管理器，管理记忆、存档、时间线、分类、归档仓库 |
+| 记忆维护 | 快捷按钮第一排 | 检查和处理积灰、重复、可压缩、低优先级条目 |
+| 刷新时间线 | 快捷按钮第三排 | 从里程碑重新整理持续叙事线 |
+| 换楼刷新 | 快捷按钮第三排 | 开新聊天后，把旧条目的来源楼层标记为旧聊天 |
+| 线索板 | 快捷按钮第三排 | 管理玩家推理节点与连线 |
+| 世界地图 | 快捷按钮第三排 | 管理地点、地区、路径和物品位置 |
+
+点击 **手动提取** 后会出现楼层范围窗口：
+
+- 输入 `12-40`：提取指定楼层范围。
+- 留空：提取最近 8 轮。
+- 点击 **换楼提取到最新**：从尚未提取的楼层逐层补齐到最新 AI 楼层。
+
+## 核心数据
+
+| 数据 | 说明 | 注入特点 |
+| --- | --- | --- |
+| 记忆条目 | 长期有用的事件、情感、习惯、事实 | 按相关性和层级注入 |
+| NPC 档案 | 角色身份、性格、外貌、状态、位置、关系 | 核心和重要 NPC 优先 |
+| 物品栏 | 关键物品、装备、线索物、消耗品、背景物品 | 关键和装备物品优先 |
+| 里程碑 | 关系质变、剧情拐点、伏笔、重大冲突起止 | 可常驻，也可向量命中 |
+| 时间线 | 主线、感情线、支线、世界观线等持续叙事线 | 用于保持长篇脉络 |
+| 世界地图 | 地点、地区、父子地点、路径、物品位置 | 命中地点及周边地点会注入 |
+| 线索板 | 玩家手动整理的推理节点和连线 | 启用后会把推测注入给 AI |
+
+### 记忆层级
+
+| 层级 | 含义 |
+| --- | --- |
+| `transient` / 瞬时 | 新的或弱记忆，容易被压缩或降级 |
+| `stable` / 稳定 | 常规有效记忆 |
+| `core` / 核心 | 高价值记忆，优先注入 |
+| `eternal` / 永恒 | 永久保留，不参与衰减 |
+| `archived` / 归档 | 保留数据，但不参与检索注入 |
+
+### NPC 与物品分级
+
+NPC 分级：
+
+- `core`：核心角色
+- `important`：重要角色
+- `minor`：配角
+- `background`：背景或路人
+
+物品分级：
+
+- `key`：关键物品
+- `equipped`：装备中
+- `clue`：线索物
+- `consumable`：消耗品
+- `background`：背景物品
+
+## 常用功能
+
+### 手动提取
+
+从角色卡、世界书和聊天楼层中提取：
+
+- NPC
+- 物品
+- 里程碑
+- 时间线
+- 地图地点
+- 普通记忆
+
+适用场景：
+
+- 刚安装扩展，想为旧聊天补记忆。
+- 自动提取没开，但想阶段性沉淀剧情。
+- 重 Roll 后想重新整理指定楼层。
+
+### 换楼提取
+
+手动提取窗口中会根据楼层状态给出 **换楼提取到最新** 按钮。它会从尚未提取的 exchange 开始，逐层提取到最新 AI 楼层。
+
+适用场景：
+
+- 切到高楼层旧聊天后补齐记忆。
+- 某段时间自动提取关闭，后来想补提。
+- 换设备后恢复了聊天，但本机还没有提取状态。
+
+### 记忆管理
+
+侧边栏 **记忆管理** 打开完整管理器，包含：
+
+- **记忆**：搜索、排序、新增、编辑、归档、删除、批量操作、导入导出。
+- **存档**：保存、加载、创建、删除角色级存档槽；上传或加载云端向量槽。
+- **时间线**：新建、编辑、归档、删除时间线，刷新时间线总结。
+- **仪表盘**：查看总体数量、注入状态、近期活动。
+- **分类**：创建分类、切换分类注入、查看分类条目。
+- **归档仓库**：查看和恢复已归档条目。
+
+### 记忆维护
+
+用于处理：
+
+- 积灰物品
+- 状态变化物品
+- 可压缩里程碑
+- 低优先级 NPC
+- 可归档或可删除条目
+
+维护模式有三种：
+
+- `auto`：静默自动维护。
+- `semi`：给出建议，等待用户批准。
+- `manual`：完全手动裁决。
+
+推荐默认使用 `semi`。
+
+### 记忆体检
+
+体检会检测：
+
+- 缺少 embedding
+- 近似重复
+- 标签孤立
+- 长期休眠
+- 来源楼层缺失或变动
+- 楼层记忆断层
+- 空时间线或状态不一致
+- 线索板长期未更新
+- 地图孤立地点
+
+### 线索板
+
+线索板让用户把记忆库中的条目摆成节点，并手动建立连线：
+
+- 因果
+- 暗示
+- 矛盾
+- 关联
+- 推测
+
+启用线索板注入后，AI 会看到玩家当前追踪的推理。线索可以是错误的，AI 不需要全部确认。
+
+### 世界地图
+
+世界地图用于管理：
+
+- 地点
+- 地区
+- 父地点 / 子地点
+- 可达路径
+- 物品位置
+- 地点层级和空间关系
+
+地图地点可参与检索和注入。适合城镇、学院、迷宫、船舱、王国、星球等场景。
+
+### 记忆管家 Agent
+
+Agent 是测试功能，可用自然语言管理记忆，例如：
+
+- “列出所有核心 NPC”
+- “穿越线分类里有什么？”
+- “把这条记忆归到感情线”
+- “停止注入穿越线分类”
+
+注意：Agent 可能按你的明确指令执行写操作，使用前建议先备份。
 
 ## 设置说明
 
-| 设置项 | 说明 | 默认值 |
-|--------|------|--------|
-| 注入深度 | 记忆插入到聊天历史中的位置（0=最末尾） | 4 |
-| 最大检索数 | 每次生成时最多检索多少条相关记忆 | 10 |
-| Token 预算 | 注入记忆的最大 token 数，防止上下文溢出 | 800 |
-| 注入模板 | 控制记忆注入格式，`{{memories}}` 为占位符 | `[角色长期记忆]\n{{memories}}` |
-| AI 自动生成 | 是否自动从 AI 回复中提取记忆 | 关闭 |
-| API 模式 | 使用主 API 还是自定义端点 | 主 API |
-| 记忆衰减 | 是否启用遗忘曲线 | 开启 |
-| 衰减速率 | 每次衰减减少的强度值 | 0.05 |
+### 顶部状态与快捷操作
 
----
+| 设置 | 代表什么 | 建议 |
+| --- | --- | --- |
+| 启用 BB-Memory | 总开关。关闭后不检索、不注入，也不会自动提取 | 日常开启，排查 prompt 问题时临时关闭 |
+| 当前记忆数 | 当前聊天主要记忆数量 | 数量异常时进入管理器检查 |
+| 提取状态 | 显示提取是否空闲、运行中或失败 | 运行中不要反复点击 |
+| 楼层状态 | 统计待提取、已提取、未提取楼层 | 旧聊天补档时重点查看 |
+| 备份 / 恢复 | 将文本记忆和向量引用写入聊天元数据，或从中恢复 | 跨设备前后使用 |
 
-## 认知类型说明（v2.2）
+### AI 自动提取
 
-| 认知类型 | 图标 | 说明 | 典型分类路径 |
-|----------|------|------|-------------|
-| 事实 fact | 📖 | 确定的信息 | `npc.profile` `item.ownership` `location.state` `world.politics` |
-| 情景 episode | 🎬 | 发生的事件 | `episode.event` `episode.promise` `episode.secret` `episode.combat` |
-| 情感 emotion | ❤️ | 情感状态 | `emotion.bond` `emotion.trauma` `npc.attitude` |
-| 习惯 habit | 🔄 | 行为模式 | `habit.routine` `habit.preference` `habit.speech` |
+| 设置 | 代表什么 | 建议 |
+| --- | --- | --- |
+| 启用 AI 自动提取 | AI 回复后自动提取超出窗口的 exchange | 初期可关闭，稳定后开启 |
+| 调试日志 | 输出详细控制台日志 | 排查时开启 |
+| API 模式 | 主 API 或自定义 OpenAI 兼容 API | 想不干扰主聊天时用自定义 API |
+| 提取确认模式 | 主动确认、半自动、全自动 | 推荐半自动 |
+| 确认通知方式 | 主动确认时用弹窗或 toast | 需要审查时用弹窗 |
+| 上下文保留窗口 | 最近 N 个 exchange 暂不提取 | 重 Roll 频繁时调大 |
+| AI 提取读取标签 | 只读取指定 XML 风格标签内容 | 配合结构化回复模板使用 |
+| 自定义读取标签 | 增加自定义标签名 | 与角色卡输出格式一致 |
+| 并行提取数 | 同时请求几个 exchange | API 限速时设为 1 |
+| 更新回滚快照保留楼层数 | 更新旧条目时保留最近 N 楼回滚快照 | 想减小存档可调低 |
+| API 预设 | 保存和切换提取/向量 API 配置 | 多供应商用户建议使用 |
+| 自定义 API 端点 / Key / 模型 | OpenAI 兼容接口配置 | 填完先测试连接 |
+| 提取风格 | 自动、日常陪伴、正剧叙事、自定义偏置 | 按 RP 类型选择 |
 
-### 记忆字段一览
+### 语义向量
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `cognitiveType` | string | 认知类型：fact/episode/emotion/habit |
-| `categoryPath` | string | 分类路径，如 `npc.relationship` |
-| `title` | string | 简短标题 |
-| `content` | string | 完整原始内容 |
-| `summary` | string | 一句话摘要 |
-| `verbatim` | string | 重要原话（承诺、告白等） |
-| `hiddenNotes` | array | 隐藏备注（AI 可见，用户默认不可见） |
-| `subject` / `target` | string | 主体/对象 |
-| `truthStatus` | string | 可信度：true/false/unknown/rumor/misleading/secret_true |
-| `pinned` | boolean | 是否固定（固定的记忆不会衰减） |
-| `resident` | boolean | 是否常驻（v2.4，每轮以索引卡形式注入） |
-| `npcTier` | string | NPC 分级：`core` / `important` / `minor` / `background`（v2.6） |
-| `itemTier` | string | 物品分级：`key` / `equipped` / `clue` / `consumable` / `background`（v2.6） |
-| `indexCard` | string | 常驻索引卡短句（状态/关系摘要，不含完整史）（v2.6） |
-| `relatedMemoryIds` | string[] | 关联记忆 id，按需展开时可连带拉出（v2.6） |
-| `standaloneArchive` | boolean | 是否单独建档；路人 NPC 应 `false`（v2.6） |
+| 设置 | 代表什么 | 建议 |
+| --- | --- | --- |
+| 启用语义向量检索 | 用 embedding 辅助相关性匹配 | 长篇建议开启 |
+| Embedding API 端点 / Key / 模型 | OpenAI 兼容 embedding 配置 | 默认模型名 `text-embedding-3-small` |
+| 测试连接 | 测试 embedding 是否可用 | 填完配置后先测试 |
+| 重建语义索引 | 为已有条目重新生成向量 | 换模型后必须重建 |
+| 启用语义去重 | 提取时合并或减少相似条目 | 默认开启 |
 
----
+### 注入设置
 
-## 文件结构与代码说明
+| 设置 | 代表什么 | 建议 |
+| --- | --- | --- |
+| 最大检索数 | 普通记忆条目每轮最多注入数量 | 默认 10 |
+| NPC 注入上限 | 每轮最多注入 NPC 档案数 | 群像剧可调大 |
+| 物品注入上限 | 每轮最多注入物品数 | 道具推理可调大 |
+| 新里程碑默认注入模式 | 常驻或向量命中 | 里程碑很多时用向量命中 |
+| 向量命中里程碑上限 | 向量模式里程碑每轮最多注入多少条 | 默认 3 |
+| 地图地点注入上限 | 命中地点及周边地点最多注入多少处 | 地图大时调小 |
+| 启用线索板注入 | 是否把玩家推理注入给 AI | 推理线进行中时开启 |
+| Token 预算 | 注入文本预算参考值 | 默认 800 |
+| Token 预算模式 | 常驻不限或严格总量 | 上下文紧张时用严格总量 |
+| 最低相关分 | 低于该分数的记忆不进入候选 | 误命中过多时调高 |
+| 近楼层完整内容窗口 | 最近 N 楼来源记忆优先用完整内容 | 想更简短可设 0 |
+| 注入模板 | 最终注入外壳，`{{memories}}` 是占位符 | 不熟悉 prompt 时保持默认 |
 
+### 升降格与维护
+
+| 设置 | 代表什么 | 建议 |
+| --- | --- | --- |
+| 维护模式 | auto / semi / manual | 推荐 semi |
+| 记忆维护阈值 | 记忆数超过后提醒维护 | 长篇可调高 |
+| NPC 维护阈值 | NPC 数超过后提醒维护 | 群像剧可调高 |
+| 物品维护阈值 | 物品数超过后提醒维护 | 道具多可调高 |
+| 物品积灰未命中轮数 | 连续未命中后变成积灰候选 | 关键道具多时调高 |
+| 多样性限制 | 同一标签最多允许多少条核心记忆 | 默认 5 |
+| 记忆升级命中计数 | 瞬时到稳定、稳定到核心所需净命中数 | 默认 20 |
+| 核心升永恒命中计数 | 核心升永恒所需净命中数 | 永恒不会衰减，谨慎调低 |
+| 记忆降级未命中计数 | 稳定或核心长期未命中后降级阈值 | 慢节奏长篇可调高 |
+| 实体升级 / 降级计数 | NPC 和物品重要性升降阈值 | 群像剧可调高 |
+| 启用时间线总结 | 是否注入整理后的持续时间线 | 长篇建议开启 |
+| 最大活跃时间线数 | 限制活跃时间线注入数量 | 默认 5 |
+| 启用自动备份 | 数据变化后自动备份到聊天元数据 | 跨设备用户建议开启 |
+| 聊天元数据备份上限 | 超过该 KB 数会跳过备份 | 大存档用本地 JSON 导出 |
+| 云端向量槽上限 | 单角色唯一云端向量槽大小限制 | 向量多时提高 |
+
+### 记忆体检
+
+| 设置 | 代表什么 | 建议 |
+| --- | --- | --- |
+| 近似重复阈值 | 相似度超过该值视为重复 | 默认 0.95 |
+| 语义孤立阈值 | 孤立度超过该值标记为孤立 | 默认 0.30 |
+| 休眠判定天数 | 长期未命中的天数阈值 | 慢节奏长篇可调大 |
+| 休眠命中次数阈值 | 命中少且长期未命中会被判休眠 | 默认 3 |
+| 线索板更新提醒 | 线索板注入但长时间未更新时提醒 | 默认 14 天 |
+
+### 故事日历、自定义、BBTel
+
+| 设置 | 代表什么 | 建议 |
+| --- | --- | --- |
+| 故事日历描述 | 当前聊天的历法、纪年、季节规则 | 奇幻、科幻、跨天剧情建议填写 |
+| 导出设置 / 提示词 | 导出注入、提取、向量、维护阈值和提示词模板 | API Key 不会导出 |
+| 导入设置 / 提示词 | 从 JSON 恢复配置 | 导入后检查本机 API Key |
+| 提示词模板列表 | 查看和编辑内部 prompt | 修改前先导出设置备份 |
+| 记忆管家 Agent | 自然语言管理记忆的测试功能 | 使用前先备份 |
+| BBTel 小手机同步 | 与 BBTel 桥接服务同步完整存档槽 | 填桥接地址后先刷新 |
+
+## 斜杠命令
+
+| 命令 | 作用 | 备注 |
+| --- | --- | --- |
+| `/bb-init` | 提示使用外置初始化工具 | 不直接打开内置初始化 |
+| `/bb-backup` | 手动备份当前聊天记忆文本到聊天元数据 | 向量走云端向量槽 |
+| `/bb-restore` | 从聊天元数据恢复备份 | 重复条目会跳过或合并 |
+| `/bb-stats` | 显示 NPC、物品、里程碑、时间线、记忆统计 | toast 显示 |
+| `/bb-manage` | 打开轻量记忆管家面板 | 侧边栏按钮打开完整管理器 |
+| `/bb-maintenance` | 打开维护面板 | 处理积灰、低优先级等问题 |
+| `/bb-clear` | 清空当前聊天所有 BB-Memory 数据 | 危险操作，会确认 |
+| `/bb-delete-floor <楼层号>` | 删除指定 AI 楼层关联数据并尝试回滚 | 楼层必须是 AI 消息 |
+| `/bb-re-extract <楼层号>` | 删除并重新提取指定 AI 楼层 | 用于修正错误提取 |
+| `/bb-floor-refresh` | 将所有记忆来源楼层标记为旧聊天 | 开新聊天后使用 |
+| `/bb-clue` | 打开线索板 | 管理推理节点与连线 |
+| `/bb-map` | 打开世界地图 | 管理地点和路径 |
+| `/bb-agent` | 打开记忆管家 Agent 测试版 | 可能执行写操作 |
+
+## 备份与跨设备同步
+
+BB-Memory 有三类常见保存方式：
+
+| 方式 | 保存位置 | 适合场景 |
+| --- | --- | --- |
+| 聊天元数据备份 | `chatMetadata` | 跨设备同步文本记忆和向量引用 |
+| 本地存档槽 | localforage | 同一角色多路线、多分支 |
+| JSON 导出 | 下载文件 | 手动备份、迁移、分享、排障 |
+
+重要说明：
+
+- v9.2.4 的云备份不再内联完整 embedding，避免聊天文件膨胀。
+- 向量同步请在完整管理器的 **存档** 页使用 **云端向量槽**。
+- 每个角色只有一个云端向量槽，上传会覆盖旧向量包。
+- 加载存档会覆盖当前聊天的 BB-Memory 数据，操作前建议先备份。
+
+## 外置工具
+
+`tools/` 下的工具不共享 BB-Memory 扩展版本号，工具版本有自己的记录。
+
+常用工具：
+
+| 工具 | 用途 |
+| --- | --- |
+| `tools/bbmemory-initializer.html` | 从角色卡、世界书、聊天记录、旧 JSON 中生成可审阅草稿 |
+| `tools/bbmemory-v9.2-save-converter.html` | 将旧时间条目 / 时间线程格式转换为 v9.2 存档格式 |
+| `tools/bbmemory-converter-v2.4-manual.html` | 旧格式转换辅助 |
+| `tools/bbmemory-vector-compressor.html` | 向量压缩与处理辅助 |
+
+外置初始化工具建议流程：
+
+1. 打开 `tools/bbmemory-initializer.html`。
+2. 上传角色卡、世界书、聊天记录或旧 BB-Memory JSON。
+3. 选择要提取的数据类型。
+4. 配置 OpenAI 兼容 API。
+5. 运行提取并人工审阅草稿。
+6. 下载导入 JSON。
+7. 在 BB-Memory 记忆管理器中导入。
+
+## 开发与架构
+
+入口：
+
+```text
+manifest.json -> index.js
 ```
-bb-memory/
-├── manifest.json          ← 扩展清单，告诉 ST 这是什么扩展
-├── index.js               ← 总指挥，协调所有模块
-├── memory-store.js        ← 数据存储层，记忆的增删改查
-├── memory-maintainer.js   ← 记忆维护巡检员（v2.5）
-├── entity-tiers.js        ← NPC/物品分级与按需展开（v2.6）
-├── message-state.js       ← 消息管理员，自动隐藏 & exchange 去重（v2.1 新增）
-├── retriever.js           ← 搜索引擎，智能检索相关记忆
-├── memory-types.js        ← 类型定义，6种记忆的规格说明
-├── auto-generator.js      ← AI 自动记录员（v2.1 改为 exchange 模式）
-├── memory-assistant.js    ← 记忆管家悬浮窗
-├── world-book-importer.js ← 世界书翻译官
-├── settings.html          ← 侧边栏设置面板
-├── style.css              ← 视觉样式
-└── README.md              ← 本文件
+
+核心模块：
+
+```text
+index.js                  主入口：初始化、拦截器、UI、斜杠命令
+memory-store.js           数据存储、CRUD、迁移、备份、设置
+retriever.js              检索评分、预算分配、注入文本构建
+auto-generator.js         AI 提取、embedding、去重、手动/自动提取
+message-state.js          楼层状态、exchange hash、隐藏/显示
+memory-manager.js         完整管理器
+memory-assistant.js       轻量浏览面板
+memory-maintainer.js      维护与时间线总结
+memory-health-check.js    记忆体检
+memory-slots.js           角色级存档槽与云端向量槽
+clue-board.js             线索板
+map-store.js              地图数据存储
+map-view.js               世界地图 UI
+memory-agent.js           记忆管家 Agent 测试版
+prompt-templates.js       可自定义提示词模板
+vector-store.js           压缩向量存储与引用
 ```
 
----
+存储模型：
 
-## 代码学习指南
+```text
+extensionSettings['bb_memory']          轻量设置，随 ST 设置保存
+localforage: bb_npc_chat_<chatId>       NPC 档案
+localforage: bb_item_chat_<chatId>      物品栏
+localforage: bb_milestone_chat_<chatId> 里程碑
+localforage: bb_timeline_chat_<chatId>  时间线
+localforage: bb_mem_chat_<chatId>       记忆条目
+localforage: bb_map_chat_<chatId>       地图
+localforage: bb_memory_slot_<charId>_<slotName> 角色级存档槽
+chatMetadata                            文本备份、存档索引、云端向量槽
+```
 
-> 本节为代码小白准备，解释每个文件中使用的编程概念。
+SillyTavern 兼容约束：
 
-### 1. manifest.json — 扩展的"身份证"
+- 不静态导入 ST core 模块。
+- 运行时通过 `SillyTavern.getContext()` 取上下文。
+- 数据访问使用 `SillyTavern.libs.localforage`、`extensionSettings`、`chatMetadata`。
+- 斜杠命令优先使用 `SlashCommandParser.addCommandObject()`，旧版回退 `registerSlashCommand()`。
+- 事件名称同时兼容 `event_types` 与 `eventTypes`。
+- 设置面板挂载到 `#extensions_settings2` 或 `#extensions_settings`。
 
-**作用：** 告诉 SillyTavern 这个扩展叫什么、入口文件是什么、有什么特殊能力。
+## 常见问题
 
-**关键概念：**
-- JSON 格式：一种数据描述格式，用花括号包裹键值对
-- `generate_interceptor`：声明一个全局函数名，ST 在每次生成 AI 回复前会调用它
+### 看不到 BB-Memory 设置面板
 
-### 2. index.js — 总指挥
+确认：
 
-**作用：** 启动时初始化所有模块、在 AI 生成前注入记忆、处理用户操作。
+1. 扩展已启用。
+2. 文件夹名是 `BB-Memory`。
+3. 页面已刷新。
+4. 浏览器控制台没有模块加载错误。
 
-**关键概念：**
-- `import/export`：模块系统，让代码分文件组织
-- `async/await`：处理"需要等待"的操作（如读数据库）
-- `globalThis.函数名`：在全局作用域注册函数
-- `eventSource.on(事件名, 处理函数)`：事件监听模式
-- DOM 操作：`document.getElementById()` 等操作页面元素
+### 手动提取失败
 
-### 3. memory-store.js — 数据库管理员
+优先检查：
 
-**作用：** 管理记忆数据的增删改查，使用 IndexedDB 存储大量数据。
+1. 自定义 API 端点是否是 http/https。
+2. API Key 是否正确。
+3. 模型名是否可用。
+4. 是否已点击“测试连接”。
+5. 当前聊天是否有可提取内容。
 
-**关键概念：**
-- `localforage`：浏览器端的数据库库，像使用 localStorage 一样简单但能存更多数据
-- `async function`：异步函数，因为数据库读写需要时间
-- `Object.freeze()`：冻结对象，防止默认值被意外修改
-- 数据迁移：当升级时把旧格式数据转为新格式
+### AI 仍然忘记重要剧情
 
-### 4. retriever.js — 搜索引擎
+检查：
 
-**作用：** 根据当前对话内容，在记忆库中找出最相关的记忆。
+1. 该条是否被归档。
+2. 是否被分类禁用注入。
+3. 是否低于最低相关分。
+4. 是否被 Token 预算截断。
+5. 是否需要升格为核心或永恒。
+6. 相关里程碑是否应改为常驻。
 
-**关键概念：**
-- 评分算法：多个维度加权求和 → 综合分数
-- `Array.sort()`：按分数从高到低排序
-- `Array.filter()`：过滤掉不需要的结果
-- Fuse.js：模糊搜索库（能容忍拼写错误）
+### 注入太多导致回复变慢
 
-### 5. memory-types.js — 分类字典
+可以：
 
-**作用：** 定义 6 种记忆类型，每种有专属字段、图标、格式化方式。
+1. 降低最大检索数。
+2. 降低 NPC、物品、地图注入上限。
+3. 使用严格总量 Token 预算模式。
+4. 跑记忆维护和体检。
+5. 归档或删除低价值条目。
 
-**关键概念：**
-- `Object.freeze()`：创建不可修改的常量对象
-- 函数作为值：每种类型的 `formatForInjection` 是一个函数
-- 正则表达式：用模式匹配自动猜测内容类型
+### 跨设备后语义检索变差
 
-### 6. auto-generator.js — AI 自动速记员
+文本备份不内联完整向量。旧设备需要在 **记忆管理 -> 存档** 页上传云端向量槽，新设备恢复文本后再加载云端向量。
 
-**作用：** 监听 AI 回复事件，调用 AI 提取重要信息并存为记忆。
+## 更新记录
 
-**关键概念：**
-- 事件驱动：`MESSAGE_RECEIVED` 事件触发处理
-- `fetch()` API：向外部服务器发送 HTTP 请求
-- JSON 解析：把 AI 返回的文本解析成结构化数据
-- 防抖/队列：避免短时间内重复处理
+### v9.2.4
 
-### 7. memory-assistant.js — 记忆管家
+- 使用说明页重写为亮色简约完整教程。
+- README 同步为 v9.2.4 文档，并标注当前版本与上次更新时间。
+- 扩展面板示意、手动提取位置、设置说明、斜杠命令和常见问题同步更新。
+- manifest、设置面板标题、导出版本、备份版本和存档版本对齐到 v9.2.4。
 
-**作用：** 创建一个可拖拽的悬浮窗，提供仪表盘和管理工具。
-
-**关键概念：**
-- DOM 动态创建：用 JavaScript 生成 HTML 元素
-- 事件委托：在父元素监听子元素事件
-- 拖拽实现：mousedown → mousemove → mouseup 三步
-- Tab 切换：显示/隐藏不同面板
-
-### 8. world-book-importer.js — 格式转换器
-
-**作用：** 把 SillyTavern 世界书 JSON 转换为 BB-Memory 记忆条目。
-
-**关键概念：**
-- JSON.parse()：把 JSON 文本转为 JavaScript 对象
-- 格式兼容：处理多种可能的输入格式
-- 启发式分类：根据关键词猜测内容类型
-
----
-
-## 技术说明
-
-### 使用的 SillyTavern 公开 API
-
-| API | 用途 |
-|-----|------|
-| `SillyTavern.getContext()` | 获取应用上下文 |
-| `extensionSettings` | 存储扩展配置 |
-| `SillyTavern.libs.localforage` | IndexedDB 数据存储 |
-| `SillyTavern.libs.Fuse` | 模糊搜索 |
-| `generateRaw()` | 无上下文的 AI 生成 |
-| `setExtensionPrompt()` | 注入内容到 prompt |
-| `eventSource.on()` | 监听 ST 事件 |
-| `renderExtensionTemplateAsync()` | 渲染 HTML 模板（第一个参数为扩展内部目录键） |
-| `../../../extensions.js` → `findExtension()` | 按名称解析已安装扩展的真实路径（官方扩展脚本导出） |
-| `Popup.show.input/confirm` | 弹窗交互 |
-| `POPUP_RESULT.AFFIRMATIVE` | 确认弹窗「确定」按钮的返回值 |
-| `SlashCommandParser.addCommandObject()` / `registerSlashCommand()` | 注册斜杠命令（新版优先前者） |
-
-### 数据存储方案
-
-- **配置数据**：存在 `extensionSettings['bb_memory']`（轻量，随 ST 设置保存）
-- **记忆数据**：存在 `localforage`（IndexedDB，适合大量数据）
-
-### 记忆检索算法
-
-综合评分 = 关键词匹配(30%) + 标签匹配(25%) + 记忆强度(25%) + 时效性(20%)
-
-评分后乘以重要性系数(0.5~1.5)，按分数排序取前 N 条注入。
-
-### 记忆衰减模型
-
-- 基础衰减率可配置（默认 0.05/次）
-- 重要性越高，衰减越慢
-- 被检索到时强度 +0.1（巩固效应）
-- 最低强度为 0.1（不会完全遗忘）
-
----
-
-## 版本记录
-
-### v2.3.0（2026-05-03）— 事实更新与隐藏备注机制
-
-**新增功能：**
-- 事实更新机制：记忆内容可随剧情推进更新，旧版本自动保存到 `history` 数组，支持查看完整变更历史
-- 隐藏备注（hiddenNotes）：每条记忆可附加结构化隐藏备注，包含 7 种类型（通用/角色内心/伏笔/隐藏真相/内心动机/压抑情感/剧情备注）
-- 真假状态系统（truthStatus）：支持 6 种状态标记（已确认/已否定/未知/传闻/误导/隐藏真相），在记忆管理器中以彩色标签显示
-- AI 隐藏注入：hiddenNotes 自动注入到 prompt 中（标记为 `[隐]`），AI 可用于行为塑造但不会直接透露给用户
-- 小眼睛按钮（👁）：记忆管理器中每条记忆旁的眼睛图标，点击展开/折叠隐藏备注面板
-- 版本历史按钮（📜）：点击查看该条记忆的所有历史版本，含变更时间、原因和旧内容
-
-**新增/修改文件：**
-- `memory-types.js` — 新增 `TRUTH_STATUS`、`HIDDEN_NOTE_TYPES` 常量；注入格式支持 hiddenNotes 和 truthStatus
-- `memory-store.js` — 新增 `updateFactContent()`、`addHiddenNote()`、`removeHiddenNote()`；hiddenNotes 从 string 迁移为 array；truthStatus 从 `confirmed` 迁移为 `true`
-- `index.js` — 小眼睛 UI、隐藏备注面板、事实更新对话框（含 truthStatus 选择和变更原因）、版本历史面板
-- `memory-assistant.js` — 浏览视图显示 truthStatus badge 和 hiddenNotes 数量指示
-- `style.css` — 新增 hiddenNotes 面板、truthStatus badge、历史面板、小眼睛高亮样式
-
-**向后兼容：**
-- `hiddenNotes` 字段自动从旧版空字符串迁移为数组格式
-- `truthStatus` 值 `confirmed` 自动迁移为 `true`
-- 旧版记忆首次读取时自动完成迁移，无需手动操作
-
----
-
-### v2.2.0（2026-05-03）— 认知记忆数据结构重构
-
-**核心变更：**
-- 认知类型系统：从 6 种物品分类（event/npc/item/…）升级为 4 种认知类型（fact/episode/emotion/habit），灵感来自认知心理学
-- 树状分类路径：新增 `categoryPath` 字段，支持 `world.politics`、`npc.relationship`、`episode.promise` 等 21 种分类路径
-- 丰富的记忆字段：每条记忆扩展到 27+ 字段，包含 `title`、`summary`、`compressed`、`verbatim`、`hiddenNotes` 等
-- 原话保留：`verbatim` 字段专门用于保存承诺、告白、威胁等重要原话，避免压缩失真
-- 结构化信息：新增 `subject`、`target`、`actors`、`location` 等字段，使记忆信息更加结构化
-- 状态与可信度：新增 `truthStatus`（确认/谣言/谎言）、`visibility`（公开/私密/秘密）、`confidence` 等字段
-- 惰性迁移：旧数据在首次读取时自动转换为新格式，无需手动操作
-
-**新增/重大修改文件：**
-- `memory-types.js` — 全面重写：认知类型定义 + 树状分类路径 + 旧类型映射 + 内容自动分类
-- `memory-store.js` — 重大更新：新 schema 定义、惰性迁移逻辑、通用字段更新、pinned 记忆免衰减
-- `auto-generator.js` — 提取 prompt 改为认知类型格式，AI 现在会输出 `title`、`summary`、`verbatim` 等字段
-
-**适配修改文件：**
-- `index.js` — 类型显示和过滤使用 `cognitiveType`，手动添加默认类型改为 `episode`
-- `memory-assistant.js` — 类型显示和过滤兼容新格式
-- `manifest.json` — 版本号 2.2.0
-
-**向后兼容：**
-- 旧记忆数据自动迁移：`type` → `legacyType` + `cognitiveType` + `categoryPath`
-- 旧类型名可继续使用：传入 `event`/`npc` 等旧类型名会自动映射到新认知类型
-- `MEMORY_TYPES` 导出保留，指向 `COGNITIVE_TYPES`
-- `getTypeDefinition()` 同时支持新旧类型 ID
-- `emotionalValence` 自动转换为 `emotionalWeight`（取绝对值）
-- 旧版 metadata 中的结构化信息会被提取到新字段（如 `metadata.npcName` → `subject`）
-- `typeEnabled` 设置自动补充新认知类型键
-
----
-
-### v2.6.1（2026-05-03）— SillyTavern 接口对齐与界面挂载修复
-
-**修复与改进：**
-
-- 使用官方 `findExtension('BB-Memory')` 解析扩展目录键，保证 `renderExtensionTemplateAsync` 与磁盘路径一致，避免出现「酒馆里看不见设置」的情况。
-- 扩展设置 HTML 挂载增加对 `#extensions_settings` / `#extensions_settings2` 的兼容与短时重试，适配 DOM 较晚就绪的酒馆版本。
-- 斜杠命令改为优先通过 `SlashCommandParser.addCommandObject` 注册（失败时回退到旧版 `registerSlashCommand`）；并对新版解析器传入的无名参数（字符串或片段数组）做统一归一化。
-- `Popup.show.confirm` 的结果改为显式与 `POPUP_RESULT.AFFIRMATIVE` 比较，避免依赖 loosely truthy 判断。
-- 事件监听兼容 `event_types` 与 `eventTypes` 两种上下文字段命名。
-- 修正文档：手动安装路径说明与官方文档对齐。
-
-**涉及文件：** `index.js`、`memory-assistant.js`、`manifest.json`、`README.md`
-
----
-
-### v2.6.0（2026-05-03）— NPC / 物品实体分级与按需展开
-
-**新增功能：**
-- NPC 四级：`core`（核心）／`important`（重要）／`minor`（配角）／`background`（路人），影响检索分与注入档位（未命中对话实体时路人大幅下降占位）。
-- 物品五级：`key`／`equipped`／`clue`／`consumable`／`background`，同样参与检索乘数与档位封顶逻辑。
-- 自动提取：`standaloneArchive=false` + `npc.profile` → 自动改为情景记忆 `episode.event`，避免路人落成完整档案；物品可走 `background` 分级减负。
-- 记忆索引卡：字段 `indexCard` + `buildDefaultIndexCard()`，低相关/模糊记忆优先注入短卡片或摘要；核心、永恒或高相关记忆注入完整内容。
-- 按需展开：`mergeExpandedRelevantResults()` 在用户消息命中实体名时，合并关联记忆并拉高档位；支持 `relatedMemoryIds` 链式展开。
-- 分类扩展：`npc.emotion`、`npc.secret`、`npc.goal`、`item.key`、`item.clue`。
-- 控制台接口：`globalThis.bbMemoryExpandEntityKeyword(keyword, limit)` 返回关键词关联记忆数组。
-
-**新增/修改文件：**
-- `entity-tiers.js` — 分级常量、实体_hint、检索乘数、展开、`applyStandaloneArchivePolicy`
-- `retriever.js` — 档位封顶、`tierScoreMultiplier`、`mergeExpandedRelevantResults`、`getResidentMemories` 按 NPC 核心度排序、L4 使用索引卡
-- `memory-store.js` — `migrateToV26`、`npcTier`/`itemTier`/`indexCard`/`relatedMemoryIds`/`standaloneArchive`
-- `auto-generator.js` — 提取 prompt 与解析字段、路人建档策略
-- `memory-types.js` — 新分类路径
-- `index.js` — 合并按需展开、管理面板分级/索引卡编辑、`bbMemoryExpandEntityKeyword`
-- `style.css` — `.bb-entity-meta-row`
-- `manifest.json` — 2.6.0
-
----
-
-### v2.5.0（2026-05-03）— 记忆维护机制
-
-**新增功能：**
-- 维护阈值提醒：活跃记忆超过阈值（默认 50）时，弹出维护建议弹窗
-- 多维度问题诊断：弱记忆、重复记忆、过期事实、闲置 NPC、可归档物品、久未使用
-- 三种用户操作：自动整理（一键处理）、手动查看（跳转管理面板）、稍后提醒（24 小时免打扰）
-- 记忆状态系统：`active`（活跃）、`fuzzy`（模糊）、`archived`（归档）、`pinned`（珍藏）、`deleted`（已删除）
-- 模糊化（fuzzy）：将完整内容压缩为摘要版本，原文保留在 `compressed` 字段，可随时恢复
-- 归档（archived）：移出检索范围但保留数据，可恢复
-- 珍藏保护：`pinned` 记忆不会被自动压缩或归档
-- 状态徽章：管理面板中每条记忆显示当前状态（模糊/归档）
-- 记忆管理器新增按钮：☁️ 模糊化、📦 归档、🔄 恢复
-
-**新增文件：**
-- `memory-maintainer.js` — 维护巡检员：诊断引擎 + 自动整理 + 弹窗 UI 构建
-
-**修改文件：**
-- `index.js` — 集成维护触发器、弹窗事件、模糊化/归档/恢复按钮、状态徽章
-- `memory-store.js` — 新增 `maintenanceThreshold` 设置、衰减跳过归档记忆
-- `settings.html` — 新增维护阈值输入框
-- `style.css` — 维护弹窗样式、状态徽章、操作按钮悬停样式
-
-**向后兼容：**
-- 旧记忆默认 `status: 'active'`，无需迁移
-- 衰减/检索逻辑自动跳过 `archived` / `deleted` 状态的记忆
-- 维护提醒为被动式，不会自动修改数据
-
----
-
-### v2.4.0（2026-05-03）— 检索与注入机制
-
-**新增功能：**
-- 8 维综合评分：`keywordScore`、`tagScore`、`embeddingScore`（预留）、`importance`、`emotionalWeight`、`strength`、`sceneScore`、`relationScore`
-- 分等级注入：L1（标签）、L2（摘要）、L3（完整内容+原话）、L4（常驻索引卡）
-- 常驻记忆：`resident` 字段标记关键角色/物品/世界状态，每轮以低 token 索引卡注入
-- 分区注入模板：`[常驻记忆]` / `[本轮相关记忆]` / `[隐藏备注]`
-- Token 预算控制：可调节的注入 token 上限（默认 800），常驻记忆占比不超过 30%
-- 场景/关系评分：自动检测对话中的角色名和地点，提升相关记忆优先级
-- 记忆管理器常驻按钮：📌 图钉图标，一键切换常驻状态
-
-**新增/重大修改文件：**
-- `retriever.js` — 全面重写：8 维评分 + 注入等级 + 常驻记忆 + token 预算 + `buildMemoryInjectionPrompt()`
-- `index.js` — 注入拦截器改用新的分区流程，新增 `extractRecentContext()` 近期上下文提取
-- `memory-store.js` — 新增 `resident` 字段迁移、`tokenBudget` 设置项
-- `settings.html` — 新增 Token 预算设置输入框
-- `style.css` — 常驻记忆按钮样式
-
-**核心函数：**
-- `calculateMemoryScore(memory, query, context)` — 8 维综合评分
-- `getResidentMemories(memories)` — 提取常驻记忆
-- `getRelevantMemories(memories, queryText, options)` — 智能检索（带评分和等级）
-- `buildMemoryInjectionPrompt({ residentMemories, relevantResults, settings })` — 分区注入构建
-- `chooseInjectionLevel(memory, score)` — 注入等级选择
-
-**向后兼容：**
-- `searchMemories()` 保留旧签名，内部调用 `getRelevantMemories()`
-- 旧记忆数据自动获得 `resident: false` 默认值
-- `simpleSearch()` 不受影响（管理面板搜索）
-- `tokenBudget` 默认 800，不影响旧设置
-
----
-
-### v2.1.0（2026-05-03）— 消息稳定化机制
-
-**新增功能：**
-- 消息自动隐藏：当前实现先让超出保留窗口的完整 exchange 入队提取，提取/跳过后使用 SillyTavern 原生 `is_system` 标记隐藏
-- 消息状态标记：每条消息标记 `_bbmem_hideSource`（插件/用户隐藏）和 `_bbmem_extracted`（是否已提取）
-- Exchange 机制：将「AI 回复 + 前一条用户消息」组成 exchange，整体送入提取流程
-- Exchange 指纹去重：基于 cyrb53 哈希算法为每个 exchange 生成唯一指纹，防止重复提取
-- 重 Roll 安全：最近窗口内的消息不会被提取，频繁重新生成不会影响已隐藏消息的状态
-
-**新增文件：**
-- `message-state.js` — 消息状态管理器，负责自动隐藏、状态标记、指纹计算
-
-**修改文件：**
-- `auto-generator.js` — 提取流程改为 exchange 模式，每个周期最多处理 3 个 exchange
-- `index.js` — 在 MESSAGE_RECEIVED 和 CHAT_CHANGED 事件中集成消息同步
-- `memory-store.js` — 旧版曾新增 `shortTermWindow` 设置项；新版本已由提取窗口与楼层状态标记取代。
-- `manifest.json` — 版本号升级到 2.1.0
-
-**向后兼容：**
-- 已有聊天数据无需迁移，首次加载时自动标记现有消息状态
-- 已有记忆数据不受影响
-- 新增的消息属性（`_bbmem_hideSource`、`_bbmem_extracted`）不会影响旧版本运行
-
----
-
-### v2.0.0（2026-05-03）— 全面升级
-
-**新增功能：**
-- AI 自动生成记忆（支持主 API / 自定义 API）
-- 多类型记忆系统（事件/时间线/物品/NPC/地点/关系）
-- 向量化标签（带权重的标签系统）
-- 记忆衰减与强化（模拟艾宾浩斯遗忘曲线）
-- 记忆管家悬浮窗（仪表盘/分类浏览/健康分析/批量操作）
-- 世界书导入转换器
-- 斜杠命令 `/memory`
-- 多类型注入格式（按事件/NPC/物品等分区显示）
-
-**架构改进：**
-- 数据存储迁移到 localforage（IndexedDB），支持大规模记忆
-- 检索算法升级为多维度加权综合评分 + Fuse 模糊搜索
-- 模块化架构重构，各功能独立文件
-
-### v1.0.0（初始版本）— 基础记忆
-
-- 手动添加/编辑/删除记忆
-- 简单关键词匹配检索
-- generate_interceptor 自动注入
-- 导入/导出 JSON
-- 侧边栏设置面板
-
----
+更早版本记录见 `dev-notes/`。
 
 ## 许可证
 

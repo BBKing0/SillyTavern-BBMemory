@@ -3,60 +3,956 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>BB-Memory 使用说明</title>
+  <title>BB-Memory v9.2.4 使用说明</title>
   <style>
-    body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.65;margin:0;background:#11131a;color:#eceff4}
-    main{max-width:920px;margin:0 auto;padding:28px 18px 48px}
-    h1{font-size:1.8rem;margin:0 0 8px}
-    h2{font-size:1.15rem;margin:28px 0 8px;border-bottom:1px solid #303646;padding-bottom:6px}
-    h3{font-size:1rem;margin:18px 0 6px}
-    p,li{color:#d8dee9}
-    .muted{color:#9aa4b2}
-    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
-    .card{border:1px solid #303646;border-radius:8px;padding:12px;background:#171a23}
-    code{background:#242936;border-radius:4px;padding:1px 4px}
-    a{color:#8ab4ff}
+    :root {
+      color-scheme: light;
+      --bg: #f7f9fc;
+      --paper: #ffffff;
+      --paper-soft: #f1f5f9;
+      --line: #d9e2ec;
+      --line-strong: #b8c6d8;
+      --text: #182230;
+      --muted: #5f6f84;
+      --soft: #8493a8;
+      --brand: #2563eb;
+      --brand-soft: #e8f0ff;
+      --green: #138a58;
+      --green-soft: #e7f7ef;
+      --amber: #b35f00;
+      --amber-soft: #fff4df;
+      --red: #c2413b;
+      --red-soft: #fff0ef;
+      --shadow: 0 14px 36px rgba(15, 23, 42, .08);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      line-height: 1.72;
+    }
+
+    a { color: var(--brand); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code, kbd {
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: var(--paper-soft);
+      padding: 1px 5px;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: .92em;
+    }
+
+    main {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 56px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(280px, .85fr);
+      gap: 22px;
+      align-items: stretch;
+      margin-bottom: 18px;
+    }
+    .hero-card, .panel, .card, details {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+    .hero-card { padding: 28px; }
+    .eyebrow {
+      color: var(--brand);
+      font-size: .82rem;
+      font-weight: 700;
+      letter-spacing: 0;
+      margin: 0 0 8px;
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: clamp(2rem, 5vw, 3.4rem);
+      line-height: 1.08;
+      letter-spacing: 0;
+    }
+    .lead {
+      margin: 0;
+      color: var(--muted);
+      font-size: 1.03rem;
+      max-width: 68ch;
+    }
+    .meta-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 18px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--paper-soft);
+      color: var(--muted);
+      padding: 3px 10px;
+      font-size: .84rem;
+      white-space: nowrap;
+    }
+
+    .nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 16px 0 26px;
+    }
+    .nav a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--paper);
+      color: var(--text);
+      padding: 5px 10px;
+      font-size: .9rem;
+    }
+
+    section { margin-top: 28px; }
+    h2 {
+      margin: 0 0 12px;
+      font-size: 1.36rem;
+      letter-spacing: 0;
+    }
+    h3 {
+      margin: 0 0 8px;
+      font-size: 1.02rem;
+      letter-spacing: 0;
+    }
+    p { margin: 0 0 10px; }
+    .muted { color: var(--muted); }
+    .soft { color: var(--soft); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 12px;
+    }
+    .card { padding: 16px; box-shadow: none; }
+    .card p { color: var(--muted); margin-bottom: 0; }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, .84fr);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .panel { padding: 18px; }
+    .steps {
+      counter-reset: step;
+      display: grid;
+      gap: 10px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .steps li {
+      counter-increment: step;
+      display: grid;
+      grid-template-columns: 32px minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+      color: var(--muted);
+    }
+    .steps li::before {
+      content: counter(step);
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      background: var(--brand-soft);
+      color: var(--brand);
+      font-weight: 700;
+    }
+
+    .mock-wrap {
+      background: linear-gradient(180deg, #ffffff, #f4f7fb);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      box-shadow: var(--shadow);
+    }
+    .mock-window {
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fbfdff;
+    }
+    .mock-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      background: #edf3fb;
+      border-bottom: 1px solid var(--line);
+      font-weight: 700;
+    }
+    .mock-body { padding: 12px; }
+    .mock-status {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 10px;
+      color: var(--muted);
+      font-size: .85rem;
+    }
+    .mock-buttons {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      margin: 8px 0;
+    }
+    .mock-btn {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #ffffff;
+      padding: 7px 8px;
+      min-height: 36px;
+      font-size: .84rem;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      justify-content: center;
+      text-align: center;
+    }
+    .mock-btn.hot {
+      border-color: #8bb3ff;
+      background: var(--brand-soft);
+      color: #174ea6;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, .08);
+      font-weight: 700;
+      position: relative;
+    }
+    .mock-btn.hot::after {
+      content: "这里";
+      position: absolute;
+      right: 7px;
+      top: -10px;
+      border: 1px solid #8bb3ff;
+      border-radius: 999px;
+      background: #fff;
+      padding: 0 6px;
+      color: var(--brand);
+      font-size: .68rem;
+    }
+    .mock-section {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      padding: 9px 10px;
+      margin-top: 8px;
+    }
+    .mock-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      border-top: 1px solid var(--line);
+      padding-top: 7px;
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: .82rem;
+    }
+    .mock-note {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: .88rem;
+    }
+
+    .dialog-mock {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 14px;
+    }
+    .dialog-title {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .dialog-summary {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--paper-soft);
+      padding: 8px 10px;
+      color: var(--muted);
+      font-size: .86rem;
+      margin: 8px 0;
+    }
+    .dialog-input {
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      background: #fff;
+      padding: 8px 10px;
+      color: var(--soft);
+      font-size: .9rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+      font-size: .93rem;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 9px 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th {
+      background: #edf3fb;
+      color: #22324a;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    tr:last-child td { border-bottom: 0; }
+    td:first-child { width: 23%; min-width: 130px; color: #263852; font-weight: 650; }
+
+    details {
+      box-shadow: none;
+      margin: 10px 0;
+      overflow: hidden;
+    }
+    summary {
+      cursor: pointer;
+      padding: 12px 14px;
+      background: #f0f5fb;
+      font-weight: 700;
+    }
+    details > div { padding: 12px; }
+
+    .note {
+      border-left: 4px solid var(--brand);
+      background: var(--brand-soft);
+      color: #1f3a66;
+      padding: 12px 14px;
+      border-radius: 6px;
+      margin: 12px 0;
+    }
+    .warn {
+      border-left-color: var(--amber);
+      background: var(--amber-soft);
+      color: #6f3a00;
+    }
+    .danger {
+      border-left-color: var(--red);
+      background: var(--red-soft);
+      color: #7d2622;
+    }
+    .good {
+      border-left-color: var(--green);
+      background: var(--green-soft);
+      color: #0e5138;
+    }
+
+    .tag-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 8px;
+    }
+    .tag {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      padding: 2px 9px;
+      color: var(--muted);
+      font-size: .84rem;
+    }
+
+    .footer {
+      margin-top: 36px;
+      color: var(--soft);
+      font-size: .88rem;
+      text-align: center;
+    }
+
+    @media (max-width: 820px) {
+      main { width: min(100% - 20px, 1120px); padding-top: 16px; }
+      .hero, .two-col { grid-template-columns: 1fr; }
+      .hero-card { padding: 20px; }
+      .mock-buttons { grid-template-columns: 1fr 1fr; }
+      table { font-size: .88rem; }
+      th, td { padding: 8px; }
+      td:first-child { min-width: 100px; }
+    }
+
+    @media (max-width: 520px) {
+      .mock-buttons { grid-template-columns: 1fr; }
+      .nav a { flex: 1 1 calc(50% - 8px); justify-content: center; }
+      table, thead, tbody, tr, th, td { display: block; }
+      thead { display: none; }
+      tr { border-bottom: 1px solid var(--line); }
+      td { border-bottom: 0; padding: 7px 10px; }
+      td:first-child { width: auto; min-width: 0; padding-top: 12px; }
+      td:nth-child(2)::before { content: "用途："; font-weight: 700; color: var(--soft); }
+      td:nth-child(3)::before { content: "建议："; font-weight: 700; color: var(--soft); }
+    }
   </style>
 </head>
 <body>
 <main>
-  <h1>BB-Memory 使用说明</h1>
-  <p class="muted">适用于 v9.2.2。BB-Memory 是 SillyTavern 角色扮演长期记忆扩展，核心目标是把剧情、关系、物品、地点和推理线索整理成可检索、可注入的上下文。</p>
+  <div class="hero">
+    <header class="hero-card">
+      <p class="eyebrow">BB-Memory v9.2.4</p>
+      <h1>使用说明</h1>
+      <p class="lead">BB-Memory 是 SillyTavern 的浏览器端长期记忆扩展。它会把角色扮演里的 NPC、物品、里程碑、时间线、地点、线索和普通记忆整理成结构化数据，并在生成回复前按相关性注入给 AI。</p>
+      <div class="meta-row">
+        <span class="pill">适用版本 v9.2.4</span>
+        <span class="pill">纯前端扩展</span>
+        <span class="pill">无构建步骤</span>
+        <span class="pill">数据主要保存在浏览器 IndexedDB</span>
+      </div>
+    </header>
 
-  <h2>核心数据</h2>
-  <div class="grid">
-    <section class="card"><h3>记忆条目</h3><p>记录长期有用的事实、事件、情绪和习惯。核心/永恒记忆会常驻注入，其余按相关性命中。</p></section>
-    <section class="card"><h3>NPC 档案</h3><p>记录角色身份、性格、外貌、状态、位置和关系。核心/重要 NPC 会优先注入。</p></section>
-    <section class="card"><h3>物品栏</h3><p>记录关键物品、装备、线索物、消耗品和背景物品。关键/装备物品会优先注入。</p></section>
-    <section class="card"><h3>里程碑</h3><p>记录关系质变、阶段转折、重大冲突起止、关键揭示等重要时间点。默认常驻注入，也可设置为向量命中。</p></section>
-    <section class="card"><h3>时间线</h3><p>记录持续存在的叙事线，如主线、感情线、支线、世界观线。时间线用于整理故事脉络，不替代里程碑。</p></section>
-    <section class="card"><h3>地图与线索板</h3><p>地图管理地点与路径；线索板允许手动建立节点和连线，把玩家推理注入给 AI。</p></section>
+    <aside class="mock-wrap" aria-label="BB-Memory 在 SillyTavern 扩展设置中的示意图">
+      <div class="mock-window">
+        <div class="mock-top">
+          <span>BB-Memory v9.2.4</span>
+          <span class="soft">扩展设置抽屉</span>
+        </div>
+        <div class="mock-body">
+          <div class="mock-status">
+            <span>启用 BB-Memory：已勾选</span>
+            <span>当前记忆数：0</span>
+            <span>提取状态：空闲</span>
+            <span>楼层状态：暂无可统计楼层</span>
+          </div>
+          <div class="mock-buttons">
+            <div class="mock-btn">初始化记忆</div>
+            <div class="mock-btn">记忆管理</div>
+            <div class="mock-btn">使用说明</div>
+            <div class="mock-btn">记忆维护</div>
+          </div>
+          <div class="mock-buttons">
+            <div class="mock-btn hot">手动提取</div>
+            <div class="mock-btn">标记消息</div>
+            <div class="mock-btn">楼层可见</div>
+          </div>
+          <div class="mock-buttons">
+            <div class="mock-btn">刷新时间线</div>
+            <div class="mock-btn">换楼刷新</div>
+            <div class="mock-btn">线索板</div>
+            <div class="mock-btn">世界地图</div>
+          </div>
+          <div class="mock-section">
+            <strong>命中条目</strong>
+            <div class="mock-row"><span>等待检索...</span><span>展开</span></div>
+          </div>
+        </div>
+      </div>
+      <p class="mock-note">在酒馆右侧扩展面板中展开 <strong>BB-Memory</strong>，第二排左侧就是“手动提取”。按钮位置会随移动端宽度换行，但文字不变。</p>
+    </aside>
   </div>
 
-  <h2>常用操作</h2>
-  <ul>
-    <li><strong>手动提取</strong>：从当前上下文提取记忆、NPC、物品、里程碑、地点和时间线。</li>
-    <li><strong>换楼提取</strong>：在手动提取窗口中一键从尚未提取的楼层逐层提取到最新 AI 楼层，适合切换到楼层较高的聊天窗口后快速补齐记忆。</li>
-    <li><strong>记忆管理</strong>：查看、搜索、新增、编辑、删除、归档各类条目，并管理存档槽。</li>
-    <li><strong>刷新时间线</strong>：根据现有里程碑重新整理时间线。</li>
-    <li><strong>记忆维护</strong>：检查重复、陈旧、缺少来源、空时间线等问题，并按建议修复。</li>
-    <li><strong>备份/恢复</strong>：把当前聊天的 BB-Memory 数据保存到聊天元数据，便于跨设备同步。</li>
-  </ul>
+  <nav class="nav">
+    <a href="#quick-start">快速开始</a>
+    <a href="#flow">运行顺序</a>
+    <a href="#where">入口位置</a>
+    <a href="#data">数据结构</a>
+    <a href="#workflows">常用工作流</a>
+    <a href="#settings">设置说明</a>
+    <a href="#commands">斜杠命令</a>
+    <a href="#trouble">排障</a>
+  </nav>
 
-  <h2>里程碑注入模式</h2>
-  <p><strong>常驻</strong>：每轮全部注入，适合少量关键节点。<strong>向量命中</strong>：仅在当前消息相关时注入，适合数量较多但仍重要的节点。设置中的“向量命中里程碑上限”会限制本轮最多注入多少条向量命中里程碑。</p>
+  <section id="quick-start">
+    <h2>快速开始</h2>
+    <div class="two-col">
+      <div class="panel">
+        <ol class="steps">
+          <li><span>在 SillyTavern 进入任意角色聊天，打开右侧扩展设置，展开 <strong>BB-Memory v9.2.4</strong>，确认“启用 BB-Memory”已勾选。</span></li>
+          <li><span>如果是旧聊天或已有存档，先点 <strong>手动提取</strong>，可以输入楼层范围，例如 <code>0-80</code>；留空会提取最近 8 轮。</span></li>
+          <li><span>如果是新角色长篇开局，建议先用 <code>tools/bbmemory-initializer.html</code> 外置工具从角色卡、世界书和聊天记录生成导入 JSON，再到“记忆管理”里导入。</span></li>
+          <li><span>正常聊天时，BB-Memory 会在生成前检索相关记忆。命中的内容会显示在“命中条目”和悬浮按钮的命中视图里。</span></li>
+          <li><span>阶段结束后点 <strong>备份</strong> 或在“存档”页保存槽位；切换设备时，文本走聊天元数据备份，向量走“云端向量槽”。</span></li>
+        </ol>
+      </div>
+      <div class="panel">
+        <h3>推荐默认用法</h3>
+        <p class="muted">不确定怎么调设置时，可以先只配置 AI 提取 API，然后使用默认阈值。v9.2.4 的默认值偏保守，适合长篇角色扮演慢慢积累。</p>
+        <div class="tag-list">
+          <span class="tag">手动提取先跑一遍</span>
+          <span class="tag">半自动确认更稳</span>
+          <span class="tag">里程碑保持克制</span>
+          <span class="tag">常备份再做批量操作</span>
+        </div>
+        <div class="note warn">提示：BB-Memory 只负责整理和注入记忆，不会替代模型本身的理解能力。记忆质量主要取决于提取 prompt、上下文范围和后续人工整理。</div>
+      </div>
+    </div>
+  </section>
 
-  <h2>建议工作流</h2>
-  <ol>
-    <li>先用“手动提取”或初始化工具建立基础数据。</li>
-    <li>在“记忆管理”中检查里程碑是否足够克制，删除普通流水账。</li>
-    <li>点击“刷新时间线”，让系统把里程碑整理成叙事线。</li>
-    <li>用“线索板”补充玩家推理，用“世界地图”补充空间关系。</li>
-    <li>切换到旧聊天或高楼层聊天后，先用“手动提取”窗口里的“换楼提取”补齐未提取楼层；阶段结束后做一次备份，开新聊天前可执行“换楼刷新”把旧来源楼层归零。</li>
-  </ol>
+  <section id="flow">
+    <h2>运行顺序与工作原理</h2>
+    <p class="muted">这一节解释 BB-Memory 在聊天时到底什么时候动、会把什么提示词发给 AI、AI 应该返回什么、重复或失败时怎么处理。你可以把它当作“开关和流程对照图”。</p>
 
-  <h2>旧存档转换</h2>
-  <p>v9.2.0 起，旧“时间条目”改为 <code>milestones</code>，旧“时间线程”改为 <code>timeline</code>。如果你有旧 JSON 备份，可使用 <code>tools/bbmemory-v9.2-save-converter.html</code> 转换后再导入。</p>
+    <details open>
+      <summary>自动提取开启后：从聊天楼层到保存记忆</summary>
+      <div>
+        <table>
+          <thead><tr><th>顺序</th><th>发生什么</th><th>相关开关</th></tr></thead>
+          <tbody>
+            <tr><td>1. AI 回复完成</td><td>SillyTavern 触发消息接收事件。BB-Memory 会等待约 2.5 秒再处理，避免刚生成完就立刻改楼层状态。</td><td>启用 BB-Memory、启用 AI 自动提取</td></tr>
+            <tr><td>2. 同步短期窗口</td><td>系统从聊天末尾往前数，把最近的若干个未处理 exchange 留在聊天里，窗口外更早的完整 exchange 标记为“待提取”。</td><td>上下文保留窗口</td></tr>
+            <tr><td>3. 判断可提取 exchange</td><td>每个 exchange 由“最近一条用户消息 + 后续 AI 回复”组成；开场白会并入第一个 exchange 的上下文。已处理过、已跳过、元对话标记的楼层不会重复进入队列。</td><td>标记消息、楼层可见</td></tr>
+            <tr><td>4. 读取 AI 回复内容</td><td>如果 AI 回复里有选中的 XML 风格标签，例如 <code>&lt;content&gt;</code>、<code>&lt;context&gt;</code>、<code>&lt;status&gt;</code>，提取器优先只读取这些标签内容；没有命中标签时读取普通回复文本。</td><td>AI 提取读取标签、自定义读取标签</td></tr>
+            <tr><td>5. 调用提取 API</td><td>BB-Memory 构建“合并提取提示词”，要求模型只返回 JSON 对象；API 可以走酒馆主 API，也可以走自定义 OpenAI 兼容 API。</td><td>API 模式、API 预设、自定义 API 端点</td></tr>
+            <tr><td>6. 解析返回结果</td><td>正常返回会被解析为 NPC、物品、里程碑、地点、时间线、记忆数组；如果返回 <code>META_DIALOGUE</code>，该楼层会被视为纯元对话并跳过。</td><td>提取元对话防护、提示词模板</td></tr>
+            <tr><td>7. 保存或等待确认</td><td>主动确认模式会先进入候选审核；半自动和全自动会直接保存。保存时 NPC、物品、里程碑、地点、时间线走 upsert，普通记忆按去重逻辑处理。</td><td>提取确认模式、确认通知方式</td></tr>
+            <tr><td>8. 标记楼层</td><td>成功保存后，用户楼层、AI 楼层和开场白上下文会标记为已提取，并按显示模式隐藏或显示。失败时楼层保留为待处理，悬浮菜单可重试。</td><td>楼层可见、调试日志</td></tr>
+            <tr><td>9. 后续维护</td><td>成功处理若干个 exchange 后，如果启用时间线总结，系统会在后台尝试刷新时间线总结。</td><td>启用时间线总结、最大活跃时间线数</td></tr>
+          </tbody>
+        </table>
+        <div class="note">默认“上下文保留窗口”为 3。由于最新 AI 回复会额外保留给用户检查，通常到第 5 条 AI 回复出现后，最早的一组用户 + AI 回复才会开始自动提取；之后每新增一条 AI 回复，就会继续把更早的一组送入队列。</div>
+      </div>
+    </details>
+
+    <details open>
+      <summary>BB-Memory 会发什么提示词，AI 应该返回什么</summary>
+      <div>
+        <p class="muted">实际提示词可以在“自定义设置 -> 提示词模板”中查看和编辑。自动提取和手动提取共用“合并提取总模板”。下面是结构化后的简化示意，不是完整原文。</p>
+        <table>
+          <thead><tr><th>部分</th><th>内容</th><th>作用</th></tr></thead>
+          <tbody>
+            <tr><td>System prompt</td><td>要求模型扮演 JSON 格式的记忆提取助手，只输出纯 JSON 对象，不要解释。</td><td>降低模型输出 markdown 或闲聊文本的概率。</td></tr>
+            <tr><td>元对话防护</td><td>要求识别 OOC、工具说明、格式修复、纯系统指令等非 RP 内容。</td><td>如果整段都是元对话，模型可返回 <code>META_DIALOGUE</code>。</td></tr>
+            <tr><td>核心原则</td><td>判断哪些信息值得长期保存，例如关系变化、承诺、伏笔、状态变化、世界观事实。</td><td>避免把每句普通寒暄都写成记忆。</td></tr>
+            <tr><td>提取维度</td><td>要求模型分别考虑记忆、NPC、物品、里程碑、地图地点、时间线。</td><td>让一次 API 调用覆盖多个数据支柱。</td></tr>
+            <tr><td>故事日历和风格偏置</td><td>插入当前聊天的历法说明，以及日常陪伴、正剧叙事或自定义偏置。</td><td>让故事时间和提取侧重点更符合当前 RP。</td></tr>
+            <tr><td>当前对话</td><td>填入本次 exchange 的用户消息和 AI 回复；手动提取时用户消息位置会放入整段上下文，AI 回复位置显示“见上下文”。</td><td>这是模型实际读取的剧情材料。</td></tr>
+          </tbody>
+        </table>
+
+        <div class="dialog-mock">
+          <div class="dialog-title">返回格式示意</div>
+          <pre style="white-space:pre-wrap;margin:0;color:#263852;font-size:.86rem;"><code>{"memories":[],"npc":[],"items":[],"milestones":[],"locations":[],"timeline":[]}</code></pre>
+        </div>
+        <p class="muted" style="margin-top:10px;">其中 <code>memories</code> 是普通记忆，<code>npc</code> 是 NPC 档案，<code>items</code> 是物品，<code>milestones</code> 是重大节点，<code>locations</code> 是地图地点，<code>timeline</code> 是持续叙事线。任一数组都可以为空。</p>
+      </div>
+    </details>
+
+    <details open>
+      <summary>重复、相似、失败会怎么样</summary>
+      <div>
+        <table>
+          <thead><tr><th>情况</th><th>处理方式</th><th>你会看到什么</th></tr></thead>
+          <tbody>
+            <tr><td>同一楼层重复触发</td><td>BB-Memory 会用用户消息 + AI 回复计算 exchange hash。已处理 hash 不会再次调用提取 API，只会补齐已提取标记和隐藏状态。</td><td>楼层状态变为已提取，不会新增重复记忆。</td></tr>
+            <tr><td>纯元对话</td><td>模型返回 <code>META_DIALOGUE</code> 或用户手动标记后，系统会把该 exchange 标为跳过并加入已处理集合。</td><td>toast 或活动记录提示“纯元对话跳过”。</td></tr>
+            <tr><td>NPC / 物品 / 地点重名</td><td>保存时会按名称或现有 ID upsert，尽量更新旧条目，而不是新增同名条目。</td><td>管理器里看到旧条目内容被补充或更新。</td></tr>
+            <tr><td>普通记忆高度相似</td><td>启用语义向量和语义去重时，会先生成 embedding。相似度达到合并阈值时合并进旧记忆。</td><td>不会新增一条重复记忆，旧条目会更新。</td></tr>
+            <tr><td>普通记忆中度相似</td><td>相似度达到降权阈值但不足合并时，新记忆仍可保存，但重要性会降低。</td><td>条目可能以较低优先级参与后续检索。</td></tr>
+            <tr><td>没有开启向量</td><td>普通记忆无法做语义去重，只能依赖标题、标签、人工整理和体检。</td><td>可能出现相似条目，建议定期运行记忆体检。</td></tr>
+            <tr><td>API 失败或 JSON 解析失败</td><td>本次 exchange 不会标记为成功提取，失败楼层会记录下来，方便之后重试。</td><td>toast、错误弹窗或活动记录显示失败原因。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+
+    <details open>
+      <summary>生成回复前：从记忆库到注入 prompt</summary>
+      <div>
+        <table>
+          <thead><tr><th>顺序</th><th>发生什么</th><th>相关设置</th></tr></thead>
+          <tbody>
+            <tr><td>1. 用户发送消息</td><td>BB-Memory 的生成拦截器读取最后一条用户消息。如果扩展关闭或当前聊天没有数据，会清空注入并放行。</td><td>启用 BB-Memory</td></tr>
+            <tr><td>2. 加载所有数据</td><td>读取 NPC、物品、里程碑、时间线、记忆、线索板、地图，并尝试加载压缩向量。</td><td>语义向量、线索板注入</td></tr>
+            <tr><td>3. 自动维护</td><td>静默执行轻量维护，例如积灰和可压缩项检查。</td><td>维护模式、维护阈值</td></tr>
+            <tr><td>4. 计算查询向量</td><td>如果启用语义向量，会为用户最新消息请求一次 embedding；失败则降级为关键词检索。</td><td>启用语义向量检索</td></tr>
+            <tr><td>5. 分支检索</td><td>NPC、物品、里程碑、时间线、地图、线索板、普通记忆分别检索和筛选。普通记忆综合关键词、embedding、近期性、层级分打分。</td><td>最大检索数、最低相关分、各类注入上限</td></tr>
+            <tr><td>6. 实体展开</td><td>如果用户消息命中某个实体名，会额外拉出相关记忆，避免只注入实体卡而漏掉关联经历。</td><td>最大检索数、Token 预算</td></tr>
+            <tr><td>7. 预算裁剪</td><td>按 Token 预算和预算模式裁剪区块。核心、永恒、常驻内容优先保留。</td><td>Token 预算、Token 预算模式</td></tr>
+            <tr><td>8. 写入 SillyTavern prompt</td><td>用注入模板包裹整理后的内容，通过 <code>setExtensionPrompt</code> 写入生成上下文。</td><td>注入模板</td></tr>
+            <tr><td>9. 记录命中</td><td>实际注入的条目会增加命中计数；未命中的活跃条目可能累积未命中计数，并触发升降格。</td><td>升级/降级阈值、多样性限制</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+
+    <details open>
+      <summary>开关怎样改变流程</summary>
+      <div>
+        <table>
+          <thead><tr><th>开关或数值</th><th>影响的流程</th><th>关闭或调低后会怎样</th></tr></thead>
+          <tbody>
+            <tr><td>启用 AI 自动提取</td><td>控制 AI 回复后是否自动进入提取队列。</td><td>不会自动提取，但仍可手动提取和注入已有记忆。</td></tr>
+            <tr><td>上下文保留窗口</td><td>决定旧楼层多早进入自动提取。</td><td>调大更安全，重 Roll 不易误提取；调小更快沉淀记忆。</td></tr>
+            <tr><td>并行提取数</td><td>决定一次处理多少个待提取 exchange。</td><td>调低更稳更慢；调高更快但更吃 API 限速。</td></tr>
+            <tr><td>提取确认模式</td><td>决定提取结果是否先给用户审核。</td><td>主动确认最可控，全自动最快。</td></tr>
+            <tr><td>AI 提取读取标签</td><td>决定提取器读取 AI 回复全文还是只读特定标签。</td><td>关闭或不命中标签时，会回退读取普通回复文本。</td></tr>
+            <tr><td>启用语义向量检索</td><td>影响检索、去重、地图地点匹配和重建索引。</td><td>关闭后依赖关键词、标签和模糊搜索。</td></tr>
+            <tr><td>启用语义去重</td><td>影响保存新普通记忆时是否做相似合并。</td><td>关闭后相似记忆会更容易并存，需要人工体检。</td></tr>
+            <tr><td>启用线索板注入</td><td>决定玩家推理是否进入生成 prompt。</td><td>关闭后线索板仍保存，但 AI 不会看到。</td></tr>
+            <tr><td>启用时间线总结</td><td>决定持续叙事线是否注入，以及自动提取后是否尝试后台刷新。</td><td>关闭后只靠里程碑和普通记忆维持长篇脉络。</td></tr>
+            <tr><td>Token 预算模式</td><td>决定常驻内容是否可以超出总预算。</td><td>严格总量更省上下文，但可能截掉一些常驻信息。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+  </section>
+
+  <section id="where">
+    <h2>入口位置与按钮用途</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>初始化记忆</h3>
+        <p>提示你使用外置 HTML 初始化工具。适合从角色卡、世界书、旧聊天、旧 JSON 备份生成第一批结构化记忆。</p>
+      </div>
+      <div class="card">
+        <h3>记忆管理</h3>
+        <p>打开完整管理器，包含记忆列表、存档槽、时间线、仪表盘、分类、归档仓库。这里可以导入、导出、新增、编辑、删除、归档和批量处理。</p>
+      </div>
+      <div class="card">
+        <h3>使用说明</h3>
+        <p>打开当前页面。用户不知道按钮在哪里时，优先看本页顶部的面板示意图。</p>
+      </div>
+      <div class="card">
+        <h3>记忆维护</h3>
+        <p>检查积灰物品、状态变化、可压缩里程碑、低优先级 NPC 等，按建议保留、升格、降格、压缩或删除。</p>
+      </div>
+      <div class="card">
+        <h3>手动提取</h3>
+        <p>从当前聊天上下文提取 NPC、物品、里程碑、时间线、地图地点和记忆。可输入楼层范围，也可在弹窗里点“换楼提取到最新”。</p>
+      </div>
+      <div class="card">
+        <h3>标记消息</h3>
+        <p>把最后一条 AI 消息标记为元对话或取消标记。标记后它仍可显示在聊天里，但提取时会跳过，适合 OOC、系统提示、格式修复。</p>
+      </div>
+      <div class="card">
+        <h3>楼层可见</h3>
+        <p>切换已提取楼层的显示状态。它主要用于临时检查，真实隐藏状态仍由 SillyTavern 原生消息标记保存。</p>
+      </div>
+      <div class="card">
+        <h3>刷新时间线</h3>
+        <p>读取已有里程碑和旧时间线，请 AI 重新整理为持续叙事线，例如主线、感情线、支线和世界观线。</p>
+      </div>
+      <div class="card">
+        <h3>换楼刷新</h3>
+        <p>开新聊天后使用，把已有条目的来源楼层标记为旧聊天，避免楼层号和新聊天冲突。</p>
+      </div>
+      <div class="card">
+        <h3>线索板</h3>
+        <p>把记忆、NPC、物品、里程碑、地图地点摆成节点，手动连线表达玩家推理。启用注入后，AI 会看到这些推测。</p>
+      </div>
+      <div class="card">
+        <h3>世界地图</h3>
+        <p>管理地点、地区、层级关系、路径和物品位置。地图地点会参与检索和注入。</p>
+      </div>
+      <div class="card">
+        <h3>备份 / 恢复</h3>
+        <p>把当前聊天的文本记忆和向量引用保存到聊天元数据，或从聊天元数据恢复。大存档建议用管理器 JSON 导出。</p>
+      </div>
+    </div>
+
+    <div class="dialog-mock">
+      <div class="dialog-title">手动提取弹窗示意</div>
+      <p class="muted">点击“手动提取”后会出现楼层范围窗口。你可以手动输入 <code>12-40</code>，也可以直接点“换楼提取到最新”。</p>
+      <div class="dialog-summary">
+        最新 AI 楼层：86，建议范围：71-86<br />
+        换楼提取：建议范围 43-86，预计 22 个 exchange<br />
+        待提取楼层：暂无已入队楼层<br />
+        尚未提取楼层：43, 45, 47 等 22 层
+      </div>
+      <div class="dialog-input">如 0-10（留空=最近8轮）</div>
+    </div>
+  </section>
+
+  <section id="data">
+    <h2>BB-Memory 记录什么</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>记忆条目</h3>
+        <p>普通长期记忆，分为事件、情感、习惯、事实。层级有瞬时、稳定、核心、永恒；归档条目会保留但不参与检索。</p>
+      </div>
+      <div class="card">
+        <h3>NPC 档案</h3>
+        <p>记录角色身份、性格、外貌、位置、关系、故事时间。等级为核心、重要、配角、背景。</p>
+      </div>
+      <div class="card">
+        <h3>物品栏</h3>
+        <p>记录关键物品、装备、线索物、消耗品和背景物品，包含持有者、位置、状态、数量等。</p>
+      </div>
+      <div class="card">
+        <h3>里程碑</h3>
+        <p>记录真正重要的剧情节点，例如关系质变、伏笔出现、冲突解决、阶段结束。可以常驻注入或仅相关时注入。</p>
+      </div>
+      <div class="card">
+        <h3>时间线</h3>
+        <p>把多个里程碑整理成持续故事线，例如“主线调查”“感情线”“王国政变”。时间线可 ongoing、paused、ended 或 resident。</p>
+      </div>
+      <div class="card">
+        <h3>地图与线索板</h3>
+        <p>地图负责空间关系，线索板负责玩家推理。它们不是四柱本体，但会和四柱一起参与检索、管理和注入。</p>
+      </div>
+    </div>
+
+    <details open>
+      <summary>注入时会发生什么</summary>
+      <div>
+        <table>
+          <thead><tr><th>阶段</th><th>说明</th><th>你能观察到什么</th></tr></thead>
+          <tbody>
+            <tr><td>读取数据</td><td>从 localforage 读取 NPC、物品、里程碑、时间线、地图、线索板和记忆条目。</td><td>调试日志开启时可在控制台看到读取与检索信息。</td></tr>
+            <tr><td>相关性检索</td><td>综合关键词、向量相似、实体命中、层级加成、近期性等维度打分。</td><td>侧边栏“命中条目”和悬浮按钮命中视图会显示本轮命中。</td></tr>
+            <tr><td>预算分配</td><td>按 Token 预算和预算模式裁剪内容。核心、永恒、常驻内容通常更优先。</td><td>如果内容过多，低优先级条目会被截断或不注入。</td></tr>
+            <tr><td>写入 prompt</td><td>最终文本通过 SillyTavern 的扩展 prompt 注入到生成上下文。</td><td>AI 回复会更容易延续旧剧情、地点、物品和关系。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+  </section>
+
+  <section id="workflows">
+    <h2>常用工作流</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>新聊天从零开始</h3>
+        <p>启用扩展后正常聊天。每隔一段剧情点“手动提取”，检查“记忆管理”里的新增条目。里程碑只保留大转折，普通流水账放进记忆条目即可。</p>
+      </div>
+      <div class="card">
+        <h3>旧聊天补齐记忆</h3>
+        <p>点“手动提取”，输入楼层范围，或点“换楼提取到最新”。提取完成后用“记忆管理”搜索、删除重复项，再点“刷新时间线”。</p>
+      </div>
+      <div class="card">
+        <h3>长篇多分支</h3>
+        <p>在“存档”页为不同路线建立槽位，例如“主线”“if线A”。切换前保存当前槽，加载另一个槽会覆盖当前聊天的 BB-Memory 数据。</p>
+      </div>
+      <div class="card">
+        <h3>跨设备同步</h3>
+        <p>点“备份”保存文本和向量引用到聊天元数据；在管理器“存档”页上传云端向量槽。新设备先恢复文本，再加载云端向量。</p>
+      </div>
+      <div class="card">
+        <h3>剧情推理</h3>
+        <p>在线索板添加节点，把“钥匙”“失踪 NPC”“时间矛盾”等连起来。低信心线索可以保留为推测，AI 会收到这些推理但不必全部确认。</p>
+      </div>
+      <div class="card">
+        <h3>记忆过多时</h3>
+        <p>先跑“记忆维护”和“记忆体检”，再在管理器里归档或删除低价值条目。把 Token 预算模式切到严格总量可以减少注入挤占。</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="settings">
+    <h2>设置说明</h2>
+    <p class="muted">下面按扩展设置面板中的折叠区说明。所有设置会写入 <code>extensionSettings['bb_memory']</code>，大多数会随 SillyTavern 设置同步；记忆正文仍存放在浏览器 localforage。</p>
+
+    <details open>
+      <summary>顶部状态与快捷操作</summary>
+      <div>
+        <table>
+          <thead><tr><th>项目</th><th>用途</th><th>建议</th></tr></thead>
+          <tbody>
+            <tr><td>启用 BB-Memory</td><td>总开关。关闭后不检索、不注入，也不会自动提取。</td><td>日常保持开启；排查 prompt 问题时可临时关闭。</td></tr>
+            <tr><td>当前记忆数</td><td>显示当前聊天主要记忆数量。</td><td>数量突然异常时进入管理器检查是否导入了错误存档。</td></tr>
+            <tr><td>提取状态</td><td>显示自动或手动提取是否空闲、运行中或失败。</td><td>长操作期间不要反复点击按钮，先等状态完成。</td></tr>
+            <tr><td>楼层状态</td><td>统计待提取、已提取、未提取楼层。</td><td>旧聊天补记忆时重点看这里。</td></tr>
+            <tr><td>云备份不再内联向量</td><td>提示当前文本备份不会把 embedding 大块塞进聊天元数据。</td><td>向量同步请用“存档”页的云端向量槽。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+
+    <details open>
+      <summary>AI 自动提取</summary>
+      <div>
+        <table>
+          <thead><tr><th>设置</th><th>代表什么</th><th>建议</th></tr></thead>
+          <tbody>
+            <tr><td>启用 AI 自动提取</td><td>AI 回复后自动把超出保留窗口的完整 exchange 送去提取。</td><td>初期建议关闭或半自动；确认风格稳定后再开启。</td></tr>
+            <tr><td>调试日志</td><td>在浏览器控制台输出更详细的提取、检索和错误信息。</td><td>排查问题时开启，日常关闭。</td></tr>
+            <tr><td>API 模式</td><td>主 API 使用当前酒馆生成接口；自定义 API 使用你填写的 OpenAI 兼容端点。</td><td>想让提取不干扰主聊天时用自定义 API。</td></tr>
+            <tr><td>提取确认模式</td><td>主动确认会弹出候选；半自动默认更稳；全自动直接保存结果。</td><td>长篇正式档推荐半自动，批量补档可临时全自动。</td></tr>
+            <tr><td>确认通知方式</td><td>主动确认时使用浮动弹窗或 toast 通知。</td><td>需要逐条审查用浮动弹窗。</td></tr>
+            <tr><td>上下文保留窗口</td><td>保留最近 N 个未提取 exchange，超过窗口后才入队提取并隐藏。</td><td>默认 3 较稳；频繁重 Roll 可调大。</td></tr>
+            <tr><td>AI 提取读取标签</td><td>如果回复含 <code>&lt;content&gt;</code>、<code>&lt;context&gt;</code> 等标签，只读取选中标签里的内容。</td><td>使用结构化回复模板时很有用；无标签时会回退普通文本。</td></tr>
+            <tr><td>自定义读取标签</td><td>追加自定义 XML 风格标签名，例如 <code>time,scene</code>。</td><td>和你的角色卡输出格式一致即可。</td></tr>
+            <tr><td>并行提取数</td><td>同时发送多少个 exchange 提取请求。</td><td>默认 2；API 限速严格时调成 1。</td></tr>
+            <tr><td>更新回滚快照保留楼层数</td><td>AI 更新旧条目时，为最近 N 楼保存回滚快照。</td><td>默认 10；想减小存档体积可调低或设 0。</td></tr>
+            <tr><td>API 预设</td><td>保存提取 API 和 Embedding API 配置，并快速切换。</td><td>常用多个供应商时很方便；API Key 不会随设置导出。</td></tr>
+            <tr><td>自定义 API 端点 / Key / 模型</td><td>OpenAI 兼容的 chat completions 地址、密钥和模型名。</td><td>端点需是 http/https；填完先点“测试连接”。</td></tr>
+            <tr><td>提取风格</td><td>调整提取侧重：自动、日常陪伴、正剧叙事或自定义偏置。</td><td>恋爱日常用“日常陪伴”，悬疑长篇用“正剧叙事”。</td></tr>
+            <tr><td>自定义风格偏置</td><td>补充你想优先记录的内容类型。</td><td>写具体偏好，例如“优先保留未说出口的承诺和情绪变化”。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+
+    <details open>
+      <summary>语义向量</summary>
+      <div>
+        <table>
+          <thead><tr><th>设置</th><th>代表什么</th><th>建议</th></tr></thead>
+          <tbody>
+            <tr><td>Embedding 预设</td><td>复用 AI 提取预设中的 embedding 配置。</td><td>保存预设后可一键同步两组 API 配置。</td></tr>
+            <tr><td>启用语义向量检索</td><td>用 embedding 相似度辅助检索，能匹配同义表达。</td><td>API 可用时建议开启，长篇记忆收益明显。</td></tr>
+            <tr><td>Embedding API 端点 / Key / 模型</td><td>OpenAI 兼容 embedding 接口配置。</td><td>默认模型名为 <code>text-embedding-3-small</code>；填完先测试连接。</td></tr>
+            <tr><td>重建语义索引</td><td>为已有 NPC、物品、里程碑、记忆、时间线和地图重新生成向量。</td><td>更换 embedding 模型后必须重建。</td></tr>
+            <tr><td>启用语义去重</td><td>提取时用向量相似度合并或减少重复条目。</td><td>建议开启；如果你想保留非常细碎差异，可临时关闭。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+
+    <details open>
+      <summary>注入设置</summary>
+      <div>
+        <table>
+          <thead><tr><th>设置</th><th>代表什么</th><th>建议</th></tr></thead>
+          <tbody>
+            <tr><td>最大检索数</td><td>普通记忆条目每轮最多注入多少条，不包含 NPC、物品等独立上限。</td><td>默认 10；模型上下文短时调小。</td></tr>
+            <tr><td>NPC 注入上限</td><td>每轮最多注入多少个 NPC 档案。</td><td>核心人物多的群像剧可适当调大。</td></tr>
+            <tr><td>物品注入上限</td><td>每轮最多注入多少件物品。</td><td>道具推理或跑团可调大。</td></tr>
+            <tr><td>新里程碑默认注入模式</td><td>常驻表示新里程碑默认每轮注入；向量命中表示相关时才注入。</td><td>里程碑少用常驻；很多时改向量命中。</td></tr>
+            <tr><td>向量命中里程碑上限</td><td>向量模式里程碑每轮最多注入多少条。</td><td>默认 3，避免里程碑淹没普通记忆。</td></tr>
+            <tr><td>地图地点注入上限</td><td>命中地点及周边地点最多注入多少处。</td><td>地图大时保持默认或调小。</td></tr>
+            <tr><td>启用线索板注入</td><td>把线索板上的活跃推理注入给 AI。</td><td>推理线进行中时开启；不想 AI 参考玩家猜测时关闭。</td></tr>
+            <tr><td>Token 预算</td><td>本轮 BB-Memory 注入文本的预算参考值。</td><td>默认 800；上下文紧张时调低。</td></tr>
+            <tr><td>Token 预算模式</td><td><code>resident_unlimited</code> 允许核心/永恒/常驻超预算；<code>strict_total</code> 所有内容共享总预算。</td><td>日常用常驻不限；上下文爆满用严格总量。</td></tr>
+            <tr><td>最低相关分</td><td>普通记忆低于该分数不会进入候选。</td><td>默认 0.05；误命中过多时调高。</td></tr>
+            <tr><td>近楼层完整内容窗口</td><td>来源楼层在最近 N 楼内的记忆优先注入完整内容。</td><td>默认 6；想更简短可设 0。</td></tr>
+            <tr><td>注入模板</td><td>控制最终注入外壳，<code>{{memories}}</code> 是记忆正文占位符。</td><td>不熟悉 prompt 时保持默认。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+
+    <details open>
+      <summary>升降格与维护</summary>
+      <div>
+        <table>
+          <thead><tr><th>设置</th><th>代表什么</th><th>建议</th></tr></thead>
+          <tbody>
+            <tr><td>维护模式</td><td>auto 静默维护，semi 给建议等待批准，manual 完全手动。</td><td>推荐 semi，避免误删重要线索。</td></tr>
+            <tr><td>记忆 / NPC / 物品维护阈值</td><td>数量超过阈值后提醒维护。</td><td>长篇可调高，但别让列表无限膨胀。</td></tr>
+            <tr><td>物品积灰未命中轮数</td><td>物品连续 N 轮未命中后会被视为积灰候选。</td><td>关键道具多时调大。</td></tr>
+            <tr><td>多样性限制</td><td>同一标签最多允许多少条核心记忆。</td><td>默认 5，避免某个主题占满核心层。</td></tr>
+            <tr><td>记忆升级命中计数</td><td>瞬时到稳定、稳定到核心需要的净命中数。</td><td>默认 20，想更快沉淀可调低。</td></tr>
+            <tr><td>核心升永恒命中计数</td><td>核心记忆升为永恒需要的净命中数。</td><td>默认 40；永恒记忆不会衰减，谨慎调低。</td></tr>
+            <tr><td>记忆降级未命中计数</td><td>稳定或核心长期未命中后降级所需计数。</td><td>默认 20；剧情跨度大可调高。</td></tr>
+            <tr><td>实体升级 / 降级计数</td><td>NPC 和物品向更重要或更背景方向移动的阈值。</td><td>群像剧调高，主角团固定时保持默认。</td></tr>
+            <tr><td>启用时间线总结</td><td>生成时注入整理后的持续时间线。</td><td>长篇剧情建议开启。</td></tr>
+            <tr><td>最大活跃时间线数</td><td>活跃时间线过多时限制注入数量。</td><td>默认 5；剧情线多时用“刷新时间线”合并。</td></tr>
+            <tr><td>启用自动备份</td><td>数据变化后自动防抖备份到聊天元数据。</td><td>跨设备用户建议开启，超限会跳过。</td></tr>
+            <tr><td>聊天元数据备份上限</td><td>文本备份 JSON 超过该 KB 数会跳过，防止聊天文件膨胀。</td><td>默认 2048KB；大存档用本地 JSON 导出。</td></tr>
+            <tr><td>云端向量槽上限</td><td>单个角色唯一云端向量槽的大小上限。</td><td>默认 2048KB；向量很多时可提高。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+
+    <details open>
+      <summary>记忆体检</summary>
+      <div>
+        <table>
+          <thead><tr><th>设置</th><th>代表什么</th><th>建议</th></tr></thead>
+          <tbody>
+            <tr><td>近似重复阈值</td><td>余弦相似度超过该值会被视为近似重复。</td><td>默认 0.95；误报多就调高。</td></tr>
+            <tr><td>语义孤立阈值</td><td>孤立度超过该值的条目会被标记为孤立。</td><td>默认 0.30；用于发现无关联碎片。</td></tr>
+            <tr><td>休眠判定天数</td><td>超过 N 天未命中且命中少的记忆会被视为休眠。</td><td>慢节奏长篇可调大。</td></tr>
+            <tr><td>休眠命中次数阈值</td><td>低于该命中次数并长期未命中的条目更容易被判休眠。</td><td>默认 3。</td></tr>
+            <tr><td>线索板更新提醒</td><td>线索板启用注入但长时间未更新时提醒。</td><td>默认 14 天；推理线短篇可调短。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+
+    <details open>
+      <summary>故事日历、自定义设置、实验功能、BBTel</summary>
+      <div>
+        <table>
+          <thead><tr><th>设置</th><th>代表什么</th><th>建议</th></tr></thead>
+          <tbody>
+            <tr><td>故事日历描述</td><td>当前聊天的历法说明，例如 DAY1 起点、纪年、季节规则。</td><td>奇幻、科幻或跨天剧情建议填写。</td></tr>
+            <tr><td>导出设置 / 提示词</td><td>导出注入、提取、向量、维护阈值和提示词模板。</td><td>API Key 不会写入导出文件。</td></tr>
+            <tr><td>导入设置 / 提示词</td><td>从 JSON 恢复上述配置。</td><td>导入后检查 API Key，因为它会保留本机现有值。</td></tr>
+            <tr><td>提示词模板列表</td><td>查看和编辑 BB-Memory 内部 prompt，包括提取、注入、线索板、Agent 等。</td><td>改 prompt 前先导出设置备份。</td></tr>
+            <tr><td>记忆管家 Agent</td><td>实验功能，可用自然语言查询、分类、编辑、归档。</td><td>可能执行写操作，使用前先备份。</td></tr>
+            <tr><td>BBTel 小手机同步</td><td>与 BBTel 桥接服务双向同步完整存档槽。</td><td>填写桥接地址后先刷新发件箱，再推送或拉取。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+  </section>
+
+  <section id="commands">
+    <h2>斜杠命令</h2>
+    <table>
+      <thead><tr><th>命令</th><th>作用</th><th>备注</th></tr></thead>
+      <tbody>
+        <tr><td><code>/bb-init</code></td><td>提示使用外置初始化工具。</td><td>不会直接打开内置初始化。</td></tr>
+        <tr><td><code>/bb-backup</code></td><td>手动备份当前聊天记忆文本到聊天元数据。</td><td>向量请在存档页使用云端向量槽。</td></tr>
+        <tr><td><code>/bb-restore</code></td><td>从聊天元数据恢复备份。</td><td>重复条目会跳过或合并。</td></tr>
+        <tr><td><code>/bb-stats</code></td><td>显示 NPC、物品、里程碑、时间线、记忆统计。</td><td>以 toast 形式显示。</td></tr>
+        <tr><td><code>/bb-manage</code></td><td>打开轻量记忆管家面板。</td><td>侧边栏“记忆管理”打开的是完整管理器。</td></tr>
+        <tr><td><code>/bb-maintenance</code></td><td>打开维护面板。</td><td>用于处理积灰、可压缩、低优先级问题。</td></tr>
+        <tr><td><code>/bb-clear</code></td><td>清空当前聊天所有 BB-Memory 数据。</td><td>危险操作，执行前会确认。</td></tr>
+        <tr><td><code>/bb-delete-floor &lt;楼层号&gt;</code></td><td>删除指定 AI 楼层关联数据，并回滚可回滚更新。</td><td>用于重 Roll 后清理错误提取。</td></tr>
+        <tr><td><code>/bb-re-extract &lt;楼层号&gt;</code></td><td>删除并重新提取指定 AI 楼层。</td><td>楼层必须是 AI 消息。</td></tr>
+        <tr><td><code>/bb-floor-refresh</code></td><td>把所有记忆来源楼层标记为旧聊天。</td><td>开新聊天后使用。</td></tr>
+        <tr><td><code>/bb-clue</code></td><td>打开线索板。</td><td>管理玩家推理节点与连线。</td></tr>
+        <tr><td><code>/bb-map</code></td><td>打开世界地图。</td><td>管理地点和路径。</td></tr>
+        <tr><td><code>/bb-agent</code></td><td>打开记忆管家 Agent 测试版。</td><td>实验功能，建议先备份。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="trouble">
+    <h2>常见问题</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>看不到 BB-Memory 设置面板</h3>
+        <p>确认扩展文件夹名是 <code>BB-Memory</code>，扩展已在 SillyTavern 启用，并刷新页面。扩展会尝试挂载到 <code>#extensions_settings2</code> 或 <code>#extensions_settings</code>。</p>
+      </div>
+      <div class="card">
+        <h3>手动提取失败</h3>
+        <p>先检查 AI 自动提取的 API 端点、Key、模型和连接测试。自定义端点必须是 OpenAI 兼容接口，且协议为 http 或 https。</p>
+      </div>
+      <div class="card">
+        <h3>AI 忘记了重要剧情</h3>
+        <p>检查该条是否被归档、是否分数太低、是否超出 Token 预算。可在管理器里升格为核心或永恒，或把相关里程碑设为常驻。</p>
+      </div>
+      <div class="card">
+        <h3>注入太多导致回复变慢</h3>
+        <p>降低最大检索数、NPC/物品/地图上限，或把 Token 预算模式改为严格总量。记忆维护和体检也能减少冗余。</p>
+      </div>
+      <div class="card">
+        <h3>跨设备后语义检索变差</h3>
+        <p>文本备份不内联向量。请在旧设备管理器“存档”页上传云端向量槽，新设备恢复文本后再加载云端向量。</p>
+      </div>
+      <div class="card">
+        <h3>旧 JSON 字段不匹配</h3>
+        <p>v9.2.0 起旧“时间条目”改为 <code>milestones</code>，旧“时间线程”改为 <code>timeline</code>。旧备份可先用 <code>tools/bbmemory-v9.2-save-converter.html</code> 转换。</p>
+      </div>
+    </div>
+    <div class="note danger">任何删除、清空、加载存档、批量归档、Agent 写操作前，都建议先导出 JSON 或执行备份。BB-Memory 会尽量给出确认和 toast，但用户侧备份仍是最稳的保险。</div>
+  </section>
+
+  <p class="footer">BB-Memory v9.2.4 使用说明。最后更新：2026-06-25。</p>
 </main>
 </body>
 </html>
