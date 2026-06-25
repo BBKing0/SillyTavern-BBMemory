@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.2.4 主入口
+ * index.js —— BB-Memory v9.2.5 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -91,13 +91,13 @@ let chatSwitchPromptOpen = false;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.2.4';
+const SETTINGS_EXPORT_VERSION = '9.2.5';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
     'npcInjectionMax', 'itemInjectionMax', 'milestoneVectorMax', 'milestoneDefaultInjectionMode',
     'mapInjectionMax', 'worldRealWorldRef', 'clueBoardInjectionEnabled',
-    'autoGenEnabled', 'autoGenMode', 'autoGenEndpoint', 'autoGenModel', 'autoGenMaxExchanges',
+    'autoGenEnabled', 'autoGenMode', 'autoGenEndpoint', 'autoGenModel',
     'maxMemoriesPerExchange', 'extractionConfirmMode', 'activeConfirmStyle', 'contextWindowExchanges',
     'batchExtractionCount', 'sourceRollbackFloorWindow', 'extractedMsgDisplay', 'extractionStyle',
     'extractionMessageTags',
@@ -129,6 +129,7 @@ const SETTING_CONTROL_BINDINGS = {
     extractionStyle: ['#bb_extraction_style', 'value'],
     contextWindowExchanges: ['#bb_context_window', 'value'],
     batchExtractionCount: ['#bb_batch_extraction', 'value'],
+    maxMemoriesPerExchange: ['#bb_max_memories_per_exchange', 'value'],
     sourceRollbackFloorWindow: ['#bb_source_rollback_floor_window', 'value'],
     tokenBudget: ['#bb_token_budget', 'value'],
     tokenBudgetMode: ['#bb_token_budget_mode', 'value'],
@@ -146,6 +147,7 @@ const SETTING_CONTROL_BINDINGS = {
     itemDustyMissRounds: ['#bb_item_dusty_miss_rounds', 'value'],
     maintenanceMode: ['#bb_maintenance_mode', 'value'],
     diversityLimitPerTag: ['#bb_diversity_limit', 'value'],
+    promotionCooldownRounds: ['#bb_promotion_cooldown_rounds', 'value'],
     hitScorePromoteThreshold: ['#bb_hit_score_promote_threshold', 'value'],
     hitScoreEternalThreshold: ['#bb_hit_score_eternal_threshold', 'value'],
     hitScoreDemoteThreshold: ['#bb_hit_score_demote_threshold', 'value'],
@@ -158,15 +160,16 @@ const SETTING_CONTROL_BINDINGS = {
     healthCheckIsolationThreshold: ['#bb_health_check_isolation_threshold', 'value'],
     healthCheckStaleDays: ['#bb_health_check_stale_days', 'value'],
     healthCheckStaleHitThreshold: ['#bb_health_check_stale_hit_threshold', 'value'],
+    healthCheckThreadStaleDays: ['#bb_health_check_thread_stale_days', 'value'],
     healthCheckClueStaleDays: ['#bb_health_check_clue_stale_days', 'value'],
     injectionTemplate: ['#bb_injection_template', 'value'],
     autoGenEndpoint: ['#bb_auto_gen_endpoint', 'value'],
     autoGenModel: ['#bb_auto_gen_model', 'value'],
     embeddingEndpoint: ['#bb_embedding_endpoint', 'value'],
     embeddingModel: ['#bb_embedding_model', 'value'],
+    mergeSimilarityThreshold: ['#bb_merge_similarity_threshold', 'value'],
+    reduceSimilarityThreshold: ['#bb_reduce_similarity_threshold', 'value'],
     customExtractionBias: ['#bb_custom_extraction_bias', 'value'],
-    customCorePrinciples: ['#bb_custom_core_principles', 'value'],
-    customExtractionDimensions: ['#bb_custom_extraction_dimensions', 'value'],
 };
 
 const EXTRACTION_MESSAGE_TAG_OPTIONS = Object.freeze(['content', 'context', 'status', 'thinking', 'note']);
@@ -1769,7 +1772,6 @@ function reorderSettingsSections() {
     const root = document.querySelector('#bb_memory_root .inline-drawer-content');
     if (!root) return;
     const order = [
-        'bbtel_sync',
         'hits',
         'autogen',
         'embedding',
@@ -1878,22 +1880,6 @@ function bindSidebarEvents() {
 
     // v7.7.1 自定义提示词绑定
     bindExtractionTagControls();
-    bindInput('#bb_custom_core_principles', 'customCorePrinciples', 'string');
-    bindInput('#bb_custom_extraction_dimensions', 'customExtractionDimensions', 'string');
-
-    // 恢复默认按钮
-    document.querySelector('#bb_reset_core_principles')?.addEventListener('click', () => {
-        updateSettings({ customCorePrinciples: '' });
-        const ta = document.querySelector('#bb_custom_core_principles');
-        if (ta) ta.value = '';
-        showToast('核心原则已恢复为默认', 'info');
-    });
-    document.querySelector('#bb_reset_extraction_dimensions')?.addEventListener('click', () => {
-        updateSettings({ customExtractionDimensions: '' });
-        const ta = document.querySelector('#bb_custom_extraction_dimensions');
-        if (ta) ta.value = '';
-        showToast('提取维度已恢复为默认', 'info');
-    });
     renderPromptTemplateList(settings);
 
     document.querySelector('#bb_export_extract_settings_btn')?.addEventListener('click', () => {
@@ -1938,6 +1924,7 @@ function bindSidebarEvents() {
     // 数字/文本输入
     bindInput('#bb_context_window', 'contextWindowExchanges', 'number');
     bindInput('#bb_batch_extraction', 'batchExtractionCount', 'number');
+    bindInput('#bb_max_memories_per_exchange', 'maxMemoriesPerExchange', 'number');
     bindInput('#bb_source_rollback_floor_window', 'sourceRollbackFloorWindow', 'number');
     bindInput('#bb_token_budget', 'tokenBudget', 'number');
     bindSelect('#bb_token_budget_mode', 'tokenBudgetMode');
@@ -1955,6 +1942,7 @@ function bindSidebarEvents() {
     bindInput('#bb_item_dusty_miss_rounds', 'itemDustyMissRounds', 'number');
     bindSelect('#bb_maintenance_mode', 'maintenanceMode');
     bindInput('#bb_diversity_limit', 'diversityLimitPerTag', 'number');
+    bindInput('#bb_promotion_cooldown_rounds', 'promotionCooldownRounds', 'number');
     bindInput('#bb_hit_score_promote_threshold', 'hitScorePromoteThreshold', 'number');
     bindInput('#bb_hit_score_eternal_threshold', 'hitScoreEternalThreshold', 'number');
     bindInput('#bb_hit_score_demote_threshold', 'hitScoreDemoteThreshold', 'number');
@@ -1967,6 +1955,7 @@ function bindSidebarEvents() {
     bindInput('#bb_health_check_isolation_threshold', 'healthCheckIsolationThreshold', 'number');
     bindInput('#bb_health_check_stale_days', 'healthCheckStaleDays', 'number');
     bindInput('#bb_health_check_stale_hit_threshold', 'healthCheckStaleHitThreshold', 'number');
+    bindInput('#bb_health_check_thread_stale_days', 'healthCheckThreadStaleDays', 'number');
     bindInput('#bb_health_check_clue_stale_days', 'healthCheckClueStaleDays', 'number');
     bindInput('#bb_injection_template', 'injectionTemplate', 'string');
     // API 配置字段绑定
@@ -1976,6 +1965,8 @@ function bindSidebarEvents() {
     bindInput('#bb_embedding_endpoint', 'embeddingEndpoint', 'string');
     bindInput('#bb_embedding_api_key', 'embeddingApiKey', 'string');
     bindInput('#bb_embedding_model', 'embeddingModel', 'string');
+    bindInput('#bb_merge_similarity_threshold', 'mergeSimilarityThreshold', 'number');
+    bindInput('#bb_reduce_similarity_threshold', 'reduceSimilarityThreshold', 'number');
     // v7.8.0 日历描述改为 per-chat 存储
     const calTextarea = document.querySelector('#bb_calendar_description');
     if (calTextarea) {
@@ -3817,7 +3808,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.2.4 初始化开始...');
+    console.log('[BB-Memory] v9.2.5 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -3981,7 +3972,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.2.4 初始化完成');
+    console.log('[BB-Memory] v9.2.5 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
@@ -4242,9 +4233,12 @@ function updateSidebarHitList() {
 //  全局 API（调试/控制台用）
 // ═══════════════════════════════════════════════════════════
 
-globalThis.bbMemoryExpandEntityKeyword = function (keyword, limit = 12) {
-    // v5 兼容 API
-    return expandMemoriesForEntityKeyword([], keyword, { limit });
+globalThis.bbMemoryExpandEntityKeyword = async function (keyword, limit = 12) {
+    // v5 兼容 API：按当前聊天读取记忆后再展开实体关键词。
+    const chatId = getChatId();
+    if (!chatId) return [];
+    const memories = await getMemories(chatId);
+    return expandMemoriesForEntityKeyword(memories, keyword, { limit });
 };
 
 globalThis.bbMemoryDebug = {

@@ -124,7 +124,7 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) 
     const allEntries = [
         ...npc.map(e => ({ ...e, _pillar: 'npc' })),
         ...items.map(e => ({ ...e, _pillar: 'item' })),
-        ...timeline.map(e => ({ ...e, _pillar: 'timeline' })),
+        ...timeline.map(e => ({ ...e, _pillar: 'milestone' })),
         ...memories.map(e => ({ ...e, _pillar: 'mem' })),
         ...(mapLocations || []).map(e => ({ ...e, _pillar: 'map', title: e.name, content: e.description, name: e.name })),
     ];
@@ -135,7 +135,7 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) 
 
     // v8.7.1 地图地点 datalist（供 location 字段下拉建议）
     const locNames = [...new Set((mapLocations || []).map(l => l.name).filter(Boolean))];
-    const locDatalist = `<datalist id="bb-location-datalist">${locNames.map(n => `<option value="${escapeHtml(n)}">`).join('')}</datalist>`;
+    const locDatalist = `<datalist id="bb-location-datalist">${locNames.map(n => `<option value="${escapeAttr(n)}">`).join('')}</datalist>`;
 
     return `
     <div class="bb-mem-popup">
@@ -208,7 +208,7 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) 
                 <button class="menu_button bb-mem-type-filter" data-type="item">
                     <i class="fa-solid fa-box"></i> 物品
                 </button>
-                <button class="menu_button bb-mem-type-filter" data-type="timeline">
+                <button class="menu_button bb-mem-type-filter" data-type="milestone">
                     <i class="fa-solid fa-clock"></i> 里程碑
                 </button>
                 <button class="menu_button bb-mem-type-filter" data-type="map">
@@ -299,10 +299,11 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) 
 let batchMode = false;
 
 function buildEntryItemHTML(e) {
-    const pillar = e._pillar;
+    const pillar = normalizeManagerPillar(e._pillar);
     const pillarConfig = {
         npc:      { icon: 'fa-user',        label: 'NPC',   color: '#ba68c8' },
         item:     { icon: 'fa-box',          label: '物品',  color: '#4fc3f7' },
+        milestone:{ icon: 'fa-clock',        label: '里程碑', color: '#ffb74d' },
         timeline: { icon: 'fa-clock',        label: '里程碑', color: '#ffb74d' },
         mem:      { icon: 'fa-brain',        label: '记忆',  color: '#81c784' },
         map:      { icon: 'fa-map',          label: '地图',  color: '#4fc3f7' },
@@ -333,7 +334,7 @@ function buildEntryItemHTML(e) {
         if (e.status) statusBadges += `<span class="bb-item-badge" style="font-size:0.7em;">${escapeHtml(e.status)}</span>`;
         if (e.owner) statusBadges += `<span style="font-size:0.75em;opacity:0.5;">持有: ${escapeHtml(e.owner)}</span>`;
         if (e.location) statusBadges += `<span style="font-size:0.72em;opacity:0.45;">📍 ${escapeHtml(e.location)}</span>`;
-    } else if (pillar === 'timeline') {
+    } else if (pillar === 'milestone') {
         statusBadges += `<span class="bb-item-badge" style="background:${e.isActive ? '#4caf5022' : '#ff980022'};color:${e.isActive ? '#4caf50' : '#ff9800'};border:1px solid ${e.isActive ? '#4caf5044' : '#ff980044'};">${e.isActive ? '进行中' : '已结束'}</span>`;
         const milestoneTier = e.memoryTier === 'stable' || e.memoryTier === 'transient' || e.injectionMode === 'vector'
             ? { label: '稳定·向量命中', color: '#4caf50' }
@@ -376,9 +377,9 @@ function buildEntryItemHTML(e) {
     // v8.6.0 分类标签
     let catBadge = '';
     if (e.category) {
-        catBadge = `<span class="bb-cat-badge" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" data-cat="${escapeHtml(e.category)}" title="点击切换分类" style="background:rgba(186,104,200,0.15);color:#ba68c8;border:1px solid rgba(186,104,200,0.3);border-radius:3px;padding:1px 6px;font-size:0.72em;cursor:pointer;margin-left:2px;">📁 ${escapeHtml(e.category)}</span>`;
+        catBadge = `<span class="bb-cat-badge" data-id="${escapeAttr(e.id)}" data-pillar="${escapeAttr(pillar)}" data-cat="${escapeAttr(e.category)}" title="点击切换分类" style="background:rgba(186,104,200,0.15);color:#ba68c8;border:1px solid rgba(186,104,200,0.3);border-radius:3px;padding:1px 6px;font-size:0.72em;cursor:pointer;margin-left:2px;">📁 ${escapeHtml(e.category)}</span>`;
     } else {
-        catBadge = `<span class="bb-cat-badge bb-cat-none" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" title="点击添加分类" style="background:rgba(255,255,255,0.04);color:var(--SmartThemeBodyColor,#ccc);border:1px dashed var(--SmartThemeBorderColor,#555);border-radius:3px;padding:1px 6px;font-size:0.7em;cursor:pointer;margin-left:2px;">📁 未分类</span>`;
+        catBadge = `<span class="bb-cat-badge bb-cat-none" data-id="${escapeAttr(e.id)}" data-pillar="${escapeAttr(pillar)}" title="点击添加分类" style="background:rgba(255,255,255,0.04);color:var(--SmartThemeBodyColor,#ccc);border:1px dashed var(--SmartThemeBorderColor,#555);border-radius:3px;padding:1px 6px;font-size:0.7em;cursor:pointer;margin-left:2px;">📁 未分类</span>`;
     }
 
     // 时间行
@@ -412,13 +413,13 @@ function buildEntryItemHTML(e) {
 
     // 复选框（批量模式才显示）
     const cbStyle = batchMode ? '' : 'display:none;';
-    const cbHTML = `<input type="checkbox" class="bb-mem-batch-cb" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" style="margin-right:8px;width:15px;height:15px;cursor:pointer;flex-shrink:0;${cbStyle}" />`;
+    const cbHTML = `<input type="checkbox" class="bb-mem-batch-cb" data-id="${escapeAttr(e.id)}" data-pillar="${escapeAttr(pillar)}" style="margin-right:8px;width:15px;height:15px;cursor:pointer;flex-shrink:0;${cbStyle}" />`;
 
     // 描述内容
     let descContent;
     if (pillar === 'npc') {
         descContent = (e.personality ? `性格: ${escapeHtml(e.personality).slice(0, 60)}<br>` : '') + (e.appearance ? `外貌: ${escapeHtml(e.appearance).slice(0, 60)}` : '') + (e.location ? `<br>位置: ${escapeHtml(e.location)}` : '');
-    } else if (pillar === 'timeline') {
+    } else if (pillar === 'milestone') {
         descContent = (e.participants?.length ? `参与者: ${escapeHtml(e.participants.join(', '))}<br>` : '') + (e.location ? `地点: ${escapeHtml(e.location)}<br>` : '') + (e.impact ? `影响: ${escapeHtml(e.impact)}` : '');
     } else {
         descContent = escapeHtml(desc.slice(0, 200));
@@ -427,10 +428,10 @@ function buildEntryItemHTML(e) {
     // 模糊记忆：有完整 content 时显示展开/收起按钮
     let fuzzyToggleHTML = '';
     if (isFuzzy && e.content && e.content.length > (e.summary || '').length) {
-        fuzzyToggleHTML = `<button class="bb-mem-fuzzy-toggle" data-id="${escapeHtml(e.id)}" title="展开查看完整内容" style="font-size:0.7em;margin-left:4px;cursor:pointer;opacity:0.5;background:none;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:4px;color:inherit;padding:0 6px;"><i class="fa-solid fa-chevron-down"></i> 展开</button>`;
+        fuzzyToggleHTML = `<button class="bb-mem-fuzzy-toggle" data-id="${escapeAttr(e.id)}" title="展开查看完整内容" style="font-size:0.7em;margin-left:4px;cursor:pointer;opacity:0.5;background:none;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:4px;color:inherit;padding:0 6px;"><i class="fa-solid fa-chevron-down"></i> 展开</button>`;
     }
     // 隐藏的完整内容（默认不显示）
-    const fuzzyFullHTML = (isFuzzy && e.content) ? `<div class="bb-mem-fuzzy-full" data-id="${escapeHtml(e.id)}" style="display:none;margin-top:4px;padding:8px;background:rgba(255,152,0,0.06);border:1px dashed var(--SmartThemeBorderColor,#555);border-radius:6px;font-size:0.85em;line-height:1.5;color:var(--SmartThemeTextColor,#ddd);opacity:0.75;">${escapeHtml(e.content.slice(0, 500))}</div>` : '';
+    const fuzzyFullHTML = (isFuzzy && e.content) ? `<div class="bb-mem-fuzzy-full" data-id="${escapeAttr(e.id)}" style="display:none;margin-top:4px;padding:8px;background:rgba(255,152,0,0.06);border:1px dashed var(--SmartThemeBorderColor,#555);border-radius:6px;font-size:0.85em;line-height:1.5;color:var(--SmartThemeTextColor,#ddd);opacity:0.75;">${escapeHtml(e.content.slice(0, 500))}</div>` : '';
 
     // 命中次数
     const hitCountHTML = pillar === 'mem' || pillar === 'item'
@@ -445,7 +446,7 @@ function buildEntryItemHTML(e) {
     const hitScoreHTML = `<span title="升降计数"><i class="fa-solid fa-scale-balanced"></i> ${hitScoreText}</span>`;
 
     return `
-    <div class="bb-mem-item" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}">
+    <div class="bb-mem-item" data-id="${escapeAttr(e.id)}" data-pillar="${escapeAttr(pillar)}">
         <div style="display:flex;align-items:center;margin-bottom:6px;">
             ${cbHTML}
             <strong style="flex:1;font-size:0.95em;">${escapeHtml(title)}</strong>
@@ -460,7 +461,7 @@ function buildEntryItemHTML(e) {
             ${fuzzyFullHTML}
             ${tagRow}
         </div>` : ''}
-        ${pillar === 'timeline' && Array.isArray(e.subEntries) && e.subEntries.length > 0 ? `
+        ${pillar === 'milestone' && Array.isArray(e.subEntries) && e.subEntries.length > 0 ? `
         <div class="bb-timeline-subs">
             ${e.subEntries.map(sub => `<div class="bb-timeline-sub">· ${escapeHtml(sub.description || '')}</div>`).join('')}
         </div>` : ''}
@@ -477,7 +478,7 @@ function buildEntryItemHTML(e) {
             <button class="menu_button bb-mem-btn-sm bb-mem-re-extract" data-floor="${e.sourceFloor}" title="重新提取该楼层记忆" style="font-size:0.75em;opacity:0.6;">
                 <i class="fa-solid fa-rotate"></i>
             </button>` : ''}
-            <button class="menu_button bb-mem-btn-sm bb-mem-edit" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" title="编辑" style="font-size:0.85em;">
+            <button class="menu_button bb-mem-btn-sm bb-mem-edit" data-id="${escapeAttr(e.id)}" data-pillar="${escapeAttr(pillar)}" title="编辑" style="font-size:0.85em;">
                 <i class="fa-solid fa-pen"></i>
             </button>
             <button class="menu_button bb-mem-btn-sm bb-mem-archive" data-id="${escapeHtml(e.id)}" data-pillar="${pillar}" title="归档" style="font-size:0.85em;">
@@ -497,6 +498,14 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = String(text || '');
     return div.innerHTML;
+}
+
+function escapeAttr(text) {
+    return escapeHtml(text).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function normalizeManagerPillar(pillar) {
+    return pillar === 'timeline' ? 'milestone' : (pillar || 'mem');
 }
 
 // v8.0.0 子条目辅助函数
@@ -716,8 +725,8 @@ function bindManagerEvents(overlay, chatId) {
             mem: (id, p) => updateMemory(chatId, id, p),
             npc: (id, p) => updateNpcProfile(chatId, id, p),
             item: (id, p) => updateItem(chatId, id, p),
-            timeline: (id, p) => updateTimelineEntry(chatId, id, p),
-        }[pillar];
+            milestone: (id, p) => updateTimelineEntry(chatId, id, p),
+        }[normalizeManagerPillar(pillar)];
 
         if (updater) {
             await updater(entryId, { category: newCat });
@@ -796,10 +805,11 @@ function bindBatchEvents(overlay, chatId) {
         try {
             for (const cb of checked) {
                 const id = cb.dataset.id;
-                const pillar = cb.dataset.pillar;
+                const pillar = normalizeManagerPillar(cb.dataset.pillar);
                 if (pillar === 'npc') await removeNpcProfile(chatId, id);
                 else if (pillar === 'item') await removeItem(chatId, id);
-                else if (pillar === 'timeline') await removeTimelineEntry(chatId, id);
+                else if (pillar === 'milestone') await removeTimelineEntry(chatId, id);
+                else if (pillar === 'map') { const { removeLocation } = await import('./map-store.js'); await removeLocation(chatId, id); }
                 else await removeMemory(chatId, id);
             }
             showToast(`已删除 ${checked.length} 条`, 'success');
@@ -819,7 +829,7 @@ function bindBatchEvents(overlay, chatId) {
         btn.disabled = true;
         try {
             for (const cb of checked) {
-                await archiveEntry(chatId, cb.dataset.pillar, cb.dataset.id);
+                await archiveEntry(chatId, normalizeManagerPillar(cb.dataset.pillar), cb.dataset.id);
             }
             showToast(`已归档 ${checked.length} 条`, 'success');
         } finally {
@@ -863,12 +873,12 @@ function rebindItemActions(overlay, chatId) {
         btn.addEventListener('click', async (e) => {
             e.stopPropagation();
             const id = btn.dataset.id;
-            const pillar = btn.dataset.pillar;
+            const pillar = normalizeManagerPillar(btn.dataset.pillar);
             const ok = confirm('确定删除这条记录吗？');
             if (!ok) return;
             if (pillar === 'npc') await removeNpcProfile(chatId, id);
             else if (pillar === 'item') await removeItem(chatId, id);
-            else if (pillar === 'timeline') await removeTimelineEntry(chatId, id);
+            else if (pillar === 'milestone') await removeTimelineEntry(chatId, id);
             else if (pillar === 'map') { const { removeLocation } = await import('./map-store.js'); await removeLocation(chatId, id); }
             else await removeMemory(chatId, id);
             showToast('已删除', 'info');
@@ -881,7 +891,7 @@ function rebindItemActions(overlay, chatId) {
         btn.addEventListener('click', async (e) => {
             e.stopPropagation();
             const id = btn.dataset.id;
-            const pillar = btn.dataset.pillar;
+            const pillar = normalizeManagerPillar(btn.dataset.pillar);
             await archiveEntry(chatId, pillar, id);
             showToast('已归档', 'success');
             await rerenderManagerList(overlay, chatId);
@@ -1000,7 +1010,7 @@ function rebindItemActions(overlay, chatId) {
 
 function showQuickAddForm(overlay, chatId) {
     let currentPillar = 'mem';
-    const pillarOpts = { mem: '记忆条目', npc: 'NPC档案', item: '物品', timeline: '里程碑', map: '地图地点' };
+    const pillarOpts = { mem: '记忆条目', npc: 'NPC档案', item: '物品', milestone: '里程碑', map: '地图地点' };
 
     const formOverlay = createManagerFormOverlay();
 
@@ -1064,6 +1074,7 @@ function showQuickAddForm(overlay, chatId) {
                 </div>
                 <label style="font-size:0.85em;">标签</label>
                 <input class="bb-input bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
+            case 'milestone':
             case 'timeline': return `
                 <label style="font-size:0.85em;">标题 <span style="color:#f44336;">*</span></label>
                 <input class="bb-input bb-f-title" placeholder="事件标题" style="width:100%;margin-bottom:8px;" />
@@ -1165,6 +1176,7 @@ function bindFormEvents(formOverlay, chatId, initialPillar) {
             switch (currentPillar) {
                 case 'npc': await addNpcProfile(chatId, prepared); break;
                 case 'item': await addItem(chatId, prepared); break;
+                case 'milestone':
                 case 'timeline': await addTimelineEntry(chatId, prepared); break;
                 case 'map': { const { addLocation } = await import('./map-store.js'); await addLocation(chatId, prepared); break; }
                 default: await addMemory(chatId, prepared); break;
@@ -1178,7 +1190,7 @@ function bindFormEvents(formOverlay, chatId, initialPillar) {
 }
 
 function buildFormHTML_inner(pillar) {
-    const pillarOpts = { mem: '记忆条目', npc: 'NPC档案', item: '物品', timeline: '里程碑', map: '地图地点' };
+    const pillarOpts = { mem: '记忆条目', npc: 'NPC档案', item: '物品', milestone: '里程碑', map: '地图地点' };
     return `
     <div class="bb-mem-form-popup" style="background:var(--SmartThemeChatTintColor,#1e1e2e);border:1px solid var(--SmartThemeBorderColor,#444);border-radius:12px;width:100%;max-width:600px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.5);">
         <div style="display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid var(--SmartThemeBorderColor,#444);">
@@ -1217,6 +1229,7 @@ function buildPillarFormFields_inner(p) {
             <label style="font-size:0.85em;">重要性</label><input class="bb-input bb-f-significance" placeholder="对剧情的重要性" style="width:100%;margin-bottom:8px;" />
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">物品等级</label><select class="bb-input bb-f-itemTier" style="width:100%;margin-bottom:8px;">${Object.values(ITEM_TIERS).map(t => `<option value="${t.id}" ${t.id === 'consumable' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div><div style="flex:1;"><label style="font-size:0.85em;">注入层级</label><select class="bb-input bb-f-memoryTier" style="width:100%;margin-bottom:8px;"><option value="transient">积灰</option><option value="stable" selected>稳定·向量命中</option><option value="eternal">永恒·常驻</option></select></div></div>
             <label style="font-size:0.85em;">标签</label><input class="bb-input bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
+        case 'milestone':
         case 'timeline': return `
             <label style="font-size:0.85em;">标题 <span style="color:#f44336;">*</span></label><input class="bb-input bb-f-title" placeholder="事件标题" style="width:100%;margin-bottom:8px;" />
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">故事时间</label><input class="bb-input bb-f-storyTime" placeholder="如：第三天清晨" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">状态</label><select class="bb-input bb-f-status" style="width:100%;margin-bottom:8px;"><option value="ongoing" selected>进行中</option><option value="ended">已结束</option><option value="foreshadow">伏笔</option></select></div></div>
@@ -1283,6 +1296,7 @@ function collectFormData(formEl, pillar) {
             keepPermanent: formEl.querySelector('.bb-f-mapResident')?.checked || false,
             source: 'manual',
         };
+        case 'milestone':
         case 'timeline': {
             const subs = [];
             formEl.querySelectorAll('.bb-subentry-row').forEach(row => {
@@ -1345,7 +1359,7 @@ async function showQuickEditForm(overlay, chatId, id, pillar) {
     }
     if (pillar === 'npc') entry = lists[0].find(e => e.id === id);
     else if (pillar === 'item') entry = lists[1].find(e => e.id === id);
-    else if (pillar === 'timeline') entry = lists[2].find(e => e.id === id);
+    else if (pillar === 'milestone') entry = lists[2].find(e => e.id === id);
     else entry = lists[3].find(e => e.id === id);
 
     if (!entry) { showToast('未找到该条目', 'error'); return; }
@@ -1416,6 +1430,7 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
                     }
                     setVal('bb-f-tags', tagsStr);
                     break;
+                case 'milestone':
                 case 'timeline':
                     setVal('bb-f-title', prefill.title || prefill.event);
                     setVal('bb-f-storyTime', prefill.storyTime);
@@ -1520,12 +1535,13 @@ function bindFormEvents_inner(formOverlay, chatId, pillar, editInfo) {
 
             if (isEdit) {
                 // 更新时间线的 isActive 字段
-                if (pillar === 'timeline') {
+                if (pillar === 'milestone') {
                     prepared.isActive = prepared.status === 'ongoing';
                 }
                 switch (pillar) {
                     case 'npc': await updateNpcProfile(chatId, editInfo.id, prepared); break;
                     case 'item': await updateItem(chatId, editInfo.id, prepared); break;
+                    case 'milestone':
                     case 'timeline': await updateTimelineEntry(chatId, editInfo.id, prepared); break;
                     case 'map': { const { updateLocation } = await import('./map-store.js'); await updateLocation(chatId, editInfo.id, prepared); break; }
                     default: await updateMemory(chatId, editInfo.id, prepared); break;
@@ -1534,6 +1550,7 @@ function bindFormEvents_inner(formOverlay, chatId, pillar, editInfo) {
                 switch (pillar) {
                     case 'npc': await addNpcProfile(chatId, prepared); break;
                     case 'item': await addItem(chatId, prepared); break;
+                    case 'milestone':
                     case 'timeline': await addTimelineEntry(chatId, prepared); break;
                     case 'map': { const { addLocation } = await import('./map-store.js'); await addLocation(chatId, prepared); break; }
                     default: await addMemory(chatId, prepared); break;
@@ -1862,7 +1879,7 @@ async function renderCategoriesPanel(overlay, chatId) {
     const allEntries = [
         ...npcs.filter(e => !e.archived).map(e => ({ ...e, _pillar: 'npc' })),
         ...items.filter(e => !e.archived).map(e => ({ ...e, _pillar: 'item' })),
-        ...timeline.filter(e => !e.archived).map(e => ({ ...e, _pillar: 'timeline' })),
+        ...timeline.filter(e => !e.archived).map(e => ({ ...e, _pillar: 'milestone' })),
         ...memories.filter(e => !e.archived && e.status !== 'deleted').map(e => ({ ...e, _pillar: 'mem' })),
     ];
 
@@ -1876,8 +1893,8 @@ async function renderCategoriesPanel(overlay, chatId) {
             const count = allEntries.filter(e => e.category === cat).length;
             const checked = enabled[cat] === true ? 'checked' : '';
             return `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer;">
-                <input type="checkbox" class="bb-mgr-cat-toggle" data-cat="${escapeHtml(cat)}" ${checked} style="cursor:pointer;" />
-                <span style="flex:1;" class="bb-mgr-cat-name" data-cat="${escapeHtml(cat)}" title="点击查看该分类条目">📁 ${escapeHtml(cat)}</span>
+                <input type="checkbox" class="bb-mgr-cat-toggle" data-cat="${escapeAttr(cat)}" ${checked} style="cursor:pointer;" />
+                <span style="flex:1;" class="bb-mgr-cat-name" data-cat="${escapeAttr(cat)}" title="点击查看该分类条目">📁 ${escapeHtml(cat)}</span>
                 <span style="font-size:0.75em;opacity:0.5;">${count}条</span>
             </label>`;
         }).join('');
@@ -1950,12 +1967,13 @@ async function renderCategoriesPanel(overlay, chatId) {
                 listEl.innerHTML = entries.length === 0
                     ? '<div style="opacity:0.4;">此分类下暂无条目</div>'
                     : entries.map(e => {
-                        const icon = { mem: 'fa-brain', npc: 'fa-user', item: 'fa-box', timeline: 'fa-clock' }[e._pillar] || 'fa-circle';
+                        const pillar = normalizeManagerPillar(e._pillar);
+                        const icon = { mem: 'fa-brain', npc: 'fa-user', item: 'fa-box', milestone: 'fa-clock' }[pillar] || 'fa-circle';
                         const label = e.title || e.name || e.event || (e.content || '').slice(0, 40);
                         return `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid var(--SmartThemeBorderColor,#3333);">
                             <i class="fa-solid ${icon}" style="font-size:0.7em;opacity:0.5;"></i>
                             <span style="flex:1;">${escapeHtml(label)}</span>
-                            <button class="menu_button bb-mgr-cat-remove-entry" data-id="${escapeHtml(e.id)}" data-pillar="${e._pillar}" style="font-size:0.65em;padding:1px 5px;opacity:0.4;" title="移出此分类">✕</button>
+                            <button class="menu_button bb-mgr-cat-remove-entry" data-id="${escapeAttr(e.id)}" data-pillar="${escapeAttr(pillar)}" style="font-size:0.65em;padding:1px 5px;opacity:0.4;" title="移出此分类">✕</button>
                         </div>`;
                     }).join('');
             }
@@ -1966,8 +1984,8 @@ async function renderCategoriesPanel(overlay, chatId) {
                         mem: (id, p) => updateMemory(chatId, id, p),
                         npc: (id, p) => updateNpcProfile(chatId, id, p),
                         item: (id, p) => updateItem(chatId, id, p),
-                        timeline: (id, p) => updateTimelineEntry(chatId, id, p),
-                    }[btn.dataset.pillar];
+                        milestone: (id, p) => updateTimelineEntry(chatId, id, p),
+                    }[normalizeManagerPillar(btn.dataset.pillar)];
                     if (updater) {
                         await updater(btn.dataset.id, { category: null });
                         showToast('已移出分类', 'success');
@@ -2032,7 +2050,7 @@ async function renderDashboardPanel(overlay, chatId) {
         const allEntries = [
             ...npc.map(e => ({ ...e, _pillar: 'npc' })),
             ...items.map(e => ({ ...e, _pillar: 'item' })),
-            ...timeline.map(e => ({ ...e, _pillar: 'timeline' })),
+            ...timeline.map(e => ({ ...e, _pillar: 'milestone' })),
             ...memories.map(e => ({ ...e, _pillar: 'mem' })),
         ];
 
@@ -2065,7 +2083,7 @@ async function renderDashboardPanel(overlay, chatId) {
         const pillarConfig = {
             npc: { icon: 'fa-user', label: 'NPC', color: '#ba68c8' },
             item: { icon: 'fa-box', label: '物品', color: '#4fc3f7' },
-            timeline: { icon: 'fa-clock', label: '里程碑', color: '#ffb74d' },
+            milestone: { icon: 'fa-clock', label: '里程碑', color: '#ffb74d' },
             mem: { icon: 'fa-brain', label: '记忆', color: '#81c784' },
         };
 
@@ -2361,15 +2379,15 @@ async function renderThreadPanel(overlay, chatId) {
                 ${allTimelineEntries.map(t => {
                     const tStatus = t.status === 'ongoing' ? '进行中' : t.status === 'ended' ? '已结束' : t.status === 'foreshadow' ? '伏笔' : t.status || '';
                     const inThread = entryThreadMap.get(t.id);
-                    const threadTag = inThread ? `<span class="bb-thread-detail-thread" title="属于时间线: ${escapeHtml(inThread)}">▪ ${escapeHtml(inThread)}</span>` : '<span class="bb-thread-detail-thread" style="opacity:0.35;">未归入时间线</span>';
+                    const threadTag = inThread ? `<span class="bb-thread-detail-thread" title="属于时间线: ${escapeAttr(inThread)}">▪ ${escapeHtml(inThread)}</span>` : '<span class="bb-thread-detail-thread" style="opacity:0.35;">未归入时间线</span>';
                     return `
                     <div class="bb-thread-detail-item">
                         <span class="bb-thread-detail-time">${escapeHtml(t.storyTime || '?')}</span>
                         <span class="bb-thread-detail-event">${escapeHtml(t.event || t.summary || '')}</span>
-                        ${tStatus ? `<span class="bb-thread-detail-status">${tStatus}</span>` : ''}
+                        ${tStatus ? `<span class="bb-thread-detail-status">${escapeHtml(tStatus)}</span>` : ''}
                         ${threadTag}
                         <span style="flex:1;"></span>
-                        <button class="bb-thread-detail-edit menu_button" data-id="${t.id}" title="编辑"><i class="fa-solid fa-pen"></i></button>
+                        <button class="bb-thread-detail-edit menu_button" data-id="${escapeAttr(t.id)}" title="编辑"><i class="fa-solid fa-pen"></i></button>
                     </div>`;
                 }).join('')}
             </div>
@@ -2422,7 +2440,7 @@ async function renderThreadPanel(overlay, chatId) {
             const id = btn.dataset.id;
             const entry = timeline.find(t => t.id === id);
             if (entry) {
-                showQuickEditForm(overlay, chatId, entry.id, 'timeline');
+                showQuickEditForm(overlay, chatId, entry.id, 'milestone');
             }
         });
     });
@@ -2774,7 +2792,7 @@ async function rerenderManagerList(overlay, chatId, cachedData = null) {
     let allEntries = [
         ...npc.map(e => ({ ...e, _pillar: 'npc' })),
         ...items.map(e => ({ ...e, _pillar: 'item' })),
-        ...timeline.map(e => ({ ...e, _pillar: 'timeline' })),
+        ...timeline.map(e => ({ ...e, _pillar: 'milestone' })),
         ...memories.map(e => ({ ...e, _pillar: 'mem' })),
         ...(mapLocations || []).map(e => ({ ...e, _pillar: 'map', title: e.name, content: e.description, name: e.name })),
     ];
@@ -2835,7 +2853,7 @@ async function renderArchiveWarehouse(overlay, chatId) {
         const allArchived = [
             ...npc.filter(e => isArchived(e)).map(e => ({ ...e, _pillar: 'npc' })),
             ...items.filter(e => isArchived(e)).map(e => ({ ...e, _pillar: 'item' })),
-            ...timeline.filter(e => isArchived(e)).map(e => ({ ...e, _pillar: 'timeline' })),
+            ...timeline.filter(e => isArchived(e)).map(e => ({ ...e, _pillar: 'milestone' })),
             ...memories.filter(e => isArchived(e)).map(e => ({ ...e, _pillar: 'mem' })),
             ...threads.filter(t => t.status === 'archived').map(t => ({ ...t, _pillar: 'thread', title: t.name, summary: t.summary || '' })),
             ...archivedMapLocs.map(e => ({ ...e, _pillar: 'map', title: e.name, content: e.description, name: e.name })),
@@ -2844,6 +2862,7 @@ async function renderArchiveWarehouse(overlay, chatId) {
         const pillarConfig = {
             npc: { icon: 'fa-user', label: 'NPC', color: '#ba68c8' },
             item: { icon: 'fa-box', label: '物品', color: '#4fc3f7' },
+            milestone: { icon: 'fa-clock', label: '里程碑', color: '#ffb74d' },
             timeline: { icon: 'fa-clock', label: '里程碑', color: '#ffb74d' },
             thread: { icon: 'fa-timeline', label: '时间线', color: '#ce93d8' },
             mem: { icon: 'fa-brain', label: '记忆', color: '#81c784' },
@@ -2860,7 +2879,8 @@ async function renderArchiveWarehouse(overlay, chatId) {
                 </div>
                 <div id="bb_warehouse_list" style="max-height:calc(100vh - 200px);overflow-y:auto;">
                     ${allArchived.length ? allArchived.map(e => {
-                        const pc = pillarConfig[e._pillar] || pillarConfig.mem;
+                        const pillar = normalizeManagerPillar(e._pillar);
+                        const pc = pillarConfig[pillar] || pillarConfig.mem;
                         const name = e.title || e.name || e.event || '(无标题)';
                         const preview = (e.content || e.summary || e.significance || e.role || '').slice(0, 80);
                         const tier = e.memoryTier || 'transient';
@@ -2874,10 +2894,10 @@ async function renderArchiveWarehouse(overlay, chatId) {
                                     ${preview ? `<div style="font-size:0.8em;opacity:0.55;margin-top:3px;">${escapeHtml(preview)}</div>` : ''}
                                 </div>
                                 <div style="display:flex;gap:4px;flex-shrink:0;">
-                                    <button class="menu_button bb-warehouse-restore" data-pillar="${e._pillar}" data-id="${escapeHtml(e.id)}" style="font-size:0.75em;padding:2px 8px;">
+                                    <button class="menu_button bb-warehouse-restore" data-pillar="${escapeAttr(pillar)}" data-id="${escapeAttr(e.id)}" style="font-size:0.75em;padding:2px 8px;">
                                         <i class="fa-solid fa-undo"></i> 恢复
                                     </button>
-                                    <button class="menu_button menu_button_danger bb-warehouse-delete" data-pillar="${e._pillar}" data-id="${escapeHtml(e.id)}" style="font-size:0.75em;padding:2px 8px;">
+                                    <button class="menu_button menu_button_danger bb-warehouse-delete" data-pillar="${escapeAttr(pillar)}" data-id="${escapeAttr(e.id)}" style="font-size:0.75em;padding:2px 8px;">
                                         <i class="fa-solid fa-trash"></i> 删除
                                     </button>
                                 </div>
@@ -2891,7 +2911,7 @@ async function renderArchiveWarehouse(overlay, chatId) {
         panel.querySelectorAll('.bb-warehouse-restore').forEach(btn => {
             btn.addEventListener('click', async () => {
                 const id = btn.dataset.id;
-                const pillar = btn.dataset.pillar;
+                const pillar = normalizeManagerPillar(btn.dataset.pillar);
                 await restoreEntry(chatId, pillar, id);
                 showToast('已恢复', 'success');
                 await renderArchiveWarehouse(overlay, chatId);
@@ -2903,11 +2923,11 @@ async function renderArchiveWarehouse(overlay, chatId) {
         panel.querySelectorAll('.bb-warehouse-delete').forEach(btn => {
             btn.addEventListener('click', async () => {
                 const id = btn.dataset.id;
-                const pillar = btn.dataset.pillar;
+                const pillar = normalizeManagerPillar(btn.dataset.pillar);
                 if (!confirm('确定永久删除此归档条目吗？')) return;
                 if (pillar === 'npc') await removeNpcProfile(chatId, id);
                 else if (pillar === 'item') await removeItem(chatId, id);
-                else if (pillar === 'timeline') await removeTimelineEntry(chatId, id);
+                else if (pillar === 'milestone') await removeTimelineEntry(chatId, id);
                 else if (pillar === 'thread') await removeTimelineThread(chatId, id);
                 else await removeMemory(chatId, id);
                 showToast('已删除归档条目', 'info');

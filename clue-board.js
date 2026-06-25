@@ -333,6 +333,10 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
+function escapeAttr(str) {
+    return escapeHtml(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 async function getChatId() {
     try {
         const ctx = SillyTavern.getContext();
@@ -693,13 +697,13 @@ function renderClueBoardSpatial(body, board, editMode, chatId, onBoardChanged) {
                 <div class="bb-clue-detail-conn">
                     <span>${isOut ? '→' : '←'} ${escapeHtml(other?.label || other?.id || '未知节点')}</span>
                     <small>${escapeHtml(typeText)} ${escapeHtml(confidenceText)}</small>
-                    <button class="menu_button bb-clue-detail-conn-del" data-conn-id="${conn.id}" title="删除连线"><i class="fa-solid fa-xmark"></i></button>
+                    <button class="menu_button bb-clue-detail-conn-del" data-conn-id="${escapeAttr(conn.id)}" title="删除连线"><i class="fa-solid fa-xmark"></i></button>
                 </div>`;
         }).join('');
         detailPane.style.display = '';
         detailPane.innerHTML = `
             <div class="bb-clue-detail-title" style="--bb-clue-color:${rc};">${escapeHtml(node.label || node.id)}</div>
-            <div class="bb-clue-detail-meta"><i class="fa-solid ${refIcons[node.refType] || 'fa-circle'}"></i> ${refLabels[node.refType] || node.refType}</div>
+            <div class="bb-clue-detail-meta"><i class="fa-solid ${refIcons[node.refType] || 'fa-circle'}"></i> ${escapeHtml(refLabels[node.refType] || node.refType)}</div>
             ${node.note ? `<div class="bb-clue-detail-note">${escapeHtml(node.note)}</div>` : '<div class="bb-clue-detail-note empty">暂无备注</div>'}
             ${relatedConnections.length ? `<div class="bb-clue-detail-conns">${connRows}</div>` : '<div class="bb-clue-detail-note empty">暂无关联连线</div>'}
             <div class="bb-clue-detail-actions">
@@ -991,16 +995,16 @@ function renderClueBoardBody(body, board, chatId, overlay, panel) {
         card.innerHTML = `
             <div style="display:flex;align-items:center;gap:8px;padding:${isChild ? '6px 10px' : '10px 12px'};">
                 ${isChild ? '<span style="font-size:0.65em;opacity:0.3;flex-shrink:0;">└─</span>' : ''}
-                <span style="background:${rc}22;border-radius:3px;padding:1px 5px;font-size:${isChild ? '0.58em' : '0.65em'};color:${rc};flex-shrink:0;" title="来源: ${rl}">${rl}</span>
-                <span class="bb-clue-node-label" data-node-id="${node.id}" style="flex:1;font-size:${isChild ? '0.85em' : '0.9em'};font-weight:600;cursor:text;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="点击编辑名称">${escapeHtml(node.label || node.id)}</span>
+                <span style="background:${rc}22;border-radius:3px;padding:1px 5px;font-size:${isChild ? '0.58em' : '0.65em'};color:${rc};flex-shrink:0;" title="来源: ${escapeAttr(rl)}">${escapeHtml(rl)}</span>
+                <span class="bb-clue-node-label" data-node-id="${escapeAttr(node.id)}" style="flex:1;font-size:${isChild ? '0.85em' : '0.9em'};font-weight:600;cursor:text;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="点击编辑名称">${escapeHtml(node.label || node.id)}</span>
                 ${(inN > 0 || outN > 0) ? `<span style="font-size:0.65em;opacity:0.35;flex-shrink:0;">${inN > 0 ? '←'+inN : ''}${inN>0&&outN>0?' ':''}${outN > 0 ? outN+'→' : ''}</span>` : ''}
                 ${hasChain ? `<span style="font-size:0.62em;opacity:0.25;flex-shrink:0;" title="含推理链">🔗</span>` : ''}
-                <button class="bb-clue-node-menu-btn menu_button" data-node-id="${node.id}" style="font-size:0.7em;padding:1px 4px;opacity:0.3;flex-shrink:0;" title="更多操作">···</button>
+                <button class="bb-clue-node-menu-btn menu_button" data-node-id="${escapeAttr(node.id)}" style="font-size:0.7em;padding:1px 4px;opacity:0.3;flex-shrink:0;" title="更多操作">···</button>
             </div>
             ${node.note ? `<div style="padding:0 12px ${isChild ? '6' : '10'}px;font-size:0.76em;opacity:0.5;border-top:1px solid var(--SmartThemeBorderColor,#3a3a4a11);margin-top:2px;padding-top:8px;">${escapeHtml(node.note)}</div>` : ''}
-            <div class="bb-clue-node-actions" data-node-id="${node.id}" style="display:none;padding:0 12px 8px;gap:4px;font-size:0.7em;border-top:1px solid var(--SmartThemeBorderColor,#3a3a4a22);padding-top:6px;">
-                <button class="bb-clue-node-edit menu_button" data-node-id="${node.id}" style="font-size:0.85em;padding:2px 8px;">✏️ 备注</button>
-                <button class="bb-clue-node-del menu_button" data-node-id="${node.id}" style="font-size:0.85em;padding:2px 8px;color:#f44336;">🗑 删除</button>
+            <div class="bb-clue-node-actions" data-node-id="${escapeAttr(node.id)}" style="display:none;padding:0 12px 8px;gap:4px;font-size:0.7em;border-top:1px solid var(--SmartThemeBorderColor,#3a3a4a22);padding-top:6px;">
+                <button class="bb-clue-node-edit menu_button" data-node-id="${escapeAttr(node.id)}" style="font-size:0.85em;padding:2px 8px;">✏️ 备注</button>
+                <button class="bb-clue-node-del menu_button" data-node-id="${escapeAttr(node.id)}" style="font-size:0.85em;padding:2px 8px;color:#f44336;">🗑 删除</button>
             </div>`;
         return card;
     }
@@ -1027,7 +1031,7 @@ function renderClueBoardBody(body, board, chatId, overlay, panel) {
             const groupToggle = document.createElement('div');
             groupToggle.className = 'bb-clue-group-toggle';
             groupToggle.style.cssText = `display:flex;align-items:center;gap:4px;font-size:0.72em;color:${tc};cursor:pointer;padding:3px 4px;border-radius:3px;user-select:none;`;
-            groupToggle.innerHTML = `<span class="bb-clue-group-arrow" style="display:inline-block;width:10px;transition:transform 0.15s;">▼</span> ${ti} <strong>${typeName}</strong> (${conns.length})`;
+            groupToggle.innerHTML = `<span class="bb-clue-group-arrow" style="display:inline-block;width:10px;transition:transform 0.15s;">▼</span> ${ti} <strong>${escapeHtml(typeName)}</strong> (${conns.length})`;
             connBlock.appendChild(groupToggle);
 
             const groupBody = document.createElement('div');
@@ -1053,12 +1057,12 @@ function renderClueBoardBody(body, board, chatId, overlay, panel) {
                 row.innerHTML = `
                     <span style="color:${tc};font-size:0.8em;flex-shrink:0;">→</span>
                     <strong style="font-size:0.95em;">${escapeHtml(toNode.label || toNode.id)}</strong>
-                    <span style="font-size:0.7em;opacity:0.6;">${confidenceLabel}</span>
+                    <span style="font-size:0.7em;opacity:0.6;">${escapeHtml(confidenceLabel)}</span>
                     ${conn.label ? `<span style="font-size:0.7em;opacity:0.4;font-style:italic;">${escapeHtml(conn.label)}</span>` : ''}
                     ${isChainStart ? `<span style="font-size:0.6em;opacity:0.3;" title="推理链">🔗</span>` : ''}
                     <span style="flex:1;"></span>
-                    <button class="bb-clue-conn-edit menu_button" data-conn-id="${conn.id}" style="font-size:0.6em;padding:0 3px;opacity:0.3;">✏️</button>
-                    <button class="bb-clue-conn-del menu_button" data-conn-id="${conn.id}" style="font-size:0.6em;padding:0 3px;opacity:0.3;color:#f44336;">✕</button>
+                    <button class="bb-clue-conn-edit menu_button" data-conn-id="${escapeAttr(conn.id)}" style="font-size:0.6em;padding:0 3px;opacity:0.3;">✏️</button>
+                    <button class="bb-clue-conn-del menu_button" data-conn-id="${escapeAttr(conn.id)}" style="font-size:0.6em;padding:0 3px;opacity:0.3;color:#f44336;">✕</button>
                 `;
                 groupBody.appendChild(row);
 
@@ -1071,7 +1075,7 @@ function renderClueBoardBody(body, board, chatId, overlay, panel) {
                             const stc = typeColors[step.type] || '#888';
                             const subRow = document.createElement('div');
                             subRow.style.cssText = `display:flex;align-items:center;gap:3px;padding:1px 4px 1px 18px;font-size:0.7em;opacity:0.55;`;
-                            subRow.innerHTML = `<span style="font-size:0.7em;">└</span><span style="color:${stc};font-size:0.75em;">→</span><strong>${escapeHtml(stepTo.label || stepTo.id)}</strong><span style="font-size:0.7em;">${confidenceLabels[step.confidence] || step.confidence}</span>`;
+                            subRow.innerHTML = `<span style="font-size:0.7em;">└</span><span style="color:${stc};font-size:0.75em;">→</span><strong>${escapeHtml(stepTo.label || stepTo.id)}</strong><span style="font-size:0.7em;">${escapeHtml(confidenceLabels[step.confidence] || step.confidence)}</span>`;
                             groupBody.appendChild(subRow);
                         }
                     }
@@ -1105,7 +1109,8 @@ function renderClueBoardBody(body, board, chatId, overlay, panel) {
     body.querySelectorAll('.bb-clue-node-menu-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
-            const actions = body.querySelector(`.bb-clue-node-actions[data-node-id="${btn.dataset.nodeId}"]`);
+            const actions = [...body.querySelectorAll('.bb-clue-node-actions')]
+                .find(el => el.dataset.nodeId === btn.dataset.nodeId);
             if (actions) actions.style.display = actions.style.display === 'none' ? 'flex' : 'none';
         });
     });
@@ -1218,7 +1223,7 @@ function showAddNodeDialog(chatId, onDone) {
             <button class="bb-clue-tab" data-pillar="mem" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">记忆</button>
             <button class="bb-clue-tab" data-pillar="npc" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">NPC</button>
             <button class="bb-clue-tab" data-pillar="item" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">物品</button>
-            <button class="bb-clue-tab" data-pillar="timeline" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">里程碑</button>
+            <button class="bb-clue-tab" data-pillar="milestone" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">里程碑</button>
             <button class="bb-clue-tab" data-pillar="map" style="font-size:0.75em;padding:4px 10px;border:1px solid var(--SmartThemeBorderColor,#555);border-radius:14px;background:transparent;color:inherit;cursor:pointer;opacity:0.6;">地图</button>
         </div>
         <input type="text" id="bb_clue_node_search" class="bb-input" placeholder="搜索条目..." style="margin-bottom:8px;flex-shrink:0;" />
@@ -1250,7 +1255,7 @@ function showAddNodeDialog(chatId, onDone) {
             ...memories.filter(isClueSourceActive).map(e => ({ ...e, _pillar: 'mem', _label: e.title || e.summary?.slice(0, 40) || e.id, _preview: (e.content || e.summary || '').slice(0, 80) })),
             ...npc.filter(isClueSourceActive).map(e => ({ ...e, _pillar: 'npc', _label: e.name || e.id, _preview: e.role || e.personality || '' })),
             ...items.filter(isClueSourceActive).map(e => ({ ...e, _pillar: 'item', _label: e.name || e.id, _preview: e.significance || e.status || '' })),
-            ...timeline.filter(isClueSourceActive).map(e => ({ ...e, _pillar: 'timeline', _label: e.event || e.summary?.slice(0, 40) || e.id, _preview: e.summary || e.storyTime || '' })),
+            ...timeline.filter(isClueSourceActive).map(e => ({ ...e, _pillar: 'milestone', _label: e.event || e.summary?.slice(0, 40) || e.id, _preview: e.summary || e.storyTime || '' })),
             ...mapLocations.map(e => ({ ...e, _pillar: 'map', _label: e.name || e.id, _preview: e.description || e.region || '' })),
         ];
 
@@ -1291,12 +1296,12 @@ function showAddNodeDialog(chatId, onDone) {
             }
 
             listEl.innerHTML = filtered.map(e => `
-                <div class="bb-clue-add-item" data-pillar="${e._pillar}" data-id="${e.id}" data-label="${escapeHtml(e._label)}"
+                <div class="bb-clue-add-item" data-pillar="${escapeAttr(e._pillar)}" data-id="${escapeAttr(e.id)}" data-label="${escapeAttr(e._label)}"
                     style="display:flex;align-items:center;gap:6px;padding:6px 8px;cursor:pointer;border-bottom:1px solid rgba(128,128,128,0.06);border-radius:4px;">
                     <i class="fa-solid ${pillarIcon[e._pillar] || 'fa-circle'}" style="color:${pillarColor[e._pillar] || '#888'};font-size:0.75em;"></i>
                     <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(e._label)}</span>
-                    ${e.truthStatus && e.truthStatus !== 'true' ? `<span style="font-size:0.65em;color:${truthColor[e.truthStatus] || '#888'};opacity:0.7;">${e.truthStatus}</span>` : ''}
-                    <span style="font-size:0.65em;opacity:0.35;">${e._preview.slice(0, 30)}</span>
+                    ${e.truthStatus && e.truthStatus !== 'true' ? `<span style="font-size:0.65em;color:${truthColor[e.truthStatus] || '#888'};opacity:0.7;">${escapeHtml(e.truthStatus)}</span>` : ''}
+                    <span style="font-size:0.65em;opacity:0.35;">${escapeHtml((e._preview || '').slice(0, 30))}</span>
                 </div>
             `).join('');
 
@@ -1347,7 +1352,7 @@ function showAddConnectionDialog(nodes, onConfirm) {
 
     const dialog = document.createElement('div');
     dialog.style.cssText = 'background:var(--SmartThemeBlurTintColor,#1e1e2e);border:1px solid var(--SmartThemeBorderColor,#45475a);border-radius:10px;padding:16px 18px;width:min(360px,90vw);';
-    const nodeOptions = nodes.map(n => `<option value="${n.id}">${escapeHtml(n.label || n.id)}</option>`).join('');
+    const nodeOptions = nodes.map(n => `<option value="${escapeAttr(n.id)}">${escapeHtml(n.label || n.id)}</option>`).join('');
     dialog.innerHTML = `
         <div style="font-weight:bold;margin-bottom:12px;"><i class="fa-solid fa-arrow-right-arrow-left"></i> 新建连线</div>
         <div style="margin-bottom:8px;">

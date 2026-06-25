@@ -22,6 +22,9 @@ function escapeHtml(text) {
     div.textContent = String(text);
     return div.innerHTML;
 }
+function escapeAttr(text) {
+    return escapeHtml(text).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 function showToast(msg, type) {
     try { const ctx = window.SillyTavern?.getContext?.(); if (ctx?.toastr?.[type || 'info']) ctx.toastr[type || 'info'](msg); } catch {}
 }
@@ -179,7 +182,7 @@ function buildListHTML(locations, items, visibleRegions, editMode = false) {
             for (const edge of (loc.edges || [])) {
                 const target = locMap.get(edge.toId);
                 if (!target || target.archived || target.region === loc.region) continue;
-                lines.push(`<button class="bb-map-cross-link" data-region="${escapeHtml(target.region || '')}">
+                lines.push(`<button class="bb-map-cross-link" data-region="${escapeAttr(target.region || '')}">
                     <span>${escapeHtml(loc.name)}</span>
                     <i class="fa-solid fa-arrow-right"></i>
                     <span>${escapeHtml(target.name)}</span>
@@ -904,11 +907,11 @@ function showLocationForm(title, defaults, onSave) {
     form.innerHTML = `
         <div style="font-weight:bold;margin-bottom:14px;font-size:1.05em;">${escapeHtml(title)}</div>
         <label style="font-size:0.85em;">名称 <span style="color:#f44336;">*</span></label>
-        <input id="bb_map_f_name" class="bb-input" value="${escapeHtml(d.name || '')}" style="width:100%;margin-bottom:10px;box-sizing:border-box;" />
+        <input id="bb_map_f_name" class="bb-input" value="${escapeAttr(d.name || '')}" style="width:100%;margin-bottom:10px;box-sizing:border-box;" />
         <label style="font-size:0.85em;">描述</label>
         <textarea id="bb_map_f_desc" class="bb-input" rows="3" style="width:100%;margin-bottom:10px;box-sizing:border-box;resize:vertical;">${escapeHtml(d.description || '')}</textarea>
         <div style="display:flex;gap:8px;">
-            <div style="flex:1;"><label style="font-size:0.85em;">区域</label><input id="bb_map_f_region" class="bb-input" value="${escapeHtml(d.region || '')}" style="width:100%;margin-bottom:10px;box-sizing:border-box;" /></div>
+            <div style="flex:1;"><label style="font-size:0.85em;">区域</label><input id="bb_map_f_region" class="bb-input" value="${escapeAttr(d.region || '')}" style="width:100%;margin-bottom:10px;box-sizing:border-box;" /></div>
             <div style="flex:1;"><label style="font-size:0.85em;">父地点</label><select id="bb_map_f_parent" class="bb-input" style="width:100%;margin-bottom:10px;"><option value="">(无)</option></select></div>
         </div>
         <label style="font-size:0.85em;display:flex;align-items:center;gap:6px;margin-bottom:12px;">
@@ -922,7 +925,7 @@ function showLocationForm(title, defaults, onSave) {
     overlay.appendChild(form); document.body.appendChild(overlay);
     getLocations(getChatId()).then(locs => {
         const sel = form.querySelector('#bb_map_f_parent');
-        if (sel) for (const l of locs) { if (l.id !== d.id) sel.innerHTML += `<option value="${l.id}" ${d.parentId === l.id ? 'selected' : ''}>${escapeHtml(l.name)}</option>`; }
+        if (sel) for (const l of locs) { if (l.id !== d.id) sel.innerHTML += `<option value="${escapeAttr(l.id)}" ${d.parentId === l.id ? 'selected' : ''}>${escapeHtml(l.name)}</option>`; }
     });
     const nameInput = form.querySelector('#bb_map_f_name');
     form.querySelector('#bb_map_f_save').addEventListener('click', () => {
@@ -952,7 +955,7 @@ function showConnectionForm(fromName, locations, onSave) {
     form.innerHTML = `
         <div style="font-weight:bold;margin-bottom:14px;">🔗 从「${escapeHtml(fromName)}」连线</div>
         <label style="font-size:0.85em;">目标地点</label>
-        <select id="bb_map_c_target" class="bb-input" style="width:100%;margin-bottom:10px;">${locations.map(l => `<option value="${l.id}">${escapeHtml(l.name)} ${l.region ? '(' + escapeHtml(l.region) + ')' : ''}</option>`).join('')}</select>
+        <select id="bb_map_c_target" class="bb-input" style="width:100%;margin-bottom:10px;">${locations.map(l => `<option value="${escapeAttr(l.id)}">${escapeHtml(l.name)} ${l.region ? '(' + escapeHtml(l.region) + ')' : ''}</option>`).join('')}</select>
         <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">距离</label><input id="bb_map_c_dist" class="bb-input" style="width:100%;margin-bottom:10px;box-sizing:border-box;" /></div><div style="flex:1;"><label style="font-size:0.85em;">路径类型</label><input id="bb_map_c_type" class="bb-input" style="width:100%;margin-bottom:10px;box-sizing:border-box;" /></div></div>
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;"><div style="flex:1;"><select id="bb_map_c_diff" class="bb-input"><option value="normal" selected>普通</option><option value="easy">容易</option><option value="hard">困难</option></select></div><div style="flex:1;"><label style="font-size:0.85em;cursor:pointer;"><input type="checkbox" id="bb_map_c_oneway" /> 单向</label></div></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;"><button id="bb_map_c_cancel" class="menu_button" style="opacity:0.6;">取消</button><button id="bb_map_c_save" class="menu_button" style="background:var(--SmartThemeQuoteColor,#4caf50);color:#fff;">创建</button></div>`;
@@ -974,7 +977,7 @@ function showItemPicker(locationName, items, onSave) {
     form.style.cssText = 'background:var(--SmartThemeChatTintColor,#1e1e2e);color:var(--SmartThemeBodyColor,#e0e0e0);border:1px solid var(--SmartThemeBorderColor,#45475a);border-radius:12px;padding:20px 24px;width:min(480px,92vw);max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.5);';
     form.innerHTML = `<div style="font-weight:bold;margin-bottom:6px;">📦 为「${escapeHtml(locationName)}」放置物品</div>
         ${placed.length > 0 ? `<div style="font-size:0.75em;opacity:0.5;margin-bottom:8px;">已有: ${placed.map(i => escapeHtml(i.name)).join('、')}</div>` : ''}
-        <div style="flex:1;overflow-y:auto;max-height:45vh;margin-bottom:8px;">${unplaced.length === 0 ? '<div style="opacity:0.4;text-align:center;padding:20px;">所有物品已在此地点</div>' : unplaced.map(i => `<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;border-bottom:1px solid var(--SmartThemeBorderColor,#3333);font-size:0.85em;"><input type="checkbox" class="bb-map-item-cb" data-id="${i.id}" /><span style="flex:1;">${escapeHtml(i.name)}</span><span style="font-size:0.65em;opacity:0.35;">${i.location ? '📍'+escapeHtml(i.location) : ''}</span></label>`).join('')}</div>
+        <div style="flex:1;overflow-y:auto;max-height:45vh;margin-bottom:8px;">${unplaced.length === 0 ? '<div style="opacity:0.4;text-align:center;padding:20px;">所有物品已在此地点</div>' : unplaced.map(i => `<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;border-bottom:1px solid var(--SmartThemeBorderColor,#3333);font-size:0.85em;"><input type="checkbox" class="bb-map-item-cb" data-id="${escapeAttr(i.id)}" /><span style="flex:1;">${escapeHtml(i.name)}</span><span style="font-size:0.65em;opacity:0.35;">${i.location ? '📍'+escapeHtml(i.location) : ''}</span></label>`).join('')}</div>
         <div style="display:flex;gap:8px;justify-content:flex-end;"><button id="bb_map_pi_cancel" class="menu_button" style="opacity:0.6;">取消</button><button id="bb_map_pi_save" class="menu_button" style="background:var(--SmartThemeQuoteColor,#4caf50);color:#fff;">放置选中</button></div>`;
     overlay.appendChild(form); document.body.appendChild(overlay);
     form.querySelector('#bb_map_pi_save').addEventListener('click', () => { const ids = [...form.querySelectorAll('.bb-map-item-cb:checked')].map(cb => cb.dataset.id); overlay.remove(); if (ids.length > 0) onSave(ids); });
@@ -1076,7 +1079,7 @@ export async function openMapView(chatId) {
         for (const r of regionKeys) {
             const rc = getRegionColor(r);
             const isVisible = visibleRegions.has(r);
-            tabBar.innerHTML += `<button class="menu_button bb-map-region-tab ${isVisible ? 'active' : ''}" data-region="${escapeHtml(r)}" style="font-size:0.72em;padding:3px 8px;${isVisible ? 'background:' + rc + '33;border-color:' + rc + ';' : ''}">${escapeHtml(getRegionLabel(r))}</button>`;
+            tabBar.innerHTML += `<button class="menu_button bb-map-region-tab ${isVisible ? 'active' : ''}" data-region="${escapeAttr(r)}" style="font-size:0.72em;padding:3px 8px;${isVisible ? 'background:' + rc + '33;border-color:' + rc + ';' : ''}">${escapeHtml(getRegionLabel(r))}</button>`;
         }
         tabBar.querySelectorAll('.bb-map-region-tab').forEach(btn => {
             btn.addEventListener('click', () => {

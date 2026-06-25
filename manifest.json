@@ -4,9 +4,9 @@
     "js": "index.js",
     "css": "style.css",
     "author": "BB-Memory Dev",
-    "version": "9.2.4",
+    "version": "9.2.5",
     "homePage": "https://github.com/BBKing0/SillyTavern-BBMemory",
     "auto_update": true,
     "generate_interceptor": "bbMemoryInterceptor",
-    "description": "Smart long-term memory extension v9.2.4 - Expanded usage guide and version alignment"
+    "description": "Smart long-term memory extension v9.2.5 - Expanded usage guide and version alignment"
 }

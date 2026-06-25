@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.2.4</b>
+            <b>BB-Memory v9.2.5</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -237,6 +237,12 @@
                     </div>
 
                     <div class="bb-mem-sidebar-section">
+                        <label for="bb_promotion_cooldown_rounds">升格冷却轮数</label>
+                        <small class="bb-mem-hint">同一条目升格后至少经过多少轮才允许再次升格（默认15）</small>
+                        <input id="bb_promotion_cooldown_rounds" type="number" class="bb-input" min="0" max="200" value="15" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
                         <label for="bb_hit_score_promote_threshold">记忆升级命中计数</label>
                         <small class="bb-mem-hint">模糊→稳固、稳固→核心所需净命中计数（默认20）</small>
                         <input id="bb_hit_score_promote_threshold" type="number" class="bb-input" min="1" max="200" value="20" />
@@ -332,6 +338,12 @@
                     </div>
 
                     <div class="bb-mem-sidebar-section">
+                        <label for="bb_health_check_thread_stale_days">时间线停滞体检天数</label>
+                        <small class="bb-mem-hint">时间线超过此天数无推进时列入体检提示（默认30）</small>
+                        <input id="bb_health_check_thread_stale_days" type="number" class="bb-input" min="1" max="365" value="30" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
                         <label for="bb_health_check_clue_stale_days">线索板更新提醒（天）</label>
                         <small class="bb-mem-hint">线索板启用注入但超过此天数未更新时提醒（默认14）</small>
                         <input id="bb_health_check_clue_stale_days" type="number" class="bb-input" min="1" max="90" value="14" />
@@ -412,6 +424,12 @@
                         <input id="bb_batch_extraction" type="number" class="bb-input" min="1" max="5" value="2" />
                     </div>
                     <div class="bb-mem-hint">同时发送的API请求数，每个exchange独立调用（增大可提速，默认2）。</div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_max_memories_per_exchange">单轮最多新增记忆</label>
+                        <small class="bb-mem-hint">每个 exchange 最多写入多少条记忆，避免一次提取过密（默认3）</small>
+                        <input id="bb_max_memories_per_exchange" type="number" class="bb-input" min="1" max="20" value="3" />
+                    </div>
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_source_rollback_floor_window">更新回滚快照保留楼层数</label>
@@ -519,6 +537,18 @@
                         <span>启用语义去重</span>
                     </label>
 
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_merge_similarity_threshold">自动合并相似度阈值</label>
+                        <small class="bb-mem-hint">相似度高于此值时优先合并为同一记忆（默认0.85）</small>
+                        <input id="bb_merge_similarity_threshold" type="number" class="bb-input" min="0.50" max="1.00" step="0.01" value="0.85" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_reduce_similarity_threshold">降权相似度阈值</label>
+                        <small class="bb-mem-hint">相似度高于此值但未合并时降低重复候选优先级（默认0.60）</small>
+                        <input id="bb_reduce_similarity_threshold" type="number" class="bb-input" min="0.10" max="1.00" step="0.01" value="0.60" />
+                    </div>
+
                 </div>
             </div>
 
@@ -564,6 +594,42 @@
                             <i class="fa-solid fa-flask"></i> 打开 Agent 测试版
                         </button>
                     </div>
+
+                    <div class="bb-experimental-card">
+                        <div class="bb-experimental-card-head">
+                            <i class="fa-solid fa-mobile-screen"></i>
+                            <div>
+                                <strong>BBTel 小手机同步（测试版 / 低优先级）</strong>
+                                <small>保留完整存档槽桥接入口，不作为核心能力维护</small>
+                            </div>
+                        </div>
+                        <div class="bb-experimental-risk">
+                            <i class="fa-solid fa-triangle-exclamation"></i>
+                            低优先级测试功能；建议先使用 BB-Memory 本地 JSON 或聊天元数据备份确认数据安全。
+                        </div>
+                        <div style="display:flex;gap:4px;margin:4px 0;align-items:center;">
+                            <input id="bbtel_bridge_base_url" class="bb-input" type="text" placeholder="/bbtel" style="flex:1;font-size:0.75em;" />
+                            <button id="bbtel_save_base_btn" class="menu_button" title="保存 BBTel 桥接地址" style="font-size:0.75em;min-width:54px;">保存</button>
+                        </div>
+                        <div style="display:flex;gap:4px;margin:4px 0;align-items:center;">
+                            <select id="bbtel_local_slot_select" class="bb-input" style="flex:1;font-size:0.78em;"></select>
+                            <button id="bbtel_sync_to_btn" class="menu_button" title="将当前 BB-Memory 存档槽发送到 BBTel" style="flex:1;font-size:0.8em;">
+                                <i class="fa-solid fa-upload"></i> 发给 BBTel
+                            </button>
+                        </div>
+                        <div style="display:flex;gap:4px;margin:4px 0;align-items:center;">
+                            <select id="bbtel_outbox_select" class="bb-input" style="flex:1;font-size:0.78em;"></select>
+                            <button id="bbtel_refresh_outbox_btn" class="menu_button" title="刷新 BBTel 发件箱" style="font-size:0.75em;min-width:54px;">刷新</button>
+                        </div>
+                        <div style="display:flex;gap:4px;margin:4px 0;">
+                            <button id="bbtel_sync_from_btn" class="menu_button" title="从 BBTel 拉取完整存档槽" style="flex:1;font-size:0.8em;">
+                                <i class="fa-solid fa-download"></i> 从 BBTel 加载
+                            </button>
+                        </div>
+                        <div id="bbtel_sync_status" style="font-size:0.75em;margin-top:6px;opacity:0.7;">
+                            就绪 - 点击按钮开始同步
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -596,42 +662,6 @@
                 </div>
             </div>
 
-            <!-- BBTel 同步 -->
-            <hr />
-            <div class="bb-settings-section">
-                <div class="bb-settings-section-header" data-section="bbtel_sync">
-                    <span><i class="fa-solid fa-mobile-screen"></i> BBTel 小手机同步</span>
-                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
-                </div>
-                <div class="bb-settings-section-body">
-                    <div class="bb-mem-hint" style="margin-bottom:8px;">
-                        <i class="fa-solid fa-circle-info"></i> 与 BBTel 小手机双向同步完整存档槽。云端部署默认使用同域 /bbtel。
-                    </div>
-                    <div style="display:flex;gap:4px;margin:4px 0;align-items:center;">
-                        <input id="bbtel_bridge_base_url" class="bb-input" type="text" placeholder="/bbtel" style="flex:1;font-size:0.75em;" />
-                        <button id="bbtel_save_base_btn" class="menu_button" title="保存 BBTel 桥接地址" style="font-size:0.75em;min-width:54px;">保存</button>
-                    </div>
-                    <div style="display:flex;gap:4px;margin:4px 0;align-items:center;">
-                        <select id="bbtel_local_slot_select" class="bb-input" style="flex:1;font-size:0.78em;"></select>
-                        <button id="bbtel_sync_to_btn" class="menu_button" title="将当前 BB-Memory 存档槽发送到 BBTel" style="flex:1;font-size:0.8em;">
-                            <i class="fa-solid fa-upload"></i> 发给 BBTel
-                        </button>
-                    </div>
-                    <div style="display:flex;gap:4px;margin:4px 0;align-items:center;">
-                        <select id="bbtel_outbox_select" class="bb-input" style="flex:1;font-size:0.78em;"></select>
-                        <button id="bbtel_refresh_outbox_btn" class="menu_button" title="刷新 BBTel 发件箱" style="font-size:0.75em;min-width:54px;">刷新</button>
-                    </div>
-                    <div style="display:flex;gap:4px;margin:4px 0;">
-                        <button id="bbtel_sync_from_btn" class="menu_button" title="从 BBTel 拉取完整存档槽" style="flex:1;font-size:0.8em;">
-                            <i class="fa-solid fa-download"></i> 从 BBTel 加载
-                        </button>
-                    </div>
-                    <div id="bbtel_sync_status" style="font-size:0.75em;margin-top:6px;opacity:0.7;">
-                        就绪 — 点击按钮开始同步
-                    </div>
-                </div>
-            </div>
-
             <script>
             (function() {
                 // BBTel 同步按钮事件绑定（在 DOM 就绪后执行）
@@ -652,9 +682,20 @@
 
                     function setStatus(text, isOk) {
                         if (statusEl) {
-                            statusEl.innerHTML = text;
+                            statusEl.textContent = text;
                             statusEl.style.color = isOk === false ? '#ff4444' : '';
                         }
+                    }
+
+                    function setOptions(select, options) {
+                        if (!select) return;
+                        select.innerHTML = '';
+                        options.forEach(function(opt) {
+                            var option = document.createElement('option');
+                            option.value = String(opt.value == null ? '' : opt.value);
+                            option.textContent = String(opt.label == null ? '' : opt.label);
+                            select.appendChild(option);
+                        });
                     }
 
                     function ensureBridgeLoaded() {
@@ -679,21 +720,21 @@
                     async function refreshLocalSlots() {
                         if (!localSlotSelect || !window.BBTelSync || !window.BBTelSync.listLocalSlots) return;
                         var slots = await window.BBTelSync.listLocalSlots();
-                        localSlotSelect.innerHTML = slots.map(function(name) {
-                            return '<option value="' + String(name).replace(/"/g, '&quot;') + '">' + name + '</option>';
-                        }).join('');
+                        setOptions(localSlotSelect, slots.map(function(name) {
+                            return { value: name, label: name };
+                        }));
                     }
 
                     async function refreshOutbox() {
                         if (!outboxSelect || !window.BBTelSync || !window.BBTelSync.listBBTelOutbox) return;
                         var packages = await window.BBTelSync.listBBTelOutbox();
-                        outboxSelect.innerHTML = packages.length
+                        setOptions(outboxSelect, packages.length
                             ? packages.map(function(pkg) {
                                 var name = (pkg.slotName || (pkg.sourceMeta && pkg.sourceMeta.slotName) || pkg.id);
                                 var count = pkg.stats && pkg.stats.total ? ' (' + pkg.stats.total + ')' : '';
-                                return '<option value="' + pkg.id + '">' + name + count + '</option>';
-                            }).join('')
-                            : '<option value="">BBTel 发件箱为空</option>';
+                                return { value: pkg.id, label: name + count };
+                            })
+                            : [{ value: '', label: 'BBTel 发件箱为空' }]);
                     }
 
                     async function refreshAll() {
