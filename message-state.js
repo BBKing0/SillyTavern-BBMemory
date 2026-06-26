@@ -751,6 +751,23 @@ export function hideExchange(userIndex, aiIndex) {
     return changed;
 }
 
+function buildFloorSourceOptions(chatId, msg, index) {
+    return {
+        sourceFloor: Number.isInteger(index) ? index : undefined,
+        sourceMessageHash: cyrb53Hash(msg?.mes || ''),
+        sourceChatId: chatId || '',
+    };
+}
+
+function countDeleteResult(result) {
+    return (result.npc || 0)
+        + (result.items || 0)
+        + (result.milestones || 0)
+        + (result.timeline || 0)
+        + (result.memories || 0)
+        + (result.map || 0);
+}
+
 /**
  * v2.9.8: 刷新聊天消息上的提取标记、隐藏状态和元标记按钮
  * 扫描 SillyTavern 聊天 DOM，为已提取/元标记的消息添加视觉标记和隐藏样式
@@ -912,9 +929,10 @@ export function refreshExtractionMarkers() {
                     for (let j = idx - 1; j >= 0; j--) {
                         if (chat[j].is_user && chat[j].mes) { userText = chat[j].mes; break; }
                     }
-                    const hash = computeExchangeHash(userText, msg.mes || '');
+                    const hash = msg._bbmem_exchangeHash || computeExchangeHash(userText, msg.mes || '');
+                    const sourceOptions = buildFloorSourceOptions(chatId, msg, idx);
                     const store = await import('./memory-store.js');
-                    await store.deleteByExchange(chatId, hash);
+                    await store.deleteByExchange(chatId, hash, sourceOptions);
                     await unmarkExchangeProcessed(chatId, hash); // v6.1.6: 清除已处理标记
                     msg._bbmem_extracted = false;
                     msg._bbmem_pendingExtraction = true;
@@ -945,29 +963,21 @@ export function refreshExtractionMarkers() {
                     for (let j = idx - 1; j >= 0; j--) {
                         if (chat[j].is_user && chat[j].mes) { userText = chat[j].mes; break; }
                     }
-                    const hash = computeExchangeHash(userText, msg.mes || '');
+                    const hash = msg._bbmem_exchangeHash || computeExchangeHash(userText, msg.mes || '');
+                    const sourceOptions = buildFloorSourceOptions(chatId, msg, idx);
                     const store = await import('./memory-store.js');
                     // v6.1.6: 先加载关联记忆展示给用户
-                    const [npc, items, timeline, memories] = await Promise.all([
-                        store.getNpcProfiles(chatId), store.getItems(chatId),
-                        store.getTimeline(chatId), store.getMemories(chatId),
-                    ]);
-                    const matched = {
-                        npc: npc.filter(e => e.sourceExchange === hash),
-                        items: items.filter(e => e.sourceExchange === hash),
-                        timeline: timeline.filter(e => e.sourceExchange === hash),
-                        memories: memories.filter(e => e.sourceExchange === hash),
-                    };
+                    const matched = await store.getEntriesBySource(chatId, hash, sourceOptions);
                     await showDeleteFloorDialog(chatId, hash, matched, async () => {
-                        const removed = await store.deleteByExchange(chatId, hash);
+                        const removed = await store.deleteByExchange(chatId, hash, sourceOptions);
                         await unmarkExchangeProcessed(chatId, hash);
-                        const total = removed.npc + removed.items + removed.timeline + removed.memories + (removed.map || 0);
+                        const total = countDeleteResult(removed);
                         const deletedTotal = Object.values(removed.deleted || {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
                         const restoredTotal = Object.values(removed.restored || {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
                         msg._bbmem_extracted = false;
                         msg._bbmem_pendingExtraction = true;
                         saveChat();
-                        showInlineToast(block, `已处理 ${total} 条关联数据（删除 ${deletedTotal} / 回滚 ${restoredTotal}；NPC:${removed.npc} 物品:${removed.items} 时间线:${removed.timeline} 地点:${removed.map || 0} 记忆:${removed.memories}）`, 'success');
+                        showInlineToast(block, `已处理 ${total} 条关联数据（删除 ${deletedTotal} / 回滚 ${restoredTotal}；NPC:${removed.npc} 物品:${removed.items} 里程碑:${removed.milestones || 0} 时间线:${removed.timeline || 0} 地点:${removed.map || 0} 记忆:${removed.memories}）`, 'success');
                         refreshExtractionMarkers();
                     });
                 } catch (err) {
@@ -1002,15 +1012,29 @@ export function refreshExtractionMarkers() {
             block.classList.remove('bb-extracted-hidden', 'bb-extracted-transparent');
         }
 
+        if (!msg._bbmem_exchangeHash && isAiMessage(msg) && (msg._bbmem_extracted || msg._bbmem_skipped || msg._bbmem_pendingExtraction)) {
+            const prev = findPreviousUser(chat, idx);
+            if (prev.userIndex >= 0) {
+                msg._bbmem_exchangeHash = computeExchangeHash(prev.userText || '', msg.mes || '');
+                changed = true;
+            }
+        }
+
         // v6.1: 存储 exchange hash 到 DOM 用于删除检测
         if (msg._bbmem_exchangeHash) {
             const uidResult = ensureMessageUid(msg);
             if (uidResult.changed) changed = true;
             block.setAttribute('data-bb-exchange-hash', msg._bbmem_exchangeHash);
             if (uidResult.uid) block.setAttribute('data-bb-message-uid', uidResult.uid);
+            block.setAttribute('data-bb-source-floor', String(idx));
+            block.setAttribute('data-bb-source-message-hash', cyrb53Hash(msg.mes || ''));
+            if (chatId) block.setAttribute('data-bb-chat-id', String(chatId));
         } else {
             block.removeAttribute('data-bb-exchange-hash');
             block.removeAttribute('data-bb-message-uid');
+            block.removeAttribute('data-bb-source-floor');
+            block.removeAttribute('data-bb-source-message-hash');
+            block.removeAttribute('data-bb-chat-id');
         }
     });
 
@@ -1019,7 +1043,20 @@ export function refreshExtractionMarkers() {
 
 // v6.1.6: 删除楼层关联记忆的确认弹窗
 async function showDeleteFloorDialog(chatId, hash, matched, onConfirm) {
-    const totalAll = matched.npc.length + matched.items.length + matched.timeline.length + matched.memories.length;
+    matched = {
+        npc: matched?.npc || [],
+        items: matched?.items || [],
+        milestones: matched?.milestones || [],
+        timeline: matched?.timeline || [],
+        memories: matched?.memories || [],
+        map: matched?.map || [],
+    };
+    const totalAll = matched.npc.length
+        + matched.items.length
+        + matched.milestones.length
+        + matched.timeline.length
+        + matched.memories.length
+        + matched.map.length;
     if (totalAll === 0) {
         showInlineToast(null, '该楼层没有关联的记忆条目', 'info');
         return;
@@ -1054,7 +1091,9 @@ async function showDeleteFloorDialog(chatId, hash, matched, onConfirm) {
     const pillars = [
         { key: 'npc', icon: 'fa-user', label: 'NPC角色', color: '#64b5f6', entries: matched.npc, fields: ['name','tier','role'] },
         { key: 'items', icon: 'fa-box', label: '物品', color: '#ffb74d', entries: matched.items, fields: ['name','status','tier'] },
-        { key: 'timeline', icon: 'fa-clock', label: '时间线', color: '#81c784', entries: matched.timeline, fields: ['event','storyTime'] },
+        { key: 'milestones', icon: 'fa-flag', label: '里程碑', color: '#81c784', entries: matched.milestones, fields: ['event','summary','storyTime'] },
+        { key: 'timeline', icon: 'fa-clock', label: '时间线', color: '#4fc3f7', entries: matched.timeline, fields: ['name','summary','status'] },
+        { key: 'map', icon: 'fa-location-dot', label: '地图地点', color: '#ba68c8', entries: matched.map, fields: ['name','region','status'] },
         { key: 'memories', icon: 'fa-brain', label: '记忆条目', color: '#ce93d8', entries: matched.memories, fields: ['title','type','tier'] },
     ];
 

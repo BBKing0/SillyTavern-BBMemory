@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>BB-Memory v9.2.5 使用说明</title>
+  <title>BB-Memory v9.2.6 使用说明</title>
   <style>
     :root {
       color-scheme: light;
@@ -419,11 +419,11 @@
 <main>
   <div class="hero">
     <header class="hero-card">
-      <p class="eyebrow">BB-Memory v9.2.5</p>
+      <p class="eyebrow">BB-Memory v9.2.6</p>
       <h1>使用说明</h1>
       <p class="lead">BB-Memory 是 SillyTavern 的浏览器端长期记忆扩展。它会把角色扮演里的 NPC、物品、里程碑、时间线、地点、线索和普通记忆整理成结构化数据，并在生成回复前按相关性注入给 AI。</p>
       <div class="meta-row">
-        <span class="pill">适用版本 v9.2.5</span>
+        <span class="pill">适用版本 v9.2.6</span>
         <span class="pill">纯前端扩展</span>
         <span class="pill">无构建步骤</span>
         <span class="pill">数据主要保存在浏览器 IndexedDB</span>
@@ -433,7 +433,7 @@
     <aside class="mock-wrap" aria-label="BB-Memory 在 SillyTavern 扩展设置中的示意图">
       <div class="mock-window">
         <div class="mock-top">
-          <span>BB-Memory v9.2.5</span>
+          <span>BB-Memory v9.2.6</span>
           <span class="soft">扩展设置抽屉</span>
         </div>
         <div class="mock-body">
@@ -486,7 +486,7 @@
     <div class="two-col">
       <div class="panel">
         <ol class="steps">
-          <li><span>在 SillyTavern 进入任意角色聊天，打开右侧扩展设置，展开 <strong>BB-Memory v9.2.5</strong>，确认“启用 BB-Memory”已勾选。</span></li>
+          <li><span>在 SillyTavern 进入任意角色聊天，打开右侧扩展设置，展开 <strong>BB-Memory v9.2.6</strong>，确认“启用 BB-Memory”已勾选。</span></li>
           <li><span>如果是旧聊天或已有存档，先点 <strong>手动提取</strong>，可以输入楼层范围，例如 <code>0-80</code>；留空会提取最近 8 轮。</span></li>
           <li><span>如果是新角色长篇开局，建议先用 <code>tools/bbmemory-initializer.html</code> 外置工具从角色卡、世界书和聊天记录生成导入 JSON，再到“记忆管理”里导入。</span></li>
           <li><span>正常聊天时，BB-Memory 会在生成前检索相关记忆。命中的内容会显示在“命中条目”和悬浮按钮的命中视图里。</span></li>
@@ -495,7 +495,7 @@
       </div>
       <div class="panel">
         <h3>推荐默认用法</h3>
-        <p class="muted">不确定怎么调设置时，可以先只配置 AI 提取 API，然后使用默认阈值。v9.2.5 的默认值偏保守，适合长篇角色扮演慢慢积累。</p>
+        <p class="muted">不确定怎么调设置时，可以先只配置 AI 提取 API，然后使用默认阈值。v9.2.6 的默认值偏保守，适合长篇角色扮演慢慢积累。</p>
         <div class="tag-list">
           <span class="tag">手动提取先跑一遍</span>
           <span class="tag">半自动确认更稳</span>
@@ -952,7 +952,7 @@
     <div class="note danger">任何删除、清空、加载存档、批量归档、Agent 写操作前，都建议先导出 JSON 或执行备份。BB-Memory 会尽量给出确认和 toast，但用户侧备份仍是最稳的保险。</div>
   </section>
 
-  <p class="footer">BB-Memory v9.2.5 使用说明。最后更新：2026-06-25。</p>
+  <p class="footer">BB-Memory v9.2.6 使用说明。最后更新：2026-06-26。</p>
 </main>
 </body>
 </html>
