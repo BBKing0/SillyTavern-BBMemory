@@ -938,13 +938,17 @@ export function refreshExtractionMarkers() {
                     msg._bbmem_pendingExtraction = true;
                     saveChat();
                     const ag = await import('./auto-generator.js');
-                    ag.onMessageReceived(idx);
+                    await ag.reextractFloor(chatId, idx, { mode: 'retry' });
+                    showInlineToast(block, `第 ${idx} 层重新提取完成`, 'success');
                     refreshExtractionMarkers();
                 } catch (err) {
                     console.warn('[BB-Memory] 重新提取失败:', err.message);
                     reExtractBtn.disabled = false;
                     reExtractBtn.innerHTML = '<i class="fa-solid fa-rotate"></i>';
                     showInlineToast(block, '重新提取失败: ' + err.message, 'error');
+                } finally {
+                    reExtractBtn.disabled = false;
+                    reExtractBtn.innerHTML = '<i class="fa-solid fa-rotate"></i>';
                 }
             });
             floorActions.appendChild(reExtractBtn);

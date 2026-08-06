@@ -761,7 +761,7 @@ export async function exportSlot(charId, slotName) {
     const cleanData = stripRuntimeEmbeddings(stripSlotEmbeddings(data));
     const vectorPack = await buildVectorPack('', cleanData, { sourceSlot: slotName });
     const archive = {
-        version: '9.2.6',
+        version: '9.3.0',
         schema: 'bb-memory-vector-ref-v1',
         exportedAt: Date.now(),
         source: 'slot',
@@ -916,7 +916,7 @@ async function removeSlotDataFromChatMetadata(slotName = null, context = null, c
  * 将槽完整数据推送到 chatMetadata（跨设备共享）
  * v9.0.2 恢复数据同步，默认去除 embedding 向量以控制体积
  * v9.0.3 添加大小上限守卫，超过 chatMetadataBackupMaxKb 限制则跳过
- * v9.2.6 固定为文本+embeddingRef，同步向量请使用单一云端向量槽
+ * v9.3.0 固定为文本+embeddingRef，同步向量请使用单一云端向量槽
  */
 async function pushSlotDataToChatMetadata(charId, slotName, data, context = null) {
     const ctx = context || getSTContext();
@@ -995,7 +995,7 @@ export async function pushSlotVectorsToCloud(charId, slotName) {
     await normalizeDataEmbeddingsToRefs('', normalized);
     const vectorPack = await buildVectorPack('', normalized, { sourceSlot: name });
     const payload = {
-        version: '9.2.6',
+        version: '9.3.0',
         schema: 'bb-memory-cloud-vector-slot-v1',
         charId,
         slotName: name,

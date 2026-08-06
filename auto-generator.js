@@ -8,7 +8,7 @@
 
 import {
     getSettings, updateSettings, getMemories, addMemory, updateMemory,
-    upsertNpcProfile, upsertItem, upsertMilestone,
+    addNpcProfile, addItem, upsertMilestone,
     upsertTimeline, getTimeline,
     updateNpcProfile, updateItem, updateMilestone,
     getNpcProfiles, getItems, getMilestones,
@@ -16,7 +16,7 @@ import {
 } from './memory-store.js';
 import {
     getExtractableExchanges, markExchangeExtracted, isExchangeProcessed,
-    markExchangeMetaSkipped, computeExchangeHash, cyrb53Hash, refreshExtractionMarkers,
+    markExchangeMetaSkipped, unmarkExchangeProcessed, computeExchangeHash, cyrb53Hash, refreshExtractionMarkers,
     syncMessageVisibility,
 } from './message-state.js';
 import { normalizeNpcTier, normalizeItemTier } from './entity-tiers.js';
@@ -27,51 +27,168 @@ import {
     getPromptTemplate,
 } from './prompt-templates.js';
 import { hydrateCollectionEmbeddings } from './vector-store.js';
+import { findBestDuplicate, mergeEntityAliases, normalizeAliases } from './dedup-engine.js';
 
-// ═══ 语义去重（保留 v4.1.0 逻辑） ═══
-
-function getDedupConfig() {
-    const s = getSettings();
-    return {
-        mergeThreshold: s.mergeSimilarityThreshold ?? 0.85,
-        reduceThreshold: s.reduceSimilarityThreshold ?? 0.60,
-        minSimilarity: 0.50,
-    };
-}
-
-function cosineSimilarity(a, b) {
-    let dot = 0, normA = 0, normB = 0;
-    for (let i = 0; i < a.length; i++) {
-        dot += a[i] * b[i];
-        normA += a[i] * a[i];
-        normB += b[i] * b[i];
-    }
-    const denom = Math.sqrt(normA) * Math.sqrt(normB);
-    return denom === 0 ? 0 : Math.max(0, dot / denom);
-}
-
-function findMostSimilarMemory(newEmbedding, existingMemories) {
-    if (!newEmbedding) return null;
-    let best = null;
-    for (const mem of existingMemories) {
-        if (!mem.embedding) continue;
-        const sim = cosineSimilarity(newEmbedding, mem.embedding);
-        if (sim >= getDedupConfig().minSimilarity && (!best || sim > best.similarity)) {
-            best = { memory: mem, similarity: sim };
-        }
-    }
-    return best;
-}
+// ═══ v9.3.0 混合去重：文本指纹 + 结构字段 + 可选向量 ═══
 
 function mergeMemoryFields(existing, incoming) {
+    const mergeText = (base, next) => {
+        const a = String(base || '').trim();
+        const b = String(next || '').trim();
+        if (!b || a.includes(b)) return a;
+        if (!a || b.includes(a)) return b;
+        return `${a}\n[补充] ${b}`;
+    };
+    const mergeTags = () => {
+        const out = [];
+        const seen = new Set();
+        for (const tag of [...(existing.tags || []), ...(incoming.tags || [])]) {
+            const name = String(typeof tag === 'string' ? tag : tag?.name || '').trim();
+            const key = name.toLowerCase();
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            out.push(typeof tag === 'string' ? { name, weight: 0.6 } : tag);
+        }
+        return out;
+    };
     return {
-        content: existing.content + '\n[更新] ' + incoming.content,
-        summary: incoming.summary || existing.summary,
+        title: existing.title || incoming.title,
+        content: mergeText(existing.content, incoming.content),
+        summary: mergeText(existing.summary, incoming.summary),
         verbatim: incoming.verbatim || existing.verbatim,
+        subject: existing.subject || incoming.subject,
+        target: existing.target || incoming.target,
+        storyTime: existing.storyTime || incoming.storyTime,
+        truthStatus: incoming.truthStatus || existing.truthStatus,
+        tags: mergeTags(),
+        dedupReview: null,
         importance: Math.min(1.0, Math.max(existing.importance || 0.5, incoming.importance || 0.5) + 0.05),
         emotionalWeight: Math.max(existing.emotionalWeight || 0, incoming.emotionalWeight || 0),
         updatedAt: Date.now(),
     };
+}
+
+function dedupThresholds(pillar) {
+    const settings = getSettings();
+    return {
+        autoMergeThreshold: pillar === 'memory'
+            ? (settings.mergeSimilarityThreshold ?? 0.85)
+            : (settings.entityMergeSimilarityThreshold ?? 0.90),
+        reviewThreshold: settings.dedupReviewSimilarityThreshold ?? 0.74,
+    };
+}
+
+function resolveAmbiguousDedupAction(decision) {
+    if (!decision || decision.action !== 'review') return decision?.action || 'none';
+    // 真值、持有者或地点存在冲突时，即使选择“积极合并”，也不得自动覆盖事实。
+    if (decision.conflict) return 'save_review';
+    const action = getSettings().dedupAmbiguousAction || 'save_review';
+    if (action === 'merge' || action === 'skip') return action;
+    return 'save_review';
+}
+
+function makeDedupReview(decision, pillar) {
+    return decision ? {
+        candidateId: decision.entry?.id || '',
+        candidateTitle: decision.entry?.title || decision.entry?.name || '',
+        pillar,
+        score: Number(decision.score.toFixed(4)),
+        similarity: Number(decision.score.toFixed(4)),
+        reason: decision.reason || '疑似重复',
+        createdAt: Date.now(),
+    } : null;
+}
+
+function mergeUniqueBy(items, keyFn) {
+    const out = [];
+    const seen = new Set();
+    for (const item of items || []) {
+        const key = keyFn(item);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push(item);
+    }
+    return out;
+}
+
+function mergeEntityPatch(pillar, existing, incoming) {
+    const text = (base, next) => {
+        const a = String(base || '').trim();
+        const b = String(next || '').trim();
+        if (!b || a.includes(b)) return a;
+        if (!a || b.includes(a)) return b;
+        return `${a}\n[补充] ${b}`;
+    };
+    const common = {
+        ...incoming,
+        name: existing.name || incoming.name,
+        aliases: mergeEntityAliases(existing, incoming),
+        tags: mergeUniqueBy([...(existing.tags || []), ...(incoming.tags || [])], tag => String(typeof tag === 'string' ? tag : tag?.name || '').toLowerCase()),
+        dedupReview: null,
+    };
+    delete common.existingId;
+    if (pillar === 'npc') {
+        return {
+            ...common,
+            role: incoming.role || existing.role,
+            personality: text(existing.personality, incoming.personality),
+            appearance: text(existing.appearance, incoming.appearance),
+            status: incoming.status || existing.status,
+            location: incoming.location || existing.location,
+            indexCard: incoming.indexCard || existing.indexCard,
+            relationships: mergeUniqueBy([...(existing.relationships || []), ...(incoming.relationships || [])], rel => `${rel?.name || ''}|${rel?.type || ''}`.toLowerCase()),
+        };
+    }
+    return {
+        ...common,
+        owner: incoming.owner || existing.owner,
+        status: incoming.status || existing.status,
+        location: incoming.location || existing.location,
+        significance: text(existing.significance, incoming.significance),
+        keepPermanent: Boolean(existing.keepPermanent || incoming.keepPermanent),
+    };
+}
+
+async function saveEntityWithDedup(chatId, pillar, incoming, sourceInfo = {}) {
+    const settings = getSettings();
+    const loader = pillar === 'npc' ? getNpcProfiles : getItems;
+    const updater = pillar === 'npc' ? updateNpcProfile : updateItem;
+    const creator = pillar === 'npc' ? addNpcProfile : addItem;
+    const existingEntries = await loader(chatId);
+    if (incoming.embedding) await hydrateCollectionEmbeddings(chatId, existingEntries);
+    const explicit = incoming.existingId ? existingEntries.find(entry => entry.id === incoming.existingId) : null;
+    const decision = settings.entityDedupEnabled
+        ? (explicit ? { entry: explicit, score: 1, reason: 'AI 复用已有实体 ID', action: 'merge', conflict: false }
+            : findBestDuplicate(pillar, incoming, existingEntries, dedupThresholds(pillar)))
+        : null;
+    const action = resolveAmbiguousDedupAction(decision);
+
+    if (decision && action === 'merge') {
+        const entry = await updater(chatId, decision.entry.id, {
+            ...mergeEntityPatch(pillar, decision.entry, incoming),
+            ...sourceInfo,
+        });
+        return { entry, action: 'merged', decision };
+    }
+    if (decision && action === 'skip') {
+        return { entry: decision.entry, action: 'skipped', decision };
+    }
+
+    const clean = { ...incoming };
+    delete clean.existingId;
+    if (decision) {
+        clean.dedupReview = makeDedupReview(decision, pillar);
+        try {
+            globalThis.bbMemoryRecordActivity?.('warning', '疑似重复待审核', `${pillar === 'npc' ? 'NPC' : '物品'}「${incoming.name}」与「${decision.entry?.name || ''}」相似 ${(decision.score * 100).toFixed(0)}%`);
+        } catch {}
+    }
+    const entry = await creator(chatId, { ...clean, ...sourceInfo });
+    return { entry, action: decision ? 'review' : 'created', decision };
+}
+
+function findMemoryDedupDecision(memory, embedding, existingMemories) {
+    if (!getSettings().dedupEnabled) return null;
+    return findBestDuplicate('memory', { ...memory, embedding }, existingMemories, dedupThresholds('memory'));
 }
 
 // ═══ 四个提取提示词 ═══
@@ -173,6 +290,8 @@ function parseNpcResponse(responseText) {
             .filter(item => item && item.n && typeof item.n === 'string')
             .map(item => ({
                 name: (item.n || '').trim(),
+                aliases: normalizeAliases(item.al || item.aliases),
+                existingId: typeof (item.eid || item.existingId) === 'string' ? String(item.eid || item.existingId).trim() : '',
                 role: typeof item.r === 'string' ? item.r.trim() : '',
                 personality: typeof item.p === 'string' ? item.p.trim() : '',
                 appearance: typeof item.a === 'string' ? item.a.trim() : '',
@@ -209,6 +328,8 @@ function parseItemResponse(responseText) {
             .filter(item => item && item.n && typeof item.n === 'string')
             .map(item => ({
                 name: (item.n || '').trim(),
+                aliases: normalizeAliases(item.al || item.aliases),
+                existingId: typeof (item.eid || item.existingId) === 'string' ? String(item.eid || item.existingId).trim() : '',
                 owner: typeof item.o === 'string' ? item.o.trim() : '',
                 status: ['held', 'used', 'lost', 'destroyed'].includes(item.s) ? item.s : 'held',
                 significance: typeof item.sig === 'string' ? item.sig.trim() : '',
@@ -672,9 +793,9 @@ function cleanAiMessage(text) {
 
 // ═══ 状态管理 ═══
 
-let isProcessing = false;
-let pendingMessages = [];
 let processingTimer = null;
+let processingChain = Promise.resolve();
+let pendingProcessingWaiters = [];
 
 // v8.2.1 提取失败追踪（悬浮球重试按钮用）
 export let lastExtractFailedFloor = null;
@@ -804,15 +925,129 @@ export function buildExtractedCandidates(results, chatId, sourceInfo = {}) {
 // ═══ 进度回调 ═══
 
 let onAutoExtractProgress = null;
+let extractionTaskSequence = 0;
+const extractionTasks = new Map();
+
+const EXTRACTION_MODE_LABELS = Object.freeze({
+    auto: '自动提取',
+    manual: '手动提取',
+    switch: '换楼提取',
+    retry: '重新提取',
+});
 
 export function setAutoExtractProgressCallback(cb) {
     onAutoExtractProgress = cb;
 }
 
-function reportProgress(phase, current, total, text) {
+function normalizeProgressFloors(floors = []) {
+    return [...new Set((Array.isArray(floors) ? floors : [floors])
+        .filter(n => Number.isInteger(n) && n >= 0))]
+        .sort((a, b) => a - b);
+}
+
+function emitExtractionProgress(info) {
     if (typeof onAutoExtractProgress === 'function') {
-        onAutoExtractProgress({ phase, current, total, text: text || '' });
+        onAutoExtractProgress(info);
     }
+}
+
+export function beginExtractionProgress(meta = {}) {
+    const id = `extract_${Date.now().toString(36)}_${++extractionTaskSequence}`;
+    const floors = normalizeProgressFloors(meta.floors);
+    const stepsPerFloor = Math.max(1, Number(meta.stepsPerFloor) || 5);
+    const task = {
+        taskId: id,
+        state: 'running',
+        mode: EXTRACTION_MODE_LABELS[meta.mode] ? meta.mode : 'auto',
+        floors,
+        floor: Number.isInteger(meta.floor) ? meta.floor : (floors[0] ?? null),
+        phase: meta.phase || 'prepare',
+        current: 0,
+        total: meta.aggregate === true ? stepsPerFloor : Math.max(stepsPerFloor, stepsPerFloor * Math.max(1, floors.length)),
+        stepsPerFloor,
+        aggregate: meta.aggregate === true,
+        floorProgress: {},
+        text: meta.text || '准备中...',
+        startedAt: Date.now(),
+        result: null,
+        error: '',
+    };
+    extractionTasks.set(id, task);
+    emitExtractionProgress({ ...task, floorProgress: { ...task.floorProgress } });
+    return id;
+}
+
+export function updateExtractionProgress(taskId, patch = {}) {
+    const task = extractionTasks.get(taskId);
+    if (!task || task.state !== 'running') return null;
+    const floor = Number.isInteger(patch.floor) ? patch.floor : task.floor;
+    if (task.aggregate && Number.isFinite(Number(patch.current))) {
+        task.current = Math.max(task.current, Math.min(task.total, Number(patch.current) || 0));
+    } else if (Number.isInteger(floor) && Number.isFinite(Number(patch.current))) {
+        const step = Math.max(0, Math.min(task.stepsPerFloor, Number(patch.current) || 0));
+        task.floorProgress[floor] = Math.max(Number(task.floorProgress[floor]) || 0, step);
+        task.current = Object.values(task.floorProgress).reduce((sum, value) => sum + (Number(value) || 0), 0);
+    } else if (Number.isFinite(Number(patch.current))) {
+        task.current = Math.max(task.current, Number(patch.current) || 0);
+    }
+    if (Number.isInteger(floor)) task.floor = floor;
+    if (patch.phase) task.phase = patch.phase;
+    if (patch.text !== undefined) task.text = String(patch.text || '');
+    if (patch.floors) task.floors = normalizeProgressFloors(patch.floors);
+    emitExtractionProgress({ ...task, floorProgress: { ...task.floorProgress } });
+    return task;
+}
+
+export function completeExtractionProgress(taskId, result = null, text = '提取完成') {
+    const task = extractionTasks.get(taskId);
+    if (!task) return null;
+    task.state = 'done';
+    task.phase = 'done';
+    task.current = task.total;
+    task.text = text;
+    task.result = result;
+    task.completedAt = Date.now();
+    emitExtractionProgress({ ...task, floorProgress: { ...task.floorProgress } });
+    extractionTasks.delete(taskId);
+    return task;
+}
+
+export function failExtractionProgress(taskId, error, text = '') {
+    const task = extractionTasks.get(taskId);
+    if (!task) return null;
+    const message = error?.message || String(error || '未知错误');
+    task.state = 'failed';
+    task.phase = 'failed';
+    task.text = text || `提取失败：${message}`;
+    task.error = message;
+    task.completedAt = Date.now();
+    emitExtractionProgress({ ...task, floorProgress: { ...task.floorProgress } });
+    extractionTasks.delete(taskId);
+    return task;
+}
+
+function reportProgress(phase, current, total, text, context = {}) {
+    if (context.taskId) {
+        updateExtractionProgress(context.taskId, {
+            phase,
+            current,
+            total,
+            text: text || '',
+            floor: context.floor,
+        });
+        return;
+    }
+    emitExtractionProgress({
+        taskId: '',
+        state: current >= total && total > 0 ? (/失败|错误/.test(text || '') ? 'failed' : 'done') : 'running',
+        mode: context.mode || 'auto',
+        floors: normalizeProgressFloors(context.floors),
+        floor: Number.isInteger(context.floor) ? context.floor : null,
+        phase,
+        current,
+        total,
+        text: text || '',
+    });
 }
 
 function formatFloorList(indices) {
@@ -834,33 +1069,27 @@ function getChatId() {
 
 export async function onMessageReceived(_messageIndex) {
     const settings = getSettings();
-    if (!settings.enabled || !settings.autoGenEnabled) return;
+    if (!settings.enabled || !settings.autoGenEnabled) return { skipped: true, reason: 'disabled' };
 
     const chatId = getChatId();
-    if (!chatId) return;
+    if (!chatId) return { skipped: true, reason: 'no-chat' };
 
     // 防抖
     const delay = _messageIndex === -1 ? 500 : 2500;
     if (processingTimer) clearTimeout(processingTimer);
-
-    processingTimer = setTimeout(async () => {
-        if (isProcessing) {
-            pendingMessages.push({ chatId, messageIndex: _messageIndex });
-            return;
-        }
-
-        isProcessing = true;
-        try {
-            await processLatestExchange(chatId);
-        } finally {
-            isProcessing = false;
-            // 处理积压
-            if (pendingMessages.length > 0) {
-                const next = pendingMessages.shift();
-                onMessageReceived(next.messageIndex);
-            }
-        }
-    }, delay);
+    return new Promise((resolve, reject) => {
+        pendingProcessingWaiters.push({ resolve, reject });
+        processingTimer = setTimeout(() => {
+            processingTimer = null;
+            const waiters = pendingProcessingWaiters.splice(0);
+            const run = processingChain.then(() => processLatestExchange(chatId));
+            processingChain = run.catch(() => {});
+            run.then(
+                result => waiters.forEach(waiter => waiter.resolve(result)),
+                error => waiters.forEach(waiter => waiter.reject(error)),
+            );
+        }, delay);
+    });
 }
 
 // ═══ 合并提取（默认）═══
@@ -952,6 +1181,13 @@ const MERGED_EXTRACTION_PROMPT = PROMPT_META_GUARD + `你是一个叙事记忆�
 
 **工作顺序**：先提取记忆，再根据记忆内容反推需要更新的 NPC/物品/里程碑。
 
+{{KNOWN_ENTITY_INDEX}}
+
+**已有实体复用规则（强制）**：
+- 如果本轮 NPC / 物品只是已有实体的别称、简称、量词变化或新增描述，必须沿用已有实体的标准名称，并填写 eid。
+- al 用于补充本轮出现的新别名。不要仅因“白色睡裙 / 一条睡裙 / 白色刺猬睡裙”这类描述差异创建多个物品。
+- 只有能确认是另一个独立人物或独立物品时，才输出为新实体并令 eid 为空。
+
 **用户/玩家信息规则（必须遵守）**：
 - 同时阅读“用户”和“角色”两侧内容；不要只总结角色回复。
 - 用户以第一人称或操控主角表达的事实、偏好、目标、计划、承诺、拒绝、关系态度、伤势、情绪、能力、物品状态，都应进入 memories。
@@ -1009,7 +1245,7 @@ g=标签数组(结构标签可选：情感类[恐惧/喜悦/愤怒/悲伤/温柔
 仅提取本轮首次登场或属性/关系发生明显变化的角色。
 关注：角色弧线节点（立场转变、隐藏面揭示）、关系温度变化。
 
-字段：n(姓名), r(身份/职业), p(性格特征，关注矛盾性和成长性), a(外貌), s(状态), l(位置)
+字段：n(姓名), eid(已有实体ID，无则""), al(别名数组), r(身份/职业), p(性格特征，关注矛盾性和成长性), a(外貌), s(状态), l(位置)
 rt=关系数组 [{"n":"关联角色名","r":"关系类型","a":"态度"}]
 nt=分级(core/important/minor/background) | ic=一行索引卡(含弧线阶段) | g=标签数组
 
@@ -1025,7 +1261,7 @@ nt=分级(core/important/minor/background) | ic=一行索引卡(含弧线阶段)
 仅提取本轮首次出现或状态改变的有意义物品。
 关注：象征维度（代表什么？）、作为伏笔的潜力（何时可能被使用？）。
 
-字段：n(物品名), o(持有者), s(状态:held/used/lost/destroyed), l(所在地点)
+字段：n(物品名), eid(已有实体ID，无则""), al(别名数组), o(持有者), s(状态:held/used/lost/destroyed), l(所在地点)
 sig=意义描述(兼顾实用与象征意义), kp=true/false
 it=分级(key/equipped/clue/consumable/background) | g=标签数组
 
@@ -1297,6 +1533,44 @@ function buildMergedPrompt(settings, styleBias, calDesc) {
     return prompt;
 }
 
+async function buildKnownEntityIndex(chatId) {
+    const settings = getSettings();
+    if (!settings.entityDedupEnabled) return '';
+    const limit = Math.max(0, Math.min(100, Number(settings.dedupKnownEntityLimit) || 0));
+    if (!limit) return '';
+    const [npcs, items] = await Promise.all([getNpcProfiles(chatId), getItems(chatId)]);
+    const rank = (entry) => (entry.archived ? -1000 : 0) + (Number(entry.hitCount) || 0) + (Number(entry.hitScore) || 0);
+    const compact = (entries, mapper) => entries
+        .filter(entry => entry && !entry.archived)
+        .sort((a, b) => rank(b) - rank(a))
+        .slice(0, limit)
+        .map(mapper);
+    const npcRows = compact(npcs, npc => ({
+        id: npc.id,
+        name: npc.name,
+        aliases: normalizeAliases(npc.aliases),
+        role: npc.role || '',
+        location: npc.location || '',
+    }));
+    const itemRows = compact(items, item => ({
+        id: item.id,
+        name: item.name,
+        aliases: normalizeAliases(item.aliases),
+        owner: item.owner || '',
+        location: item.location || '',
+        status: item.status || '',
+    }));
+    if (!npcRows.length && !itemRows.length) return '';
+    return `【已有实体索引｜只用于复用 ID 与标准名称，不是待提取文本】\nNPC=${JSON.stringify(npcRows)}\n物品=${JSON.stringify(itemRows)}`;
+}
+
+function applyKnownEntityIndex(prompt, indexText) {
+    if (prompt.includes('{{KNOWN_ENTITY_INDEX}}')) {
+        return prompt.replace('{{KNOWN_ENTITY_INDEX}}', indexText || '【已有实体索引】当前为空');
+    }
+    return indexText ? `${indexText}\n\n${prompt}` : prompt;
+}
+
 const INITIAL_PILLARS = ['memories', 'npc', 'items', 'milestones', 'locations', 'timeline'];
 const INITIAL_PILLAR_LABELS = {
     memories: '记忆条目',
@@ -1428,7 +1702,8 @@ async function callMergedExtraction(chatId, userMessage, aiMessage) {
     const settings = getSettings();
     const styleBias = getStyleBias();
     const calDesc = await getCalendarDescription(chatId);
-    const prompt = buildMergedPrompt(settings, styleBias, calDesc)
+    const knownEntityIndex = await buildKnownEntityIndex(chatId);
+    const prompt = applyKnownEntityIndex(buildMergedPrompt(settings, styleBias, calDesc), knownEntityIndex)
         .replace('{{userMessage}}', userMessage || '(无)')
         .replace('{{aiMessage}}', cleanAiMessage(aiMessage) || '(无)');
 
@@ -1512,28 +1787,28 @@ async function saveExtractedLocations(chatId, locations, sourceInfo = {}) {
     return count;
 }
 
-async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
+async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo, progressContext = {}) {
     try {
-        reportProgress('merged', 0, 5, '正在调用 AI 提取记忆...');
+        reportProgress('ai', 0, 5, '正在调用 AI 提取记忆...', progressContext);
         const { isMetaDialogue, results } = await callMergedExtraction(chatId, userMessage, aiMessage);
         if (isMetaDialogue || !results) {
-            reportProgress('merged', 5, 5, '提取完成（纯元对话已跳过）');
+            reportProgress('done', 5, 5, '提取完成（纯元对话已跳过）', progressContext);
             return { isMetaDialogue: true, total: 0 };
         }
         let total = 0;
         const settings = getSettings();
         const hasEmbedding = settings.embeddingEnabled && settings.embeddingEndpoint;
-        reportProgress('merged', 1, 5, '正在解析提取结果...');
-        reportProgress('merged', 2, 5, '正在保存 NPC/物品/里程碑/时间线...');
+        reportProgress('parse', 1, 5, '正在解析提取结果...', progressContext);
+        reportProgress('save-entities', 2, 5, '正在保存 NPC/物品/里程碑/时间线...', progressContext);
         for (const npc of results.npc) {
             const embedding = hasEmbedding ? await embedMemoryEntry(npc) : null;
-            await upsertNpcProfile(chatId, { ...npc, embedding, ...(sourceInfo || {}) });
-            total++;
+            const saved = await saveEntityWithDedup(chatId, 'npc', { ...npc, embedding }, sourceInfo || {});
+            if (saved.action !== 'skipped') total++;
         }
         for (const item of results.items) {
             const embedding = hasEmbedding ? await embedMemoryEntry(item) : null;
-            await upsertItem(chatId, { ...item, embedding, ...(sourceInfo || {}) });
-            total++;
+            const saved = await saveEntityWithDedup(chatId, 'item', { ...item, embedding }, sourceInfo || {});
+            if (saved.action !== 'skipped') total++;
         }
         for (const milestone of results.milestones || []) {
             const embedding = hasEmbedding ? await embedMemoryEntry(milestone) : null;
@@ -1550,37 +1825,39 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo) {
         const existingMemories = await getMemories(chatId);
         await hydrateCollectionEmbeddings(chatId, existingMemories);
         const activeMemories = existingMemories.filter(m => m.embedding);
-        reportProgress('merged', 3, 5, hasEmbedding ? '正在向量化记忆...' : '正在保存记忆条目...');
+        reportProgress('save-memories', 3, 5, hasEmbedding ? '正在向量化记忆...' : '正在保存记忆条目...', progressContext);
         for (const mem of limited) {
             const embedding = hasEmbedding
                 ? await embedMemoryEntry(mem)
                 : null;
-            if (settings.dedupEnabled && embedding) {
-                const similar = findMostSimilarMemory(embedding, activeMemories);
-                if (similar) {
-                    if (similar.similarity >= getDedupConfig().mergeThreshold) {
-                        const merged = { ...mergeMemoryFields(similar.memory, mem), embedding, ...(sourceInfo || {}) };
-                        await updateMemory(chatId, similar.memory.id, merged);
-                        // 更新缓存中的条目
-                        const idx = activeMemories.findIndex(m => m.id === similar.memory.id);
-                        if (idx >= 0) activeMemories[idx] = { ...activeMemories[idx], ...merged };
-                        continue;
-                    } else if (similar.similarity >= getDedupConfig().reduceThreshold) {
-                        mem.importance = Math.max(0.3, (mem.importance || 0.5) - 0.15);
-                    }
-                }
+            const decision = findMemoryDedupDecision(mem, embedding, existingMemories);
+            const dedupAction = resolveAmbiguousDedupAction(decision);
+            if (decision && dedupAction === 'merge') {
+                const merged = { ...mergeMemoryFields(decision.entry, mem), embedding: embedding || decision.entry.embedding, ...(sourceInfo || {}) };
+                await updateMemory(chatId, decision.entry.id, merged);
+                const idx = activeMemories.findIndex(m => m.id === decision.entry.id);
+                if (idx >= 0) activeMemories[idx] = { ...activeMemories[idx], ...merged };
+                const allIdx = existingMemories.findIndex(m => m.id === decision.entry.id);
+                if (allIdx >= 0) existingMemories[allIdx] = { ...existingMemories[allIdx], ...merged };
+                continue;
+            }
+            if (decision && dedupAction === 'skip') continue;
+            if (decision) {
+                mem.dedupReview = makeDedupReview(decision, 'memory');
+                mem.importance = Math.max(0.3, (mem.importance || 0.5) - 0.15);
             }
             const saved = await addMemory(chatId, { ...mem, embedding, memoryTier: 'stable', ...(sourceInfo || {}) });
+            existingMemories.push(saved);
             if (embedding) activeMemories.push(saved);
             total++;
         }
-        reportProgress('merged', 4, 5, '正在汇总结果...');
+        reportProgress('summarize', 4, 5, '正在汇总结果...', progressContext);
         console.log('[BB-Memory] 合并提取: NPC' + results.npc.length + '/物品' + results.items.length + '/里程碑' + (results.milestones || []).length + '/时间线' + (results.timeline || []).length + '/记忆' + limited.length + ' (保存' + total + '条)');
-        reportProgress('merged', 5, 5, '提取完成');
+        reportProgress('done', 5, 5, '提取完成', progressContext);
         return { total };
     } catch (e) {
         console.warn('[BB-Memory] 合并提取失败:', e.message);
-        reportProgress('merged', 5, 5, '提取失败: ' + (e.message || '未知错误'));
+        reportProgress('failed', 5, 5, '提取失败: ' + (e.message || '未知错误'), progressContext);
         if (typeof globalThis.bbShowErrorPopup === 'function') {
             globalThis.bbShowErrorPopup('AI 提取失败', e.message || '未知错误', '端点: ' + (getSettings().autoGenMode === 'custom' ? (getSettings().autoGenEndpoint || '未配置') : '主 API'));
         }
@@ -1605,12 +1882,22 @@ async function processLatestExchange(chatId) {
     // v8.0.0 批量提取：窗口外有完整 exchange 就立即处理；batchExtractionCount 控制并行数量。
     const batchCount = Math.min(settings.batchExtractionCount || 1, exchanges.length);
     const batch = exchanges.slice(0, batchCount);
+    const taskFloors = batch.map(ex => ex.aiIndex);
+    const taskId = beginExtractionProgress({
+        mode: 'auto',
+        floors: taskFloors,
+        text: taskFloors.length > 1 ? `准备自动提取 ${taskFloors.length} 个楼层...` : '准备自动提取...',
+    });
 
     // 检查 batch 中第一个是否已处理
-    if (await isExchangeProcessed(chatId, batch[0].hash)) return;
+    if (await isExchangeProcessed(chatId, batch[0].hash)) {
+        completeExtractionProgress(taskId, { skipped: true }, '楼层已处理，已跳过');
+        return { skipped: true };
+    }
 
     // 记录成功处理的 exchange（用于后续标记）
     const succeeded = [];
+    const failed = [];
 
     try {
         if (confirmMode === 'active') {
@@ -1618,13 +1905,16 @@ async function processLatestExchange(chatId) {
             for (const ex of batch) {
                 if (await isExchangeProcessed(chatId, ex.hash)) continue;
                 try {
+                    updateExtractionProgress(taskId, { floor: ex.aiIndex, phase: 'ai', current: 0, text: '正在调用 AI 提取记忆...' });
                     const { isMetaDialogue, results } = await callMergedExtraction(chatId, ex.userMessage, ex.aiMessage);
                     if (isMetaDialogue || !results) {
                         console.log('[BB-Memory] Active模式检测到纯元对话，跳过');
                         await markExchangeMetaSkipped(ex.userIndex, ex.aiIndex, ex.hash, 'auto', ex.extraIndices);
                         notifyMetaDialogueFloor(ex.aiIndex);
+                        updateExtractionProgress(taskId, { floor: ex.aiIndex, phase: 'done', current: 5, text: '纯元对话已跳过' });
                         continue;
                     }
+                    updateExtractionProgress(taskId, { floor: ex.aiIndex, phase: 'parse', current: 2, text: '正在整理待审核候选...' });
                     const sourceInfo = {
                         sourceExchange: ex.hash,
                         sourceFloor: ex.aiIndex,
@@ -1636,9 +1926,11 @@ async function processLatestExchange(chatId) {
                         pendingAutoCandidates.push(...candidates);
                     }
                     succeeded.push(ex);
+                    updateExtractionProgress(taskId, { floor: ex.aiIndex, phase: 'done', current: 5, text: '提取完成，等待用户审核' });
                 } catch (e) {
                     console.warn('[BB-Memory] Active模式单个 exchange 提取失败:', e.message);
                     lastExtractFailedFloor = ex.aiIndex;
+                    failed.push({ ex, error: e });
                     if (typeof globalThis.bbMemoryRecordActivity === 'function') {
                         globalThis.bbMemoryRecordActivity('error', '自动提取失败', `第 ${ex.aiIndex} 楼提取失败：${e.message || '未知错误'}`);
                     }
@@ -1655,7 +1947,12 @@ async function processLatestExchange(chatId) {
                     sourceMessageHash: cyrb53Hash(ex.aiMessage || ''),
                 };
                 try {
-                    const result = await extractMergedStage(chatId, ex.userMessage, ex.aiMessage, sourceInfo);
+                    const result = await extractMergedStage(chatId, ex.userMessage, ex.aiMessage, sourceInfo, {
+                        taskId,
+                        mode: 'auto',
+                        floors: taskFloors,
+                        floor: ex.aiIndex,
+                    });
                     if (result && result.isMetaDialogue) {
                         console.log('[BB-Memory] 并行提取：检测到纯元对话，跳过');
                         await markExchangeMetaSkipped(ex.userIndex, ex.aiIndex, ex.hash, 'auto', ex.extraIndices);
@@ -1664,6 +1961,7 @@ async function processLatestExchange(chatId) {
                     }
                     if (result && result.failed) {
                         lastExtractFailedFloor = ex.aiIndex;
+                        failed.push({ ex, error: new Error(result.error || '未知错误') });
                         if (typeof globalThis.bbMemoryRecordActivity === 'function') {
                             globalThis.bbMemoryRecordActivity('error', '自动提取失败', `第 ${ex.aiIndex} 楼提取失败：${result.error || '未知错误'}`);
                         }
@@ -1673,6 +1971,7 @@ async function processLatestExchange(chatId) {
                 } catch (e) {
                     console.warn('[BB-Memory] 并行提取单个 exchange 失败:', e.message);
                     lastExtractFailedFloor = ex.aiIndex;  // v8.2.1 记录失败楼层供悬浮球重试
+                    failed.push({ ex, error: e });
                     if (typeof globalThis.bbMemoryRecordActivity === 'function') {
                         globalThis.bbMemoryRecordActivity('error', '自动提取失败', `第 ${ex.aiIndex} 楼提取失败：${e.message || '未知错误'}`);
                     }
@@ -1690,7 +1989,10 @@ async function processLatestExchange(chatId) {
     } catch (e) {
         console.warn('[BB-Memory] 提取处理异常:', e.message);
         // v8.2.1 外層异常通常说明批量某一步骤整体挂了
-        if (batch.length > 0) lastExtractFailedFloor = batch[0].aiIndex;
+        if (batch.length > 0) {
+            lastExtractFailedFloor = batch[0].aiIndex;
+            failed.push({ ex: batch[0], error: e });
+        }
     }
 
     // v8.0.0 批量标记所有成功处理的 exchange
@@ -1700,6 +2002,18 @@ async function processLatestExchange(chatId) {
     if (succeeded.length && typeof globalThis.bbMemoryRecordActivity === 'function') {
         const floors = succeeded.flatMap(ex => [...(ex.extraIndices || []), ex.userIndex, ex.aiIndex]);
         globalThis.bbMemoryRecordActivity('success', '自动提取完成', `已处理楼层 ${formatFloorList(floors)}，共 ${succeeded.length} 个 exchange`);
+    }
+
+    if (failed.length) {
+        const failedFloors = [...new Set(failed.map(item => item.ex?.aiIndex).filter(Number.isInteger))];
+        const message = failedFloors.length
+            ? `自动提取失败：第 ${formatFloorList(failedFloors)} 层${succeeded.length ? `（已成功 ${succeeded.length} 个 exchange）` : ''}`
+            : '自动提取失败';
+        failExtractionProgress(taskId, failed[0].error, message);
+    } else {
+        completeExtractionProgress(taskId, { succeeded: succeeded.length }, succeeded.length
+            ? `自动提取完成：${succeeded.length} 个 exchange`
+            : '自动提取完成（没有需要保存的新条目）');
     }
 
     // v6.7.0: 时间线自动更新检测（按成功处理的 exchange 数计数）
@@ -1720,6 +2034,7 @@ async function processLatestExchange(chatId) {
     }
 
     setTimeout(() => refreshExtractionMarkers(), 200);
+    return { succeeded: succeeded.length, failed: failed.length };
 }
 
 // ═══ 批量提取（用于初始化） ═══
@@ -1812,17 +2127,20 @@ async function saveInitialMemories(chatId, memories, sourceInfo, result) {
             ? await embedMemoryEntry(mem)
             : null;
 
-        if (settings.dedupEnabled && embedding) {
-            const similar = findMostSimilarMemory(embedding, activeMemories);
-            if (similar) {
-                if (similar.similarity >= getDedupConfig().mergeThreshold) {
-                    await updateMemory(chatId, similar.memory.id, { ...mergeMemoryFields(similar.memory, mem), ...sourceInfo });
-                    result.merged++;
-                    continue;
-                } else if (similar.similarity >= getDedupConfig().reduceThreshold) {
-                    mem.importance = Math.max(0.3, (mem.importance || 0.5) - 0.15);
-                }
-            }
+        const decision = findMemoryDedupDecision(mem, embedding, existingMemories);
+        const dedupAction = resolveAmbiguousDedupAction(decision);
+        if (decision && dedupAction === 'merge') {
+            await updateMemory(chatId, decision.entry.id, { ...mergeMemoryFields(decision.entry, mem), embedding: embedding || decision.entry.embedding, ...sourceInfo });
+            result.merged++;
+            continue;
+        }
+        if (decision && dedupAction === 'skip') {
+            result.skipped++;
+            continue;
+        }
+        if (decision) {
+            mem.dedupReview = makeDedupReview(decision, 'memory');
+            mem.importance = Math.max(0.3, (mem.importance || 0.5) - 0.15);
         }
 
         const exactKey = `${(mem.title || '').toLowerCase().trim()}|${(mem.content || '').toLowerCase().trim().slice(0, 120)}`;
@@ -1843,6 +2161,7 @@ async function saveInitialMemories(chatId, memories, sourceInfo, result) {
         }
 
         const saved = await addMemory(chatId, { ...mem, embedding, memoryTier: mem.memoryTier || 'stable', ...sourceInfo });
+        existingMemories.push(saved);
         if (embedding) activeMemories.push(saved);
         exactKeys.set(exactKey, saved);
         result.memories++;
@@ -1865,16 +2184,20 @@ export async function saveInitialExtractionResult(chatId, data, options = {}) {
         for (const npc of (dataForSave?.npc || [])) {
             if (!npc?.name) continue;
             const embedding = hasEmbedding ? await embedMemoryEntry(npc) : null;
-            await upsertNpcProfile(chatId, { ...npc, embedding, ...sourceInfo });
-            result.npc++;
+            const saved = await saveEntityWithDedup(chatId, 'npc', { ...npc, embedding }, sourceInfo);
+            if (saved.action === 'merged') result.merged++;
+            else if (saved.action === 'skipped') result.skipped++;
+            else result.npc++;
         }
     }
     if (selected.has('items')) {
         for (const item of (dataForSave?.items || [])) {
             if (!item?.name) continue;
             const embedding = hasEmbedding ? await embedMemoryEntry(item) : null;
-            await upsertItem(chatId, { ...item, embedding, ...sourceInfo });
-            result.items++;
+            const saved = await saveEntityWithDedup(chatId, 'item', { ...item, embedding }, sourceInfo);
+            if (saved.action === 'merged') result.merged++;
+            else if (saved.action === 'skipped') result.skipped++;
+            else result.items++;
         }
     }
     if (selected.has('milestones')) {
@@ -1901,13 +2224,34 @@ export async function saveInitialExtractionResult(chatId, data, options = {}) {
 export async function extractFromContext(chatId, contextText, options = {}) {
     const { onProgress, sourceInfo } = options;
     const results = { npc: 0, items: 0, milestones: 0, timeline: 0, threads: 0, locations: 0, memories: 0 };
+    const taskMode = EXTRACTION_MODE_LABELS[options.mode] ? options.mode : 'manual';
+    const taskFloors = normalizeProgressFloors(options.floors || options.floor || sourceInfo?.sourceFloor);
+    const ownsTask = !options.taskId;
+    const taskId = options.taskId || beginExtractionProgress({
+        mode: taskMode,
+        floors: taskFloors,
+        floor: taskFloors[0],
+        aggregate: true,
+        text: taskMode === 'retry' ? '准备重新提取...' : '准备手动提取...',
+    });
+    const progressContext = {
+        taskId,
+        mode: taskMode,
+        floors: taskFloors,
+        floor: Number.isInteger(options.floor) ? options.floor : taskFloors[0],
+    };
+    const notify = (stage, current, progress) => {
+        if (onProgress) onProgress({ stage, current, total: 5, progress });
+        reportProgress(stage, current, 5, progress, progressContext);
+    };
 
-    if (onProgress) onProgress({ stage: 'merged', progress: '正在 AI 提取记忆（合并模式）...' });
+    notify('ai', 0, '正在调用 AI 提取记忆...');
 
     const settings = getSettings();
     const styleBias = getStyleBias();
     const calDesc = await getCalendarDescription(chatId);
-    const prompt = buildMergedPrompt(settings, styleBias, calDesc)
+    const knownEntityIndex = await buildKnownEntityIndex(chatId);
+    const prompt = applyKnownEntityIndex(buildMergedPrompt(settings, styleBias, calDesc), knownEntityIndex)
         .replace('{{userMessage}}', contextText)
         .replace('{{aiMessage}}', '(见上下文)');
 
@@ -1915,21 +2259,25 @@ export async function extractFromContext(chatId, contextText, options = {}) {
         const responseText = await callApi(prompt, { isMerged: true });
         if (responseText && responseText.trim().toUpperCase().startsWith('META_DIALOGUE')) {
             console.log('[BB-Memory] 批量提取检测到纯元对话，跳过');
+            notify('done', 5, '提取完成（纯元对话已跳过）');
+            if (ownsTask) completeExtractionProgress(taskId, results, '提取完成（纯元对话已跳过）');
             return results;
         }
         const parsed = filterTimelineCoveredByThreads(parseMergedResponse(responseText));
         const hasEmbedding = settings.embeddingEnabled && settings.embeddingEndpoint;
+        notify('parse', 1, '正在解析提取结果...');
+        notify('save-entities', 2, '正在保存 NPC/物品/里程碑/时间线...');
 
         // v7.7.1 合并提取：一次 API 调用获取全部四柱
         for (const npc of parsed.npc) {
             const embedding = hasEmbedding ? await embedMemoryEntry(npc) : null;
-            await upsertNpcProfile(chatId, { ...npc, embedding, ...(sourceInfo || {}) });
-            results.npc++;
+            const saved = await saveEntityWithDedup(chatId, 'npc', { ...npc, embedding }, sourceInfo || {});
+            if (saved.action !== 'skipped') results.npc++;
         }
         for (const item of parsed.items) {
             const embedding = hasEmbedding ? await embedMemoryEntry(item) : null;
-            await upsertItem(chatId, { ...item, embedding, ...(sourceInfo || {}) });
-            results.items++;
+            const saved = await saveEntityWithDedup(chatId, 'item', { ...item, embedding }, sourceInfo || {});
+            if (saved.action !== 'skipped') results.items++;
         }
         for (const milestone of parsed.milestones || []) {
             const embedding = hasEmbedding ? await embedMemoryEntry(milestone) : null;
@@ -1945,26 +2293,31 @@ export async function extractFromContext(chatId, contextText, options = {}) {
         const existingMemories = await getMemories(chatId);
         await hydrateCollectionEmbeddings(chatId, existingMemories);
         const activeMemories = existingMemories.filter(m => m.embedding);
+        notify('save-memories', 3, hasEmbedding ? '正在向量化并保存记忆...' : '正在保存记忆条目...');
         for (const mem of parsed.memories) {
             const embedding = hasEmbedding
                 ? await embedMemoryEntry(mem)
                 : null;
-            if (settings.dedupEnabled && embedding) {
-                const similar = findMostSimilarMemory(embedding, activeMemories);
-                if (similar) {
-                    if (similar.similarity >= getDedupConfig().mergeThreshold) {
-                        await updateMemory(chatId, similar.memory.id, { ...mergeMemoryFields(similar.memory, mem), ...(sourceInfo || {}) });
-                        results.memories++;
-                        continue;
-                    } else if (similar.similarity >= getDedupConfig().reduceThreshold) {
-                        mem.importance = Math.max(0.3, (mem.importance || 0.5) - 0.15);
-                    }
-                }
+            const decision = findMemoryDedupDecision(mem, embedding, existingMemories);
+            const dedupAction = resolveAmbiguousDedupAction(decision);
+            if (decision && dedupAction === 'merge') {
+                await updateMemory(chatId, decision.entry.id, { ...mergeMemoryFields(decision.entry, mem), embedding: embedding || decision.entry.embedding, ...(sourceInfo || {}) });
+                results.memories++;
+                continue;
+            }
+            if (decision && dedupAction === 'skip') continue;
+            if (decision) {
+                mem.dedupReview = makeDedupReview(decision, 'memory');
+                mem.importance = Math.max(0.3, (mem.importance || 0.5) - 0.15);
             }
             const saved = await addMemory(chatId, { ...mem, embedding, memoryTier: 'stable', ...(sourceInfo || {}) });
+            existingMemories.push(saved);
             if (embedding) activeMemories.push(saved);
             results.memories++;
         }
+        notify('summarize', 4, '正在汇总提取结果...');
+        notify('done', 5, '提取完成');
+        if (ownsTask) completeExtractionProgress(taskId, results, '提取完成');
     } catch (e) {
         console.warn('[BB-Memory] 合并提取失败:', e.message);
         if (typeof globalThis.bbShowErrorPopup === 'function') {
@@ -1972,9 +2325,114 @@ export async function extractFromContext(chatId, contextText, options = {}) {
         }
         results.failed = true;
         results.error = e.message || '未知错误';
+        if (ownsTask) failExtractionProgress(taskId, e);
     }
 
     return results;
+}
+
+/**
+ * 精确重新提取指定 AI 楼层。手动调用不受 autoGenEnabled 限制，
+ * 返回的 Promise 只会在 AI 调用、保存和楼层标记全部结束后完成。
+ */
+export async function reextractFloor(chatId, floor, options = {}) {
+    const settings = getSettings();
+    if (!settings.enabled) throw new Error('BB-Memory 当前未启用');
+    if (!chatId) throw new Error('当前聊天不可用');
+
+    const ctx = SillyTavern.getContext();
+    const chat = ctx.chat || [];
+    const aiMessage = chat[floor];
+    if (!Number.isInteger(floor) || floor < 0 || floor >= chat.length || !aiMessage || aiMessage.is_user || aiMessage.is_system) {
+        throw new Error(`第 ${floor} 层不是可提取的 AI 消息`);
+    }
+
+    let pairedUserIndex = -1;
+    let pairedUserText = '';
+    for (let index = floor - 1; index >= 0; index--) {
+        if (chat[index]?.is_user) {
+            pairedUserIndex = index;
+            pairedUserText = chat[index].mes || '';
+            break;
+        }
+    }
+    if (pairedUserIndex < 0) throw new Error(`第 ${floor} 层之前没有可配对的用户消息`);
+    const retryHash = computeExchangeHash(pairedUserText, aiMessage.mes || '');
+    await unmarkExchangeProcessed(chatId, retryHash);
+
+    aiMessage._bbmem_extracted = false;
+    aiMessage._bbmem_skipped = false;
+    aiMessage._bbmem_pendingExtraction = true;
+    delete aiMessage._bbmem_meta_marker;
+    delete aiMessage._bbmem_meta_reason;
+    delete aiMessage._bbmem_meta_pair;
+    const pairedUser = chat[pairedUserIndex];
+    if (pairedUser) {
+        pairedUser._bbmem_extracted = false;
+        pairedUser._bbmem_skipped = false;
+        pairedUser._bbmem_pendingExtraction = true;
+        delete pairedUser._bbmem_meta_marker;
+        delete pairedUser._bbmem_meta_reason;
+        delete pairedUser._bbmem_meta_pair;
+    }
+    try { ctx.saveChatDebounced?.(); } catch {}
+
+    const exchanges = await getExtractableExchanges();
+    const ex = exchanges.find(item => item.aiIndex === floor);
+    if (!ex) throw new Error(`未能构建第 ${floor} 层的对话 exchange，请刷新楼层标记后重试`);
+
+    const taskId = beginExtractionProgress({ mode: options.mode || 'retry', floors: [floor], floor, text: '准备重新提取...' });
+    const sourceInfo = {
+        sourceExchange: ex.hash,
+        sourceFloor: ex.aiIndex,
+        sourceChatId: chatId,
+        sourceMessageHash: cyrb53Hash(ex.aiMessage || ''),
+    };
+
+    try {
+        let result;
+        if ((settings.extractionConfirmMode || 'semi') === 'active') {
+            updateExtractionProgress(taskId, { floor, phase: 'ai', current: 0, text: '正在调用 AI 提取记忆...' });
+            const extracted = await callMergedExtraction(chatId, ex.userMessage, ex.aiMessage);
+            if (extracted.isMetaDialogue || !extracted.results) {
+                await markExchangeMetaSkipped(ex.userIndex, ex.aiIndex, ex.hash, 'retry', ex.extraIndices);
+                notifyMetaDialogueFloor(ex.aiIndex);
+                result = { isMetaDialogue: true, total: 0 };
+            } else {
+                updateExtractionProgress(taskId, { floor, phase: 'parse', current: 2, text: '正在整理待审核候选...' });
+                const candidates = buildExtractedCandidates(extracted.results, chatId, sourceInfo);
+                if (candidates.length) pendingAutoCandidates.push(...candidates);
+                await markExchangeExtracted(ex.userIndex, ex.aiIndex, ex.hash, ex.extraIndices);
+                result = { pendingReview: candidates.length, total: candidates.length };
+            }
+        } else {
+            result = await extractMergedStage(chatId, ex.userMessage, ex.aiMessage, sourceInfo, {
+                taskId,
+                mode: options.mode || 'retry',
+                floors: [floor],
+                floor,
+            });
+            if (result?.failed) throw new Error(result.error || 'AI 提取失败');
+            if (result?.isMetaDialogue) {
+                await markExchangeMetaSkipped(ex.userIndex, ex.aiIndex, ex.hash, 'retry', ex.extraIndices);
+                notifyMetaDialogueFloor(ex.aiIndex);
+            } else {
+                await markExchangeExtracted(ex.userIndex, ex.aiIndex, ex.hash, ex.extraIndices);
+            }
+        }
+
+        if (lastExtractFailedFloor === floor) lastExtractFailedFloor = null;
+        completeExtractionProgress(taskId, result, result?.pendingReview
+            ? `重新提取完成：${result.pendingReview} 条待审核`
+            : `第 ${floor} 层重新提取完成`);
+        setTimeout(() => refreshExtractionMarkers(), 100);
+        return result;
+    } catch (error) {
+        lastExtractFailedFloor = floor;
+        failExtractionProgress(taskId, error, `第 ${floor} 层重新提取失败：${error.message || '未知错误'}`);
+        setTimeout(() => refreshExtractionMarkers(), 100);
+        throw error;
+    }
 }
 
 // ═══ 初始化/生命周期 ═══
@@ -2010,7 +2468,8 @@ export function stopAutoGenerator() {
     } catch { /* ignore */ }
     eventRegistered = false;
     if (processingTimer) { clearTimeout(processingTimer); processingTimer = null; }
-    pendingMessages = [];
+    const waiters = pendingProcessingWaiters.splice(0);
+    waiters.forEach(waiter => waiter.resolve({ skipped: true, reason: 'stopped' }));
 }
 
 // ═══ Active 模式：保存候选人 ═══
@@ -2058,22 +2517,26 @@ async function saveMemoryCandidate(chatId, mem, sourceInfo, activeMemories) {
     const existing = activeMemories ? null : await getMemories(chatId);
     if (existing) await hydrateCollectionEmbeddings(chatId, existing);
     const vectorPool = activeMemories || existing.filter(m => m.embedding);
+    const allMemories = existing || await getMemories(chatId);
+    if (!existing) await hydrateCollectionEmbeddings(chatId, allMemories);
 
     const embedding = getSettings().embeddingEnabled && getSettings().embeddingEndpoint
         ? await embedMemoryEntry(mem)
         : null;
 
-    if (getSettings().dedupEnabled && embedding) {
-        const similar = findMostSimilarMemory(embedding, vectorPool);
-        if (similar) {
-            if (similar.similarity >= getDedupConfig().mergeThreshold) {
-                const updates = mergeMemoryFields(similar.memory, mem);
-                await updateMemory(chatId, similar.memory.id, { ...updates, ...sourceInfo });
-                return { saved: 1, merged: 1 };
-            } else if (similar.similarity >= getDedupConfig().reduceThreshold) {
-                mem.importance = Math.max(0.3, (mem.importance || 0.5) - 0.15);
-            }
-        }
+    const decision = findMemoryDedupDecision(mem, embedding, allMemories);
+    const dedupAction = resolveAmbiguousDedupAction(decision);
+    if (decision && dedupAction === 'merge') {
+        const updates = mergeMemoryFields(decision.entry, mem);
+        await updateMemory(chatId, decision.entry.id, { ...updates, embedding: embedding || decision.entry.embedding, ...sourceInfo });
+        return { saved: 1, merged: 1 };
+    }
+    if (decision && dedupAction === 'skip') {
+        return { saved: 0, merged: 0, skipped: 1 };
+    }
+    if (decision) {
+        mem.dedupReview = makeDedupReview(decision, 'memory');
+        mem.importance = Math.max(0.3, (mem.importance || 0.5) - 0.15);
     }
 
     const saved = await addMemory(chatId, { ...mem, embedding, memoryTier: mem.memoryTier || 'stable', source: mem.source || 'auto', ...sourceInfo });
@@ -2103,15 +2566,19 @@ export async function saveExtractedCandidates(chatId, candidates, onProgress) {
         if (pillar === 'npc') {
             if (!payload.name) { result.skipped++; reportCandidateProgress(candidate); continue; }
             const embedding = hasEmbedding ? await embedMemoryEntry(payload) : null;
-            await upsertNpcProfile(chatId, { ...payload, embedding, ...sourceInfo });
-            result.npc++;
-            result.total++;
+            const saved = await saveEntityWithDedup(chatId, 'npc', { ...payload, embedding }, sourceInfo);
+            if (saved.action === 'merged') result.merged++;
+            else if (saved.action === 'skipped') result.skipped++;
+            else result.npc++;
+            if (saved.action !== 'skipped') result.total++;
         } else if (pillar === 'item') {
             if (!payload.name) { result.skipped++; reportCandidateProgress(candidate); continue; }
             const embedding = hasEmbedding ? await embedMemoryEntry(payload) : null;
-            await upsertItem(chatId, { ...payload, embedding, ...sourceInfo });
-            result.items++;
-            result.total++;
+            const saved = await saveEntityWithDedup(chatId, 'item', { ...payload, embedding }, sourceInfo);
+            if (saved.action === 'merged') result.merged++;
+            else if (saved.action === 'skipped') result.skipped++;
+            else result.items++;
+            if (saved.action !== 'skipped') result.total++;
         } else if (pillar === 'milestone') {
             if (!payload.event && !payload.summary) { result.skipped++; reportCandidateProgress(candidate); continue; }
             const embedding = hasEmbedding ? await embedMemoryEntry(payload) : null;
@@ -2134,6 +2601,7 @@ export async function saveExtractedCandidates(chatId, candidates, onProgress) {
             const saved = await saveMemoryCandidate(chatId, payload, sourceInfo, activeMemories);
             result.memories += saved.saved;
             result.merged += saved.merged;
+            result.skipped += saved.skipped || 0;
             result.total += saved.saved;
         }
 

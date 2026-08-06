@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.2.6 主入口
+ * index.js —— BB-Memory v9.3.0 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -35,7 +35,8 @@ import {
     initAutoGenerator, stopAutoGenerator, extractFromContext, saveExtractedCandidates,
     setAutoExtractProgressCallback, getPendingAutoCandidates, clearPendingAutoCandidates,
     callEmbeddingApi, embedExistingMemories,
-    lastExtractFailedFloor, clearLastExtractFailedFloor,
+    beginExtractionProgress, completeExtractionProgress, failExtractionProgress,
+    reextractFloor,
     testApiConnection, getAutoGeneratorPromptTemplates,
 } from './auto-generator.js';
 
@@ -92,7 +93,7 @@ let chatSwitchSuppressDeletesUntil = 0;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.2.6';
+const SETTINGS_EXPORT_VERSION = '9.3.0';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
@@ -104,7 +105,8 @@ const SETTINGS_EXPORT_KEYS = [
     'extractionMessageTags',
     'customExtractionBias', 'customCorePrinciples', 'customExtractionDimensions', 'customPromptTemplates',
     'embeddingEnabled', 'embeddingEndpoint', 'embeddingModel', 'dedupEnabled', 'mergeSimilarityThreshold',
-    'reduceSimilarityThreshold',
+    'reduceSimilarityThreshold', 'entityDedupEnabled', 'entityMergeSimilarityThreshold',
+    'dedupReviewSimilarityThreshold', 'dedupKnownEntityLimit', 'dedupAmbiguousAction',
     'diversityLimitPerTag', 'promotionCooldownRounds', 'hitScorePromoteThreshold', 'hitScoreEternalThreshold',
     'hitScoreDemoteThreshold', 'entityTierPromoteThreshold', 'entityTierDemoteThreshold',
     'maintenanceMode', 'maintenanceMemThreshold', 'maintenanceNpcThreshold', 'maintenanceItemThreshold', 'itemDustyMissRounds',
@@ -120,6 +122,7 @@ const SETTING_CONTROL_BINDINGS = {
     autoGenEnabled: ['#bb_auto_gen_enabled', 'checkbox'],
     embeddingEnabled: ['#bb_embedding_enabled', 'checkbox'],
     dedupEnabled: ['#bb_dedup_enabled', 'checkbox'],
+    entityDedupEnabled: ['#bb_entity_dedup_enabled', 'checkbox'],
     debugLogging: ['#bb_debug_logging', 'checkbox'],
     timelineSummaryEnabled: ['#bb_timeline_summary_enabled', 'checkbox'],
     clueBoardInjectionEnabled: ['#bb_clue_board_injection_enabled', 'checkbox'],
@@ -128,6 +131,7 @@ const SETTING_CONTROL_BINDINGS = {
     extractionConfirmMode: ['#bb_extraction_confirm_mode', 'value'],
     activeConfirmStyle: ['#bb_active_confirm_style', 'value'],
     extractionStyle: ['#bb_extraction_style', 'value'],
+    dedupAmbiguousAction: ['#bb_dedup_ambiguous_action', 'value'],
     contextWindowExchanges: ['#bb_context_window', 'value'],
     batchExtractionCount: ['#bb_batch_extraction', 'value'],
     maxMemoriesPerExchange: ['#bb_max_memories_per_exchange', 'value'],
@@ -170,6 +174,9 @@ const SETTING_CONTROL_BINDINGS = {
     embeddingModel: ['#bb_embedding_model', 'value'],
     mergeSimilarityThreshold: ['#bb_merge_similarity_threshold', 'value'],
     reduceSimilarityThreshold: ['#bb_reduce_similarity_threshold', 'value'],
+    entityMergeSimilarityThreshold: ['#bb_entity_merge_similarity_threshold', 'value'],
+    dedupReviewSimilarityThreshold: ['#bb_dedup_review_similarity_threshold', 'value'],
+    dedupKnownEntityLimit: ['#bb_dedup_known_entity_limit', 'value'],
     customExtractionBias: ['#bb_custom_extraction_bias', 'value'],
 };
 
@@ -1148,6 +1155,35 @@ function formatHubBusyStatus(status, fallback = '') {
     return text || '正在提取';
 }
 
+const EXTRACTION_MODE_TEXT = Object.freeze({
+    auto: '自动提取',
+    manual: '手动提取',
+    switch: '换楼提取',
+    retry: '重新提取',
+});
+
+function formatExtractionTaskFloors(info = {}) {
+    const floors = Array.isArray(info.floors) && info.floors.length
+        ? info.floors
+        : (Number.isInteger(info.floor) ? [info.floor] : []);
+    if (!floors.length) return '';
+    const range = formatCompactFloorRange(floors);
+    return floors.length === 1 ? `第 ${range} 层` : `${range} 层`;
+}
+
+function formatExtractionProgressLabel(info = {}, compact = false) {
+    const mode = EXTRACTION_MODE_TEXT[info.mode] || '提取';
+    const floors = formatExtractionTaskFloors(info);
+    const prefix = `${mode}${floors ? ` ${floors}` : ''}`;
+    const text = String(info.text || '').replace(/^提取状态[:：]?\s*/, '').trim();
+    const failed = info.state === 'failed';
+    const done = info.state === 'done';
+    if (failed) return `${prefix}失败${text ? ` · ${text.replace(/^.*?失败[:：]?\s*/, '')}` : ''}`;
+    if (done) return `${prefix}完成${text && !/^(提取|自动提取|手动提取|换楼提取|重新提取)?完成/.test(text) ? ` · ${text}` : ''}`;
+    const progress = !compact && info.total > 0 ? ` (${Math.min(info.current || 0, info.total)}/${info.total})` : '';
+    return `${prefix}中${text ? ` · ${text}` : ''}${progress}`;
+}
+
 function refreshExtractionFloorStatus() {
     let status = null;
     try {
@@ -1474,6 +1510,7 @@ function buildManualRangeContext(ctx, rangeStr = '') {
     let contextText = buildManualBaseContext(ctx);
     let sourceFloor = undefined;
     let range = null;
+    let floors = [];
     try {
         const chat = ctx.chat || [];
         range = parseManualFloorRange(rangeStr, chat.length);
@@ -1491,10 +1528,11 @@ function buildManualRangeContext(ctx, rangeStr = '') {
                 .slice(-8);
         }
         if (messagePairs.length) {
+            floors = messagePairs.map(item => item.index).filter(Number.isInteger);
             contextText += `【最近对话】\n${messagePairs.map(item => formatManualChatMessage(item.msg, item.index)).join('\n')}`;
         }
     } catch { /* ignore */ }
-    return { contextText, sourceInfo: typeof sourceFloor === 'number' ? { sourceFloor } : {} };
+    return { contextText, sourceInfo: typeof sourceFloor === 'number' ? { sourceFloor } : {}, floors, range };
 }
 
 function emptyExtractionResult() {
@@ -1528,6 +1566,12 @@ async function handleSwitchFloorExtraction(chatId, request = {}) {
     const baseContext = buildManualBaseContext(ctx);
     const totals = emptyExtractionResult();
     const progressEl = createProgressToast(`换楼提取: 准备中（0/${candidates.length}）...`);
+    const taskFloors = candidates.map(ex => ex.aiIndex);
+    const taskId = beginExtractionProgress({
+        mode: 'switch',
+        floors: taskFloors,
+        text: `准备换楼提取 ${candidates.length} 个 exchange...`,
+    });
     let done = 0;
 
     try {
@@ -1551,6 +1595,10 @@ async function handleSwitchFloorExtraction(chatId, request = {}) {
 
             const results = await extractFromContext(chatId, contextText, {
                 onProgress: updateProgress,
+                taskId,
+                mode: 'switch',
+                floors: taskFloors,
+                floor: ex.aiIndex,
                 sourceInfo: {
                     sourceExchange: ex.hash,
                     sourceFloor: ex.aiIndex,
@@ -1570,6 +1618,7 @@ async function handleSwitchFloorExtraction(chatId, request = {}) {
             refreshExtractionFloorStatus();
         }
     } catch (e) {
+        failExtractionProgress(taskId, e, `换楼提取失败：${e.message || '未知错误'}（已完成 ${done}/${candidates.length}）`);
         if (progressEl) {
             progressEl.textContent = `换楼提取失败：${e.message || '未知错误'}（已完成 ${done}/${candidates.length}）`;
             setTimeout(() => progressEl.remove(), 5000);
@@ -1579,6 +1628,7 @@ async function handleSwitchFloorExtraction(chatId, request = {}) {
 
     totals.switchFloors = done;
     totals.sourceRange = plan.range;
+    completeExtractionProgress(taskId, totals, `换楼提取完成：${done} 个 exchange`);
     if (progressEl) {
         progressEl.textContent = `换楼提取完成！已处理 ${done} 个 exchange；${formatExtractionResultSummary(totals)}`;
         setTimeout(() => progressEl.remove(), 3000);
@@ -1594,7 +1644,7 @@ async function handleInitMemory(chatId, requestInput = '') {
     }
 
     const ctx = SillyTavern.getContext();
-    const { contextText, sourceInfo } = buildManualRangeContext(ctx, request.range);
+    const { contextText, sourceInfo, floors } = buildManualRangeContext(ctx, request.range);
 
     if (!contextText.trim()) {
         throw new Error('没有可用的上下文（角色卡、世界书、对话记录均为空）');
@@ -1607,7 +1657,12 @@ async function handleInitMemory(chatId, requestInput = '') {
         if (progressEl) progressEl.textContent = `手动提取: ${info.progress || ''}`;
     };
 
-    const results = await extractFromContext(chatId, contextText, { onProgress: updateProgress, sourceInfo });
+    const results = await extractFromContext(chatId, contextText, {
+        onProgress: updateProgress,
+        sourceInfo,
+        mode: 'manual',
+        floors,
+    });
     if (results?.failed) {
         if (progressEl) {
             progressEl.textContent = `提取失败：${results.error || '未知错误'}`;
@@ -1830,6 +1885,7 @@ function bindSidebarEvents() {
     });
     bindCheckbox('#bb_embedding_enabled', 'embeddingEnabled');
     bindCheckbox('#bb_dedup_enabled', 'dedupEnabled');
+    bindCheckbox('#bb_entity_dedup_enabled', 'entityDedupEnabled');
     bindCheckbox('#bb_debug_logging', 'debugLogging');
     bindCheckbox('#bb_timeline_summary_enabled', 'timelineSummaryEnabled');
     bindCheckbox('#bb_clue_board_injection_enabled', 'clueBoardInjectionEnabled');
@@ -1856,6 +1912,7 @@ function bindSidebarEvents() {
 
     // 提取风格
     bindSelect('#bb_extraction_style', 'extractionStyle');
+    bindSelect('#bb_dedup_ambiguous_action', 'dedupAmbiguousAction');
     const styleSelect = document.querySelector('#bb_extraction_style');
     const customBiasSection = document.querySelector('#bb_custom_bias_section');
     const customBiasTextarea = document.querySelector('#bb_custom_extraction_bias');
@@ -1968,6 +2025,9 @@ function bindSidebarEvents() {
     bindInput('#bb_embedding_model', 'embeddingModel', 'string');
     bindInput('#bb_merge_similarity_threshold', 'mergeSimilarityThreshold', 'number');
     bindInput('#bb_reduce_similarity_threshold', 'reduceSimilarityThreshold', 'number');
+    bindInput('#bb_entity_merge_similarity_threshold', 'entityMergeSimilarityThreshold', 'number');
+    bindInput('#bb_dedup_review_similarity_threshold', 'dedupReviewSimilarityThreshold', 'number');
+    bindInput('#bb_dedup_known_entity_limit', 'dedupKnownEntityLimit', 'number');
     // v7.8.0 日历描述改为 per-chat 存储
     const calTextarea = document.querySelector('#bb_calendar_description');
     if (calTextarea) {
@@ -3106,9 +3166,13 @@ function registerSlashCommands() {
         aiMsg._bbmem_pendingExtraction = true;
         try { ctx2.saveChatDebounced(); } catch {}
         // 触发提取
-        showToast('正在重新提取...', 'info');
-        const { onMessageReceived } = await import('./auto-generator.js');
-        onMessageReceived(floor);
+        showToast(`正在重新提取第 ${floor} 层...`, 'info');
+        try {
+            await reextractFloor(chatId, floor, { mode: 'retry' });
+            showToast(`第 ${floor} 层重新提取完成`, 'success');
+        } catch (error) {
+            showToast(`第 ${floor} 层重新提取失败：${error.message || '未知错误'}`, 'error');
+        }
     }, '删除并重新提取指定楼层的记忆');
 
     addCmd('bb-floor-refresh', async () => {
@@ -3736,7 +3800,7 @@ async function handleFloatingMenuAction(action) {
         case 'retry_extract': {
             if (!chatId) return;
             try {
-                const { lastExtractFailedFloor: floor, clearLastExtractFailedFloor: clear } = await import('./auto-generator.js');
+                const { lastExtractFailedFloor: floor } = await import('./auto-generator.js');
                 if (floor !== null && floor !== undefined) {
                     const ctx = SillyTavern.getContext();
                     const chat = ctx.chat;
@@ -3745,10 +3809,8 @@ async function handleFloatingMenuAction(action) {
                         chat[floor]._bbmem_skipped = false;
                         chat[floor]._bbmem_pendingExtraction = true;
                     }
-                    clear();
                     showToast(`正在重新提取第 ${floor} 层...`, 'info');
-                    const { onMessageReceived } = await import('./auto-generator.js');
-                    await onMessageReceived(floor);
+                    await reextractFloor(chatId, floor, { mode: 'retry' });
                     showToast(`第 ${floor} 层重新提取完成`, 'success');
                 }
             } catch (e) {
@@ -3828,7 +3890,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.2.6 初始化开始...');
+    console.log('[BB-Memory] v9.3.0 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -3871,9 +3933,11 @@ async function init() {
         if (getSettings().debugLogging) {
             console.log(`[BB-Memory] 提取进度: ${info.phase} ${info.current}/${info.total}${info.text ? ' - ' + info.text : ''}`);
         }
-        const isDone = info.current >= info.total && info.total > 0;
-        const isFailed = isDone && info.text && /失败|错误/.test(info.text);
-        const label = info.text || (isDone ? '完成' : (info.phase ? (info.total > 0 ? Math.round((info.current / info.total) * 100) + '%' : '...') : ''));
+        const isFailed = info.state === 'failed' || (info.current >= info.total && info.total > 0 && /失败|错误/.test(info.text || ''));
+        const isDone = info.state === 'done' || isFailed || (!info.state && info.current >= info.total && info.total > 0);
+        const hubLabelText = formatExtractionProgressLabel(info, true);
+        const sidebarLabelText = formatExtractionProgressLabel(info, false);
+        const taskKey = info.taskId || `legacy_${info.mode || 'auto'}`;
 
         // 同步悬浮球进度 + v7.9.0 失败红点
         const hubRow = document.getElementById('bb_hub_extract_progress');
@@ -3881,13 +3945,14 @@ async function init() {
         if (hubRow) {
             const icon = hubRow.querySelector('i');
             const labelEl = document.getElementById('bb_hub_extract_label');
+            hubRow.dataset.taskId = taskKey;
             if (isDone) {
-                delete hubRow.dataset.busy;
+                hubRow.dataset.busy = isFailed ? 'failed' : 'result';
                 if (icon) {
                     icon.className = isFailed ? 'fa-solid fa-exclamation-triangle' : 'fa-solid fa-check-circle';
                     icon.style.color = isFailed ? '#f44336' : '#4caf50';
                 }
-                if (labelEl) labelEl.textContent = isFailed ? `失败-${info.text || '未知错误'}` : formatHubIdleStatus(getExtractionFloorStatus());
+                if (labelEl) labelEl.textContent = hubLabelText;
                 // 失败时显示红点
                 if (badge) {
                     badge.textContent = '';
@@ -3899,7 +3964,7 @@ async function init() {
             } else if (info.phase) {
                 hubRow.dataset.busy = '1';
                 if (icon) { icon.className = 'fa-solid fa-spinner fa-spin'; icon.style.color = ''; }
-                if (labelEl) labelEl.textContent = formatHubBusyStatus(getExtractionFloorStatus(), label);
+                if (labelEl) labelEl.textContent = hubLabelText;
                 if (badge) badge.style.display = 'none';
             } else {
                 delete hubRow.dataset.busy;
@@ -3914,21 +3979,44 @@ async function init() {
         if (sidebarRow) {
             const icon = sidebarRow.querySelector('i');
             const strong = sidebarRow.querySelector('strong');
+            sidebarRow.dataset.taskId = taskKey;
             if (isDone) {
                 if (icon) {
                     icon.className = isFailed ? 'fa-solid fa-exclamation-triangle' : 'fa-solid fa-check-circle';
                     icon.style.color = isFailed ? '#f44336' : '#4caf50';
                 }
-                if (strong) strong.textContent = info.text || '完成';
+                if (strong) strong.textContent = sidebarLabelText;
             } else if (info.phase) {
                 if (icon) { icon.className = 'fa-solid fa-spinner fa-spin'; icon.style.color = ''; }
-                if (strong) strong.textContent = label;
+                if (strong) strong.textContent = sidebarLabelText;
             } else {
                 if (icon) { icon.className = 'fa-solid fa-moon'; icon.style.color = ''; }
                 if (strong) strong.textContent = '空闲';
             }
         }
         refreshExtractionFloorStatus();
+        if (isDone && !isFailed) {
+            setTimeout(() => {
+                const currentHub = document.getElementById('bb_hub_extract_progress');
+                const currentSidebar = document.getElementById('bb_sidebar_extract_progress');
+                if (currentHub?.dataset.taskId === taskKey) {
+                    delete currentHub.dataset.busy;
+                    delete currentHub.dataset.taskId;
+                    const icon = currentHub.querySelector('i');
+                    if (icon) { icon.className = 'fa-solid fa-moon'; icon.style.color = ''; }
+                    const labelEl = document.getElementById('bb_hub_extract_label');
+                    if (labelEl) labelEl.textContent = formatHubIdleStatus(getExtractionFloorStatus());
+                }
+                if (currentSidebar?.dataset.taskId === taskKey) {
+                    delete currentSidebar.dataset.taskId;
+                    const icon = currentSidebar.querySelector('i');
+                    const strong = currentSidebar.querySelector('strong');
+                    if (icon) { icon.className = 'fa-solid fa-moon'; icon.style.color = ''; }
+                    if (strong) strong.textContent = '空闲';
+                }
+            }, 3000);
+        }
+        if (isFailed) setTimeout(() => refreshFloatingHubData(), 0);
 
         // 同步维护面板进度（如有打开）
         const maintOverlay = document.querySelector('.bb-maint-overlay');
@@ -3940,7 +4028,7 @@ async function init() {
                 } else if (info.phase) {
                     progressEl.style.display = 'block';
                     const pct = info.total > 0 ? Math.round((info.current / info.total) * 100) : 0;
-                    progressEl.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${info.text || ('提取进度: ' + info.phase + ' ' + info.current + '/' + info.total + ' (' + pct + '%)')}`;
+                    progressEl.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${escapeHtml(sidebarLabelText || ('提取进度: ' + info.phase + ' ' + info.current + '/' + info.total + ' (' + pct + '%)'))}`;
                 } else {
                     progressEl.style.display = 'none';
                 }
@@ -3992,7 +4080,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.2.6 初始化完成');
+    console.log('[BB-Memory] v9.3.0 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆

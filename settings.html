@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.2.6</b>
+            <b>BB-Memory v9.3.0</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -547,6 +547,39 @@
                         <label for="bb_reduce_similarity_threshold">降权相似度阈值</label>
                         <small class="bb-mem-hint">相似度高于此值但未合并时降低重复候选优先级（默认0.60）</small>
                         <input id="bb_reduce_similarity_threshold" type="number" class="bb-input" min="0.10" max="1.00" step="0.01" value="0.60" />
+                    </div>
+
+                    <label class="checkbox_label" style="margin: 8px 0;">
+                        <input id="bb_entity_dedup_enabled" type="checkbox" checked />
+                        <span>启用 NPC / 物品名称与别名去重</span>
+                    </label>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_entity_merge_similarity_threshold">实体自动合并阈值</label>
+                        <small class="bb-mem-hint">综合名称、别名、持有者、地点和向量判断；默认 0.90，越高越保守</small>
+                        <input id="bb_entity_merge_similarity_threshold" type="number" class="bb-input" min="0.60" max="1.00" step="0.01" value="0.90" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_dedup_review_similarity_threshold">疑似重复提醒阈值</label>
+                        <small class="bb-mem-hint">达到该阈值但未自动合并时，按下方策略处理（默认 0.74）</small>
+                        <input id="bb_dedup_review_similarity_threshold" type="number" class="bb-input" min="0.50" max="0.99" step="0.01" value="0.74" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_dedup_ambiguous_action">疑似重复处理</label>
+                        <small class="bb-mem-hint">“保存并标记”最安全；激进合并可能误合并同类但不同的物品或事件</small>
+                        <select id="bb_dedup_ambiguous_action" class="bb-input">
+                            <option value="save_review">保存并标记待审核</option>
+                            <option value="merge">直接合并（激进）</option>
+                            <option value="skip">跳过新条目（严格）</option>
+                        </select>
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_dedup_known_entity_limit">提示词已有实体上限</label>
+                        <small class="bb-mem-hint">向 AI 提供多少个已有 NPC / 物品索引，帮助保持名称一致（默认 30）</small>
+                        <input id="bb_dedup_known_entity_limit" type="number" class="bb-input" min="0" max="100" step="1" value="30" />
                     </div>
 
                 </div>

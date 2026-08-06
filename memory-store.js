@@ -6,6 +6,7 @@
  */
 
 import { normalizeNpcTier, normalizeItemTier } from './entity-tiers.js';
+import { findExactEntityMatch, mergeEntityAliases, normalizeAliases } from './dedup-engine.js';
 import {
     buildVectorPack,
     countEmbeddingRefs,
@@ -87,6 +88,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
     dedupEnabled: true,
     mergeSimilarityThreshold: 0.85,
     reduceSimilarityThreshold: 0.60,
+    entityDedupEnabled: true,
+    entityMergeSimilarityThreshold: 0.90,
+    dedupReviewSimilarityThreshold: 0.74,
+    dedupKnownEntityLimit: 30,
+    dedupAmbiguousAction: 'save_review', // 'save_review' | 'merge' | 'skip'
     // 故事时间
     calendarDescription: '',
     // 升降格与维护
@@ -487,6 +493,7 @@ export async function addNpcProfile(chatId, data) {
     const entry = {
         id: generateId(),
         name: data.name || '',
+        aliases: normalizeAliases(data.aliases),
         role: data.role || '',
         personality: data.personality || '',
         appearance: data.appearance || '',
@@ -513,6 +520,7 @@ export async function addNpcProfile(chatId, data) {
         creationFloor: typeof data.creationFloor === 'number' ? data.creationFloor : (typeof data.sourceFloor === 'number' ? data.sourceFloor : -1),
         sourceMessageHash: data.sourceMessageHash || '',
         sourceChatId: data.sourceChatId || '',
+        dedupReview: data.dedupReview || null,
     };
     profiles.push(entry);
     await saveCollection('npc', chatId, profiles);
@@ -525,9 +533,13 @@ export async function addNpcProfile(chatId, data) {
  */
 export async function upsertNpcProfile(chatId, data) {
     const profiles = await getNpcProfiles(chatId);
-    const existing = profiles.find(p => p.name.toLowerCase() === (data.name || '').toLowerCase());
+    const existing = findExactEntityMatch('npc', data, profiles);
     if (existing) {
-        return updateNpcProfile(chatId, existing.id, data);
+        return updateNpcProfile(chatId, existing.id, {
+            ...data,
+            name: existing.name || data.name,
+            aliases: mergeEntityAliases(existing, data),
+        });
     }
     return addNpcProfile(chatId, data);
 }
@@ -574,6 +586,7 @@ export async function addItem(chatId, data) {
     const entry = {
         id: generateId(),
         name: data.name || '',
+        aliases: normalizeAliases(data.aliases),
         owner: data.owner || '',
         location: data.location || '',       // v8.7.0 物品所在地点
         status: data.status || 'held',       // held | used | lost | destroyed
@@ -596,6 +609,7 @@ export async function addItem(chatId, data) {
         creationFloor: typeof data.creationFloor === 'number' ? data.creationFloor : (typeof data.sourceFloor === 'number' ? data.sourceFloor : -1),
         sourceMessageHash: data.sourceMessageHash || '',
         sourceChatId: data.sourceChatId || '',
+        dedupReview: data.dedupReview || null,
     };
     items.push(entry);
     await saveCollection('item', chatId, items);
@@ -608,9 +622,13 @@ export async function addItem(chatId, data) {
  */
 export async function upsertItem(chatId, data) {
     const items = await getItems(chatId);
-    const existing = items.find(i => i.name.toLowerCase() === (data.name || '').toLowerCase());
+    const existing = findExactEntityMatch('item', data, items);
     if (existing) {
-        return updateItem(chatId, existing.id, data);
+        return updateItem(chatId, existing.id, {
+            ...data,
+            name: existing.name || data.name,
+            aliases: mergeEntityAliases(existing, data),
+        });
     }
     return addItem(chatId, data);
 }
@@ -685,6 +703,7 @@ export async function addMilestone(chatId, data) {
         creationFloor: typeof data.creationFloor === 'number' ? data.creationFloor : (typeof data.sourceFloor === 'number' ? data.sourceFloor : -1),
         sourceMessageHash: data.sourceMessageHash || '',
         sourceChatId: data.sourceChatId || '',
+        dedupReview: data.dedupReview || null,
     };
     milestones.push(entry);
     // 按 storyTimeSort 排序
@@ -884,6 +903,7 @@ export async function addMemory(chatId, data) {
         creationFloor: typeof data.creationFloor === 'number' ? data.creationFloor : (typeof data.sourceFloor === 'number' ? data.sourceFloor : -1),
         sourceMessageHash: data.sourceMessageHash || '',
         sourceChatId: data.sourceChatId || '',
+        dedupReview: data.dedupReview || null,
     };
     memories.push(entry);
     await saveCollection('mem', chatId, memories);
@@ -1359,7 +1379,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.2.6',
+        version: '9.3.0',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -1731,7 +1751,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
         clueBoard,
     };
     const backup = {
-        version: '9.2.6',
+        version: '9.3.0',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2469,7 +2489,7 @@ export async function exportMemories(chatId) {
     await normalizeDataEmbeddingsToRefs(chatId, data);
     const vectorPack = await buildVectorPack(chatId, data);
     return JSON.stringify({
-        version: '9.2.6',
+        version: '9.3.0',
         schema: 'bb-memory-vector-ref-v1',
         exportedAt: Date.now(),
         data: stripRuntimeEmbeddings(data),

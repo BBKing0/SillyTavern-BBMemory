@@ -374,6 +374,14 @@ function buildEntryItemHTML(e) {
         }
     }
 
+    // v9.3.0：混合去重无法安全自动合并时，保留条目并明确标记，供用户人工核对。
+    if (e.dedupReview?.candidateId) {
+        const similarity = Number(e.dedupReview.score ?? e.dedupReview.similarity ?? 0);
+        const candidateName = e.dedupReview.candidateName || e.dedupReview.candidateTitle || '已有条目';
+        const reviewTitle = `疑似与“${candidateName}”重复（相似度 ${Math.round(similarity * 100)}%），请编辑或删除其中一条`;
+        statusBadges += `<span class="bb-item-badge" title="${escapeAttr(reviewTitle)}" style="font-size:0.7em;background:#ff980022;color:#ffb74d;border:1px solid #ff980066;"><i class="fa-solid fa-code-compare"></i> 疑似重复 ${Math.round(similarity * 100)}%</span>`;
+    }
+
     // v8.6.0 分类标签
     let catBadge = '';
     if (e.category) {
@@ -1043,6 +1051,8 @@ function showQuickAddForm(overlay, chatId) {
             case 'npc': return `
                 <label style="font-size:0.85em;">姓名 <span style="color:#f44336;">*</span></label>
                 <input class="bb-input bb-f-name" placeholder="角色姓名" style="width:100%;margin-bottom:8px;" />
+                <label style="font-size:0.85em;">别名 <small style="opacity:0.55;">用于识别同一角色，逗号分隔</small></label>
+                <input class="bb-input bb-f-aliases" placeholder="昵称、旧称、称号" style="width:100%;margin-bottom:8px;" />
                 <div style="display:flex;gap:8px;">
                     <div style="flex:1;"><label style="font-size:0.85em;">身份</label><input class="bb-input bb-f-role" placeholder="如：王国骑士" style="width:100%;margin-bottom:8px;" /></div>
                     <div style="flex:1;"><label style="font-size:0.85em;">位置</label><input class="bb-input bb-f-location" placeholder="所在地点" list="bb-location-datalist" style="width:100%;margin-bottom:8px;" /></div>
@@ -1060,6 +1070,8 @@ function showQuickAddForm(overlay, chatId) {
             case 'item': return `
                 <label style="font-size:0.85em;">名称 <span style="color:#f44336;">*</span></label>
                 <input class="bb-input bb-f-name" placeholder="物品名称" style="width:100%;margin-bottom:8px;" />
+                <label style="font-size:0.85em;">别名 <small style="opacity:0.55;">用于合并不同描述，逗号分隔</small></label>
+                <input class="bb-input bb-f-aliases" placeholder="简称、旧称、外观描述名" style="width:100%;margin-bottom:8px;" />
                 <div style="display:flex;gap:8px;">
                     <div style="flex:1;"><label style="font-size:0.85em;">持有者</label><input class="bb-input bb-f-owner" placeholder="当前持有者" style="width:100%;margin-bottom:8px;" /></div>
                     <div style="flex:1;"><label style="font-size:0.85em;">状态</label><select class="bb-input bb-f-status" style="width:100%;margin-bottom:8px;"><option value="held">持有中</option><option value="used">已使用</option><option value="lost">已丢失</option><option value="destroyed">已销毁</option></select></div>
@@ -1217,6 +1229,7 @@ function buildPillarFormFields_inner(p) {
     switch (p) {
         case 'npc': return `
             <label style="font-size:0.85em;">姓名 <span style="color:#f44336;">*</span></label><input class="bb-input bb-f-name" placeholder="角色姓名" style="width:100%;margin-bottom:8px;" />
+            <label style="font-size:0.85em;">别名 <small style="opacity:0.55;">用于识别同一角色，逗号分隔</small></label><input class="bb-input bb-f-aliases" placeholder="昵称、旧称、称号" style="width:100%;margin-bottom:8px;" />
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">身份</label><input class="bb-input bb-f-role" placeholder="如：王国骑士" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">位置</label><input class="bb-input bb-f-location" placeholder="所在地点" list="bb-location-datalist" style="width:100%;margin-bottom:8px;" /></div></div>
             <label style="font-size:0.85em;">性格</label><textarea class="bb-input bb-f-personality" placeholder="性格特点..." rows="2" style="width:100%;margin-bottom:8px;"></textarea>
             <label style="font-size:0.85em;">外貌</label><textarea class="bb-input bb-f-appearance" placeholder="外貌描述..." rows="2" style="width:100%;margin-bottom:8px;"></textarea>
@@ -1224,6 +1237,7 @@ function buildPillarFormFields_inner(p) {
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">NPC等级</label><select class="bb-input bb-f-npcTier" style="width:100%;margin-bottom:8px;">${Object.values(NPC_TIERS).map(t => `<option value="${t.id}" ${t.id === 'minor' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div><div style="flex:1;"><label style="font-size:0.85em;">标签</label><input class="bb-input bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" /></div></div>`;
         case 'item': return `
             <label style="font-size:0.85em;">名称 <span style="color:#f44336;">*</span></label><input class="bb-input bb-f-name" placeholder="物品名称" style="width:100%;margin-bottom:8px;" />
+            <label style="font-size:0.85em;">别名 <small style="opacity:0.55;">用于合并不同描述，逗号分隔</small></label><input class="bb-input bb-f-aliases" placeholder="简称、旧称、外观描述名" style="width:100%;margin-bottom:8px;" />
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">持有者</label><input class="bb-input bb-f-owner" placeholder="当前持有者" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">状态</label><select class="bb-input bb-f-status" style="width:100%;margin-bottom:8px;"><option value="held">持有中</option><option value="used">已使用</option><option value="lost">已丢失</option><option value="destroyed">已销毁</option></select></div></div>
             <label style="font-size:0.85em;">所在地点</label><input class="bb-input bb-f-location" placeholder="物品所在的地图地点" list="bb-location-datalist" style="width:100%;margin-bottom:8px;" />
             <label style="font-size:0.85em;">重要性</label><input class="bb-input bb-f-significance" placeholder="对剧情的重要性" style="width:100%;margin-bottom:8px;" />
@@ -1270,7 +1284,7 @@ function collectFormData(formEl, pillar) {
     const tags = tagsStr ? tagsStr.split(/[,，]/).map(t => t.trim()).filter(Boolean) : [];
     switch (pillar) {
         case 'npc': return {
-            name: g('bb-f-name'), role: g('bb-f-role'), personality: g('bb-f-personality'),
+            name: g('bb-f-name'), aliases: g('bb-f-aliases').split(/[,，]/).map(s => s.trim()).filter(Boolean), role: g('bb-f-role'), personality: g('bb-f-personality'),
             appearance: g('bb-f-appearance'), location: g('bb-f-location'),
             relationships: g('bb-f-relationships').split(/[,，]/).map(s => s.trim()).filter(Boolean),
             npcTier: formEl.querySelector('.bb-f-npcTier')?.value || 'minor', tags, source: 'manual',
@@ -1278,7 +1292,7 @@ function collectFormData(formEl, pillar) {
         case 'item': {
             const memoryTier = formEl.querySelector('.bb-f-memoryTier')?.value || 'stable';
             return {
-                name: g('bb-f-name'), owner: g('bb-f-owner'),
+                name: g('bb-f-name'), aliases: g('bb-f-aliases').split(/[,，]/).map(s => s.trim()).filter(Boolean), owner: g('bb-f-owner'),
                 location: g('bb-f-location'),
                 status: formEl.querySelector('.bb-f-status')?.value || 'held',
                 significance: g('bb-f-significance'),
@@ -1407,6 +1421,7 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
             switch (pillar) {
                 case 'npc':
                     setVal('bb-f-name', prefill.name);
+                    setVal('bb-f-aliases', Array.isArray(prefill.aliases) ? prefill.aliases.join(', ') : '');
                     setVal('bb-f-role', prefill.role);
                     setVal('bb-f-personality', prefill.personality);
                     setVal('bb-f-appearance', prefill.appearance);
@@ -1417,6 +1432,7 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
                     break;
                 case 'item':
                     setVal('bb-f-name', prefill.name);
+                    setVal('bb-f-aliases', Array.isArray(prefill.aliases) ? prefill.aliases.join(', ') : '');
                     setVal('bb-f-owner', prefill.owner);
                     setVal('bb-f-location', prefill.location);
                     if (prefill.status) { const el = formOverlay.querySelector('.bb-f-status'); if (el) el.value = prefill.status; }
