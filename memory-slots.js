@@ -20,6 +20,10 @@ import {
     normalizeDataEmbeddingsToRefs,
     stripRuntimeEmbeddings,
 } from './vector-store.js';
+import {
+    getStableCharacterId,
+    getAcceptableCharIdsSync,
+} from './slot-identity.js';
 
 // ═══ localforage 访问 ═══
 
@@ -184,7 +188,31 @@ function createEmptySlotData() {
         _slotEmpty: true,
         _slotCreatedAt: now,
         _slotUpdatedAt: now,
+        _slotBoundChatId: '',
     };
+}
+
+/**
+ * v9.3.1 槽归属守卫。
+ *
+ * 分支串档 bug 的成因：切换窗口时自动保存把「未绑定聊天」的数据
+ * 覆盖写进了全局 currentSlotName 指向的槽（往往是上一个聊天的槽），
+ * 于是分支 if 的内容盖掉了正剧存档。
+ *
+ * 这里从槽这一侧再上一道锁：槽记录自己属于哪个聊天，
+ * 来源聊天不一致时拒绝自动覆盖。
+ */
+function assertSlotOwnership(existing, chatId, slotName, options = {}) {
+    if (options.force === true) return;
+    const expect = options.expectChatId;
+    if (!expect) return;
+    const owner = existing?._slotBoundChatId;
+    if (!owner) return;
+    if (String(owner) === String(expect)) return;
+    throw new Error(
+        `存档 "${slotName}" 当前归属聊天「${String(owner).slice(0, 32)}」，`
+        + `与来源聊天「${String(chatId).slice(0, 32)}」不一致，已阻止覆盖写入`
+    );
 }
 
 // ═══ v5 四柱数据读写 ═══
@@ -284,6 +312,7 @@ function normalizeSlotData(raw) {
         _slotEmpty: raw._slotEmpty === true,
         _slotCreatedAt: raw._slotCreatedAt || raw.createdAt || now,
         _slotUpdatedAt: raw._slotUpdatedAt || raw.updatedAt || now,
+        _slotBoundChatId: raw._slotBoundChatId || '',
     };
     normalized._slotEmpty =
         normalized.npc.length + normalized.items.length + normalized.milestones.length + normalized.timeline.length + normalized.memories.length +
@@ -327,20 +356,15 @@ export async function getChatSlotDataSummary(chatId) {
 
 // ═══ 角色ID获取 ═══
 
+/**
+ * v9.3.1 起返回**稳定**角色 ID（char:<avatar> / group:<groupId>）。
+ *
+ * v9.3.0 及更早使用 ctx.characterId —— 那是 characters 数组下标，
+ * 导入/删除角色后会平移，导致整个存档命名空间失联（存档"消失"），
+ * 甚至跨角色覆盖写入。详见 slot-identity.js 文件头。
+ */
 export function getCharacterId() {
-    try {
-        const ctx = SillyTavern.getContext();
-        if (ctx.characterId !== undefined && ctx.characterId !== null) {
-            return String(ctx.characterId);
-        }
-        if (ctx.this_chid !== undefined && ctx.this_chid !== null && ctx.this_chid !== '') {
-            return String(ctx.this_chid);
-        }
-        if (ctx.groupId !== undefined && ctx.groupId !== null && ctx.groupId !== '') {
-            return `group:${ctx.groupId}`;
-        }
-    } catch { /* ignore */ }
-    return null;
+    return getStableCharacterId();
 }
 
 // ═══ 槽列表 ═══
@@ -471,10 +495,12 @@ export async function saveToSlot(charId, chatId, slotName, options = {}) {
     const data = await readAllPillarData(chatId);
     const lf = getLocalForage();
     const existing = await lf.getItem(slotKey(charId, slotName));
+    assertSlotOwnership(existing, chatId, slotName, options);
     const now = Date.now();
     data._slotEmpty = totalCount(data) === 0;
     data._slotCreatedAt = existing?._slotCreatedAt || existing?.createdAt || now;
     data._slotUpdatedAt = now;
+    data._slotBoundChatId = String(chatId);
     await normalizeDataEmbeddingsToRefs(chatId, data);
     const cleanData = stripRuntimeEmbeddings(data);
     await lf.setItem(slotKey(charId, slotName), cleanData);
@@ -540,6 +566,9 @@ export async function cloneSlot(charId, sourceSlotName, targetSlotName, options 
     data._slotCreatedAt = now;
     data._slotUpdatedAt = now;
     data._slotBranchedFrom = sourceName;
+    // v9.3.1 副本不继承来源槽的归属聊天，否则 if 分支会"继承"正剧的归属，
+    // 之后的自动保存就会写回正剧存档（分支串档 bug 的一条路径）。
+    data._slotBoundChatId = String(options.boundChatId || '');
     await normalizeDataEmbeddingsToRefs('', data);
     const cleanData = stripRuntimeEmbeddings(data);
     await lf.setItem(slotKey(charId, targetName), cleanData);
@@ -660,7 +689,11 @@ export async function loadFromSlot(charId, chatId, slotName, options = {}) {
     }
 
     await writeAllPillarData(chatId, data);
-    if (options.bindChat !== false) bindChatToSlot(charId, chatId, slotName);
+    if (options.bindChat !== false) {
+        bindChatToSlot(charId, chatId, slotName);
+        // v9.3.1 槽反向记录归属聊天，后续自动保存据此拒绝跨聊天覆盖
+        await claimSlotForChat(charId, slotName, chatId);
+    }
 
     // v9.0.3: 从云端拉取的数据缺少 embedding，后台补全
     if (pulledFromCloud) {
@@ -668,6 +701,39 @@ export async function loadFromSlot(charId, chatId, slotName, options = {}) {
     }
 
     return { count: totalCount(data), data, pulledFromCloud, embeddingCount: countSlotEmbeddings(data) };
+}
+
+/**
+ * v9.3.1 在槽数据上记录归属聊天。
+ * 只改元字段，不触碰四柱内容，避免任何数据风险。
+ */
+export async function claimSlotForChat(charId, slotName, chatId) {
+    if (!charId || !slotName || !chatId) return false;
+    const lf = getLocalForage();
+    try {
+        const raw = await lf.getItem(slotKey(charId, slotName));
+        if (raw === null || raw === undefined || typeof raw !== 'object' || Array.isArray(raw)) return false;
+        if (String(raw._slotBoundChatId || '') === String(chatId)) return true;
+        raw._slotBoundChatId = String(chatId);
+        await lf.setItem(slotKey(charId, slotName), raw);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * 读取槽当前归属的聊天 ID（无归属返回空串）。
+ */
+export async function getSlotOwnerChatId(charId, slotName) {
+    if (!charId || !slotName) return '';
+    const lf = getLocalForage();
+    try {
+        const raw = await lf.getItem(slotKey(charId, slotName));
+        return String(raw?._slotBoundChatId || '');
+    } catch {
+        return '';
+    }
 }
 
 /**
@@ -761,7 +827,7 @@ export async function exportSlot(charId, slotName) {
     const cleanData = stripRuntimeEmbeddings(stripSlotEmbeddings(data));
     const vectorPack = await buildVectorPack('', cleanData, { sourceSlot: slotName });
     const archive = {
-        version: '9.3.0',
+        version: '9.3.1',
         schema: 'bb-memory-vector-ref-v1',
         exportedAt: Date.now(),
         source: 'slot',
@@ -801,9 +867,19 @@ function legacySlotDataKey(slotName) {
     return SLOT_DATA_PREFIX + slotName;
 }
 
+/**
+ * v9.3.1 除稳定 ID 作用域键外，还要读取已认领的历史命名空间作用域键，
+ * 否则升级后旧的 chatMetadata 槽数据会全部读不到。
+ * 注意：写入永远只用稳定 ID（scopedSlotDataKey(charId, ...) 为第一个元素）。
+ */
 function getSlotDataKeys(charId, slotName) {
     const keys = [];
-    if (charId !== null && charId !== undefined) keys.push(scopedSlotDataKey(charId, slotName));
+    if (charId !== null && charId !== undefined) {
+        keys.push(scopedSlotDataKey(charId, slotName));
+        for (const alt of getAcceptableCharIdsSync(charId)) {
+            if (String(alt) !== String(charId)) keys.push(scopedSlotDataKey(alt, slotName));
+        }
+    }
     keys.push(legacySlotDataKey(slotName));
     return [...new Set(keys)];
 }
@@ -995,7 +1071,7 @@ export async function pushSlotVectorsToCloud(charId, slotName) {
     await normalizeDataEmbeddingsToRefs('', normalized);
     const vectorPack = await buildVectorPack('', normalized, { sourceSlot: name });
     const payload = {
-        version: '9.3.0',
+        version: '9.3.1',
         schema: 'bb-memory-cloud-vector-slot-v1',
         charId,
         slotName: name,
@@ -1121,8 +1197,12 @@ export function getRemoteSlotIndex(charId) {
     if (!raw) return { slots: {} };
     try {
         const parsed = JSON.parse(raw);
-        if (parsed?.charId !== undefined && charId !== undefined && String(parsed.charId) !== String(charId)) {
-            return { slots: {} };
+        // v9.3.1 升级后本地 charId 变为稳定 ID，而已有 chatMetadata 里仍是旧下标。
+        // 接受稳定 ID 以及所有已认领的历史命名空间，避免云端槽整体失联。
+        if (parsed?.charId !== undefined && charId !== undefined && charId !== null) {
+            const acceptable = new Set(getAcceptableCharIdsSync(charId).map(String));
+            acceptable.add(String(charId));
+            if (!acceptable.has(String(parsed.charId))) return { slots: {} };
         }
         return parsed && parsed.slots ? parsed : { slots: {} };
     } catch {

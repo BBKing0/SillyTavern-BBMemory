@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.3.0 主入口
+ * index.js —— BB-Memory v9.3.1 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -74,7 +74,11 @@ import { openMemoryManager } from './memory-manager.js';
 import {
     getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot,
     cloneSlot, getChatSlotDataSummary, bindChatToSlot, getBoundSlotName,
+    claimSlotForChat, getSlotOwnerChatId,
 } from './memory-slots.js';
+import {
+    getCharacterDisplayName, autoRescueSlots, primeIdentityCache,
+} from './slot-identity.js';
 
 // ═══ 常量 ═══
 const INJECTION_KEY = 'bb_memory_injection';
@@ -93,7 +97,7 @@ let chatSwitchSuppressDeletesUntil = 0;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.3.0';
+const SETTINGS_EXPORT_VERSION = '9.3.1';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
@@ -2189,6 +2193,9 @@ function bindSidebarEvents() {
         if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
         import('./map-view.js').then(m => m.openMapView(chatId));
     });
+    document.querySelector('#bb_slot_rescue_btn')?.addEventListener('click', () => {
+        openSlotRescuePanel().catch(e => showToast(`打开存档救援失败: ${e.message}`, 'error'));
+    });
     document.querySelector('#bb_agent_btn')?.addEventListener('click', () => {
         const chatId = getChatId();
         if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
@@ -2503,13 +2510,303 @@ function buildDefaultSlotName(prefix, base = '') {
     return safeBase ? `${safeBase}-${prefix}-${stamp}` : `${prefix}-${stamp}`;
 }
 
-function showChatSwitchSlotDialog({ sourceSlot, sourceCount, sourceEmbeddingCount, currentChatId }) {
+// ═══════════════════════════════════════════════════════════
+//  v9.3.1 存档救援
+// ═══════════════════════════════════════════════════════════
+
+let pendingSlotRescue = null;
+let slotRescueNoticeShown = new Set();
+
+/**
+ * 角色载入时的存档命名空间救援。
+ *
+ * v9.3.0 及更早把 characters 数组下标当作存档命名空间，
+ * 导入/删除角色后下标平移，存档就"消失"了（其实还躺在旧命名空间里）。
+ * 这里在读写任何存档之前先把它们找回来。
+ */
+async function runSlotRescueOnLoad(charId) {
+    if (!charId) return null;
+    const result = await autoRescueSlots(charId);
+    if (!result) return null;
+
+    if (result.status === 'migrated') {
+        const r = result.result || {};
+        pendingSlotRescue = null;
+        showTopNotification(
+            `已找回历史存档：从命名空间「${r.legacyId}」恢复 ${r.slotCount} 个存档、${r.entries} 条数据`,
+            'success',
+        );
+        if (getSettings().debugLogging) {
+            console.log('[BB-Memory] 存档自动救援完成:', r);
+        }
+        refreshSidebar();
+        refreshFloatingHubData();
+        return result;
+    }
+
+    if (result.status === 'review') {
+        pendingSlotRescue = { charId, candidates: result.candidates, report: result.report };
+        const key = `${charId}:${result.candidates.length}`;
+        if (!slotRescueNoticeShown.has(key)) {
+            slotRescueNoticeShown.add(key);
+            const total = result.candidates.reduce((sum, c) => sum + (c.totalEntries || 0), 0);
+            showTopNotification(
+                `检测到 ${result.candidates.length} 组未认领的历史存档（共 ${total} 条），`
+                + '当前角色存档为空。请打开「存档救援」确认归属。',
+                'warning',
+            );
+        }
+        renderSlotRescueBanner();
+        return result;
+    }
+
+    pendingSlotRescue = null;
+    renderSlotRescueBanner();
+    return result;
+}
+
+function renderSlotRescueBanner() {
+    const host = document.querySelector('#bb_slot_rescue_banner');
+    if (!host) return;
+    if (!pendingSlotRescue?.candidates?.length) {
+        host.innerHTML = '';
+        host.style.display = 'none';
+        return;
+    }
+    const total = pendingSlotRescue.candidates.reduce((sum, c) => sum + (c.totalEntries || 0), 0);
+    host.style.display = '';
+    host.innerHTML = `
+        <div class="bb-rescue-banner">
+            <i class="fa-solid fa-triangle-exclamation"></i>
+            <div class="bb-rescue-banner-text">
+                <strong>发现 ${pendingSlotRescue.candidates.length} 组未认领的历史存档</strong>
+                <small>共 ${total} 条数据。角色下标变化会让旧存档失联，点击确认归属即可找回。</small>
+            </div>
+            <button class="menu_button bb-rescue-banner-btn" type="button">
+                <i class="fa-solid fa-life-ring"></i> 存档救援
+            </button>
+        </div>`;
+    host.querySelector('.bb-rescue-banner-btn')?.addEventListener('click', () => openSlotRescuePanel());
+}
+
+function rescueConfidenceMeta(confidence) {
+    if (confidence === 'high') return { label: '高置信', cls: 'high', icon: 'fa-circle-check' };
+    if (confidence === 'medium') return { label: '中置信', cls: 'medium', icon: 'fa-circle-question' };
+    return { label: '低置信', cls: 'low', icon: 'fa-circle-exclamation' };
+}
+
+function renderRescueNamespaceCard(ns) {
+    const meta = rescueConfidenceMeta(ns.confidence);
+    const slotList = ns.slots
+        .slice()
+        .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+        .map(s => {
+            const when = s.updatedAt ? new Date(s.updatedAt).toLocaleString() : '时间未知';
+            const c = s.counts || {};
+            const detail = [
+                c.memories ? `记忆 ${c.memories}` : '',
+                c.npc ? `NPC ${c.npc}` : '',
+                c.items ? `物品 ${c.items}` : '',
+                c.milestones ? `里程碑 ${c.milestones}` : '',
+                c.timeline ? `时间线 ${c.timeline}` : '',
+                c.map ? `地点 ${c.map}` : '',
+            ].filter(Boolean).join(' · ') || '空存档';
+            return `
+                <label class="bb-rescue-slot">
+                    <input type="checkbox" class="bb-rescue-slot-cb" value="${escapeHtml(s.name)}" checked />
+                    <span class="bb-rescue-slot-name">${escapeHtml(s.name)}</span>
+                    <span class="bb-rescue-slot-count">${s.count} 条</span>
+                    <span class="bb-rescue-slot-detail">${escapeHtml(detail)}</span>
+                    <span class="bb-rescue-slot-time">${escapeHtml(when)}</span>
+                    ${s.titles?.length ? `<span class="bb-rescue-slot-preview">内容预览：${escapeHtml(s.titles.join('、'))}</span>` : ''}
+                </label>`;
+        }).join('');
+
+    const missing = ns.fromIndexOnly?.length
+        ? `<div class="bb-rescue-missing"><i class="fa-solid fa-circle-minus"></i> 索引中登记但数据已缺失：${escapeHtml(ns.fromIndexOnly.join('、'))}</div>`
+        : '';
+    const claimed = ns.claimedByOther
+        ? `<div class="bb-rescue-claimed"><i class="fa-solid fa-lock"></i> 该命名空间已被其它角色认领（${escapeHtml(ns.claimedBy || '')}）。仍可复制，但请确认是否真属于当前角色。</div>`
+        : '';
+
+    return `
+        <div class="bb-rescue-ns" data-ns="${escapeHtml(ns.charId)}">
+            <div class="bb-rescue-ns-head">
+                <span class="bb-rescue-badge ${meta.cls}"><i class="fa-solid ${meta.icon}"></i> ${meta.label}</span>
+                <strong class="bb-rescue-ns-id">命名空间 ${escapeHtml(ns.charId)}</strong>
+                ${ns.displayName ? `<span class="bb-rescue-ns-name">${escapeHtml(ns.displayName)}</span>` : ''}
+                <span class="bb-rescue-ns-sum">${ns.slotCount} 个存档 / ${ns.totalEntries} 条</span>
+            </div>
+            <div class="bb-rescue-reason"><i class="fa-solid fa-circle-info"></i> ${escapeHtml(ns.reason)}</div>
+            ${claimed}
+            ${missing}
+            <div class="bb-rescue-slots">${slotList}</div>
+            <div class="bb-rescue-ns-actions">
+                <button class="menu_button bb-rescue-select-all" type="button"><i class="fa-solid fa-check-double"></i> 全选</button>
+                <button class="menu_button bb-rescue-select-none" type="button"><i class="fa-solid fa-square"></i> 全不选</button>
+                <button class="menu_button bb-rescue-adopt" type="button"><i class="fa-solid fa-hand-holding-heart"></i> 认领到当前角色</button>
+            </div>
+        </div>`;
+}
+
+/**
+ * 存档救援面板：列出所有历史命名空间，由用户确认认领。
+ * 认领是"复制"，旧数据原样保留，可反复核对。
+ */
+export async function openSlotRescuePanel() {
+    document.querySelector('.bb-rescue-overlay')?.remove();
+    const charId = getCharacterId();
+    if (!charId) { showToast('请先进入角色对话', 'warning'); return; }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'bb-rescue-overlay';
+    overlay.innerHTML = `
+        <div class="bb-rescue-dialog">
+            <div class="bb-rescue-header">
+                <i class="fa-solid fa-life-ring"></i>
+                <div>
+                    <strong>存档救援</strong>
+                    <small>找回因角色下标变化而失联的历史存档</small>
+                </div>
+                <button class="bb-rescue-close" type="button" title="关闭">&times;</button>
+            </div>
+            <div class="bb-rescue-body"><div class="bb-rescue-loading"><i class="fa-solid fa-spinner fa-spin"></i> 正在扫描本地存档命名空间...</div></div>
+            <div class="bb-rescue-footer">
+                <span class="bb-rescue-status"></span>
+                <button class="menu_button bb-rescue-refresh" type="button"><i class="fa-solid fa-rotate"></i> 重新扫描</button>
+            </div>
+        </div>`;
+    document.body.appendChild(overlay);
+
+    const close = () => overlay.remove();
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.querySelector('.bb-rescue-close')?.addEventListener('click', close);
+
+    const body = overlay.querySelector('.bb-rescue-body');
+    const status = overlay.querySelector('.bb-rescue-status');
+
+    const render = async () => {
+        body.innerHTML = '<div class="bb-rescue-loading"><i class="fa-solid fa-spinner fa-spin"></i> 正在扫描本地存档命名空间...</div>';
+        let report;
+        try {
+            const { collectRescueCandidates } = await import('./slot-identity.js');
+            report = await collectRescueCandidates(charId);
+        } catch (e) {
+            body.innerHTML = `<div class="bb-rescue-error">扫描失败：${escapeHtml(e.message || String(e))}</div>`;
+            return;
+        }
+
+        const charName = getCharacterDisplayName(charId);
+        const head = `
+            <div class="bb-rescue-current">
+                <div><strong>当前角色</strong>：${escapeHtml(charName || '(未知)')}</div>
+                <div><strong>稳定命名空间</strong>：<code>${escapeHtml(report.stableId || '(无法解析)')}</code></div>
+                <div><strong>本命名空间已有</strong>：${report.ownSlotCount} 个存档 / ${report.ownEntries} 条</div>
+                <div><strong>当前角色下标</strong>：${escapeHtml(String(report.legacyIndex ?? '(无)'))}${report.metaCharId ? ` · 聊天云端索引记录：<code>${escapeHtml(report.metaCharId)}</code>` : ''}</div>
+            </div>
+            <div class="bb-rescue-help">
+                <i class="fa-solid fa-shield-halved"></i>
+                认领 = <strong>复制</strong>到当前角色的稳定命名空间。旧数据完整保留，不会被删除，可以反复核对。
+                同名存档会自动加 "-救援" 后缀，不覆盖现有存档。
+            </div>`;
+
+        if (!report.candidates.length) {
+            body.innerHTML = `${head}<div class="bb-rescue-empty"><i class="fa-solid fa-circle-check"></i> 没有发现其它历史存档命名空间。</div>`;
+            status.textContent = `已扫描 ${report.scanned} 个存档相关键`;
+            return;
+        }
+
+        body.innerHTML = head
+            + report.candidates.map(renderRescueNamespaceCard).join('')
+            + (report.unresolved?.length
+                ? `<div class="bb-rescue-unresolved"><strong>无法归类的键（${report.unresolved.length}）</strong>
+                     <div>${report.unresolved.map(u => `<code>${escapeHtml(u.key)}</code> (${u.count} 条)`).join('<br>')}</div>
+                     <small>这些键的命名空间无法自动解析，如需处理请联系开发者，数据不会被自动改动。</small></div>`
+                : '');
+        status.textContent = `已扫描 ${report.scanned} 个存档相关键 · ${report.candidates.length} 组候选`;
+
+        body.querySelectorAll('.bb-rescue-ns').forEach(card => {
+            const boxes = () => [...card.querySelectorAll('.bb-rescue-slot-cb')];
+            card.querySelector('.bb-rescue-select-all')?.addEventListener('click', () => {
+                boxes().forEach(b => { b.checked = true; });
+            });
+            card.querySelector('.bb-rescue-select-none')?.addEventListener('click', () => {
+                boxes().forEach(b => { b.checked = false; });
+            });
+            card.querySelector('.bb-rescue-adopt')?.addEventListener('click', async (e) => {
+                const btn = e.currentTarget;
+                const legacyId = card.dataset.ns;
+                const slotNames = boxes().filter(b => b.checked).map(b => b.value);
+                if (!slotNames.length) { showToast('请至少勾选一个存档', 'warning'); return; }
+                const ok = confirm(
+                    `确认把命名空间「${legacyId}」中的 ${slotNames.length} 个存档认领到当前角色？\n\n`
+                    + '这是复制操作，原数据保留不变。'
+                );
+                if (!ok) return;
+                const orig = btn.innerHTML;
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在认领...';
+                try {
+                    const { migrateLegacyNamespace } = await import('./slot-identity.js');
+                    const result = await migrateLegacyNamespace(legacyId, charId, { slotNames });
+                    const renamed = result.migrated.filter(m => m.from !== m.to);
+                    showTopNotification(
+                        `已认领 ${result.slotCount} 个存档、${result.entries} 条数据`
+                        + (renamed.length ? `；${renamed.length} 个因同名重命名为 ${renamed.map(m => m.to).join('、')}` : ''),
+                        'success',
+                    );
+                    if (result.skipped.length) {
+                        showToast(`${result.skipped.length} 个存档未能认领，详见控制台`, 'warning');
+                        console.warn('[BB-Memory] 未认领的存档:', result.skipped);
+                    }
+                    pendingSlotRescue = null;
+                    renderSlotRescueBanner();
+                    refreshSidebar();
+                    refreshFloatingHubData();
+                    await render();
+                } catch (err) {
+                    showToast(`认领失败：${err.message}`, 'error');
+                    btn.disabled = false;
+                    btn.innerHTML = orig;
+                }
+            });
+        });
+    };
+
+    overlay.querySelector('.bb-rescue-refresh')?.addEventListener('click', () => render());
+    await render();
+}
+
+/**
+ * v9.3.1 检测当前聊天是否为分支。
+ * ST 的分支聊天文件名通常带 " Branch #" / "branch" 标记，
+ * 同时 chatMetadata 里会保留来源信息。任一命中即视为分支。
+ */
+function detectBranchChat(chatId) {
+    try {
+        const text = String(chatId || '');
+        if (/branch/i.test(text) || /分支/.test(text)) return true;
+        const ctx = SillyTavern.getContext();
+        const meta = ctx?.chatMetadata || {};
+        if (meta.branched_from || meta.branchedFrom || meta.main_chat) return true;
+    } catch { /* ignore */ }
+    return false;
+}
+
+function showChatSwitchSlotDialog({
+    sourceSlot, sourceCount, sourceEmbeddingCount, currentChatId,
+    currentCount = 0, isBranch = false, existingSlots = [],
+}) {
     return new Promise((resolve) => {
         document.querySelector('.bb-slot-switch-overlay')?.remove();
 
-        const canBranch = Number(sourceCount || 0) > 0;
+        const canBranch = Boolean(sourceSlot) && Number(sourceCount || 0) > 0;
         const branchDefault = buildDefaultSlotName('if', sourceSlot);
         const emptyDefault = buildDefaultSlotName('new');
+        const slotOptions = (existingSlots || [])
+            .filter(s => s && s.name)
+            .map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)} (${Number(s.count || 0)} 条)</option>`)
+            .join('');
         const overlay = document.createElement('div');
         overlay.className = 'bb-slot-switch-overlay';
         overlay.innerHTML = `
@@ -2517,31 +2814,45 @@ function showChatSwitchSlotDialog({ sourceSlot, sourceCount, sourceEmbeddingCoun
                 <div class="bb-slot-switch-header">
                     <i class="fa-solid fa-code-branch"></i>
                     <div>
-                        <strong>检测到更换窗口</strong>
+                        <strong>${isBranch ? '检测到分支窗口' : '检测到未绑定的窗口'}</strong>
                         <small>当前聊天：${escapeHtml(String(currentChatId || '').slice(0, 24))}</small>
                     </div>
-                    <button class="bb-slot-switch-close" type="button" title="稍后处理">&times;</button>
+                    <button class="bb-slot-switch-close" type="button" title="稍后处理（会自动隔离到新存档）">&times;</button>
                 </div>
                 <div class="bb-slot-switch-body">
                     <div class="bb-slot-switch-note">
-                        是否以 <strong>「${escapeHtml(sourceSlot || 'default')}」</strong> 存档为基础新增 if 分支，或新建一个空存档并切换过去？
+                        这个窗口还没有绑定存档。请选择它该使用哪个存档 ——
+                        ${canBranch ? `可以基于 <strong>「${escapeHtml(sourceSlot)}」</strong> 新增 if 分支，` : ''}
+                        也可以新建空存档或绑定到已有存档。
+                    </div>
+                    <div class="bb-slot-switch-safety">
+                        <i class="fa-solid fa-shield-halved"></i>
+                        为避免串档，未绑定的窗口不会写入任何已有存档。若直接关闭本窗口，
+                        BB-Memory 会自动为它创建一个隔离存档。
                     </div>
                     <div class="bb-slot-switch-stats">
                         <span><i class="fa-solid fa-layer-group"></i> 基础条目：<strong>${Number(sourceCount || 0)}</strong></span>
                         <span><i class="fa-solid fa-vector-square"></i> 本地向量：<strong>${Number(sourceEmbeddingCount || 0)}</strong></span>
+                        <span><i class="fa-solid fa-comment-dots"></i> 本窗口现有：<strong>${Number(currentCount || 0)}</strong></span>
                     </div>
                     <label class="bb-slot-switch-field">
                         <span>新增 if 分支名称</span>
                         <input class="bb-input" id="bb_slot_switch_branch_name" value="${escapeHtml(branchDefault)}" ${canBranch ? '' : 'disabled'} />
                     </label>
-                    ${canBranch ? '' : '<div class="bb-slot-switch-warning"><i class="fa-solid fa-triangle-exclamation"></i> 当前基础存档为空，无法复制为 if 分支；可以先新建空存档。</div>'}
+                    ${canBranch ? '' : '<div class="bb-slot-switch-warning"><i class="fa-solid fa-triangle-exclamation"></i> 没有可作为基础的已绑定存档，无法复制为 if 分支；可以新建空存档或绑定已有存档。</div>'}
                     <label class="bb-slot-switch-field">
                         <span>新建空存档名称</span>
                         <input class="bb-input" id="bb_slot_switch_empty_name" value="${escapeHtml(emptyDefault)}" />
                     </label>
+                    ${slotOptions ? `
+                    <label class="bb-slot-switch-field">
+                        <span>绑定到已有存档</span>
+                        <select class="bb-input" id="bb_slot_switch_existing_name">${slotOptions}</select>
+                    </label>` : ''}
                 </div>
                 <div class="bb-slot-switch-actions">
                     <button class="menu_button" id="bb_slot_switch_cancel" type="button">稍后处理</button>
+                    ${slotOptions ? '<button class="menu_button" id="bb_slot_switch_existing" type="button"><i class="fa-solid fa-link"></i> 绑定已有</button>' : ''}
                     <button class="menu_button" id="bb_slot_switch_empty" type="button">
                         <i class="fa-solid fa-file-circle-plus"></i> 新建空存档
                     </button>
@@ -2572,6 +2883,11 @@ function showChatSwitchSlotDialog({ sourceSlot, sourceCount, sourceEmbeddingCoun
             if (!slotName) { showToast('请输入新存档名称', 'warning'); return; }
             done({ action: 'new', slotName });
         });
+        overlay.querySelector('#bb_slot_switch_existing')?.addEventListener('click', () => {
+            const slotName = overlay.querySelector('#bb_slot_switch_existing_name')?.value?.trim();
+            if (!slotName) { showToast('请选择要绑定的存档', 'warning'); return; }
+            done({ action: 'existing', slotName });
+        });
         [branchInput, emptyInput].forEach(input => {
             input?.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') done(null);
@@ -2588,16 +2904,38 @@ function showChatSwitchSlotDialog({ sourceSlot, sourceCount, sourceEmbeddingCoun
     });
 }
 
-async function saveObservedChatSlot(charId, chatId, slotName) {
-    if (!charId || !chatId || !slotName) return null;
+/**
+ * v9.3.1 切换窗口前的自动保存。
+ *
+ * 【修复分支串档】旧实现在聊天没有绑定记录时回退到全局 currentSlotName，
+ * 然后直接把该聊天的数据覆盖进那个槽。典型后果：在分支 if 里点了"稍后处理"
+ * 导致分支未绑定，之后切走时分支数据被写进了正剧存档。
+ *
+ * 新规则：只有**明确绑定**的聊天才能触发自动保存，且带上归属校验。
+ * 没有绑定就不写，改为返回 unbound 让上层去引导用户显式选择。
+ */
+async function saveObservedChatSlot(charId, chatId, options = {}) {
+    if (!charId || !chatId) return null;
+    const boundSlot = getBoundSlotName(charId, chatId);
+    if (!boundSlot) {
+        const summary = await getChatSlotDataSummary(chatId).catch(() => ({ count: 0 }));
+        return { unbound: true, count: summary?.count || 0 };
+    }
     try {
         const summary = await getChatSlotDataSummary(chatId);
-        const alreadyBound = getBoundSlotName(charId, chatId);
-        if (summary.count <= 0 && !alreadyBound) return null;
-        return await saveToSlot(charId, chatId, slotName, { syncCloud: false });
+        if (summary.count <= 0 && options.allowEmpty !== true) {
+            return { skipped: true, reason: 'empty', slotName: boundSlot, count: 0 };
+        }
+        const saved = await saveToSlot(charId, chatId, boundSlot, {
+            syncCloud: false,
+            expectChatId: chatId,
+        });
+        return { ...saved, slotName: boundSlot };
     } catch (e) {
-        console.warn('[BB-Memory] 切换窗口前置保存失败:', e.message || e);
-        return null;
+        // 归属冲突不是"失败"，而是守卫成功拦下了一次串档
+        console.warn('[BB-Memory] 切换窗口前置保存被拦下或失败:', e.message || e);
+        showTopNotification(`已阻止一次可能的存档串档：${e.message}`, 'warning');
+        return { blocked: true, error: e.message, slotName: boundSlot };
     }
 }
 
@@ -2625,14 +2963,14 @@ async function maybePromptChatSwitchSlot({ prevChatId, prevCharId, chatId, charI
     const switchedChat = hadPrevious && String(prevChatId) !== String(chatId);
     const switchedChar = hadPrevious && String(prevCharId) !== String(charId);
     const switched = switchedChat || switchedChar;
-    const previousSlotName = getSettings().currentSlotName || 'default';
 
     try {
+        // 1. 先保存上一个窗口 —— 仅当它有明确绑定时
         if (switched && prevChatId && prevCharId) {
-            const prevBoundSlot = getBoundSlotName(prevCharId, prevChatId) || previousSlotName;
-            await saveObservedChatSlot(prevCharId, prevChatId, prevBoundSlot);
+            await saveObservedChatSlot(prevCharId, prevChatId);
         }
 
+        // 2. 当前窗口有明确绑定 -> 按绑定加载
         const boundSlot = getBoundSlotName(charId, chatId);
         if (boundSlot) {
             const currentSlot = getSettings().currentSlotName || 'default';
@@ -2641,59 +2979,69 @@ async function maybePromptChatSwitchSlot({ prevChatId, prevCharId, chatId, charI
             } else {
                 bindChatToSlot(charId, chatId, boundSlot, { overwrite: false });
             }
+            await claimSlotForChat(charId, boundSlot, chatId);
             return;
         }
 
-        if (!switched) {
-            bindChatToSlot(charId, chatId, previousSlotName, { overwrite: false });
-            return;
-        }
-
-        const sameCharacter = !switchedChar && String(prevCharId) === String(charId);
-        const currentSummary = await getChatSlotDataSummary(chatId);
-
-        if (!sameCharacter || currentSummary.count > 0) {
-            const fallbackSlot = sameCharacter ? previousSlotName : 'default';
-            bindChatToSlot(charId, chatId, fallbackSlot, { overwrite: false });
-            return;
-        }
-
-        const promptKey = `${charId}:${prevChatId}->${chatId}`;
+        // 3. 当前窗口没有绑定。
+        //    v9.3.1 关键修复：绝不再把它静默绑定到 currentSlotName（上一个聊天的槽）。
+        //    未绑定的窗口一律走显式选择流程。
+        const promptKey = `${charId}:${prevChatId || 'init'}->${chatId}`;
         if (handledChatSwitchPrompts.has(promptKey) || chatSwitchPromptOpen) return;
-        handledChatSwitchPrompts.add(promptKey);
 
-        const sourceSlot = getBoundSlotName(prevCharId, prevChatId) || previousSlotName;
+        const currentSummary = await getChatSlotDataSummary(chatId);
+        const isBranch = detectBranchChat(chatId);
+        const sourceSlot = (prevCharId && prevChatId && String(prevCharId) === String(charId))
+            ? getBoundSlotName(prevCharId, prevChatId)
+            : '';
+
         let sourceCount = 0;
         let sourceEmbeddingCount = 0;
-
-        const saved = await saveObservedChatSlot(prevCharId, prevChatId, sourceSlot);
-        if (saved) {
-            sourceCount = saved.count || 0;
-            sourceEmbeddingCount = saved.embeddingCount || 0;
-        }
-
-        if (sourceCount === 0) {
+        if (sourceSlot) {
             const slots = await listSlots(charId);
             const source = slots.find(s => s.name === sourceSlot);
             sourceCount = source?.count || 0;
             sourceEmbeddingCount = source?.embeddingCount || source?.remoteEmbeddings || 0;
         }
 
+        handledChatSwitchPrompts.add(promptKey);
         chatSwitchPromptOpen = true;
         const choice = await showChatSwitchSlotDialog({
             sourceSlot,
             sourceCount,
             sourceEmbeddingCount,
             currentChatId: chatId,
+            currentCount: currentSummary.count || 0,
+            isBranch,
+            existingSlots: await listSlots(charId),
         });
         chatSwitchPromptOpen = false;
-        if (!choice) return;
+
+        // 「稍后处理」不再留下悬空状态：自动落一个专属新槽，
+        // 这样后续自动保存有明确目标，不会误伤任何已有存档。
+        if (!choice) {
+            const fallbackName = buildDefaultSlotName('未命名', getCharacterDisplayName(charId));
+            await createEmptySlot(charId, fallbackName).catch(() => {});
+            bindChatToSlot(charId, chatId, fallbackName);
+            await claimSlotForChat(charId, fallbackName, chatId);
+            if (currentSummary.count > 0) {
+                await saveToSlot(charId, chatId, fallbackName, { syncCloud: false, expectChatId: chatId }).catch(() => {});
+            }
+            showTopNotification(
+                `当前窗口未选择存档，已自动隔离到新存档「${fallbackName}」，不会影响其它存档`,
+                'warning',
+            );
+            refreshSidebar();
+            refreshFloatingHubData();
+            return;
+        }
 
         const progress = createProgressToast('正在切换 BB-Memory 存档...');
         try {
             if (choice.action === 'branch') {
+                if (!sourceSlot) throw new Error('没有可作为分支基础的已绑定存档');
                 progress && (progress.textContent = '正在复制当前存档为 if 分支...');
-                await cloneSlot(charId, sourceSlot, choice.slotName, { syncCloud: false });
+                await cloneSlot(charId, sourceSlot, choice.slotName, { syncCloud: false, boundChatId: chatId });
                 const loaded = await loadFromSlot(charId, chatId, choice.slotName, { preserveIds: true });
                 showTopNotification(`已基于「${sourceSlot}」创建 if 分支「${choice.slotName}」，复制 ${loaded.count} 条`, 'success');
             } else if (choice.action === 'new') {
@@ -2701,6 +3049,19 @@ async function maybePromptChatSwitchSlot({ prevChatId, prevCharId, chatId, charI
                 await createEmptySlot(charId, choice.slotName);
                 const loaded = await loadFromSlot(charId, chatId, choice.slotName, { preserveIds: true });
                 showTopNotification(`已新建并切换到存档「${choice.slotName}」 (${loaded.count} 条)`, 'success');
+            } else if (choice.action === 'existing') {
+                // v9.3.1 绑定到已有存档：先校验该槽是否已归属别的聊天
+                const owner = await getSlotOwnerChatId(charId, choice.slotName);
+                if (owner && String(owner) !== String(chatId)) {
+                    const ok = confirm(
+                        `存档「${choice.slotName}」当前归属另一个聊天窗口。\n`
+                        + '继续绑定会让两个窗口共用同一存档，之后的自动保存可能互相覆盖。\n\n确定继续吗？'
+                    );
+                    if (!ok) throw new Error('已取消绑定');
+                }
+                progress && (progress.textContent = `正在加载存档「${choice.slotName}」...`);
+                const loaded = await loadFromSlot(charId, chatId, choice.slotName, { preserveIds: true });
+                showTopNotification(`已绑定并加载存档「${choice.slotName}」 (${loaded.count} 条)`, 'success');
             }
             refreshSidebar();
             refreshFloatingHubData();
@@ -3082,6 +3443,10 @@ function registerSlashCommands() {
         openAssistant(chatId, 'dashboard');
     }, '打开记忆管家面板');
 
+    addCmd('bb-rescue', () => {
+        openSlotRescuePanel().catch(e => showToast(`打开存档救援失败: ${e.message}`, 'error'));
+    }, '打开存档救援 — 找回因角色下标变化而失联的历史存档');
+
     addCmd('bb-maintenance', async () => {
         const chatId = getChatId();
         if (!chatId) return;
@@ -3262,6 +3627,15 @@ async function onChatChanged() {
     // 迁移检查
     if (!settings.migratedFromV4) {
         try { await migrateV4ToV5(chatId); } catch { /* ignore */ }
+    }
+
+    // v9.3.1 存档命名空间救援：必须在任何存档读写之前完成，
+    // 否则会在空的稳定命名空间上继续操作，用户看到的就是"存档消失"。
+    try {
+        await primeIdentityCache(charId);
+        await runSlotRescueOnLoad(charId);
+    } catch (e) {
+        console.warn('[BB-Memory] 存档救援检查失败:', e.message || e);
     }
 
     // 可见性同步
@@ -3839,8 +4213,17 @@ async function handleFloatingMenuAction(action) {
             try {
                 const charId = getCharacterId();
                 if (!charId) { showTopNotification('无法获取角色ID', 'error'); break; }
-                const slotName = getSettings().currentSlotName || 'default';
-                const result = await saveToSlot(charId, chatId, slotName);
+                // v9.3.1 写入目标必须是本窗口的**实际绑定**，不能用全局 currentSlotName。
+                // 后者是上一个窗口留下的值，会造成跨窗口串档。
+                const slotName = getBoundSlotName(charId, chatId);
+                if (!slotName) {
+                    showTopNotification(
+                        '当前窗口还没有绑定存档，已阻止保存以避免覆盖其它存档。请在记忆管理的存档页选择或新建一个存档。',
+                        'warning',
+                    );
+                    break;
+                }
+                const result = await saveToSlot(charId, chatId, slotName, { expectChatId: chatId });
                 const count = typeof result === 'object' ? result.count : result;
                 const cloudTip = result?.cloudSynced ? '，云端索引已更新（完整数据保留在本地）' : '（本地已保存，云端索引不可用）';
                 showTopNotification(`已保存 ${count} 条到「${slotName}」${cloudTip}`, result?.cloudSynced ? 'success' : 'warning');
@@ -3890,7 +4273,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.3.0 初始化开始...');
+    console.log('[BB-Memory] v9.3.1 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -4064,14 +4447,20 @@ async function init() {
     initMessageDeletionWatch();
     initExtractionMarkerWatch();
     initChatSwitchFallbackWatch();
-    setTimeout(() => {
+    setTimeout(async () => {
         const chatId = getChatId();
         const charId = getCharacterId();
-        if (chatId && charId) {
-            maybePromptChatSwitchSlot({ prevChatId: null, prevCharId: null, chatId, charId }).catch((e) => {
-                console.warn('[BB-Memory] 初始化存档绑定同步失败:', e.message || e);
-            });
+        if (!chatId || !charId) return;
+        // v9.3.1 存档救援必须先于任何绑定/加载动作
+        try {
+            await primeIdentityCache(charId);
+            await runSlotRescueOnLoad(charId);
+        } catch (e) {
+            console.warn('[BB-Memory] 初始化存档救援失败:', e.message || e);
         }
+        maybePromptChatSwitchSlot({ prevChatId: null, prevCharId: null, chatId, charId }).catch((e) => {
+            console.warn('[BB-Memory] 初始化存档绑定同步失败:', e.message || e);
+        });
     }, 1200);
 
     // v6.1: 监听消息删除，自动清理关联记忆
@@ -4080,7 +4469,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.3.0 初始化完成');
+    console.log('[BB-Memory] v9.3.1 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆

@@ -17,7 +17,7 @@ import {
 } from './memory-store.js';
 import {
     getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot, exportSlot, getRemoteSlotIndex,
-    getCloudVectorSlot, pushSlotVectorsToCloud, pullCloudVectors,
+    getCloudVectorSlot, pushSlotVectorsToCloud, pullCloudVectors, getSlotOwnerChatId,
 } from './memory-slots.js';
 import { simpleSearch } from './retriever.js';
 import { MEMORY_TYPES, TRUTH_STATUS, HIDDEN_NOTE_TYPES, TIMELINE_STATUS, ITEM_STATUS } from './memory-types.js';
@@ -1796,7 +1796,17 @@ function bindSlotEvents(overlay, chatId, charId, slotsEl) {
         btn.addEventListener('click', async () => {
             const slotName = btn.dataset.slot;
             try {
-                const result = await saveToSlot(charId, chatId, slotName);
+                // v9.3.1 手动保存前先确认归属：若该槽属于别的聊天窗口，
+                // 直接覆盖就是串档（分支 if 盖掉正剧的典型场景）。
+                const owner = await getSlotOwnerChatId(charId, slotName);
+                if (owner && String(owner) !== String(chatId)) {
+                    const ok = confirm(
+                        `存档「${slotName}」当前归属另一个聊天窗口：\n${String(owner).slice(0, 60)}\n\n`
+                        + '继续保存会用**当前窗口**的记忆覆盖它，属于跨窗口串档。\n\n确定继续吗？'
+                    );
+                    if (!ok) { showToast('已取消保存', 'warning'); return; }
+                }
+                const result = await saveToSlot(charId, chatId, slotName, { force: true });
                 let syncTip;
                 if (result.cloudDataSynced) {
                     syncTip = `，已同步到云端 (${(result.cloudDataSize / 1024).toFixed(0)}KB)`;
