@@ -1067,7 +1067,7 @@ function getChatId() {
 
 // ═══ 核心：消息接收处理 ═══
 
-export async function onMessageReceived(_messageIndex) {
+export async function onMessageReceived(_messageIndex, options = {}) {
     const settings = getSettings();
     if (!settings.enabled || !settings.autoGenEnabled) return { skipped: true, reason: 'disabled' };
 
@@ -1075,7 +1075,10 @@ export async function onMessageReceived(_messageIndex) {
     if (!chatId) return { skipped: true, reason: 'no-chat' };
 
     // 防抖
-    const delay = _messageIndex === -1 ? 500 : 2500;
+    const requestedDelay = Number(options.delay);
+    const delay = Number.isFinite(requestedDelay) && requestedDelay >= 0
+        ? requestedDelay
+        : (_messageIndex === -1 ? 500 : 2500);
     if (processingTimer) clearTimeout(processingTimer);
     return new Promise((resolve, reject) => {
         pendingProcessingWaiters.push({ resolve, reject });
@@ -2437,19 +2440,41 @@ export async function reextractFloor(chatId, floor, options = {}) {
 
 // ═══ 初始化/生命周期 ═══
 
-let eventRegistered = false;
+let registeredAutoEvent = null;
+
+/**
+ * SillyTavern 会 await 消息事件的所有监听器。这里必须同步返回，不能把整条
+ * 提取 Promise 交给 eventSource，否则 MESSAGE_RECEIVED 后的消息渲染也会等到
+ * 提取结束。实际任务通过 processingChain 在后台串行执行。
+ */
+function onAutoExtractionEvent(messageIndex) {
+    void onMessageReceived(messageIndex, { delay: 0 }).catch((error) => {
+        console.warn('[BB-Memory] 后台自动提取失败:', error?.message || error);
+        if (typeof globalThis.bbMemoryRecordActivity === 'function') {
+            globalThis.bbMemoryRecordActivity('error', '自动提取失败', error?.message || '未知错误');
+        }
+    });
+}
 
 export function initAutoGenerator() {
-    if (eventRegistered) return;
+    if (registeredAutoEvent) return;
     try {
         const ctx = SillyTavern.getContext();
         const eventTypes = ctx.eventTypes || ctx.event_types || {};
-        const msgReceived = eventTypes.MESSAGE_RECEIVED;
-        if (msgReceived) {
-            ctx.eventSource.on(msgReceived, onMessageReceived);
-            eventRegistered = true;
+        // v9.3.2：用户消息入列后，上一批完整 exchange 与本轮记忆命中并行处理。
+        // 旧版 ST 若没有 MESSAGE_SENT，则依次回退到用户渲染和 AI 收到事件。
+        const autoEvent = eventTypes.MESSAGE_SENT
+            || eventTypes.USER_MESSAGE_RENDERED
+            || eventTypes.MESSAGE_RECEIVED;
+        if (autoEvent && ctx.eventSource) {
+            ctx.eventSource.on(autoEvent, onAutoExtractionEvent);
+            registeredAutoEvent = autoEvent;
             // 初始积压检查
-            setTimeout(() => onMessageReceived(-1), 3000);
+            setTimeout(() => {
+                void onMessageReceived(-1).catch((error) => {
+                    console.warn('[BB-Memory] 初始积压提取失败:', error?.message || error);
+                });
+            }, 3000);
         }
     } catch (e) {
         console.warn('[BB-Memory] auto-generator 初始化失败:', e.message);
@@ -2457,16 +2482,14 @@ export function initAutoGenerator() {
 }
 
 export function stopAutoGenerator() {
-    if (!eventRegistered) return;
+    if (!registeredAutoEvent) return;
     try {
         const ctx = SillyTavern.getContext();
-        const eventTypes = ctx.eventTypes || ctx.event_types || {};
-        const msgReceived = eventTypes.MESSAGE_RECEIVED;
-        if (msgReceived) {
-            ctx.eventSource.removeListener(msgReceived, onMessageReceived);
+        if (ctx.eventSource) {
+            ctx.eventSource.removeListener(registeredAutoEvent, onAutoExtractionEvent);
         }
     } catch { /* ignore */ }
-    eventRegistered = false;
+    registeredAutoEvent = null;
     if (processingTimer) { clearTimeout(processingTimer); processingTimer = null; }
     const waiters = pendingProcessingWaiters.splice(0);
     waiters.forEach(waiter => waiter.resolve({ skipped: true, reason: 'stopped' }));

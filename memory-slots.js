@@ -827,7 +827,7 @@ export async function exportSlot(charId, slotName) {
     const cleanData = stripRuntimeEmbeddings(stripSlotEmbeddings(data));
     const vectorPack = await buildVectorPack('', cleanData, { sourceSlot: slotName });
     const archive = {
-        version: '9.3.1',
+        version: '9.3.2',
         schema: 'bb-memory-vector-ref-v1',
         exportedAt: Date.now(),
         source: 'slot',
@@ -1071,7 +1071,7 @@ export async function pushSlotVectorsToCloud(charId, slotName) {
     await normalizeDataEmbeddingsToRefs('', normalized);
     const vectorPack = await buildVectorPack('', normalized, { sourceSlot: name });
     const payload = {
-        version: '9.3.1',
+        version: '9.3.2',
         schema: 'bb-memory-cloud-vector-slot-v1',
         charId,
         slotName: name,

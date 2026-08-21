@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.3.1 主入口
+ * index.js —— BB-Memory v9.3.2 主入口
  *
  * 四柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -97,7 +97,7 @@ let chatSwitchSuppressDeletesUntil = 0;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.3.1';
+const SETTINGS_EXPORT_VERSION = '9.3.2';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
@@ -4273,7 +4273,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.3.1 初始化开始...');
+    console.log('[BB-Memory] v9.3.2 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -4469,7 +4469,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.3.1 初始化完成');
+    console.log('[BB-Memory] v9.3.2 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
