@@ -62,6 +62,50 @@ export const TRUTH_STATUS = Object.freeze({
 });
 
 // ═══════════════════════════════════════════════════════════
+//  v9.3.3 实时记忆（第五柱）
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 实时记忆的细节分类。
+ *
+ * 这一柱专门装「具体、易被遗忘、当下有效」的场景细节：坐什么车来的、穿了什么、
+ * 谁在场、点了什么。它们不进向量检索、无条件注入，用来解决长线逻辑断裂
+ * （query 里没有「车」字，"坐车来电影院"就永远检索不到）。
+ */
+export const REALTIME_KINDS = Object.freeze({
+    transport: { id: 'transport', label: '交通', icon: 'fa-solid fa-bus',            color: '#4fc3f7' },
+    outfit:    { id: 'outfit',    label: '衣着', icon: 'fa-solid fa-shirt',          color: '#f06292' },
+    present:   { id: 'present',   label: '在场', icon: 'fa-solid fa-users',          color: '#81c784' },
+    preference:{ id: 'preference',label: '偏好', icon: 'fa-solid fa-heart-circle-check', color: '#ffb74d' },
+    position:  { id: 'position',  label: '位置', icon: 'fa-solid fa-location-dot',   color: '#9575cd' },
+    state:     { id: 'state',     label: '状态', icon: 'fa-solid fa-wave-square',    color: '#4db6ac' },
+    object:    { id: 'object',    label: '随手物', icon: 'fa-solid fa-hand-holding', color: '#a1887f' },
+    detail:    { id: 'detail',    label: '其他细节', icon: 'fa-solid fa-circle-dot', color: '#90a4ae' },
+});
+
+export const DEFAULT_REALTIME_KIND = 'detail';
+
+export function normalizeRealtimeKind(value) {
+    const key = String(value || '').trim().toLowerCase();
+    if (REALTIME_KINDS[key]) return key;
+    // 容错：AI 可能直接回中文标签
+    const byLabel = Object.values(REALTIME_KINDS).find(k => k.label === String(value || '').trim());
+    return byLabel ? byLabel.id : DEFAULT_REALTIME_KIND;
+}
+
+/** 实时记忆的结算状态。 */
+export const REALTIME_SETTLE_STATES = Object.freeze({
+    active:         { id: 'active',         label: '生效中', color: '#4caf50' },
+    pending_settle: { id: 'pending_settle', label: '待结算', color: '#ff9800' },
+    settled:        { id: 'settled',        label: '已结算', color: '#9e9e9e' },
+});
+
+export function normalizeSettleState(value) {
+    const key = String(value || '').trim();
+    return REALTIME_SETTLE_STATES[key] ? key : 'active';
+}
+
+// ═══════════════════════════════════════════════════════════
 //  隐藏备注类型
 // ═══════════════════════════════════════════════════════════
 

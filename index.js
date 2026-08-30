@@ -1,7 +1,7 @@
 /**
- * index.js —— BB-Memory v9.3.2 主入口
+ * index.js —— BB-Memory v9.3.3 主入口
  *
- * 四柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目。
+ * 五柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目 / 实时记忆。
  * 负责初始化、拦截器、UI、斜杠命令。
  */
 
@@ -13,6 +13,8 @@ import {
     getMilestones, addMilestone, updateMilestone, removeMilestone, upsertMilestone,
     getTimeline,
     getMemories, addMemory, updateMemory, removeMemory,
+    getRealtimeMemories, addRealtimeMemory, addRealtimeMemories,
+    updateRealtimeMemory, removeRealtimeMemory, clearRealtimeMemories,
     clearAllData, deleteByExchange, getMemoryStats, refreshAllSourceFloors,
     exportMemoriesToChatMetadata, importMemoriesFromChatMetadata, cleanupChatMetadataBloat,
     migrateV4ToV5,
@@ -28,7 +30,7 @@ import {
     getRetrieverPromptTemplates,
 } from './retriever.js';
 
-import { MEMORY_TYPES, TRUTH_STATUS } from './memory-types.js';
+import { MEMORY_TYPES, TRUTH_STATUS, REALTIME_KINDS, REALTIME_SETTLE_STATES } from './memory-types.js';
 import { NPC_TIERS, ITEM_TIERS, expandMemoriesForEntityKeyword } from './entity-tiers.js';
 
 import {
@@ -51,7 +53,10 @@ import { getMap } from './map-store.js';  // v8.7.0
 import { hydrateCollectionEmbeddings, hydrateMapEmbeddings } from './vector-store.js';
 import {
     DEFAULT_AGENT_SYSTEM_PROMPT,
+    DEFAULT_CURATE_REVIEW_PROMPT,
     DEFAULT_HEALTH_TAG_PROMPT,
+    DEFAULT_REALTIME_DETAIL_EXTRACT_PROMPT,
+    DEFAULT_REALTIME_SETTLE_PROMPT,
     DEFAULT_THREAD_SUMMARY_PROMPT,
     getPromptTemplate,
     getPromptTemplates,
@@ -97,7 +102,7 @@ let chatSwitchSuppressDeletesUntil = 0;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.3.2';
+const SETTINGS_EXPORT_VERSION = '9.3.3';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
@@ -116,6 +121,18 @@ const SETTINGS_EXPORT_KEYS = [
     'maintenanceMode', 'maintenanceMemThreshold', 'maintenanceNpcThreshold', 'maintenanceItemThreshold', 'itemDustyMissRounds',
     'healthCheckDuplicateThreshold', 'healthCheckIsolationThreshold', 'healthCheckStaleDays',
     'healthCheckStaleHitThreshold', 'healthCheckThreadStaleDays', 'healthCheckClueStaleDays',
+    // v9.3.3 AI 记忆整理
+    'aiCurateEnabled', 'aiCurateTriggerMode',
+    'aiCurateMemThreshold', 'aiCurateNpcThreshold', 'aiCurateItemThreshold',
+    'aiCurateMilestoneThreshold', 'aiCurateTimelineThreshold',
+    'aiCurateRecallPerEntry', 'aiCurateClusterThreshold', 'aiCurateMaxGroupsPerRun',
+    'aiCurateAuthMerge', 'aiCurateAuthRewrite', 'aiCurateAuthSplit', 'aiCurateAuthDelete',
+    'aiCurateUndoDepth', 'dedupTimeConflictScope',
+    // v9.3.3 实时记忆（第五柱）
+    'realtimeEnabled', 'realtimeExtractEnabled', 'realtimeExtractScope', 'realtimeExtractFirstN',
+    'realtimeMaxDetailsPerFloor', 'realtimeTtlFloors', 'realtimeMaxEntries',
+    'realtimeSceneChangeSettle', 'realtimeInjectionMax', 'realtimeInjectionTokenCap',
+    'realtimePromotionMode', 'realtimeSettleMode',
     'timelineSummaryEnabled', 'maxActiveTimeline', 'autoBackupEnabled', 'chatMetadataBackupMaxKb', 'cloudVectorSlotMaxKb',
     'apiProfiles', 'activeApiProfile', 'categories', 'enabledCategories',
     'debugLogging',
@@ -171,6 +188,36 @@ const SETTING_CONTROL_BINDINGS = {
     healthCheckStaleHitThreshold: ['#bb_health_check_stale_hit_threshold', 'value'],
     healthCheckThreadStaleDays: ['#bb_health_check_thread_stale_days', 'value'],
     healthCheckClueStaleDays: ['#bb_health_check_clue_stale_days', 'value'],
+    // v9.3.3 AI 记忆整理
+    aiCurateEnabled: ['#bb_ai_curate_enabled', 'checkbox'],
+    aiCurateTriggerMode: ['#bb_ai_curate_trigger_mode', 'value'],
+    aiCurateMemThreshold: ['#bb_ai_curate_mem_threshold', 'value'],
+    aiCurateNpcThreshold: ['#bb_ai_curate_npc_threshold', 'value'],
+    aiCurateItemThreshold: ['#bb_ai_curate_item_threshold', 'value'],
+    aiCurateMilestoneThreshold: ['#bb_ai_curate_milestone_threshold', 'value'],
+    aiCurateTimelineThreshold: ['#bb_ai_curate_timeline_threshold', 'value'],
+    aiCurateClusterThreshold: ['#bb_ai_curate_cluster_threshold', 'value'],
+    aiCurateRecallPerEntry: ['#bb_ai_curate_recall_per_entry', 'value'],
+    aiCurateMaxGroupsPerRun: ['#bb_ai_curate_max_groups', 'value'],
+    aiCurateAuthMerge: ['#bb_ai_curate_auth_merge', 'value'],
+    aiCurateAuthRewrite: ['#bb_ai_curate_auth_rewrite', 'value'],
+    aiCurateAuthSplit: ['#bb_ai_curate_auth_split', 'value'],
+    aiCurateAuthDelete: ['#bb_ai_curate_auth_delete', 'value'],
+    aiCurateUndoDepth: ['#bb_ai_curate_undo_depth', 'value'],
+    dedupTimeConflictScope: ['#bb_dedup_time_conflict_scope', 'value'],
+    // v9.3.3 实时记忆（第五柱）
+    realtimeEnabled: ['#bb_realtime_enabled', 'checkbox'],
+    realtimeExtractEnabled: ['#bb_realtime_extract_enabled', 'checkbox'],
+    realtimeExtractScope: ['#bb_realtime_extract_scope', 'value'],
+    realtimeExtractFirstN: ['#bb_realtime_extract_first_n', 'value'],
+    realtimeMaxDetailsPerFloor: ['#bb_realtime_max_details_per_floor', 'value'],
+    realtimeTtlFloors: ['#bb_realtime_ttl_floors', 'value'],
+    realtimeMaxEntries: ['#bb_realtime_max_entries', 'value'],
+    realtimeSceneChangeSettle: ['#bb_realtime_scene_change_settle', 'checkbox'],
+    realtimeInjectionMax: ['#bb_realtime_injection_max', 'value'],
+    realtimeInjectionTokenCap: ['#bb_realtime_injection_token_cap', 'value'],
+    realtimePromotionMode: ['#bb_realtime_promotion_mode', 'value'],
+    realtimeSettleMode: ['#bb_realtime_settle_mode', 'value'],
     injectionTemplate: ['#bb_injection_template', 'value'],
     autoGenEndpoint: ['#bb_auto_gen_endpoint', 'value'],
     autoGenModel: ['#bb_auto_gen_model', 'value'],
@@ -272,6 +319,33 @@ function getPromptTemplateDefinitions() {
             description: '记忆体检中为条目生成建议标签时使用。',
             defaultValue: DEFAULT_HEALTH_TAG_PROMPT,
         },
+        {
+            // v9.3.3 AI 整理师。定义写在这里而非 memory-curator.js，是为了让整理师保持懒加载。
+            key: 'curate.review',
+            title: 'AI 记忆整理审查',
+            category: 'AI 整理师',
+            description: '把聚类出的疑似重复分组交给 AI 判断合并/重写/拆分/删除/保留时使用。'
+                + '可用占位符：{{fieldSpec}}（字段说明）{{groupsText}}（待整理分组）{{CONCRETE_TIME_RULE}} {{calRef}}。',
+            defaultValue: DEFAULT_CURATE_REVIEW_PROMPT,
+        },
+        {
+            // v9.3.3 实时细节抓取。定义内联在这里，让 realtime-memory.js 保持懒加载。
+            key: 'realtime.detailExtract',
+            title: '实时细节抓取',
+            category: '实时记忆',
+            description: '每层与主提取并行发起的轻量抓取提示词，只抓「当下有效的具体细节」（交通/衣着/在场/点的东西等）。'
+                + '可用占位符：{{maxDetails}} {{location}} {{storyTime}} {{aiMessage}}。',
+            defaultValue: DEFAULT_REALTIME_DETAIL_EXTRACT_PROMPT,
+        },
+        {
+            // v9.3.3 场景结算。定义内联在这里，让 realtime-memory.js 保持懒加载。
+            key: 'realtime.settle',
+            title: '实时记忆场景结算',
+            category: '实时记忆',
+            description: '场景结束时判定每条临时细节的去向：晋升长期库 / 留档不注入 / 延长有效期。'
+                + '可用占位符：{{location}} {{storyTime}} {{settleReason}} {{librarySummary}} {{pendingText}}。',
+            defaultValue: DEFAULT_REALTIME_SETTLE_PROMPT,
+        },
         ...getAutoGeneratorPromptTemplates(),
         ...getRetrieverPromptTemplates(),
         ...getClueBoardPromptTemplates(),
@@ -353,17 +427,21 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     }
 
     // 4. 加载数据
-    const [npc, items, milestones, memories, timeline, clueBoard, mapData] = await Promise.all([
+    const [npc, items, milestones, memories, timeline, clueBoard, mapData, realtimeAll] = await Promise.all([
         getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId),
         getTimeline(chatId),
         getClueBoard(chatId),
         getMap(chatId),  // v8.7.0
+        settings.realtimeEnabled === false ? Promise.resolve([]) : getRealtimeMemories(chatId),  // v9.3.3 第五柱
     ]);
 
     const hasMapData = Object.values(mapData?.locations || {}).some(loc => loc && !loc.archived);
     const activeClueBoard = settings.clueBoardInjectionEnabled === false ? null : clueBoard;
     const hasClueData = Array.isArray(activeClueBoard?.nodes) && activeClueBoard.nodes.length > 0;
-    const hasData = npc.length + items.length + milestones.length + memories.length + timeline.length > 0 || hasMapData || hasClueData;
+    // v9.3.3 只有实时记忆也要注入：它不参与检索，是解决长线逻辑断裂的唯一通道
+    const hasRealtimeData = Array.isArray(realtimeAll) && realtimeAll.length > 0;
+    const hasData = npc.length + items.length + milestones.length + memories.length + timeline.length > 0
+        || hasMapData || hasClueData || hasRealtimeData;
     if (!hasData) { clearInjection(); return chat; }
 
     try {
@@ -442,6 +520,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         mapData,  // v8.7.0
         queryText: userMessage,
         queryEmbedding,
+        realtimeEntries: realtimeAll,  // v9.3.3 第五柱：无条件注入，不参与检索
     });
     if (!text.trim()) { clearInjection(); return chat; }
 
@@ -480,7 +559,10 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
 
     if (settings.debugLogging) {
         const prefix = isReroll ? '[BB-Memory] 重roll注入' : '[BB-Memory] 注入';
-        console.log(`${prefix}: 时间线${stats.timelineCount || 0} NPC${stats.npcCount} 物品${stats.itemCount} 里程碑${stats.milestoneCount || 0} 记忆${stats.memoryCount} 地图${stats.mapCount || 0}${stats.clueBoard ? ' 线索板1' : ''} | ~${tokenEstimate} tokens`);
+        const realtimeNote = stats.realtimeEntryCount
+            ? ` 实时${stats.realtimeEntryCount}/${stats.realtimeTotalCount}(~${stats.realtimeTokens}t)`
+            : '';
+        console.log(`${prefix}: 时间线${stats.timelineCount || 0} NPC${stats.npcCount} 物品${stats.itemCount} 里程碑${stats.milestoneCount || 0} 记忆${stats.memoryCount} 地图${stats.mapCount || 0}${stats.clueBoard ? ' 线索板1' : ''}${realtimeNote} | ~${tokenEstimate} tokens`);
     }
 
     // 11. 存储命中追踪
@@ -1687,6 +1769,8 @@ async function handleInitMemory(chatId, requestInput = '') {
 // v8.2.3 暴露给 memory-manager.js 使用
 globalThis.bbPromptFloorRange = promptFloorRange;
 globalThis.bbHandleInitMemory = handleInitMemory;
+// v9.3.3 供后台链上的实时记忆结算给出用户反馈
+globalThis.bbShowToast = showToast;
 
 function createProgressToast(text) {
     try {
@@ -2019,6 +2103,46 @@ function bindSidebarEvents() {
     bindInput('#bb_health_check_stale_hit_threshold', 'healthCheckStaleHitThreshold', 'number');
     bindInput('#bb_health_check_thread_stale_days', 'healthCheckThreadStaleDays', 'number');
     bindInput('#bb_health_check_clue_stale_days', 'healthCheckClueStaleDays', 'number');
+    // v9.3.3 AI 记忆整理
+    bindCheckbox('#bb_ai_curate_enabled', 'aiCurateEnabled', refreshCurateStatus);
+    bindSelect('#bb_ai_curate_trigger_mode', 'aiCurateTriggerMode');
+    document.querySelector('#bb_ai_curate_trigger_mode')?.addEventListener('change', refreshCurateStatus);
+    bindInput('#bb_ai_curate_mem_threshold', 'aiCurateMemThreshold', 'number');
+    bindInput('#bb_ai_curate_npc_threshold', 'aiCurateNpcThreshold', 'number');
+    bindInput('#bb_ai_curate_item_threshold', 'aiCurateItemThreshold', 'number');
+    bindInput('#bb_ai_curate_milestone_threshold', 'aiCurateMilestoneThreshold', 'number');
+    bindInput('#bb_ai_curate_timeline_threshold', 'aiCurateTimelineThreshold', 'number');
+    bindInput('#bb_ai_curate_cluster_threshold', 'aiCurateClusterThreshold', 'number');
+    bindInput('#bb_ai_curate_recall_per_entry', 'aiCurateRecallPerEntry', 'number');
+    bindInput('#bb_ai_curate_max_groups', 'aiCurateMaxGroupsPerRun', 'number');
+    bindSelect('#bb_ai_curate_auth_merge', 'aiCurateAuthMerge');
+    bindSelect('#bb_ai_curate_auth_rewrite', 'aiCurateAuthRewrite');
+    bindSelect('#bb_ai_curate_auth_split', 'aiCurateAuthSplit');
+    bindSelect('#bb_ai_curate_auth_delete', 'aiCurateAuthDelete');
+    bindInput('#bb_ai_curate_undo_depth', 'aiCurateUndoDepth', 'number');
+    bindSelect('#bb_dedup_time_conflict_scope', 'dedupTimeConflictScope');
+    // v9.3.3 实时记忆（第五柱）
+    bindCheckbox('#bb_realtime_enabled', 'realtimeEnabled', refreshRealtimeStatus);
+    bindCheckbox('#bb_realtime_extract_enabled', 'realtimeExtractEnabled');
+    bindSelect('#bb_realtime_extract_scope', 'realtimeExtractScope');
+    bindInput('#bb_realtime_extract_first_n', 'realtimeExtractFirstN', 'number');
+    bindInput('#bb_realtime_max_details_per_floor', 'realtimeMaxDetailsPerFloor', 'number');
+    bindInput('#bb_realtime_ttl_floors', 'realtimeTtlFloors', 'number');
+    bindInput('#bb_realtime_max_entries', 'realtimeMaxEntries', 'number');
+    bindCheckbox('#bb_realtime_scene_change_settle', 'realtimeSceneChangeSettle');
+    bindInput('#bb_realtime_injection_max', 'realtimeInjectionMax', 'number');
+    bindInput('#bb_realtime_injection_token_cap', 'realtimeInjectionTokenCap', 'number');
+    bindSelect('#bb_realtime_promotion_mode', 'realtimePromotionMode');
+    bindSelect('#bb_realtime_settle_mode', 'realtimeSettleMode');
+    // 注入上限改了立刻刷新状态行里的注入预览
+    for (const sel of ['#bb_realtime_injection_max', '#bb_realtime_injection_token_cap']) {
+        document.querySelector(sel)?.addEventListener('change', refreshRealtimeStatus);
+    }
+    // 阈值变了立刻刷新进度提示，避免显示旧分母
+    for (const sel of ['#bb_ai_curate_mem_threshold', '#bb_ai_curate_npc_threshold', '#bb_ai_curate_item_threshold',
+        '#bb_ai_curate_milestone_threshold', '#bb_ai_curate_timeline_threshold']) {
+        document.querySelector(sel)?.addEventListener('change', refreshCurateStatus);
+    }
     bindInput('#bb_injection_template', 'injectionTemplate', 'string');
     // API 配置字段绑定
     bindInput('#bb_auto_gen_endpoint', 'autoGenEndpoint', 'string');
@@ -2196,6 +2320,15 @@ function bindSidebarEvents() {
     document.querySelector('#bb_slot_rescue_btn')?.addEventListener('click', () => {
         openSlotRescuePanel().catch(e => showToast(`打开存档救援失败: ${e.message}`, 'error'));
     });
+    // v9.3.3 AI 记忆整理
+    document.querySelector('#bb_curate_now_btn')?.addEventListener('click', () => handleCurateNow(false));
+    document.querySelector('#bb_curate_full_btn')?.addEventListener('click', () => handleCurateNow(true));
+    document.querySelector('#bb_curate_undo_btn')?.addEventListener('click', handleCurateUndo);
+    refreshCurateStatus();
+    // v9.3.3 实时记忆（第五柱）
+    document.querySelector('#bb_realtime_settle_btn')?.addEventListener('click', handleRealtimeSettle);
+    document.querySelector('#bb_realtime_undo_btn')?.addEventListener('click', handleRealtimeUndo);
+    refreshRealtimeStatus();
     document.querySelector('#bb_agent_btn')?.addEventListener('click', () => {
         const chatId = getChatId();
         if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
@@ -3433,7 +3566,7 @@ function registerSlashCommands() {
         const chatId = getChatId();
         if (!chatId) return;
         const stats = await getMemoryStats(chatId);
-        const msg = `BB-Memory 统计：\nNPC: ${stats.npc.total} | 物品: ${stats.items.total} | 里程碑: ${stats.milestones?.total || 0} | 时间线: ${stats.timeline?.total || 0} | 记忆: ${stats.memories.total}`;
+        const msg = `BB-Memory 统计：\nNPC: ${stats.npc.total} | 物品: ${stats.items.total} | 里程碑: ${stats.milestones?.total || 0} | 时间线: ${stats.timeline?.total || 0} | 记忆: ${stats.memories.total} | 实时: ${stats.realtime?.total || 0}`;
         showToast(msg, 'info');
     }, '查看记忆统计');
 
@@ -3905,6 +4038,11 @@ function injectFloatingHub() {
                 <i class="fa-solid fa-map"></i>
                 <span>地图</span>
             </div>
+            <div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_realtime">
+                <i class="fa-solid fa-bolt" style="color:#4db6ac;"></i>
+                <span>实时记忆</span>
+                <span class="bb-hub-count-badge" id="bb_hub_realtime_count">0</span>
+            </div>
             <div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_manager">
                 <i class="fa-solid fa-gear"></i>
                 <span>记忆管理</span>
@@ -4094,6 +4232,20 @@ async function refreshFloatingHubData() {
         } catch { /* ignore */ }
     }
 
+    // v9.3.3 第五柱入口徽标：只统计仍会参与注入/待结算的场景细节。
+    const realtimeCount = document.getElementById('bb_hub_realtime_count');
+    if (realtimeCount) {
+        try {
+            const chatId = getChatId();
+            const entries = chatId && getSettings().realtimeEnabled !== false ? await getRealtimeMemories(chatId) : [];
+            const visibleCount = entries.filter(entry => entry.settleState !== 'settled' && !entry.promotedTo).length;
+            realtimeCount.textContent = String(visibleCount);
+            realtimeCount.title = `当前有 ${visibleCount} 条实时场景细节会参与注入或等待结算`;
+        } catch {
+            realtimeCount.textContent = '-';
+        }
+    }
+
     // 更新可见性按钮图标（三态）
     const toggleItem = document.querySelector('.bb-floating-menu-action[data-action="toggle_visibility"] i');
     if (toggleItem) {
@@ -4204,6 +4356,10 @@ async function handleFloatingMenuAction(action) {
             }
             break;
         }
+        case 'open_realtime': {
+            if (chatId) openAssistant(chatId, 'realtime');
+            break;
+        }
         case 'open_manager': {
             if (chatId) openMemoryManager(chatId);
             break;
@@ -4273,7 +4429,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.3.2 初始化开始...');
+    console.log('[BB-Memory] v9.3.3 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -4469,7 +4625,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.3.2 初始化完成');
+    console.log('[BB-Memory] v9.3.3 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
@@ -4772,6 +4928,517 @@ globalThis.bbMemoryExpandEntityKeyword = async function (keyword, limit = 12) {
     return expandMemoriesForEntityKeyword(memories, keyword, { limit });
 };
 
+// v9.3.3 整理师聚类引擎调试入口（纯函数，零 API 调用）
+const CURATOR_PILLAR_LOADERS = {
+    mem: getMemories,
+    npc: getNpcProfiles,
+    item: getItems,
+    milestone: getMilestones,
+    timeline: getTimeline,
+};
+
+async function debugCuratorBuildGroups(pillar = 'mem', options = {}) {
+    const chatId = getChatId();
+    if (!chatId) {
+        console.warn('[BB-Memory] 未打开聊天，无法读取数据');
+        return null;
+    }
+    const { prepareCurationGroups, buildSimilarityMatrix } = await import('./memory-curator.js');
+    const loader = CURATOR_PILLAR_LOADERS[pillar] || CURATOR_PILLAR_LOADERS.mem;
+    const entries = await loader(chatId);
+    const s = getSettings();
+    const result = await prepareCurationGroups(chatId, pillar, entries, options.newIds || [], {
+        recallPerEntry: options.recallPerEntry ?? s.aiCurateRecallPerEntry,
+        clusterThreshold: options.clusterThreshold ?? s.aiCurateClusterThreshold,
+        maxGroups: options.maxGroups ?? s.aiCurateMaxGroupsPerRun,
+        includeArchived: options.includeArchived === true,
+    });
+    console.log(`[BB-Memory] 柱=${result.pillar} 条目=${result.stats.poolSize} 种子=${result.stats.seedCount} `
+        + `阈值=${result.stats.clusterThreshold} 建边=${result.stats.edgeCount} 组=${result.groups.length} `
+        + `向量覆盖率=${(result.stats.vectorCoverage * 100).toFixed(0)}%`);
+    result.groups.forEach((group, i) => {
+        console.log(`\n── 组 ${i + 1}／${result.groups.length}：${group.ids.length} 条，最高相似度 ${group.maxSimilarity.toFixed(3)}，平均 ${group.avgSimilarity.toFixed(3)}`);
+        console.table(group.entries.map(entry => ({
+            id: entry.id,
+            标题: entry.title || entry.name || entry.event || '',
+            内容: String(entry.content || entry.summary || entry.significance || '').slice(0, 40),
+            故事时间: entry.storyTime || entry.st || '',
+        })));
+        console.table(buildSimilarityMatrix(group.entries, result.pillar));
+    });
+    if (!result.groups.length) console.log('[BB-Memory] 没有聚出候选组（条目太少、都不相似，或阈值偏高）');
+    return result;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  v9.3.3 AI 记忆整理：侧边栏入口
+// ═══════════════════════════════════════════════════════════
+
+function setCurateStatus(text, tone = '') {
+    const el = document.querySelector('#bb_curate_status');
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.color = tone === 'error' ? '#f44336' : (tone === 'success' ? '#4caf50' : '');
+}
+
+function setCurateButtonsBusy(busy, activeBtn, busyText) {
+    const ids = ['#bb_curate_now_btn', '#bb_curate_full_btn', '#bb_curate_undo_btn'];
+    for (const id of ids) {
+        const btn = document.querySelector(id);
+        if (!btn) continue;
+        if (busy) {
+            if (!btn.dataset.bbOrigHtml) btn.dataset.bbOrigHtml = btn.innerHTML;
+            btn.disabled = true;
+            if (id === activeBtn) btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${busyText || '处理中'}`;
+        } else {
+            btn.disabled = false;
+            if (btn.dataset.bbOrigHtml) {
+                btn.innerHTML = btn.dataset.bbOrigHtml;
+                delete btn.dataset.bbOrigHtml;
+            }
+        }
+    }
+}
+
+const CURATE_THRESHOLD_LABELS = Object.freeze({
+    mem: ['记忆', 'aiCurateMemThreshold'],
+    npc: ['NPC', 'aiCurateNpcThreshold'],
+    item: ['物品', 'aiCurateItemThreshold'],
+    milestone: ['里程碑', 'aiCurateMilestoneThreshold'],
+    timeline: ['时间线', 'aiCurateTimelineThreshold'],
+});
+
+/** 展示各柱累积计数与阈值，让用户知道还差多少条会自动触发整理。 */
+async function refreshCurateStatus() {
+    const el = document.querySelector('#bb_curate_status');
+    if (!el) return;
+    const s = getSettings();
+    if (!s.aiCurateEnabled) { setCurateStatus('AI 整理已关闭'); return; }
+    const chatId = getChatId();
+    if (!chatId) { setCurateStatus('未进入对话'); return; }
+    if (s.aiCurateTriggerMode === 'manual') { setCurateStatus('仅手动触发模式'); return; }
+    try {
+        const { getCurationState } = await import('./memory-curator.js');
+        const { counters } = getCurationState(chatId, s);
+        const parts = [];
+        for (const [pillar, [label, key]] of Object.entries(CURATE_THRESHOLD_LABELS)) {
+            const threshold = Number(s[key]);
+            if (!Number.isFinite(threshold) || threshold <= 0) continue;
+            const count = counters[pillar] || 0;
+            if (count > 0) parts.push(`${label} ${count}/${threshold}`);
+        }
+        setCurateStatus(parts.length
+            ? `自动整理进度：${parts.join('，')}（${s.aiCurateTriggerMode === 'all' ? '全部达标' : '任一达标'}触发）`
+            : '自动整理进度：暂无新增条目');
+    } catch { setCurateStatus(''); }
+}
+
+/** 全库整理开销较大，先把预估的 API 调用次数摆出来让用户确认。 */
+async function confirmFullCuration(message) {
+    try {
+        const ctx = SillyTavern.getContext();
+        if (typeof ctx.Popup?.show?.confirm === 'function') {
+            return await ctx.Popup.show.confirm('全库整理', `${message}\n\n继续吗？`);
+        }
+    } catch { /* 降级到原生 confirm */ }
+    return confirm(`全库整理\n\n${message}\n\n继续吗？`);
+}
+
+async function handleCurateNow(fullLibrary) {
+    const chatId = getChatId();
+    if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+    const btnId = fullLibrary ? '#bb_curate_full_btn' : '#bb_curate_now_btn';
+    const onProgress = ({ phase, message, current, total }) => {
+        const prefix = { cluster: '分析', ai: 'AI 整理', apply: '应用', review: '待确认' }[phase] || '处理';
+        setCurateStatus(message || prefix);
+        setCurateButtonsBusy(true, btnId, total ? `${prefix} ${current}/${total}` : prefix);
+    };
+
+    setCurateButtonsBusy(true, btnId, '准备中');
+    setCurateStatus('正在准备整理...');
+    try {
+        const { runCurationFlow, runFullLibraryCuration, isCurationRunning } = await import('./memory-curator.js');
+        if (isCurationRunning()) {
+            showToast('已有整理任务在运行，请稍后再试', 'warning');
+            return;
+        }
+        if (fullLibrary) {
+            const probe = await runFullLibraryCuration(chatId, { onProgress });
+            if (probe.error) { showToast(probe.error, 'error'); setCurateStatus(probe.error, 'error'); return; }
+            if (!probe.needsConfirm) {
+                showToast(probe.summary, 'info');
+                setCurateStatus(probe.summary);
+                return;
+            }
+            setCurateButtonsBusy(false);
+            if (!await confirmFullCuration(probe.summary)) {
+                setCurateStatus('已取消全库整理');
+                return;
+            }
+            setCurateButtonsBusy(true, btnId, '整理中');
+            // 复用探测阶段已聚好的组，不重跑一遍全库两两比较
+            const report = await runFullLibraryCuration(chatId, {
+                confirmed: true, groups: probe.groups, onProgress,
+            });
+            showToast(report.error ? `全库整理出错：${report.error}` : report.summary,
+                report.error ? 'error' : 'success');
+            setCurateStatus(report.summary || report.error, report.error ? 'error' : 'success');
+            return;
+        }
+
+        const report = await runCurationFlow(chatId, { source: 'manual', onProgress });
+        if (report.error) {
+            showToast(`AI 整理失败：${report.error}`, 'error');
+            setCurateStatus(report.error, 'error');
+            return;
+        }
+        showToast(`AI 整理：${report.summary}`, 'success');
+        setCurateStatus(report.summary
+            + (report.applyResult?.snapshotId ? '（可用「撤销整理」回滚）' : ''), 'success');
+    } catch (e) {
+        console.warn('[BB-Memory] AI 整理失败:', e);
+        showToast(`AI 整理失败：${e.message}`, 'error');
+        setCurateStatus(e.message, 'error');
+    } finally {
+        setCurateButtonsBusy(false);
+    }
+}
+
+async function handleCurateUndo() {
+    const chatId = getChatId();
+    if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+    setCurateButtonsBusy(true, '#bb_curate_undo_btn', '撤销中');
+    try {
+        const { undoLastCuration } = await import('./memory-curator.js');
+        const result = await undoLastCuration(chatId);
+        if (!result.ok) {
+            showToast(result.error, 'warning');
+            setCurateStatus(result.error, 'error');
+            return;
+        }
+        const label = result.opSummary ? `「${result.opSummary}」` : '上次整理';
+        showToast(`已撤销${label}：${result.summary}`, 'success');
+        setCurateStatus(`已撤销${label}：${result.summary}`, 'success');
+    } catch (e) {
+        showToast(`撤销失败：${e.message}`, 'error');
+        setCurateStatus(e.message, 'error');
+    } finally {
+        setCurateButtonsBusy(false);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  v9.3.3 实时记忆（第五柱）：侧边栏入口
+// ═══════════════════════════════════════════════════════════
+
+function setRealtimeStatus(text, tone = '') {
+    const el = document.querySelector('#bb_realtime_status');
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.color = tone === 'error' ? '#f44336' : (tone === 'success' ? '#4caf50' : '');
+}
+
+function setRealtimeButtonsBusy(busy, activeBtn, busyText) {
+    for (const id of ['#bb_realtime_settle_btn', '#bb_realtime_undo_btn']) {
+        const btn = document.querySelector(id);
+        if (!btn) continue;
+        if (busy) {
+            if (!btn.dataset.bbOrigHtml) btn.dataset.bbOrigHtml = btn.innerHTML;
+            btn.disabled = true;
+            if (id === activeBtn) btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${busyText || '处理中'}`;
+        } else {
+            btn.disabled = false;
+            if (btn.dataset.bbOrigHtml) {
+                btn.innerHTML = btn.dataset.bbOrigHtml;
+                delete btn.dataset.bbOrigHtml;
+            }
+        }
+    }
+}
+
+/** 展示第五柱当前状态：活跃/待结算条数与实际注入条数。 */
+async function refreshRealtimeStatus() {
+    const el = document.querySelector('#bb_realtime_status');
+    if (!el) return;
+    const s = getSettings();
+    if (!s.realtimeEnabled) { setRealtimeStatus('实时记忆已关闭'); return; }
+    const chatId = getChatId();
+    if (!chatId) { setRealtimeStatus('未进入对话'); return; }
+    try {
+        const entries = await getRealtimeMemories(chatId);
+        if (!entries.length) { setRealtimeStatus('实时记忆：暂无场景细节'); return; }
+        const active = entries.filter(e => e.settleState === 'active').length;
+        const pending = entries.filter(e => e.settleState === 'pending_settle').length;
+        const promoted = entries.filter(e => e.promotedTo).length;
+        const { getRealtimeForInjection } = await import('./retriever.js');
+        const preview = getRealtimeForInjection(entries, s);
+        setRealtimeStatus(`实时记忆：生效 ${active} / 待结算 ${pending} / 已晋升 ${promoted}`
+            + `，本轮注入 ${preview.injectedCount} 条（~${preview.tokenEstimate} tokens）`
+            + (preview.truncated ? '，已截断' : ''));
+    } catch { setRealtimeStatus(''); }
+}
+
+async function handleRealtimeSettle() {
+    const chatId = getChatId();
+    if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+    const s = getSettings();
+    if (!s.realtimeEnabled) { showToast('实时记忆已关闭，请先在设置里启用', 'warning'); return; }
+
+    setRealtimeButtonsBusy(true, '#bb_realtime_settle_btn', '结算中');
+    setRealtimeStatus('正在准备结算...');
+    try {
+        const { settleRealtimeMemories, isSettlementRunning } = await import('./realtime-memory.js');
+        if (isSettlementRunning()) { showToast('已有结算任务在运行，请稍后再试', 'warning'); return; }
+        const chatLength = SillyTavern.getContext().chat?.length ?? 0;
+        const report = await settleRealtimeMemories(chatId, {
+            manual: true,
+            currentFloor: chatLength - 1,
+            onProgress: ({ message, current, total }) => {
+                if (message) setRealtimeStatus(message);
+                setRealtimeButtonsBusy(true, '#bb_realtime_settle_btn',
+                    total ? `结算 ${current}/${total}` : '结算中');
+            },
+        });
+        if (report.error) {
+            showToast(`结算失败：${report.error}`, 'error');
+            setRealtimeStatus(report.error, 'error');
+            return;
+        }
+        showToast(`场景结算：${report.summary}`, 'success');
+        setRealtimeStatus(report.summary
+            + (report.applyResult?.snapshotId ? '（可用「撤销结算」回滚）' : ''), 'success');
+    } catch (e) {
+        console.warn('[BB-Memory] 实时记忆结算失败:', e);
+        showToast(`结算失败：${e.message}`, 'error');
+        setRealtimeStatus(e.message, 'error');
+    } finally {
+        setRealtimeButtonsBusy(false);
+        refreshRealtimeStatus();
+    }
+}
+
+async function handleRealtimeUndo() {
+    const chatId = getChatId();
+    if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+    setRealtimeButtonsBusy(true, '#bb_realtime_undo_btn', '撤销中');
+    try {
+        const { undoLastSettlement } = await import('./realtime-memory.js');
+        const result = await undoLastSettlement(chatId);
+        if (!result.ok) {
+            showToast(result.error || '没有可撤销的结算记录', 'warning');
+            setRealtimeStatus(result.error || '没有可撤销的结算记录', 'error');
+            return;
+        }
+        const label = result.opSummary ? `「${result.opSummary}」` : '上次结算';
+        showToast(`已撤销${label}：${result.summary}`, 'success');
+        setRealtimeStatus(`已撤销${label}：${result.summary}`, 'success');
+    } catch (e) {
+        showToast(`撤销失败：${e.message}`, 'error');
+        setRealtimeStatus(e.message, 'error');
+    } finally {
+        setRealtimeButtonsBusy(false);
+        refreshRealtimeStatus();
+    }
+}
+
+function printCuratorSelfTest(label, result) {
+    console.log(`[BB-Memory] 整理师${label}自检：${result.pass ? '全部通过' : '存在失败'}`
+        + `（${result.cases.filter(c => c.pass).length}/${result.cases.length}）`);
+    console.table(result.cases.map(c => ({
+        分类: c.group || label,
+        用例: c.name,
+        结果: c.pass ? 'PASS' : 'FAIL',
+        期望: c.expected || '',
+        实际: c.actual,
+    })));
+    return result;
+}
+
+/** 真实数据 + 真实 API 跑一次整理判断，只打印不写库。用于评估 AI 判断质量。 */
+async function debugCuratorDryRun(pillar = 'mem', options = {}) {
+    const grouped = await debugCuratorBuildGroups(pillar, options);
+    if (!grouped?.groups?.length) return null;
+    const { runCuration } = await import('./memory-curator.js');
+    console.log('[BB-Memory] 正在调用 AI 整理（不写库）...');
+    const result = await runCuration(getChatId(), grouped.groups, options);
+    if (!result.ok) {
+        console.error('[BB-Memory] 整理失败:', result.error);
+        return result;
+    }
+    console.log(`[BB-Memory] ${result.apiMode} API 耗时 ${result.durationMs}ms，`
+        + `${result.ops.length} 个有效操作，${result.rejected.length} 个被拦截`);
+    if (result.ops.length) {
+        console.table(result.ops.map(op => ({
+            操作: op.op,
+            柱: op.pillar,
+            条目: op.ids.join(' + '),
+            保留: op.keepId || '',
+            需确认: op.forceConfirm ? '是' : '',
+            理由: op.reason,
+            系统备注: (op.notes || []).join('；'),
+        })));
+        result.ops.filter(op => op.result || op.results).forEach(op => {
+            console.log(`── ${op.op} ${op.ids.join('+')} 的重写结果:`, op.result || op.results);
+        });
+    }
+    if (result.rejected.length) console.warn('[BB-Memory] 被拦截:', result.rejected);
+    console.log('[BB-Memory] 本次为 dry-run，未写入任何数据。');
+    return result;
+}
+
+// v9.3.3 第五柱（实时记忆）调试入口
+const realtimeDebug = {
+    list: async () => {
+        const chatId = getChatId();
+        if (!chatId) { console.warn('[BB-Memory] 未打开聊天'); return []; }
+        const list = await getRealtimeMemories(chatId);
+        console.table(list.map(e => ({
+            id: e.id,
+            分类: REALTIME_KINDS[e.kind]?.label || e.kind,
+            内容: e.text,
+            场景: e.sceneKey,
+            创建楼层: e.createdFloor,
+            最近楼层: e.lastSeenFloor,
+            状态: REALTIME_SETTLE_STATES[e.settleState]?.label || e.settleState,
+            晋升去向: e.promotedTo ? `${e.promotedTo.pillar}:${e.promotedTo.id}` : '',
+        })));
+        console.log(`[BB-Memory] 实时记忆 ${list.length} 条`);
+        return list;
+    },
+    add: async (data) => {
+        const chatId = getChatId();
+        if (!chatId) { console.warn('[BB-Memory] 未打开聊天'); return null; }
+        const entry = Array.isArray(data)
+            ? await addRealtimeMemories(chatId, data)
+            : await addRealtimeMemory(chatId, data);
+        console.log('[BB-Memory] 已写入实时记忆:', entry);
+        return entry;
+    },
+    update: async (id, patch) => {
+        const chatId = getChatId();
+        if (!chatId) return null;
+        return updateRealtimeMemory(chatId, id, patch);
+    },
+    remove: async (id) => {
+        const chatId = getChatId();
+        if (!chatId) return false;
+        return removeRealtimeMemory(chatId, id);
+    },
+    clear: async () => {
+        const chatId = getChatId();
+        if (!chatId) return 0;
+        const n = await clearRealtimeMemories(chatId);
+        console.log(`[BB-Memory] 已清空 ${n} 条实时记忆`);
+        return n;
+    },
+    /** 场景标识与抓取范围自检，不读库不发请求 */
+    selfTest: async () => {
+        const { __selfTestRealtime } = await import('./realtime-memory.js');
+        return printCuratorSelfTest('实时记忆', __selfTestRealtime());
+    },
+    /** 当前场景状态（从现有条目反推） */
+    scene: async () => {
+        const chatId = getChatId();
+        if (!chatId) { console.warn('[BB-Memory] 未打开聊天'); return null; }
+        const { deriveSceneState } = await import('./realtime-memory.js');
+        const state = deriveSceneState(await getRealtimeMemories(chatId));
+        console.log('[BB-Memory] 当前场景:', state);
+        return state;
+    },
+    /** 对指定楼层真跑一次细节抓取（会写库） */
+    extract: async (floor) => {
+        const chatId = getChatId();
+        if (!chatId) { console.warn('[BB-Memory] 未打开聊天'); return null; }
+        const chat = SillyTavern.getContext().chat || [];
+        const index = Number.isFinite(Number(floor)) ? Number(floor) : chat.length - 1;
+        const msg = chat[index];
+        if (!msg) { console.warn(`[BB-Memory] 第 ${index} 层不存在`); return null; }
+        const { extractRealtimeDetails } = await import('./realtime-memory.js');
+        const result = await extractRealtimeDetails(chatId, {
+            aiMessage: msg.mes || '',
+            aiIndex: index,
+            hash: '',
+        });
+        console.log('[BB-Memory] 抓取结果:', result);
+        if (result.saved?.length) console.table(result.saved.map(e => ({ 分类: e.kind, 内容: e.text })));
+        return result;
+    },
+    /** 查看注入预览（走真实的双硬上限） */
+    injectionPreview: async () => {
+        const chatId = getChatId();
+        if (!chatId) { console.warn('[BB-Memory] 未打开聊天'); return null; }
+        const { getRealtimeForInjection } = await import('./retriever.js');
+        const preview = getRealtimeForInjection(await getRealtimeMemories(chatId), getSettings());
+        console.log(`[BB-Memory] 实时注入 ${preview.injectedCount}/${preview.totalCount} 条，`
+            + `~${preview.tokenEstimate} tokens${preview.truncated ? '（已截断）' : ''}`);
+        for (const line of preview.lines) console.log('  ' + line.text);
+        return preview;
+    },
+    /** 只跑结算的三触发器判定（写库标记，不调 API） */
+    check: async (floor) => {
+        const chatId = getChatId();
+        if (!chatId) { console.warn('[BB-Memory] 未打开聊天'); return null; }
+        const chatLength = SillyTavern.getContext().chat?.length ?? 0;
+        const { checkSettlement } = await import('./realtime-memory.js');
+        const result = await checkSettlement(chatId, Number.isFinite(Number(floor)) ? Number(floor) : chatLength - 1);
+        console.log(`[BB-Memory] 结算检查：活跃 ${result.activeCount}，标记 ${result.marked}，`
+            + `待结算 ${result.pendingCount}，修剪留档 ${result.pruned}`);
+        if (Object.keys(result.byReason).length) console.table(result.byReason);
+        refreshRealtimeStatus();
+        return result;
+    },
+    /** 完整跑一次结算（会调 API 并写库） */
+    settle: async (options = {}) => {
+        const chatId = getChatId();
+        if (!chatId) { console.warn('[BB-Memory] 未打开聊天'); return null; }
+        const chatLength = SillyTavern.getContext().chat?.length ?? 0;
+        const { settleRealtimeMemories } = await import('./realtime-memory.js');
+        const report = await settleRealtimeMemories(chatId, {
+            manual: options.manual !== false,
+            currentFloor: chatLength - 1,
+            onProgress: ({ message }) => { if (message) console.log('[BB-Memory]', message); },
+            ...options,
+        });
+        console.log(`[BB-Memory] 结算结果：${report.summary}`);
+        if (report.applyResult?.promoted.length) {
+            console.table(report.applyResult.promoted.map(p => ({
+                原细节: p.entry.text,
+                晋升到: p.ref.pillar,
+                方式: p.ref.action,
+                理由: p.reason,
+            })));
+        }
+        if (report.rejected.length) console.warn('[BB-Memory] 被拦截的决定:', report.rejected);
+        refreshRealtimeStatus();
+        return report;
+    },
+    /** 撤销上次结算 */
+    undo: async () => {
+        const chatId = getChatId();
+        if (!chatId) { console.warn('[BB-Memory] 未打开聊天'); return null; }
+        const { undoLastSettlement } = await import('./realtime-memory.js');
+        const result = await undoLastSettlement(chatId);
+        console.log(result.ok ? `[BB-Memory] 撤销成功：${result.summary}` : `[BB-Memory] 撤销失败：${result.error}`);
+        refreshRealtimeStatus();
+        return result;
+    },
+    /** 列出结算撤销快照 */
+    snapshots: async () => {
+        const chatId = getChatId();
+        if (!chatId) return [];
+        const { listSettleSnapshots } = await import('./realtime-memory.js');
+        const list = await listSettleSnapshots(chatId);
+        console.table(list.map(s => ({
+            快照: s.id,
+            时间: new Date(s.timestamp).toLocaleString(),
+            涉及条目: s.entryCount,
+            晋升条目: s.promotedCount,
+            摘要: s.summary,
+        })));
+        return list;
+    },
+};
+
 globalThis.bbMemoryDebug = {
     getMemoryStats,
     getNpcProfiles,
@@ -4780,7 +5447,110 @@ globalThis.bbMemoryDebug = {
     getTimeline,
     getTimelineEntries: getMilestones,
     getMemories,
+    getRealtimeMemories,
+    realtime: realtimeDebug,
     lastRetrievalResult: () => lastRetrievalResult,
+    curator: {
+        /** 聚类三组固定用例自检，不读库不发请求 */
+        selfTest: async () => {
+            const { __selfTestCurationGroups } = await import('./memory-curator.js');
+            return printCuratorSelfTest('聚类', __selfTestCurationGroups());
+        },
+        /** 操作解析与拦截自检，不读库不发请求 */
+        selfTestOps: async () => {
+            const { __selfTestCurationOps } = await import('./memory-curator.js');
+            return printCuratorSelfTest('操作解析', __selfTestCurationOps());
+        },
+        /** 授权矩阵与合并补丁自检，不读库不发请求 */
+        selfTestAuth: async () => {
+            const { __selfTestCurationAuth } = await import('./memory-curator.js');
+            return printCuratorSelfTest('授权矩阵', __selfTestCurationAuth());
+        },
+        /** 触发条件与种子归一化自检，不读库不发请求 */
+        selfTestTrigger: async () => {
+            const { __selfTestCurationTrigger } = await import('./memory-curator.js');
+            return printCuratorSelfTest('触发条件', __selfTestCurationTrigger());
+        },
+        /** 全部自检 */
+        selfTestAll: async () => {
+            const { __selfTestCurator } = await import('./memory-curator.js');
+            return printCuratorSelfTest('全部', __selfTestCurator());
+        },
+        /** 撤销上次整理 */
+        undo: async () => {
+            const chatId = getChatId();
+            if (!chatId) { console.warn('[BB-Memory] 未打开聊天'); return null; }
+            const { undoLastCuration } = await import('./memory-curator.js');
+            const result = await undoLastCuration(chatId);
+            console.log(result.ok ? `[BB-Memory] 撤销成功：${result.summary}` : `[BB-Memory] 撤销失败：${result.error}`);
+            return result;
+        },
+        /** 查看/重置整理计数器 */
+        counters: async (reset = false) => {
+            const chatId = getChatId();
+            if (!chatId) { console.warn('[BB-Memory] 未打开聊天'); return null; }
+            const { getCurationState, clearCurationCounters, shouldTriggerCuration } = await import('./memory-curator.js');
+            if (reset) {
+                clearCurationCounters(chatId);
+                console.log('[BB-Memory] 整理计数器已清零');
+            }
+            const s = getSettings();
+            const state = getCurationState(chatId, s);
+            console.table(Object.entries(CURATE_THRESHOLD_LABELS).map(([pillar, [label, key]]) => ({
+                柱: label,
+                计数: state.counters[pillar] || 0,
+                阈值: s[key],
+                种子数: state.seeds[pillar]?.length || 0,
+            })));
+            console.log(`[BB-Memory] 触发模式=${s.aiCurateTriggerMode} 是否达标=${shouldTriggerCuration(state.counters, s)}`);
+            refreshCurateStatus();
+            return state;
+        },
+        /** 列出撤销快照栈 */
+        snapshots: async () => {
+            const chatId = getChatId();
+            if (!chatId) { console.warn('[BB-Memory] 未打开聊天'); return []; }
+            const { listCurationSnapshots } = await import('./memory-curator.js');
+            const list = await listCurationSnapshots(chatId);
+            console.table(list.map(s => ({
+                快照: s.id,
+                时间: new Date(s.timestamp).toLocaleString(),
+                来源: s.source,
+                操作数: s.opCount,
+                已应用: s.applied,
+                摘要: s.summary,
+                柱: (s.pillars || []).join('/'),
+            })));
+            return list;
+        },
+        /** 完整跑一次整理（会写库，走授权矩阵） */
+        run: async (options = {}) => {
+            const chatId = getChatId();
+            if (!chatId) { console.warn('[BB-Memory] 未打开聊天'); return null; }
+            const { runCurationFlow } = await import('./memory-curator.js');
+            const report = await runCurationFlow(chatId, {
+                source: 'manual',
+                onProgress: ({ message }) => { if (message) console.log('[BB-Memory]', message); },
+                ...options,
+            });
+            console.log(`[BB-Memory] 整理结果：${report.summary}`);
+            if (report.applyResult?.snapshotId) {
+                console.log(`[BB-Memory] 撤销快照 ${report.applyResult.snapshotId}，用 bbMemoryDebug.curator.undo() 回滚`);
+            }
+            return report;
+        },
+        /** 对当前聊天真实数据跑一次聚类并打印组内相似度矩阵，不写库 */
+        buildGroups: debugCuratorBuildGroups,
+        /** 真实数据 + 真实 API 跑一次整理判断，只打印操作清单，**不写库** */
+        dryRun: debugCuratorDryRun,
+        /** 对任意条目数组打印两两相似度矩阵 */
+        matrix: async (entries, pillar = 'mem') => {
+            const { buildSimilarityMatrix } = await import('./memory-curator.js');
+            const matrix = buildSimilarityMatrix(entries, pillar);
+            console.table(matrix);
+            return matrix;
+        },
+    },
 };
 
 // ═══ 启动 ═══

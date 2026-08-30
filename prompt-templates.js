@@ -104,6 +104,138 @@ export const DEFAULT_THREAD_SUMMARY_PROMPT = `你是一个故事时间线组织�
 {"timeline":[{"id":"保留已有ID或生成新ID","name":"时间线名","type":"plot|emotional|side|world","status":"ongoing|ended|paused|resident","priority":"high|medium|low","parentThreadId":null,"entries":[{"refId":"可选的里程碑ID","period":"具体时间区间","event":"事件描述","status":"ongoing|ended|milestone"}]}]}
 只输出 JSON。`;
 
+export const DEFAULT_CURATE_REVIEW_PROMPT = `你是 BB-Memory 记忆整理师。下面每一组条目都是系统用向量/文本相似度聚出来的**疑似重复**。
+最常见的情况是：同一件事被逐层补细节写成了好几条（先写「去吃饭」，后写「去楼下的肯德基吃汉堡和炸鸡」），
+相邻两条都不够像、整条链却指向同一件事，所以逐条比较的去重抓不到，需要你整组一起看。
+
+任务：逐组判断并输出整理操作。只输出一个 JSON 对象，不要 markdown 代码块，不要解释文字。
+
+## 操作类型
+- merge：组内多条其实是同一件事 → 合并成一条。必须给 keepId（保留哪条的 id）和 result（重写后的完整字段）。
+- rewrite：单条内容冗余、混乱或含推测 → 原地重写。给 ids（1 个）和 result。
+- split：单条塞进了多件互不相关的事 → 拆开。给 ids（1 个）和 results（≥2 条）。
+- delete：内容完全无价值（空洞、纯元对话、与保留条目完全重复且无任何新增信息）→ 删除。
+- keep：措辞相似但确实是不同的事，或各自都有独立信息 → 原样保留。
+
+## 硬规则（违反会被系统拦截并丢弃该操作）
+1. **merge 的 result 必须是重写后的最终态**，不是把几条文本拼接。禁止出现「[补充]」「另外」「又」「同时」这类缝合痕迹。
+2. **保留信息量最大的版本**。一条写「去吃饭」、另一条写「去楼下的肯德基吃汉堡和炸鸡」时，
+   合并结果必须保住「楼下的」「肯德基」「汉堡和炸鸡」这些具体信息，绝不许退化成笼统说法。
+3. **时间合成区间**。同一件事的多条时间不同时，写成区间（如「12:01–12:10」）；跨日期的不要强行合成。
+4. **真值冲突禁止合并**。truthStatus 互相矛盾（一条 true 一条 false），或事实本身互相矛盾时，一律 keep。
+5. **不同日期、不同场次的事件禁止合并**，即使措辞几乎一样。
+6. 标记为「永恒」的条目禁止 delete、禁止 split、禁止在 merge 里被吸收（只能作为 keepId 保留）。
+7. 不确定就 keep。宁可留一条重复，不可丢一条事实。
+
+## result / results 可写字段
+{{fieldSpec}}
+
+{{CONCRETE_TIME_RULE}}
+{{calRef}}
+
+## 待整理分组
+{{groupsText}}
+
+## 返回格式
+{"ops":[
+  {"op":"merge","pillar":"mem","ids":["id1","id2","id3"],"keepId":"id1","result":{"title":"...","summary":"...","content":"...","storyTime":"..."},"reason":"三条是同一约定的渐进细化，保留最具体版本"},
+  {"op":"keep","pillar":"mem","ids":["id4"],"reason":"措辞相似但是另一天的独立事件"}
+]}
+只输出这个 JSON 对象。`;
+
+export const DEFAULT_REALTIME_DETAIL_EXTRACT_PROMPT = `你是场景细节记录员。只做一件事：从下面这一段角色扮演回复里，抓出**当下有效的具体细节**。
+
+这些细节不进长期记忆库，只在当前场景内临时生效，用来防止后文出现「坐公交来的却开车回家」这类前后矛盾。
+所以判断标准只有一条：**如果后文忘了它就会写出矛盾，就记；否则不记。**
+
+## 要抓（举例）
+- 交通 transport：怎么来的、怎么走的（坐公交、打车、走路、骑车）
+- 衣着 outfit：谁穿了什么、换了什么
+- 在场 present：这个场景里还有谁（路人、店员、邻座、宠物）
+- 偏好 preference：点了什么、要了什么、当场表达的具体喜好
+- 位置 position：坐在哪、站在哪、在哪一侧
+- 状态 state：当下的身体或情绪状态（淋湿了、手里拿着伞、有点醉）
+- 随手物 object：随手放下的东西在哪（包放在座位上、伞靠在门边）
+- 其他细节 detail：以上都不属于但符合判断标准的
+
+## 不要抓（重要）
+- 里程碑级内容：关系转折、剧情拐点、重大承诺、伏笔 —— 这些由主提取负责，你写了会重复
+- 长期设定：性格、身份、世界观规则、固定习惯 —— 这些不是「当下细节」
+- 抽象概括、情绪评论、文学化描写（「气氛温馨」「他若有所思」）
+- 元对话、OOC、系统提示
+- 没有具体内容的空话
+
+## 输出
+最多 {{maxDetails}} 条，按重要性排序。只输出 JSON 对象，不要 markdown，不要解释。
+每条：{"k":"分类英文键","t":"一句话细节，写清是谁/是什么，20字以内"}
+
+格式：{"details":[{"k":"transport","t":"A和B坐公交车前往电影院"},{"k":"outfit","t":"A穿连衣裙"}]}
+没有值得记录的细节时返回：{"details":[]}
+
+## 当前场景
+地点：{{location}}
+时间：{{storyTime}}
+
+## 本层回复
+{{aiMessage}}`;
+
+export const DEFAULT_REALTIME_SETTLE_PROMPT = `你是场景收尾结算员。下面这些是刚刚结束的场景里记下的**临时细节**，现在场景过去了，要决定每一条的去向。
+
+判断标准只有一条：**这条细节离开当前场景之后，还会影响后续剧情吗？**
+- 会影响 → 晋升（promote）进长期库
+- 只在那个场景里有意义 → 丢弃（discard）
+- 场景其实还没结束、还需要继续生效 → 保留（keep）
+
+## 三种去向
+- promote：写进长期库。必须给 pillar 和 fields。
+  · mem 记忆条目 —— 影响关系、习惯、偏好、已确立的事实
+  · npc 角色档案 —— 反复出现、有名有姓、后续还会登场的人物
+  · item 物品 —— 被带走、被保留、后续还会用到的东西
+  · milestone 里程碑 —— 只在这条细节本身就是剧情节点时才用，通常不该用
+- discard：不写进长期库。**这不是删除事实，只是判定它没有长期价值**，条目会留档但不再注入。
+- keep：场景还在继续，这条细节继续生效。
+
+## 判断示例
+- 「一起看了电影」→ promote 到 mem：是共同经历，后续会被提起
+- 「A喜欢喝可乐」→ promote 到 mem：是稳定偏好，下次点单还有用
+- 「卖爆米花的小孩」→ promote 到 npc：如果是有辨识度的角色；只是背景路人则 discard
+- 「A穿连衣裙」→ discard：换场景就换衣服了，留着会误导后文
+- 「坐公交车来的」→ discard：这趟行程已经结束了
+- 「伞还靠在门边」→ keep 或 promote 到 item：如果伞还没拿走，后文可能要用
+
+## 硬规则
+1. 宁可 discard 也不要乱 promote。长期库被垃圾条目填满比丢几条细节更糟。
+2. 已经在长期库里的内容不要重复 promote（见下方现有条目清单）。
+3. promote 到 npc/item 时，name 必须是具体名称，不能是「一个小孩」这类描述。
+4. promote 的 fields 要重写成长期库的口吻（完整、独立可读），不是把临时细节原样搬过去。
+5. 不确定就 discard。
+
+## fields 可写字段
+- mem：title 标题 / type(event|emotion|habit|fact) / summary 一句话 / content 事实摘要 / subject 主体 / target 对象 / storyTime 具体时间 / importance 0~1 / tags
+- npc：name 姓名 / role 身份 / appearance 外貌 / status 状态 / location 所在地 / indexCard 一句话索引卡 / tags
+- item：name 物品名 / owner 持有者 / status(held|used|lost|destroyed) / location 所在地点 / significance 意义与用途 / tags
+- milestone：storyTime 具体时间 / event 事件摘要 / location 地点 / impact 影响 / tags
+
+## 当前场景
+地点：{{location}}
+时间：{{storyTime}}
+结算原因：{{settleReason}}
+
+## 长期库里已有的内容（不要重复 promote）
+{{librarySummary}}
+
+## 待结算的临时细节
+{{pendingText}}
+
+## 返回格式
+只输出 JSON 对象，不要 markdown，不要解释：
+{"decisions":[
+  {"id":"条目id","action":"promote","pillar":"mem","fields":{"title":"一起看了电影","type":"event","content":"A和B一起去电影院看了电影。","storyTime":"2026年4月9日下午"},"reason":"共同经历，后续会被提起"},
+  {"id":"条目id","action":"discard","reason":"换场景即失效的衣着"},
+  {"id":"条目id","action":"keep","reason":"伞还没拿走，场景未结束"}
+]}
+每个待结算条目都要给一条决定。`;
+
 export const DEFAULT_HEALTH_TAG_PROMPT = `请为以下角色扮演记忆生成 3-5 个简洁的标签关键词（每个词不超过 6 个字）。
 用逗号分隔，只输出标签，不要其他内容。
 

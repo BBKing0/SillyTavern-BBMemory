@@ -6,6 +6,8 @@
  */
 
 import { normalizeNpcTier, normalizeItemTier } from './entity-tiers.js';
+import { normalizeRealtimeKind, normalizeSettleState } from './memory-types.js';
+import { normalizeIdentityText } from './dedup-engine.js';
 import { findExactEntityMatch, mergeEntityAliases, normalizeAliases } from './dedup-engine.js';
 import {
     buildVectorPack,
@@ -26,6 +28,7 @@ const STORAGE_KEYS = {
     mem:      'bb_mem_chat_',
     map:      'bb_map_chat_',           // v8.7.0 地图记忆
     timeline: 'bb_timeline_chat_',      // v9.2.0 时间线（原时间线程）
+    realtime: 'bb_rt_chat_',            // v9.3.3 实时记忆（第五柱，无条件注入、不做向量）
 };
 
 // ⚠️ LEGACY_STORAGE_KEYS 仅用于迁移时的只读数据源，不会写入到这些键
@@ -93,6 +96,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
     dedupReviewSimilarityThreshold: 0.74,
     dedupKnownEntityLimit: 30,
     dedupAmbiguousAction: 'save_review', // 'save_review' | 'merge' | 'skip'
+    // v9.3.3 故事时间冲突的扣分粒度：'date' 只有日期不同才扣（同一天内 12:01 vs 12:05 不扣）
+    // 'exact' 旧行为（任何时间串不同都扣 0.12）| 'off' 不扣
+    dedupTimeConflictScope: 'date',
     // 故事时间
     calendarDescription: '',
     // 升降格与维护
@@ -107,6 +113,37 @@ export const DEFAULT_SETTINGS = Object.freeze({
     maintenanceMemThreshold: 20,   // 记忆维护阈值
     maintenanceNpcThreshold: 5,    // NPC 维护阈值
     maintenanceItemThreshold: 20,  // 物品维护阈值
+    // v9.3.3 实时记忆（第五柱）
+    // 装「坐什么车来的、穿了什么、谁在场」这类当下有效的场景细节。
+    // 无条件注入、不参与向量检索——正是这个"绕过检索"的性质解决了长线逻辑断裂。
+    realtimeEnabled: true,
+    realtimeExtractEnabled: true,
+    realtimeExtractScope: 'always',    // 'always' 每层都抓 | 'first_n' 仅每个场景前 N 层
+    realtimeExtractFirstN: 6,          // realtimeExtractScope='first_n' 时的层数
+    realtimeMaxDetailsPerFloor: 5,     // 单层最多抓几条细节
+    realtimeTtlFloors: 12,            // 条目存活多少楼层后进入待结算
+    realtimeMaxEntries: 40,           // 第五柱容量上限，超出时最旧的进待结算
+    realtimeSceneChangeSettle: true,   // 场景切换时结算上一场景的条目
+    realtimeInjectionMax: 15,          // 注入条数硬上限
+    realtimeInjectionTokenCap: 300,    // 注入 token 硬上限（不依赖全局预算，必须自带）
+    realtimePromotionMode: 'auto',     // 'auto' 直接写入长期库 | 'confirm' 确认后写入
+    realtimeSettleMode: 'auto',        // 'auto' 自动结算 | 'manual' 仅手动结算
+    // v9.3.3 AI 记忆整理师（跨条目聚类去重，解决渐进细化型重复）
+    aiCurateEnabled: true,
+    aiCurateTriggerMode: 'any',       // 'any' 任一柱达标 | 'all' 全部达标 | 'manual' 仅手动
+    aiCurateMemThreshold: 10,         // 记忆柱新增多少条后触发整理
+    aiCurateMilestoneThreshold: 5,
+    aiCurateNpcThreshold: 5,
+    aiCurateItemThreshold: 5,
+    aiCurateTimelineThreshold: 3,
+    aiCurateRecallPerEntry: 5,        // 每条新条目向量召回多少条同柱相关旧条目
+    aiCurateClusterThreshold: 0.65,   // 聚类建边的松阈值（远低于 0.85 合并线，靠链式连通抓渐进细化）
+    aiCurateMaxGroupsPerRun: 8,       // 单次整理最多处理多少组
+    aiCurateAuthMerge: 'notify',      // 'auto' 静默执行 | 'notify' 执行并提醒 | 'confirm' 必须确认
+    aiCurateAuthRewrite: 'notify',
+    aiCurateAuthSplit: 'confirm',
+    aiCurateAuthDelete: 'confirm',
+    aiCurateUndoDepth: 3,             // 保留最近几次整理的撤销快照
     // 记忆体检
     healthCheckDuplicateThreshold: 0.95,   // 近似重复检测阈值
     healthCheckIsolationThreshold: 0.30,   // 语义孤立检测阈值
@@ -204,6 +241,8 @@ function defaultActiveTier(value) {
 function normalizeCollectionType(type) {
     if (type === 'timeline_entry') return 'milestone';
     if (type === 'thread' || type === 'threads' || type === 'timelineThreads' || type === 'timeThreads') return 'timeline';
+    // v9.3.3 实时记忆（第五柱）
+    if (type === 'rt' || type === 'realtimeMemories' || type === 'realtime_memory') return 'realtime';
     return type;
 }
 
@@ -939,6 +978,143 @@ export async function removeMemory(chatId, id) {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  v9.3.3 实时记忆 CRUD（第五柱）
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * 实时记忆刻意不带 embedding / hitScore / memoryTier：
+ * 它无条件注入、不参与向量检索、不参与升降格，靠 TTL + 场景切换 + 容量结算退场。
+ */
+function normalizeRealtimeEntry(data = {}, options = {}) {
+    const now = options.now || Date.now();
+    const floor = typeof data.createdFloor === 'number' ? data.createdFloor
+        : (typeof data.sourceFloor === 'number' ? data.sourceFloor : -1);
+    return {
+        id: data.id || generateId(),
+        kind: normalizeRealtimeKind(data.kind),
+        text: String(data.text || '').trim(),
+        sceneKey: String(data.sceneKey || '').trim(),
+        location: String(data.location || '').trim(),
+        storyTime: String(data.storyTime || '').trim(),
+        createdFloor: floor,
+        lastSeenFloor: typeof data.lastSeenFloor === 'number' ? data.lastSeenFloor : floor,
+        settleState: normalizeSettleState(data.settleState),
+        settleReason: String(data.settleReason || '').trim(),
+        promotedTo: data.promotedTo && typeof data.promotedTo === 'object' ? data.promotedTo : null,
+        createdAt: data.createdAt || now,
+        updatedAt: now,
+        source: data.source || 'auto',
+        sourceExchange: data.sourceExchange || '',
+        sourceFloor: typeof data.sourceFloor === 'number' ? data.sourceFloor : -1,
+        sourceChatId: data.sourceChatId || '',
+        sourceMessageHash: data.sourceMessageHash || '',
+    };
+}
+
+export async function getRealtimeMemories(chatId) {
+    const list = await loadCollection('realtime', chatId);
+    return Array.isArray(list) ? list : [];
+}
+
+export async function addRealtimeMemory(chatId, data) {
+    if (!chatId) return null;
+    const entry = normalizeRealtimeEntry(data);
+    if (!entry.text) return null;
+    const list = await getRealtimeMemories(chatId);
+    list.push(entry);
+    await saveCollection('realtime', chatId, list);
+    scheduleAutoBackup(chatId);
+    return entry;
+}
+
+/**
+ * 批量写入。抓取阶段一次给多条，逐条 add 会反复读写整个集合。
+ * @returns {Array<object>} 实际写入的条目
+ */
+export async function addRealtimeMemories(chatId, entries) {
+    if (!chatId || !Array.isArray(entries) || !entries.length) return [];
+    const list = await getRealtimeMemories(chatId);
+    const added = [];
+    for (const data of entries) {
+        const entry = normalizeRealtimeEntry(data);
+        if (!entry.text) continue;
+        list.push(entry);
+        added.push(entry);
+    }
+    if (!added.length) return [];
+    await saveCollection('realtime', chatId, list);
+    scheduleAutoBackup(chatId);
+    return added;
+}
+
+export async function updateRealtimeMemory(chatId, id, patch = {}) {
+    const list = await getRealtimeMemories(chatId);
+    const entry = list.find(e => e.id === id);
+    if (!entry) return null;
+    const { id: _id, createdAt: _ca, ...safe } = patch;
+    Object.assign(entry, safe);
+    if (Object.prototype.hasOwnProperty.call(patch, 'kind')) entry.kind = normalizeRealtimeKind(patch.kind);
+    if (Object.prototype.hasOwnProperty.call(patch, 'settleState')) entry.settleState = normalizeSettleState(patch.settleState);
+    entry.updatedAt = Date.now();
+    await saveCollection('realtime', chatId, list);
+    scheduleAutoBackup(chatId);
+    return entry;
+}
+
+/** 批量改状态（结算流程一次标很多条）。 */
+export async function updateRealtimeMemories(chatId, ids, patch = {}) {
+    const targets = new Set((Array.isArray(ids) ? ids : []).map(String));
+    if (!targets.size) return 0;
+    const list = await getRealtimeMemories(chatId);
+    const now = Date.now();
+    let changed = 0;
+    for (const entry of list) {
+        if (!targets.has(String(entry.id))) continue;
+        const { id: _id, createdAt: _ca, ...safe } = patch;
+        Object.assign(entry, safe);
+        if (Object.prototype.hasOwnProperty.call(patch, 'kind')) entry.kind = normalizeRealtimeKind(patch.kind);
+        if (Object.prototype.hasOwnProperty.call(patch, 'settleState')) entry.settleState = normalizeSettleState(patch.settleState);
+        entry.updatedAt = now;
+        changed++;
+    }
+    if (changed) {
+        await saveCollection('realtime', chatId, list);
+        scheduleAutoBackup(chatId);
+    }
+    return changed;
+}
+
+export async function removeRealtimeMemory(chatId, id) {
+    const list = await getRealtimeMemories(chatId);
+    const filtered = list.filter(e => e.id !== id);
+    if (filtered.length === list.length) return false;
+    await saveCollection('realtime', chatId, filtered);
+    scheduleAutoBackup(chatId);
+    return true;
+}
+
+export async function removeRealtimeMemories(chatId, ids) {
+    const targets = new Set((Array.isArray(ids) ? ids : []).map(String));
+    if (!targets.size) return 0;
+    const list = await getRealtimeMemories(chatId);
+    const filtered = list.filter(e => !targets.has(String(e.id)));
+    const removed = list.length - filtered.length;
+    if (removed) {
+        await saveCollection('realtime', chatId, filtered);
+        scheduleAutoBackup(chatId);
+    }
+    return removed;
+}
+
+export async function clearRealtimeMemories(chatId) {
+    if (!chatId) return 0;
+    const list = await getRealtimeMemories(chatId);
+    await saveCollection('realtime', chatId, []);
+    scheduleAutoBackup(chatId);
+    return list.length;
+}
+
+// ═══════════════════════════════════════════════════════════
 //  v7.6.0 统一归档系统
 // ═══════════════════════════════════════════════════════════
 
@@ -989,6 +1165,60 @@ export async function restoreEntry(chatId, type, id) {
         case 'map': { const { restoreLocation } = await import('./map-store.js'); return restoreLocation(chatId, id); }
         default: return updateMemory(chatId, id, { archived: false, status: 'active' });
     }
+}
+
+/**
+ * v9.3.3 按原 id 原样写回条目，供撤销/回滚使用。
+ *
+ * 与 add* 系列的区别：add* 会生成新 id，会破坏 relatedMemoryIds、线索板 refId 等交叉引用。
+ * 撤销必须还原到字面原状，所以这里直接覆写集合。
+ *
+ * @param {string} chatId
+ * @param {string} type - 'npc' | 'item' | 'milestone' | 'mem' | 'timeline'
+ * @param {Array<object>} entries 完整条目对象（含 id）
+ * @param {object} options { removeIds: string[] } 同时删除的条目 id
+ * @returns {{ restored: number, reinserted: number, removed: number }}
+ */
+export async function restoreEntriesVerbatim(chatId, type, entries, options = {}) {
+    if (!chatId) return { restored: 0, reinserted: 0, removed: 0 };
+    const normalized = normalizeCollectionType(type);
+    if (!STORAGE_KEYS[normalized]) throw new Error(`未知的数据柱：${type}`);
+
+    const collection = await loadCollection(normalized, chatId);
+    const list = Array.isArray(collection) ? collection : [];
+    const removeIds = new Set((options.removeIds || []).map(id => String(id)));
+    const byId = new Map(list.map((entry, index) => [String(entry?.id), index]));
+
+    let restored = 0;
+    let reinserted = 0;
+    for (const entry of (Array.isArray(entries) ? entries : [])) {
+        const id = String(entry?.id || '');
+        if (!id) continue;
+        removeIds.delete(id); // 既要还原又在删除列表里时，还原优先
+        const copy = deepClonePlain(entry);
+        const index = byId.get(id);
+        if (index === undefined) {
+            list.push(copy);
+            byId.set(id, list.length - 1);
+            reinserted++;
+        } else {
+            list[index] = copy;
+            restored++;
+        }
+    }
+
+    let removed = 0;
+    const finalList = list.filter(entry => {
+        if (removeIds.has(String(entry?.id))) { removed++; return false; }
+        return true;
+    });
+
+    if (normalized === 'milestone') {
+        finalList.sort((a, b) => (a.storyTimeSort ?? 0) - (b.storyTimeSort ?? 0));
+    }
+    await saveCollection(normalized, chatId, finalList);
+    scheduleAutoBackup(chatId);
+    return { restored, reinserted, removed };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1372,14 +1602,17 @@ export async function clearAllData(chatId) {
         lf.removeItem(storageKey('map', chatId)),
         lf.removeItem(storageKey('timeline', chatId)),
         lf.removeItem(legacyStorageKey('timeline', chatId)),
+        lf.removeItem(storageKey('realtime', chatId)),      // v9.3.3 第五柱
         lf.removeItem('bb_clue_board_' + chatId),
         lf.removeItem('bb_calendar_chat_' + chatId),
         lf.removeItem('bb_memory_exchanges_' + chatId),
+        lf.removeItem('bb_curate_undo_' + chatId),          // v9.3.3 整理撤销快照
+        lf.removeItem('bb_rt_settle_undo_' + chatId),       // v9.3.3 结算撤销快照
     ]);
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.3.2',
+        version: '9.3.3',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -1392,6 +1625,7 @@ export async function clearAllData(chatId) {
             memories: [],
             map: { locations: {} },
             clueBoard: { nodes: [], connections: [] },
+            realtime: [],
         },
     });
     await saveChatMetadata(ctx);
@@ -1576,12 +1810,13 @@ export async function refreshAllSourceFloors(chatId) {
 // ═══════════════════════════════════════════════════════════
 
 export async function getMemoryStats(chatId) {
-    const [npc, items, milestones, memories, timeline] = await Promise.all([
+    const [npc, items, milestones, memories, timeline, realtime] = await Promise.all([
         getNpcProfiles(chatId),
         getItems(chatId),
         getMilestones(chatId),
         getMemories(chatId),
         getTimeline(chatId),
+        getRealtimeMemories(chatId),
     ]);
 
     const byTier = (arr) => {
@@ -1600,6 +1835,16 @@ export async function getMemoryStats(chatId) {
         timeline: { total: timeline.length, byTier: byTier(timeline) },
         timelineEntries: { total: milestones.length, byTier: byTier(milestones) },
         memories: { total: memories.length, byTier: byTier(memories) },
+        // v9.3.3 第五柱不参与升降格，按结算状态统计
+        realtime: {
+            total: realtime.length,
+            byState: {
+                active: realtime.filter(e => e.settleState === 'active').length,
+                pending_settle: realtime.filter(e => e.settleState === 'pending_settle').length,
+                settled: realtime.filter(e => e.settleState === 'settled').length,
+            },
+            promoted: realtime.filter(e => e.promotedTo).length,
+        },
     };
 }
 
@@ -1631,7 +1876,8 @@ function countBackupEntries(backup) {
         + (source?.memories?.length || 0)
         + (timeline.length || 0)
         + mapCount
-        + clueCount;
+        + clueCount
+        + (Array.isArray(source?.realtime) ? source.realtime.length : 0);
 }
 
 function stripEmbedding(entry) {
@@ -1730,7 +1976,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
         import('./map-store.js'),
         import('./clue-board.js'),
     ]);
-    const [npc, items, milestones, memories, timeline, map, clueBoard] = await Promise.all([
+    const [npc, items, milestones, memories, timeline, map, clueBoard, realtime] = await Promise.all([
         getNpcProfiles(chatId),
         getItems(chatId),
         getMilestones(chatId),
@@ -1738,6 +1984,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
         getTimeline(chatId),
         getMap(chatId),
         getClueBoard(chatId),
+        getRealtimeMemories(chatId),
     ]);
 
     await normalizeDataEmbeddingsToRefs(chatId, { npc, items, milestones, timeline, memories, map });
@@ -1749,9 +1996,11 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
         memories: stripEmbeddings(memories),
         map: stripMapEmbeddings(map),
         clueBoard,
+        // v9.3.3 第五柱不做向量，直接带走
+        realtime,
     };
     const backup = {
-        version: '9.3.2',
+        version: '9.3.3',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2054,7 +2303,57 @@ async function restoreBackupPayload(chatId, backup) {
     restored += clueResult.restored;
     skipped += clueResult.skipped;
 
+    const realtimeResult = await restoreRealtimeBackup(chatId, source.realtime, idMaps);
+    restored += realtimeResult.restored;
+    skipped += realtimeResult.skipped;
+
     return { restored, skipped, merged, vectorImported: vectorImport.imported || 0, vectorSkipped: vectorImport.skipped || 0 };
+}
+
+/**
+ * v9.3.3 恢复第五柱。
+ *
+ * 单独走一条路而不是复用 restorePart：实时记忆没有 embedding / hitScore / memoryTier，
+ * 走通用路径会被塞上一堆它不需要的字段。
+ * 按 text + sceneKey 去重；promotedTo 里的目标 id 要跟着导入时的 id 重映射，否则
+ * 注入过滤会把「已晋升」判断到不存在的条目上。
+ */
+async function restoreRealtimeBackup(chatId, entries, idMaps = {}) {
+    const list = Array.isArray(entries) ? entries : [];
+    if (!list.length) return { restored: 0, skipped: 0 };
+
+    const existing = await getRealtimeMemories(chatId);
+    const existingIds = new Set(existing.map(e => String(e.id)));
+    const existingKeys = new Set(existing.map(e => `${normalizeIdentityText(e.text)}|${e.sceneKey || ''}`));
+    const pillarMaps = { mem: idMaps.mem, npc: idMaps.npc, item: idMaps.item, milestone: idMaps.milestone };
+
+    const next = existing.slice();
+    let restored = 0;
+    let skipped = 0;
+    for (const raw of list) {
+        if (!raw || typeof raw !== 'object') { skipped++; continue; }
+        const text = String(raw.text || '').trim();
+        if (!text) { skipped++; continue; }
+        const key = `${normalizeIdentityText(text)}|${raw.sceneKey || ''}`;
+        if (existingKeys.has(key)) { skipped++; continue; }
+
+        const entry = normalizeRealtimeEntry({ ...raw, text });
+        if (existingIds.has(entry.id)) entry.id = generateId();
+        // 晋升去向的 id 随导入重映射；映射不到就当作未晋升，避免"已晋升"指向空条目
+        if (entry.promotedTo?.pillar && entry.promotedTo.id) {
+            const map = pillarMaps[entry.promotedTo.pillar];
+            const mapped = map?.get?.(entry.promotedTo.id);
+            if (mapped) entry.promotedTo = { ...entry.promotedTo, id: mapped };
+            else if (map) entry.promotedTo = null;
+        }
+        existingIds.add(entry.id);
+        existingKeys.add(key);
+        next.push(entry);
+        restored++;
+    }
+
+    if (restored) await saveCollection('realtime', chatId, next);
+    return { restored, skipped };
 }
 
 export async function importMemoriesFromChatMetadata(chatId) {
@@ -2481,15 +2780,15 @@ export async function exportMemories(chatId) {
         import('./map-store.js'),
         import('./clue-board.js'),
     ]);
-    const [npc, items, milestones, memories, timeline, map, clueBoard] = await Promise.all([
+    const [npc, items, milestones, memories, timeline, map, clueBoard, realtime] = await Promise.all([
         getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId),
-        getTimeline(chatId), getMap(chatId), getClueBoard(chatId),
+        getTimeline(chatId), getMap(chatId), getClueBoard(chatId), getRealtimeMemories(chatId),
     ]);
-    const data = { npc, items, milestones, timeline, memories, map, clueBoard };
+    const data = { npc, items, milestones, timeline, memories, map, clueBoard, realtime };
     await normalizeDataEmbeddingsToRefs(chatId, data);
     const vectorPack = await buildVectorPack(chatId, data);
     return JSON.stringify({
-        version: '9.3.2',
+        version: '9.3.3',
         schema: 'bb-memory-vector-ref-v1',
         exportedAt: Date.now(),
         data: stripRuntimeEmbeddings(data),

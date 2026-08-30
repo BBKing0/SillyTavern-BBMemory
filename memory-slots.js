@@ -47,6 +47,7 @@ const MEMORY_KEY = 'bb_mem_chat_';
 const LEGACY_THREAD_KEY = 'bb_timeline_threads_';
 const MAP_KEY = 'bb_map_chat_';
 const CLUE_BOARD_KEY = 'bb_clue_board_';
+const REALTIME_KEY = 'bb_rt_chat_';       // v9.3.3 实时记忆（第五柱）
 
 function looksLikeLegacyMilestoneList(data) {
     return Array.isArray(data) && data.some(entry =>
@@ -185,6 +186,7 @@ function createEmptySlotData() {
         memories: [],
         map: { locations: {} },
         clueBoard: { nodes: [], connections: [], updatedAt: 0 },
+        realtime: [],                     // v9.3.3 实时记忆（第五柱）
         _slotEmpty: true,
         _slotCreatedAt: now,
         _slotUpdatedAt: now,
@@ -219,7 +221,7 @@ function assertSlotOwnership(existing, chatId, slotName, options = {}) {
 
 async function readAllPillarData(chatId) {
     const lf = getLocalForage();
-    const [npc, items, rawMilestones, rawTimeline, memories, legacyThreads, map, clueBoard] = await Promise.all([
+    const [npc, items, rawMilestones, rawTimeline, memories, legacyThreads, map, clueBoard, realtime] = await Promise.all([
         lf.getItem(NPC_KEY + chatId),
         lf.getItem(ITEM_KEY + chatId),
         lf.getItem(MILESTONE_KEY + chatId),
@@ -228,6 +230,7 @@ async function readAllPillarData(chatId) {
         lf.getItem(LEGACY_THREAD_KEY + chatId),
         lf.getItem(MAP_KEY + chatId),
         lf.getItem(CLUE_BOARD_KEY + chatId),
+        lf.getItem(REALTIME_KEY + chatId),
     ]);
     const legacyMilestones = looksLikeLegacyMilestoneList(rawTimeline) ? rawTimeline : [];
     const timeline = looksLikeLegacyMilestoneList(rawTimeline)
@@ -241,6 +244,8 @@ async function readAllPillarData(chatId) {
         memories: Array.isArray(memories) ? memories : [],
         map: normalizeMapData(map),
         clueBoard: normalizeClueBoardData(clueBoard),
+        // v9.3.3 第五柱：不做向量，所以不参与 normalizeDataEmbeddingsToRefs
+        realtime: Array.isArray(realtime) ? realtime : [],
     };
     await normalizeDataEmbeddingsToRefs(chatId, data);
     return stripRuntimeEmbeddings(data);
@@ -261,6 +266,7 @@ async function writeAllPillarData(chatId, data) {
         lf.removeItem(LEGACY_THREAD_KEY + chatId),
         lf.setItem(MAP_KEY + chatId, clean.map),
         lf.setItem(CLUE_BOARD_KEY + chatId, clean.clueBoard),
+        lf.setItem(REALTIME_KEY + chatId, clean.realtime),
     ]);
 }
 
@@ -291,6 +297,7 @@ function normalizeSlotData(raw) {
     if (Array.isArray(raw)) {
         return { ...createEmptySlotData(), memories: clonePlain(raw), _slotEmpty: raw.length === 0 };
     }
+    // 旧存档没有 realtime 字段，下面 normalized 里统一兜成空数组
     if (!raw || typeof raw !== 'object') {
         return createEmptySlotData();
     }
@@ -309,6 +316,7 @@ function normalizeSlotData(raw) {
         memories: Array.isArray(raw.memories) ? clonePlain(raw.memories) : [],
         map: normalizeMapData(raw.map || raw.mapData),
         clueBoard: normalizeClueBoardData(raw.clueBoard || raw.clues),
+        realtime: Array.isArray(raw.realtime) ? clonePlain(raw.realtime) : [],
         _slotEmpty: raw._slotEmpty === true,
         _slotCreatedAt: raw._slotCreatedAt || raw.createdAt || now,
         _slotUpdatedAt: raw._slotUpdatedAt || raw.updatedAt || now,
@@ -316,7 +324,7 @@ function normalizeSlotData(raw) {
     };
     normalized._slotEmpty =
         normalized.npc.length + normalized.items.length + normalized.milestones.length + normalized.timeline.length + normalized.memories.length +
-        Object.keys(normalized.map.locations || {}).length + normalized.clueBoard.nodes.length === 0;
+        Object.keys(normalized.map.locations || {}).length + normalized.clueBoard.nodes.length + normalized.realtime.length === 0;
     return normalized;
 }
 
@@ -331,7 +339,8 @@ function totalCount(data) {
         + normalized.timeline.length
         + normalized.memories.length
         + Object.keys(normalized.map.locations || {}).length
-        + normalized.clueBoard.nodes.length;
+        + normalized.clueBoard.nodes.length
+        + normalized.realtime.length;
 }
 
 function countSlotEmbeddings(data) {
@@ -434,7 +443,8 @@ export async function listSlots(charId) {
     // v9.0.6 slot payloads may exist in chatMetadata; embeddings are included only by explicit user action.
     const remoteIndex = getRemoteSlotIndex(charId);
     for (const [name, meta] of Object.entries(remoteIndex.slots || {})) {
-        const total = (meta.npc || 0) + (meta.items || 0) + (meta.milestones || 0) + (meta.timeline || 0) + (meta.mem || 0) + (meta.map || 0) + (meta.clues || 0);
+        const total = (meta.npc || 0) + (meta.items || 0) + (meta.milestones || 0) + (meta.timeline || 0)
+            + (meta.mem || 0) + (meta.map || 0) + (meta.clues || 0) + (meta.realtime || 0);
         const remotePayloadAvailable = slotPayloadExistsInChatMetadata(charId, name);
         const local = localByName.get(name);
         if (local) {
@@ -635,7 +645,8 @@ export async function loadFromSlot(charId, chatId, slotName, options = {}) {
     const hasExistingData = currentData.npc.length > 0 || currentData.items.length > 0 ||
         currentData.milestones.length > 0 || currentData.timeline.length > 0 || currentData.memories.length > 0 ||
         Object.keys(currentData.map.locations || {}).length > 0 ||
-        currentData.clueBoard.nodes.length > 0;
+        currentData.clueBoard.nodes.length > 0 ||
+        (currentData.realtime?.length || 0) > 0;
 
     if (hasExistingData && options.preserveIds !== true) {
         const oldIds = {
@@ -827,7 +838,7 @@ export async function exportSlot(charId, slotName) {
     const cleanData = stripRuntimeEmbeddings(stripSlotEmbeddings(data));
     const vectorPack = await buildVectorPack('', cleanData, { sourceSlot: slotName });
     const archive = {
-        version: '9.3.2',
+        version: '9.3.3',
         schema: 'bb-memory-vector-ref-v1',
         exportedAt: Date.now(),
         source: 'slot',
@@ -926,10 +937,10 @@ async function getSlotPillarCounts(charId, slotName) {
     const lf = getLocalForage();
     const data = await lf.getItem(slotKey(charId, slotName));
     if (Array.isArray(data)) {
-        return { npc: 0, items: 0, milestones: 0, timeline: 0, mem: data.length, map: 0, clues: 0, embeddings: countSlotEmbeddings(data) };
+        return { npc: 0, items: 0, milestones: 0, timeline: 0, mem: data.length, map: 0, clues: 0, realtime: 0, embeddings: countSlotEmbeddings(data) };
     }
     if (!data || typeof data !== 'object') {
-        return { npc: 0, items: 0, milestones: 0, timeline: 0, mem: 0, map: 0, clues: 0, embeddings: 0 };
+        return { npc: 0, items: 0, milestones: 0, timeline: 0, mem: 0, map: 0, clues: 0, realtime: 0, embeddings: 0 };
     }
     const normalized = normalizeSlotData(data);
     return {
@@ -940,6 +951,7 @@ async function getSlotPillarCounts(charId, slotName) {
         mem: normalized.memories.length,
         map: Object.keys(normalized.map.locations || {}).length,
         clues: normalized.clueBoard.nodes.length,
+        realtime: normalized.realtime.length,
         embeddings: countSlotEmbeddings(normalized),
     };
 }
@@ -1071,7 +1083,7 @@ export async function pushSlotVectorsToCloud(charId, slotName) {
     await normalizeDataEmbeddingsToRefs('', normalized);
     const vectorPack = await buildVectorPack('', normalized, { sourceSlot: name });
     const payload = {
-        version: '9.3.2',
+        version: '9.3.3',
         schema: 'bb-memory-cloud-vector-slot-v1',
         charId,
         slotName: name,

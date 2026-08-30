@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.3.0</b>
+            <b>BB-Memory v9.3.3</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -74,6 +74,31 @@
                     <i class="fa-solid fa-life-ring"></i> 存档救援
                 </button>
             </div>
+
+            <!-- 快捷按钮 行4：v9.3.3 AI 记忆整理 -->
+            <div class="bb-mem-sidebar-buttons">
+                <button id="bb_curate_now_btn" class="menu_button" title="AI 整理记忆——把逐条去重抓不到的渐进细化型重复聚成一组，交给 AI 合并重写">
+                    <i class="fa-solid fa-wand-sparkles"></i> AI 整理
+                </button>
+                <button id="bb_curate_full_btn" class="menu_button" title="全库整理——扫描全部条目找疑似重复（API 调用较多，结果一律先过审核面板）">
+                    <i class="fa-solid fa-magnifying-glass-chart"></i> 全库整理
+                </button>
+                <button id="bb_curate_undo_btn" class="menu_button" title="撤销上次 AI 整理，逐字段还原到整理前">
+                    <i class="fa-solid fa-rotate-left"></i> 撤销整理
+                </button>
+            </div>
+            <div id="bb_curate_status" style="font-size:0.7em;opacity:0.6;margin-bottom:6px;"></div>
+
+            <!-- 快捷按钮 行5：v9.3.3 实时记忆（第五柱） -->
+            <div class="bb-mem-sidebar-buttons">
+                <button id="bb_realtime_settle_btn" class="menu_button" title="立即结算——把当前场景细节交给 AI 判定：晋升长期库 / 留档 / 延期">
+                    <i class="fa-solid fa-flag-checkered"></i> 立即结算
+                </button>
+                <button id="bb_realtime_undo_btn" class="menu_button" title="撤销上次结算，撤回晋升条目并还原实时记忆">
+                    <i class="fa-solid fa-rotate-left"></i> 撤销结算
+                </button>
+            </div>
+            <div id="bb_realtime_status" style="font-size:0.7em;opacity:0.6;margin-bottom:6px;"></div>
 
             <!-- 跨设备备份 -->
             <div style="display:flex;gap:4px;margin:4px 0;">
@@ -353,6 +378,252 @@
                         <label for="bb_health_check_clue_stale_days">线索板更新提醒（天）</label>
                         <small class="bb-mem-hint">线索板启用注入但超过此天数未更新时提醒（默认14）</small>
                         <input id="bb_health_check_clue_stale_days" type="number" class="bb-input" min="1" max="90" value="14" />
+                    </div>
+
+                </div>
+            </div>
+
+            <hr />
+
+            <!-- v9.3.3 AI 记忆整理 -->
+            <div class="bb-settings-section">
+                <div class="bb-settings-section-header" data-section="aicurate">
+                    <span><i class="fa-solid fa-wand-sparkles"></i> AI 记忆整理</span>
+                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                </div>
+                <div class="bb-settings-section-body">
+
+                    <div style="font-size:0.72em;opacity:0.6;line-height:1.5;margin-bottom:6px;">
+                        逐条去重只能两两比较，抓不到「渐进细化」型重复（同一件事分 5 层越写越细，相邻两条都在 0.8 上下、谁也过不了合并线）。
+                        整理师用松阈值把整条细化链聚成一组，一次性交给 AI 重写成最终态。
+                    </div>
+
+                    <label class="checkbox_label" style="margin: 8px 0;">
+                        <input id="bb_ai_curate_enabled" type="checkbox" />
+                        <span>启用 AI 记忆整理</span>
+                    </label>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_ai_curate_trigger_mode">触发模式</label>
+                        <small class="bb-mem-hint">决定新增条目累积到什么程度才自动整理。</small>
+                        <select id="bb_ai_curate_trigger_mode" class="bb-input" style="width:100%;">
+                            <option value="any">任一柱达标即触发（默认）</option>
+                            <option value="all">全部柱达标才触发</option>
+                            <option value="manual">仅手动触发</option>
+                        </select>
+                    </div>
+
+                    <div style="font-size:0.72em;opacity:0.55;margin:6px 0 2px;">
+                        各柱触发阈值：新增/更新多少条后参与判定。设为 0 表示该柱不参与自动触发。
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_ai_curate_mem_threshold">记忆条目阈值</label>
+                        <input id="bb_ai_curate_mem_threshold" type="number" class="bb-input" min="0" max="200" value="10" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_ai_curate_npc_threshold">NPC 阈值</label>
+                        <input id="bb_ai_curate_npc_threshold" type="number" class="bb-input" min="0" max="100" value="5" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_ai_curate_item_threshold">物品阈值</label>
+                        <input id="bb_ai_curate_item_threshold" type="number" class="bb-input" min="0" max="100" value="5" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_ai_curate_milestone_threshold">里程碑阈值</label>
+                        <input id="bb_ai_curate_milestone_threshold" type="number" class="bb-input" min="0" max="100" value="5" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_ai_curate_timeline_threshold">时间线阈值</label>
+                        <input id="bb_ai_curate_timeline_threshold" type="number" class="bb-input" min="0" max="100" value="3" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_ai_curate_cluster_threshold">聚类建边阈值</label>
+                        <small class="bb-mem-hint">相似度超过此值就在两条之间连边（默认0.65）。刻意远低于合并线 0.85——靠链式连通抓渐进细化，调高会漏掉长链。</small>
+                        <input id="bb_ai_curate_cluster_threshold" type="number" class="bb-input" min="0.20" max="0.99" step="0.01" value="0.65" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_ai_curate_recall_per_entry">每条召回数</label>
+                        <small class="bb-mem-hint">每条新条目向量召回多少条同柱相关旧条目参与聚类（默认5）。调高更容易接上长链，但比较开销上升。</small>
+                        <input id="bb_ai_curate_recall_per_entry" type="number" class="bb-input" min="1" max="50" value="5" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_ai_curate_max_groups">单次最多整理组数</label>
+                        <small class="bb-mem-hint">一次整理送给 AI 的分组上限（默认8）。也是全库整理的分批大小。</small>
+                        <input id="bb_ai_curate_max_groups" type="number" class="bb-input" min="1" max="50" value="8" />
+                    </div>
+
+                    <div style="font-size:0.72em;opacity:0.55;margin:8px 0 2px;">
+                        授权矩阵：每类操作允许 AI 做到什么程度。
+                        <b>直接执行</b>静默写库只记日志，<b>执行并提醒</b>写库并弹提示，<b>必须确认</b>先进审核面板等你勾选。
+                        系统检测到风险（缝合式合并、结果明显变短、永恒条目被吸收）时会无视此设置强制转人工确认。
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_ai_curate_auth_merge">合并（merge）</label>
+                        <select id="bb_ai_curate_auth_merge" class="bb-input" style="width:100%;">
+                            <option value="auto">直接执行</option>
+                            <option value="notify">执行并提醒（默认）</option>
+                            <option value="confirm">必须确认</option>
+                        </select>
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_ai_curate_auth_rewrite">重写（rewrite）</label>
+                        <select id="bb_ai_curate_auth_rewrite" class="bb-input" style="width:100%;">
+                            <option value="auto">直接执行</option>
+                            <option value="notify">执行并提醒（默认）</option>
+                            <option value="confirm">必须确认</option>
+                        </select>
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_ai_curate_auth_split">拆分（split）</label>
+                        <select id="bb_ai_curate_auth_split" class="bb-input" style="width:100%;">
+                            <option value="auto">直接执行</option>
+                            <option value="notify">执行并提醒</option>
+                            <option value="confirm">必须确认（默认）</option>
+                        </select>
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_ai_curate_auth_delete">删除（delete）</label>
+                        <small class="bb-mem-hint">删除不可逆，建议保持"必须确认"。</small>
+                        <select id="bb_ai_curate_auth_delete" class="bb-input" style="width:100%;">
+                            <option value="auto">直接执行</option>
+                            <option value="notify">执行并提醒</option>
+                            <option value="confirm">必须确认（默认）</option>
+                        </select>
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_ai_curate_undo_depth">撤销快照层数</label>
+                        <small class="bb-mem-hint">保留最近几次整理的完整回滚快照（默认3）。快照写不进去时整理会直接中止，不会盲写。</small>
+                        <input id="bb_ai_curate_undo_depth" type="number" class="bb-input" min="1" max="20" value="3" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_dedup_time_conflict_scope">时间冲突判定粒度</label>
+                        <small class="bb-mem-hint">去重打分里"故事时间不同"的扣分粒度。按<b>日期</b>时，同一天内 12:01 与 12:05 不再扣 0.12（默认）；按<b>完整时间</b>是旧行为。</small>
+                        <select id="bb_dedup_time_conflict_scope" class="bb-input" style="width:100%;">
+                            <option value="date">按日期（同一天内不扣分，默认）</option>
+                            <option value="exact">按完整时间（旧行为）</option>
+                            <option value="off">不扣分</option>
+                        </select>
+                    </div>
+
+                </div>
+            </div>
+
+            <hr />
+
+            <!-- v9.3.3 实时记忆（第五柱） -->
+            <div class="bb-settings-section">
+                <div class="bb-settings-section-header" data-section="realtime">
+                    <span><i class="fa-solid fa-bolt"></i> 实时记忆（场景细节）</span>
+                    <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
+                </div>
+                <div class="bb-settings-section-body">
+
+                    <div style="font-size:0.72em;opacity:0.6;line-height:1.5;margin-bottom:6px;">
+                        检索由最后一条用户消息驱动，问句里没有「车」字，「坐公交车来电影院」就永远进不了注入，后文于是写出「开车回家」。
+                        这一柱专收「坐什么车来的、穿了什么、谁在场、点了什么」这类当下细节，<b>不做向量、不参与检索、无条件注入</b>——
+                        正是这个绕过检索的性质解决了长线逻辑断裂。场景结束时再逐条判定晋升长期库还是留档。
+                    </div>
+
+                    <label class="checkbox_label" style="margin: 8px 0;">
+                        <input id="bb_realtime_enabled" type="checkbox" />
+                        <span>启用实时记忆（总开关）</span>
+                    </label>
+
+                    <label class="checkbox_label" style="margin: 8px 0;">
+                        <input id="bb_realtime_extract_enabled" type="checkbox" />
+                        <span>自动抓取场景细节</span>
+                    </label>
+                    <small class="bb-mem-hint" style="margin-bottom:8px;">与主提取并行发起的轻量调用。关掉后仍可手动添加细节，只是不再自动抓。</small>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_realtime_extract_scope">抓取范围</label>
+                        <small class="bb-mem-hint">每层都抓最完整但每层多一次 API 调用；只抓场景前 N 层可省调用，代价是场景后段的新细节会漏。</small>
+                        <select id="bb_realtime_extract_scope" class="bb-input" style="width:100%;">
+                            <option value="always">每层都抓（默认）</option>
+                            <option value="first_n">只抓每个场景的前 N 层</option>
+                        </select>
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_realtime_extract_first_n">场景前 N 层</label>
+                        <small class="bb-mem-hint">仅「只抓前 N 层」模式生效（默认6）。换地点或跨天算新场景，计数重新开始。</small>
+                        <input id="bb_realtime_extract_first_n" type="number" class="bb-input" min="1" max="200" value="6" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_realtime_max_details_per_floor">单层最多抓几条</label>
+                        <small class="bb-mem-hint">一层回复里最多记几条细节（默认5）。调高会更全，但注入预算消耗更快。</small>
+                        <input id="bb_realtime_max_details_per_floor" type="number" class="bb-input" min="1" max="50" value="5" />
+                    </div>
+
+                    <div style="font-size:0.72em;opacity:0.55;margin:8px 0 2px;">
+                        注入上限：这一柱刻意<b>不受全局 token 预算约束</b>（否则又会被裁掉、白做），
+                        所以必须靠下面两个硬上限自己管住体积。两者取先到者。
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_realtime_injection_max">注入条数上限</label>
+                        <small class="bb-mem-hint">最多注入几条细节（默认15）。超出时按楼层由新到旧截断。</small>
+                        <input id="bb_realtime_injection_max" type="number" class="bb-input" min="0" max="200" value="15" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_realtime_injection_token_cap">注入 token 上限</label>
+                        <small class="bb-mem-hint">该分区的 token 硬顶（默认300）。设 0 表示只用条数上限。</small>
+                        <input id="bb_realtime_injection_token_cap" type="number" class="bb-input" min="0" max="8000" value="300" />
+                    </div>
+
+                    <div style="font-size:0.72em;opacity:0.55;margin:8px 0 2px;">
+                        结算：场景过去后逐条判定去向。<b>晋升</b>写进长期库，<b>留档</b>不再注入但数据保留，<b>延期</b>继续生效。
+                    </div>
+
+                    <label class="checkbox_label" style="margin: 8px 0;">
+                        <input id="bb_realtime_scene_change_settle" type="checkbox" />
+                        <span>场景切换时结算上一场景</span>
+                    </label>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_realtime_ttl_floors">有效期（楼层）</label>
+                        <small class="bb-mem-hint">一条细节多少层没被提及就进入待结算（默认12）。设 0 表示不按楼层过期。</small>
+                        <input id="bb_realtime_ttl_floors" type="number" class="bb-input" min="0" max="500" value="12" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_realtime_max_entries">生效条数上限</label>
+                        <small class="bb-mem-hint">同时生效的细节上限（默认40）。超出时最旧的先进待结算。留档条目按此值的 2 倍机械修剪。</small>
+                        <input id="bb_realtime_max_entries" type="number" class="bb-input" min="0" max="500" value="40" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_realtime_settle_mode">结算时机</label>
+                        <small class="bb-mem-hint">自动模式在触发条件满足时直接调 API 结算；手动模式只标记待结算，等你点「立即结算」。</small>
+                        <select id="bb_realtime_settle_mode" class="bb-input" style="width:100%;">
+                            <option value="auto">自动结算（默认）</option>
+                            <option value="manual">仅手动结算</option>
+                        </select>
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_realtime_promotion_mode">晋升写入方式</label>
+                        <small class="bb-mem-hint">晋升会往长期库写新条目。选<b>确认后写入</b>时会先弹面板让你逐条勾选。留档与延期不受此设置影响。</small>
+                        <select id="bb_realtime_promotion_mode" class="bb-input" style="width:100%;">
+                            <option value="auto">直接写入（默认）</option>
+                            <option value="confirm">确认后写入</option>
+                        </select>
                     </div>
 
                 </div>

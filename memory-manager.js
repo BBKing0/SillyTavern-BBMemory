@@ -1,8 +1,7 @@
 /**
- * memory-manager.js —— BB-Memory v5.5 记忆管理器
+ * memory-manager.js —— BB-Memory v9.3.3 记忆管理器
  *
- * 全屏覆盖弹窗，3 标签页：记忆 / 存档 / 常驻档案。
- * 从 v4.4.2 移植，适配 v5.5 四柱数据架构。
+ * 全屏覆盖弹窗，统一管理长期记忆、实时记忆、存档、时间线与归档。
  */
 
 import {
@@ -11,6 +10,7 @@ import {
     getMilestones as getTimeline, addMilestone as addTimelineEntry, updateMilestone as updateTimelineEntry, removeMilestone as removeTimelineEntry,
     getTimeline as getTimelineThreads, upsertTimeline as upsertTimelineThread, removeTimeline as removeTimelineThread,
     getMemories, addMemory, updateMemory, removeMemory,
+    getRealtimeMemories, updateRealtimeMemory,
     clearAllData, deleteByExchange, getMemoryStats, getSettings, updateSettings,
     exportMemories, importMemories, updateFactContent, addHiddenNote, removeHiddenNote,
     isArchived, archiveEntry, restoreEntry,
@@ -20,7 +20,10 @@ import {
     getCloudVectorSlot, pushSlotVectorsToCloud, pullCloudVectors, getSlotOwnerChatId,
 } from './memory-slots.js';
 import { simpleSearch } from './retriever.js';
-import { MEMORY_TYPES, TRUTH_STATUS, HIDDEN_NOTE_TYPES, TIMELINE_STATUS, ITEM_STATUS } from './memory-types.js';
+import {
+    MEMORY_TYPES, TRUTH_STATUS, HIDDEN_NOTE_TYPES, TIMELINE_STATUS, ITEM_STATUS,
+    REALTIME_KINDS, REALTIME_SETTLE_STATES,
+} from './memory-types.js';
 import { NPC_TIERS, ITEM_TIERS, normalizeNpcTier, normalizeItemTier } from './entity-tiers.js';
 import { attachEntryEmbedding } from './auto-generator.js';
 import { markExchangeExtracted, hideExchange, unmarkExchangeProcessed, getExtractionFloorStatus } from './message-state.js';
@@ -155,6 +158,9 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) 
             <button class="bb-mgr-tab" data-tab="threads">
                 <i class="fa-solid fa-timeline"></i> 时间线
             </button>
+            <button class="bb-mgr-tab" data-tab="realtime">
+                <i class="fa-solid fa-bolt"></i> 实时
+            </button>
             <button class="bb-mgr-tab" data-tab="dashboard">
                 <i class="fa-solid fa-gauge-high"></i> 仪表盘
             </button>
@@ -268,6 +274,13 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) 
         <!-- 时间线标签页 -->
         <div class="bb-mgr-panel" data-panel="threads" style="display:none;">
             <div id="bb_thread_panel_content">
+                <div class="bb-mem-empty"><i class="fa-solid fa-spinner fa-spin"></i> 加载中...</div>
+            </div>
+        </div>
+
+        <!-- v9.3.3 实时记忆标签页 -->
+        <div class="bb-mgr-panel" data-panel="realtime" style="display:none;">
+            <div id="bb_realtime_panel_content" class="bb-realtime-panel">
                 <div class="bb-mem-empty"><i class="fa-solid fa-spinner fa-spin"></i> 加载中...</div>
             </div>
         </div>
@@ -610,6 +623,8 @@ function bindManagerEvents(overlay, chatId) {
                 await renderDashboardPanel(overlay, chatId);
             } else if (panelName === 'threads') {
                 await renderThreadPanel(overlay, chatId);
+            } else if (panelName === 'realtime') {
+                await renderRealtimePanel(overlay, chatId);
             } else if (panelName === 'categories') {
                 await renderCategoriesPanel(overlay, chatId);
             } else if (panelName === 'warehouse') {
@@ -1581,6 +1596,235 @@ function bindFormEvents_inner(formOverlay, chatId, pillar, editInfo) {
     });
 }
 
+// ═══ 实时记忆标签页（v9.3.3） ═══
+
+function realtimeFloorLabel(entry) {
+    const first = Number(entry.createdFloor);
+    const last = Number(entry.lastSeenFloor);
+    if (!Number.isFinite(first) && !Number.isFinite(last)) return '未知楼层';
+    if (first === last || !Number.isFinite(last)) return `第 ${Number.isFinite(first) ? first : last} 层`;
+    return `第 ${Number.isFinite(first) ? first : '?'}–${last} 层`;
+}
+
+function buildRealtimeManagerItem(entry) {
+    const kind = REALTIME_KINDS[entry.kind] || REALTIME_KINDS.detail;
+    const state = REALTIME_SETTLE_STATES[entry.settleState] || REALTIME_SETTLE_STATES.active;
+    const promoted = entry.promotedTo?.pillar && entry.promotedTo?.id;
+    return `<article class="bb-realtime-item" data-id="${escapeAttr(entry.id)}" data-state="${escapeAttr(entry.settleState || 'active')}">
+        <div class="bb-realtime-item-head">
+            <span class="bb-item-badge" style="color:${kind.color};border-color:${kind.color}66;background:${kind.color}18;">
+                <i class="${kind.icon}"></i> ${escapeHtml(kind.label)}
+            </span>
+            <span class="bb-item-badge" style="color:${state.color};border-color:${state.color}66;background:${state.color}18;">
+                ${escapeHtml(state.label)}
+            </span>
+            ${promoted ? '<span class="bb-item-badge" style="color:#ba68c8;border-color:#ba68c866;background:#ba68c818;">已晋升</span>' : ''}
+            <span class="bb-realtime-floor">${escapeHtml(realtimeFloorLabel(entry))}</span>
+        </div>
+        <div class="bb-realtime-text">${escapeHtml(entry.text)}</div>
+        <div class="bb-realtime-meta">
+            ${entry.sceneKey ? `<span title="场景标识"><i class="fa-solid fa-location-dot"></i> ${escapeHtml(entry.sceneKey)}</span>` : ''}
+            ${entry.settleReason ? `<span title="结算原因"><i class="fa-solid fa-flag"></i> ${escapeHtml(entry.settleReason)}</span>` : ''}
+        </div>
+        <div class="bb-realtime-actions">
+            <button class="menu_button bb-rt-edit" data-id="${escapeAttr(entry.id)}"><i class="fa-solid fa-pen"></i> 编辑</button>
+            ${!promoted ? `<button class="menu_button bb-rt-promote" data-id="${escapeAttr(entry.id)}"><i class="fa-solid fa-arrow-up"></i> 手动晋升</button>` : ''}
+            ${entry.settleState !== 'settled'
+                ? `<button class="menu_button bb-rt-discard" data-id="${escapeAttr(entry.id)}"><i class="fa-solid fa-box-archive"></i> 留档</button>`
+                : (!promoted ? `<button class="menu_button bb-rt-reactivate" data-id="${escapeAttr(entry.id)}"><i class="fa-solid fa-rotate-left"></i> 恢复生效</button>` : '')}
+        </div>
+    </article>`;
+}
+
+async function renderRealtimePanel(overlay, chatId) {
+    const panel = overlay.querySelector('#bb_realtime_panel_content');
+    if (!panel) return;
+    panel.innerHTML = '<div class="bb-mem-empty"><i class="fa-solid fa-spinner fa-spin"></i> 正在读取实时记忆...</div>';
+    try {
+        const entries = (await getRealtimeMemories(chatId)).slice().sort((a, b) =>
+            Number(b.lastSeenFloor ?? b.createdFloor ?? -1) - Number(a.lastSeenFloor ?? a.createdFloor ?? -1));
+        const counts = {
+            active: entries.filter(e => e.settleState === 'active').length,
+            pending: entries.filter(e => e.settleState === 'pending_settle').length,
+            settled: entries.filter(e => e.settleState === 'settled').length,
+        };
+        panel.innerHTML = `
+            <div class="bb-realtime-toolbar">
+                <div>
+                    <strong><i class="fa-solid fa-bolt"></i> 当前场景细节</strong>
+                    <div class="bb-realtime-summary">生效 ${counts.active} · 待结算 ${counts.pending} · 已结算 ${counts.settled}</div>
+                </div>
+                <div class="bb-realtime-toolbar-actions">
+                    <select class="bb-input" id="bb_rt_state_filter" aria-label="按状态筛选">
+                        <option value="all">全部状态</option>
+                        <option value="active">生效中</option>
+                        <option value="pending_settle">待结算</option>
+                        <option value="settled">已结算</option>
+                    </select>
+                    <button class="menu_button" id="bb_rt_settle_now"><i class="fa-solid fa-flag-checkered"></i> 立即结算</button>
+                    <button class="menu_button" id="bb_rt_undo"><i class="fa-solid fa-rotate-left"></i> 撤销结算</button>
+                    <button class="menu_button" id="bb_rt_refresh"><i class="fa-solid fa-arrows-rotate"></i> 刷新</button>
+                </div>
+            </div>
+            <div class="bb-realtime-help">实时记忆会绕过向量检索并受独立条数/token 上限保护；“留档”只停止注入，不会立即删除数据。</div>
+            <div class="bb-realtime-list">
+                ${entries.length ? entries.map(buildRealtimeManagerItem).join('') : '<div class="bb-mem-empty">暂无实时场景细节</div>'}
+            </div>`;
+
+        panel.querySelector('#bb_rt_state_filter')?.addEventListener('change', (event) => {
+            const state = event.currentTarget.value;
+            panel.querySelectorAll('.bb-realtime-item').forEach(item => {
+                item.style.display = state === 'all' || item.dataset.state === state ? '' : 'none';
+            });
+        });
+        panel.querySelector('#bb_rt_refresh')?.addEventListener('click', () => renderRealtimePanel(overlay, chatId));
+        panel.querySelector('#bb_rt_settle_now')?.addEventListener('click', async (event) => {
+            const btn = event.currentTarget;
+            const original = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 结算中...';
+            showToast('正在结算实时场景细节...', 'info');
+            try {
+                const { settleRealtimeMemories } = await import('./realtime-memory.js');
+                const currentFloor = entries.reduce((max, e) => Math.max(max, Number(e.lastSeenFloor) || 0), 0);
+                const result = await settleRealtimeMemories(chatId, { manual: true, currentFloor });
+                if (!result.ok) throw new Error(result.error || result.summary || '结算失败');
+                showToast(result.summary || '实时记忆结算完成', 'success');
+                await renderRealtimePanel(overlay, chatId);
+            } catch (error) {
+                showToast(`实时记忆结算失败: ${error.message}`, 'error');
+                btn.disabled = false;
+                btn.innerHTML = original;
+            }
+        });
+        panel.querySelector('#bb_rt_undo')?.addEventListener('click', async (event) => {
+            const btn = event.currentTarget;
+            btn.disabled = true;
+            showToast('正在撤销最近一次实时记忆结算...', 'info');
+            try {
+                const { undoLastSettlement } = await import('./realtime-memory.js');
+                const result = await undoLastSettlement(chatId);
+                if (!result.ok) throw new Error(result.error || '没有可撤销的结算记录');
+                showToast(result.summary, 'success');
+                await renderRealtimePanel(overlay, chatId);
+            } catch (error) {
+                showToast(`撤销结算失败: ${error.message}`, 'error');
+                btn.disabled = false;
+            }
+        });
+        panel.querySelectorAll('.bb-rt-edit').forEach(btn => btn.addEventListener('click', () => {
+            const entry = entries.find(item => String(item.id) === String(btn.dataset.id));
+            if (entry) showRealtimeEditForm(overlay, chatId, entry);
+        }));
+        panel.querySelectorAll('.bb-rt-promote').forEach(btn => btn.addEventListener('click', () => {
+            const entry = entries.find(item => String(item.id) === String(btn.dataset.id));
+            if (entry) showRealtimePromoteForm(overlay, chatId, entry);
+        }));
+        panel.querySelectorAll('.bb-rt-discard').forEach(btn => btn.addEventListener('click', async () => {
+            const ok = await confirmManagerAction('留档实时记忆', '留档后该细节将停止注入，但仍可在此恢复。是否继续？');
+            if (!ok) return;
+            btn.disabled = true;
+            try {
+                await updateRealtimeMemory(chatId, btn.dataset.id, { settleState: 'settled', settleReason: 'discarded' });
+                showToast('已留档；数据仍保留，可随时恢复', 'success');
+                await renderRealtimePanel(overlay, chatId);
+            } catch (error) { showToast(`留档失败: ${error.message}`, 'error'); btn.disabled = false; }
+        }));
+        panel.querySelectorAll('.bb-rt-reactivate').forEach(btn => btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            try {
+                await updateRealtimeMemory(chatId, btn.dataset.id, { settleState: 'active', settleReason: '', promotedTo: null });
+                showToast('该细节已恢复生效', 'success');
+                await renderRealtimePanel(overlay, chatId);
+            } catch (error) { showToast(`恢复失败: ${error.message}`, 'error'); btn.disabled = false; }
+        }));
+    } catch (error) {
+        panel.innerHTML = `<div class="bb-mem-empty">加载实时记忆失败：${escapeHtml(error.message)}</div>`;
+        showToast(`加载实时记忆失败: ${error.message}`, 'error');
+    }
+}
+
+function showRealtimeEditForm(managerOverlay, chatId, entry) {
+    const formOverlay = createManagerFormOverlay('bb-realtime-form-overlay');
+    formOverlay.innerHTML = `<div class="bb-mem-form-popup">
+        <div class="bb-mem-form-header"><h3><i class="fa-solid fa-pen"></i> 编辑实时记忆</h3><span class="bb-mem-form-close">&times;</span></div>
+        <div class="bb-mem-form-body">
+            <div class="bb-mem-form-group"><label>细节分类</label><select class="bb-input" id="bb_rt_edit_kind">
+                ${Object.values(REALTIME_KINDS).map(kind => `<option value="${kind.id}" ${kind.id === entry.kind ? 'selected' : ''}>${escapeHtml(kind.label)}</option>`).join('')}
+            </select></div>
+            <div class="bb-mem-form-group"><label>细节内容</label><textarea class="bb-input" id="bb_rt_edit_text" rows="4">${escapeHtml(entry.text)}</textarea></div>
+            <div class="bb-mem-form-group"><label>场景标识</label><input class="bb-input" id="bb_rt_edit_scene" value="${escapeAttr(entry.sceneKey || '')}"></div>
+        </div>
+        <div class="bb-mem-form-footer"><button class="menu_button" id="bb_rt_edit_cancel">取消</button><button class="menu_button" id="bb_rt_edit_save"><i class="fa-solid fa-floppy-disk"></i> 保存</button></div>
+    </div>`;
+    const close = () => formOverlay.remove();
+    formOverlay.querySelector('.bb-mem-form-close')?.addEventListener('click', close);
+    formOverlay.querySelector('#bb_rt_edit_cancel')?.addEventListener('click', close);
+    formOverlay.querySelector('#bb_rt_edit_save')?.addEventListener('click', async (event) => {
+        const text = formOverlay.querySelector('#bb_rt_edit_text')?.value.trim();
+        if (!text) { showToast('细节内容不能为空', 'warning'); return; }
+        const btn = event.currentTarget;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 保存中...';
+        try {
+            await updateRealtimeMemory(chatId, entry.id, {
+                kind: formOverlay.querySelector('#bb_rt_edit_kind')?.value || 'detail',
+                text,
+                sceneKey: formOverlay.querySelector('#bb_rt_edit_scene')?.value.trim() || '',
+            });
+            close();
+            showToast('实时记忆已更新', 'success');
+            await renderRealtimePanel(managerOverlay, chatId);
+        } catch (error) { showToast(`保存失败: ${error.message}`, 'error'); btn.disabled = false; btn.innerHTML = '保存'; }
+    });
+}
+
+function showRealtimePromoteForm(managerOverlay, chatId, entry) {
+    const formOverlay = createManagerFormOverlay('bb-realtime-form-overlay');
+    formOverlay.innerHTML = `<div class="bb-mem-form-popup">
+        <div class="bb-mem-form-header"><h3><i class="fa-solid fa-arrow-up"></i> 手动晋升到长期库</h3><span class="bb-mem-form-close">&times;</span></div>
+        <div class="bb-mem-form-body">
+            <div class="bb-realtime-source-preview">${escapeHtml(entry.text)}</div>
+            <div class="bb-mem-form-group"><label>目标柱</label><select class="bb-input" id="bb_rt_promote_pillar">
+                <option value="mem">记忆条目</option><option value="milestone">里程碑</option><option value="npc">NPC 档案</option><option value="item">物品</option>
+            </select></div>
+            <div class="bb-mem-form-group"><label>名称 / 标题（NPC、物品必填）</label><input class="bb-input" id="bb_rt_promote_name" placeholder="留空时使用细节内容生成标题"></div>
+            <div class="bb-mem-form-group"><label>整理后的长期描述</label><textarea class="bb-input" id="bb_rt_promote_content" rows="4">${escapeHtml(entry.text)}</textarea></div>
+        </div>
+        <div class="bb-mem-form-footer"><button class="menu_button" id="bb_rt_promote_cancel">取消</button><button class="menu_button" id="bb_rt_promote_save"><i class="fa-solid fa-arrow-up"></i> 晋升并留档</button></div>
+    </div>`;
+    const close = () => formOverlay.remove();
+    formOverlay.querySelector('.bb-mem-form-close')?.addEventListener('click', close);
+    formOverlay.querySelector('#bb_rt_promote_cancel')?.addEventListener('click', close);
+    formOverlay.querySelector('#bb_rt_promote_save')?.addEventListener('click', async (event) => {
+        const pillar = formOverlay.querySelector('#bb_rt_promote_pillar')?.value || 'mem';
+        const name = formOverlay.querySelector('#bb_rt_promote_name')?.value.trim() || '';
+        const content = formOverlay.querySelector('#bb_rt_promote_content')?.value.trim() || entry.text;
+        if ((pillar === 'npc' || pillar === 'item') && !name) { showToast('晋升 NPC 或物品时必须填写名称', 'warning'); return; }
+        const fields = pillar === 'npc'
+            ? { name, role: content, indexCard: content }
+            : pillar === 'item'
+                ? { name, significance: content, status: 'held', location: entry.location || '' }
+                : pillar === 'milestone'
+                    ? { event: name || content, summary: content, storyTime: entry.storyTime || '', location: entry.location || '' }
+                    : { title: name || content.slice(0, 30), content, summary: content, type: 'fact', storyTime: entry.storyTime || '' };
+        const btn = event.currentTarget;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 晋升中...';
+        showToast('正在把实时细节晋升到长期库...', 'info');
+        try {
+            const { applySettleDecisions } = await import('./realtime-memory.js');
+            const result = await applySettleDecisions(chatId, [{ id: entry.id, action: 'promote', pillar, fields, entry, reason: '用户手动晋升' }], [], {
+                currentFloor: entry.lastSeenFloor,
+            });
+            if (!result.ok || result.failed.length) throw new Error(result.failed[0]?.error || result.summary || '晋升失败');
+            close();
+            showToast(result.summary || '实时记忆已晋升', 'success');
+            await renderRealtimePanel(managerOverlay, chatId);
+        } catch (error) { showToast(`晋升失败: ${error.message}`, 'error'); btn.disabled = false; btn.innerHTML = '晋升并留档'; }
+    });
+}
+
 // ═══ 存档标签页 ═══
 
 function isRemoteIndexOnlySlot(slot) {
@@ -2153,6 +2397,11 @@ async function renderDashboardPanel(overlay, chatId) {
                     <div style="font-size:1.4em;font-weight:bold;">${memories.length}</div>
                     <div style="font-size:0.8em;opacity:0.7;">记忆条目</div>
                     <div style="font-size:0.7em;opacity:0.5;">核心${stats.memories?.byTier?.core || 0} / 稳固${stats.memories?.byTier?.stable || 0}</div>
+                </div>
+                <div class="bb-dash-stat-card" style="background:var(--SmartThemeBlurTintColor, rgba(255,255,255,0.04));border-radius:8px;padding:10px;text-align:center;border-left:3px solid #4db6ac;">
+                    <div style="font-size:1.4em;font-weight:bold;">${stats.realtime?.total || 0}</div>
+                    <div style="font-size:0.8em;opacity:0.7;">实时记忆</div>
+                    <div style="font-size:0.7em;opacity:0.5;">生效${stats.realtime?.byState?.active || 0} / 待结算${stats.realtime?.byState?.pending_settle || 0}</div>
                 </div>
             </div>
 

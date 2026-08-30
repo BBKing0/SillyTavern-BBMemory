@@ -40,7 +40,7 @@ export function normalizeItemName(value) {
     return normalizeIdentityText(value).replace(LEADING_ITEM_QUANTIFIER, '');
 }
 
-function charBigrams(value) {
+export function charBigrams(value) {
     const text = normalizeIdentityText(value);
     if (!text) return [];
     if (text.length === 1) return [text];
@@ -49,10 +49,12 @@ function charBigrams(value) {
     return out;
 }
 
-export function textDiceSimilarity(a, b) {
-    const aa = charBigrams(a);
-    const bb = charBigrams(b);
-    if (!aa.length || !bb.length) return 0;
+/**
+ * Dice 系数，输入为已切好的二元组数组。
+ * 调用方可缓存 charBigrams 结果，避免在 O(n^2) 两两比较里重复归一化字符串。
+ */
+export function diceFromBigrams(aa, bb) {
+    if (!Array.isArray(aa) || !Array.isArray(bb) || !aa.length || !bb.length) return 0;
     const counts = new Map();
     for (const token of aa) counts.set(token, (counts.get(token) || 0) + 1);
     let overlap = 0;
@@ -63,6 +65,10 @@ export function textDiceSimilarity(a, b) {
         counts.set(token, count - 1);
     }
     return (2 * overlap) / (aa.length + bb.length);
+}
+
+export function textDiceSimilarity(a, b) {
+    return diceFromBigrams(charBigrams(a), charBigrams(b));
 }
 
 function longestCommonSubstringLength(a, b) {
@@ -108,7 +114,39 @@ function conflictingField(a, b) {
     return Boolean(left && right && left !== right);
 }
 
-function nameSimilarity(pillar, incoming, existing) {
+// ═══ v9.3.3 故事时间冲突的判定粒度 ═══
+
+export const TIME_CONFLICT_SCOPES = Object.freeze(['date', 'exact', 'off']);
+
+/** 时刻类表述：clock 时间、中文时段词、N点/N时/N分/N秒。 */
+const TIME_OF_DAY_PATTERN = /\d{1,2}\s*[:：]\s*\d{1,2}(?:\s*[:：]\s*\d{1,2})?|\d{1,2}\s*(?:点半|点钟|点|時|时|分|秒)|凌晨|清晨|早晨|早上|上午|正午|中午|午后|下午|傍晚|黄昏|晚上|夜里|深夜|半夜|午夜|夜晚|夜|晨|昼|傍午/g;
+
+/**
+ * 抽出故事时间里的“日期部分”签名，丢掉时刻表述。
+ *
+ * 「12:01」「12:05」都会归一化成空——同一天内的时刻差异不该被判为时间冲突。
+ * 「2026年4月3日夜」→「2026年4月3日」，「2026年4月4日」→ 与前者不同，仍算冲突。
+ */
+export function storyTimeDateSignature(value) {
+    const text = String(value ?? '').trim();
+    if (!text) return '';
+    return normalizeIdentityText(text.replace(TIME_OF_DAY_PATTERN, ' '));
+}
+
+/**
+ * 两个故事时间是否算冲突。
+ * @param {string} scope 'date' 按日期（默认）| 'exact' 按完整时间（旧行为）| 'off' 不判定
+ */
+export function conflictingStoryTime(a, b, scope = 'date') {
+    if (scope === 'off') return false;
+    if (scope === 'exact') return conflictingField(a, b);
+    const left = storyTimeDateSignature(a);
+    const right = storyTimeDateSignature(b);
+    // 任一侧只写了时刻（日期签名为空）时无法判断日期，不扣分
+    return Boolean(left && right && left !== right);
+}
+
+export function entityNameSimilarity(pillar, incoming, existing) {
     const incomingNames = entityNames(incoming, pillar);
     const existingNames = entityNames(existing, pillar);
     let best = 0;
@@ -135,7 +173,7 @@ function memoryText(entry = {}) {
     return [entry.title, entry.summary, entry.content, entry.verbatim].filter(Boolean).join('\n');
 }
 
-function memoryScore(incoming, existing) {
+function memoryScore(incoming, existing, config = {}) {
     const incomingBody = normalizeIdentityText(incoming.content || incoming.summary || incoming.title);
     const existingBody = normalizeIdentityText(existing.content || existing.summary || existing.title);
     if (incomingBody && incomingBody === existingBody) return { score: 1, reason: '内容指纹一致', conflict: false };
@@ -158,7 +196,8 @@ function memoryScore(incoming, existing) {
         && ((incoming.truthStatus === 'true' && existing.truthStatus === 'false')
             || (incoming.truthStatus === 'false' && existing.truthStatus === 'true'));
     const timeConflict = ['event', 'emotion'].includes(incoming.type || existing.type)
-        && conflictingField(incoming.storyTime, existing.storyTime);
+        && conflictingStoryTime(incoming.storyTime, existing.storyTime,
+            TIME_CONFLICT_SCOPES.includes(config.timeConflictScope) ? config.timeConflictScope : 'date');
     if (truthConflict) score -= 0.35;
     if (timeConflict) score -= 0.12;
     return {
@@ -169,7 +208,7 @@ function memoryScore(incoming, existing) {
 }
 
 function entityScore(pillar, incoming, existing) {
-    const name = nameSimilarity(pillar, incoming, existing);
+    const name = entityNameSimilarity(pillar, incoming, existing);
     if (pillar !== 'item' && name === 1) return { score: 1, reason: '名称或别名一致', conflict: false };
     const vector = cosineSimilarity(incoming.embedding, existing.embedding);
     let score = Math.max(name, vector * 0.94);
@@ -202,7 +241,7 @@ export function findBestDuplicate(pillar, incoming, existingEntries = [], config
     for (const existing of existingEntries) {
         if (!existing || existing.archived) continue;
         const detail = pillar === 'memory'
-            ? memoryScore(incoming, existing)
+            ? memoryScore(incoming, existing, config)
             : entityScore(pillar, incoming, existing);
         if (!best || detail.score > best.score) best = { entry: existing, ...detail };
     }

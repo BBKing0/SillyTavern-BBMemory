@@ -75,6 +75,8 @@ function dedupThresholds(pillar) {
             ? (settings.mergeSimilarityThreshold ?? 0.85)
             : (settings.entityMergeSimilarityThreshold ?? 0.90),
         reviewThreshold: settings.dedupReviewSimilarityThreshold ?? 0.74,
+        // v9.3.3 故事时间冲突的判定粒度（默认按日期，同一天内的时刻差异不再扣分）
+        timeConflictScope: settings.dedupTimeConflictScope ?? 'date',
     };
 }
 
@@ -149,7 +151,36 @@ function mergeEntityPatch(pillar, existing, incoming) {
     };
 }
 
-async function saveEntityWithDedup(chatId, pillar, incoming, sourceInfo = {}) {
+// ═══ v9.3.3 AI 整理师聚类种子收集 ═══
+
+/**
+ * 提取过程中被写入或更新的条目 id，按柱分组。
+ * 交给 memory-curator 的 recordCurationSeeds 累加计数器，达标后触发跨条目聚类整理。
+ */
+function makeSeedCollector() {
+    return { mem: [], npc: [], item: [], milestone: [], timeline: [] };
+}
+
+function collectSeed(collector, pillar, id) {
+    const list = collector?.[pillar];
+    if (!list || !id) return;
+    const key = String(id);
+    if (!list.includes(key)) list.push(key);
+}
+
+function mergeSeedCollectors(target, source) {
+    if (!target || !source) return target;
+    for (const pillar of Object.keys(target)) {
+        for (const id of (source[pillar] || [])) collectSeed(target, pillar, id);
+    }
+    return target;
+}
+
+/**
+ * v9.3.3 导出供 realtime-memory.js 的晋升流程复用。
+ * 实时记忆晋升到 NPC/物品柱时必须走这里，否则「卖爆米花的小孩」会和已有同名 NPC 撞成两条。
+ */
+export async function saveEntityWithDedup(chatId, pillar, incoming, sourceInfo = {}) {
     const settings = getSettings();
     const loader = pillar === 'npc' ? getNpcProfiles : getItems;
     const updater = pillar === 'npc' ? updateNpcProfile : updateItem;
@@ -775,7 +806,8 @@ function extractConfiguredTagBlocks(text, tags) {
     return parts.join('\n\n').trim();
 }
 
-function cleanAiMessage(text) {
+/** v9.3.3 导出供 realtime-memory.js 复用，保证两条提取路径的清洗规则一致。 */
+export function cleanAiMessage(text) {
     if (!text) return '';
     let cleaned = text;
     cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, '');
@@ -1093,6 +1125,92 @@ export async function onMessageReceived(_messageIndex, options = {}) {
             );
         }, delay);
     });
+}
+
+/**
+ * v9.3.3 与主提取并行抓取实时细节。
+ *
+ * 用 Promise.allSettled 隔离：抓取多一次 API 调用就多一个失败面，
+ * 而主提取的楼层标记状态绝不能被它污染——标记出错会导致重复提取或永久跳过。
+ * 所以这里只 resolve、不 reject，任何异常都在内部吞掉。
+ */
+async function runRealtimeExtraction(chatId, exchange) {
+    try {
+        const settings = getSettings();
+        if (!settings.realtimeEnabled || !settings.realtimeExtractEnabled) return null;
+        const { extractRealtimeDetails } = await import('./realtime-memory.js');
+        return await extractRealtimeDetails(chatId, exchange, { settings });
+    } catch (e) {
+        console.warn('[BB-Memory] 实时细节抓取异常（已隔离，不影响主提取）:', e);
+        return null;
+    }
+}
+
+/** 主提取拿到地点/时间后回填本层实时记忆的场景标识。同样全程静默降级。 */
+async function syncRealtimeSceneKey(chatId, floor, extractionResults) {
+    try {
+        const settings = getSettings();
+        if (!settings.realtimeEnabled) return;
+        const { pickSceneInfoFromExtraction, updateSceneKeyForFloor } = await import('./realtime-memory.js');
+        const sceneInfo = pickSceneInfoFromExtraction(extractionResults || {});
+        if (!sceneInfo.location && !sceneInfo.storyTime) return;
+        await updateSceneKeyForFloor(chatId, floor, sceneInfo);
+    } catch (e) {
+        if (getSettings().debugLogging) console.warn('[BB-Memory] 场景标识回填失败:', e);
+    }
+}
+
+/**
+ * v9.3.3 把 AI 整理排到 processingChain 尾部。
+ *
+ * 刻意不 await：
+ *  - 不能让当前提取的 Promise 等整理，MESSAGE_RECEIVED 的等待方会被拖住（v9.3.2 踩过）
+ *  - 但必须与提取串行，否则整理读到旧集合再写回，会覆盖掉下一轮新提取的条目
+ * 挂到 processingChain 上正好同时满足这两点。
+ */
+function scheduleCurationAfterExtraction(chatId, seeds) {
+    if (!chatId) return;
+    const run = processingChain.then(async () => {
+        try {
+            const { recordCurationSeeds, maybeRunScheduledCuration } = await import('./memory-curator.js');
+            const state = recordCurationSeeds(chatId, seeds);
+            if (!state.triggered) return;
+            if (getChatId() !== chatId) return;  // 期间切了聊天就不动手
+            await maybeRunScheduledCuration(chatId);
+        } catch (e) {
+            console.warn('[BB-Memory] AI 整理调度失败:', e);
+        }
+    });
+    processingChain = run.catch(() => {});
+}
+
+/**
+ * v9.3.3 把实时记忆结算排到 processingChain 尾部。
+ *
+ * 与整理同样的理由：不 await（不能拖住消息渲染的等待方），但必须与提取串行，
+ * 否则结算读到旧集合再写回，会覆盖掉刚抓进来的细节。
+ */
+function scheduleRealtimeSettlement(chatId, currentFloor) {
+    if (!chatId) return;
+    const run = processingChain.then(async () => {
+        try {
+            const settings = getSettings();
+            if (!settings.realtimeEnabled) return;
+            if (getChatId() !== chatId) return;
+            const { maybeSettleAfterExtraction } = await import('./realtime-memory.js');
+            const outcome = await maybeSettleAfterExtraction(chatId, currentFloor, { settings });
+            if (outcome.report?.applyResult?.promoted?.length) {
+                const summary = outcome.report.summary;
+                try {
+                    globalThis.bbMemoryRecordActivity?.('info', '实时记忆结算', summary);
+                    globalThis.bbShowToast?.(`场景结算：${summary}`, 'info');
+                } catch { /* 反馈失败不影响数据 */ }
+            }
+        } catch (e) {
+            console.warn('[BB-Memory] 实时记忆结算调度失败:', e);
+        }
+    });
+    processingChain = run.catch(() => {});
 }
 
 // ═══ 合并提取（默认）═══
@@ -1791,12 +1909,14 @@ async function saveExtractedLocations(chatId, locations, sourceInfo = {}) {
 }
 
 async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo, progressContext = {}) {
+    // v9.3.3 记录本次写入/更新的条目 id，作为 AI 整理师的聚类种子
+    const seeds = makeSeedCollector();
     try {
         reportProgress('ai', 0, 5, '正在调用 AI 提取记忆...', progressContext);
         const { isMetaDialogue, results } = await callMergedExtraction(chatId, userMessage, aiMessage);
         if (isMetaDialogue || !results) {
             reportProgress('done', 5, 5, '提取完成（纯元对话已跳过）', progressContext);
-            return { isMetaDialogue: true, total: 0 };
+            return { isMetaDialogue: true, total: 0, seeds };
         }
         let total = 0;
         const settings = getSettings();
@@ -1806,22 +1926,30 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo, pr
         for (const npc of results.npc) {
             const embedding = hasEmbedding ? await embedMemoryEntry(npc) : null;
             const saved = await saveEntityWithDedup(chatId, 'npc', { ...npc, embedding }, sourceInfo || {});
-            if (saved.action !== 'skipped') total++;
+            if (saved.action !== 'skipped') {
+                total++;
+                collectSeed(seeds, 'npc', saved.entry?.id);
+            }
         }
         for (const item of results.items) {
             const embedding = hasEmbedding ? await embedMemoryEntry(item) : null;
             const saved = await saveEntityWithDedup(chatId, 'item', { ...item, embedding }, sourceInfo || {});
-            if (saved.action !== 'skipped') total++;
+            if (saved.action !== 'skipped') {
+                total++;
+                collectSeed(seeds, 'item', saved.entry?.id);
+            }
         }
         for (const milestone of results.milestones || []) {
             const embedding = hasEmbedding ? await embedMemoryEntry(milestone) : null;
-            await upsertMilestone(chatId, { ...milestone, embedding, ...(sourceInfo || {}) });
+            const savedMilestone = await upsertMilestone(chatId, { ...milestone, embedding, ...(sourceInfo || {}) });
+            collectSeed(seeds, 'milestone', savedMilestone?.id);
             total++;
         }
         // v8.7.0 地点提取
         total += await saveExtractedLocations(chatId, results.locations, sourceInfo);
-        const timelineSave = { timeline: 0, threads: 0, merged: 0, skipped: 0 };
+        const timelineSave = { timeline: 0, threads: 0, merged: 0, skipped: 0, ids: [] };
         await saveInitialThreads(chatId, results.timeline || results.threads || [], sourceInfo, timelineSave);
+        for (const id of timelineSave.ids) collectSeed(seeds, 'timeline', id);
         total += timelineSave.timeline + timelineSave.merged;
         const maxPerExchange = settings.maxMemoriesPerExchange ?? 3;
         const limited = results.memories.slice(0, maxPerExchange);
@@ -1838,6 +1966,8 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo, pr
             if (decision && dedupAction === 'merge') {
                 const merged = { ...mergeMemoryFields(decision.entry, mem), embedding: embedding || decision.entry.embedding, ...(sourceInfo || {}) };
                 await updateMemory(chatId, decision.entry.id, merged);
+                // 被去重合并的条目内容变了，同样要作为整理种子重新参与聚类
+                collectSeed(seeds, 'mem', decision.entry.id);
                 const idx = activeMemories.findIndex(m => m.id === decision.entry.id);
                 if (idx >= 0) activeMemories[idx] = { ...activeMemories[idx], ...merged };
                 const allIdx = existingMemories.findIndex(m => m.id === decision.entry.id);
@@ -1850,6 +1980,7 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo, pr
                 mem.importance = Math.max(0.3, (mem.importance || 0.5) - 0.15);
             }
             const saved = await addMemory(chatId, { ...mem, embedding, memoryTier: 'stable', ...(sourceInfo || {}) });
+            collectSeed(seeds, 'mem', saved?.id);
             existingMemories.push(saved);
             if (embedding) activeMemories.push(saved);
             total++;
@@ -1857,14 +1988,20 @@ async function extractMergedStage(chatId, userMessage, aiMessage, sourceInfo, pr
         reportProgress('summarize', 4, 5, '正在汇总结果...', progressContext);
         console.log('[BB-Memory] 合并提取: NPC' + results.npc.length + '/物品' + results.items.length + '/里程碑' + (results.milestones || []).length + '/时间线' + (results.timeline || []).length + '/记忆' + limited.length + ' (保存' + total + '条)');
         reportProgress('done', 5, 5, '提取完成', progressContext);
-        return { total };
+        // v9.3.3 交出地点/时间来源，供实时记忆回填 sceneKey
+        return {
+            total,
+            seeds,
+            sceneResults: { locations: results.locations, milestones: results.milestones, memories: limited },
+        };
     } catch (e) {
         console.warn('[BB-Memory] 合并提取失败:', e.message);
         reportProgress('failed', 5, 5, '提取失败: ' + (e.message || '未知错误'), progressContext);
         if (typeof globalThis.bbShowErrorPopup === 'function') {
             globalThis.bbShowErrorPopup('AI 提取失败', e.message || '未知错误', '端点: ' + (getSettings().autoGenMode === 'custom' ? (getSettings().autoGenEndpoint || '未配置') : '主 API'));
         }
-        return { failed: true, error: e.message || '未知错误', total: 0 };
+        // 失败也把已成功写入的部分交出去，否则这些条目永远不会被整理
+        return { failed: true, error: e.message || '未知错误', total: 0, seeds };
     }
 }
 
@@ -1901,6 +2038,7 @@ async function processLatestExchange(chatId) {
     // 记录成功处理的 exchange（用于后续标记）
     const succeeded = [];
     const failed = [];
+    const batchSeeds = makeSeedCollector();  // v9.3.3 本批写入的条目，供 AI 整理师聚类
 
     try {
         if (confirmMode === 'active') {
@@ -1909,7 +2047,14 @@ async function processLatestExchange(chatId) {
                 if (await isExchangeProcessed(chatId, ex.hash)) continue;
                 try {
                     updateExtractionProgress(taskId, { floor: ex.aiIndex, phase: 'ai', current: 0, text: '正在调用 AI 提取记忆...' });
-                    const { isMetaDialogue, results } = await callMergedExtraction(chatId, ex.userMessage, ex.aiMessage);
+                    // v9.3.3 实时细节抓取与主提取并行；审核模式下细节仍直接入第五柱（它不进审核队列）
+                    const [mergedSettled] = await Promise.allSettled([
+                        callMergedExtraction(chatId, ex.userMessage, ex.aiMessage),
+                        runRealtimeExtraction(chatId, ex),
+                    ]);
+                    if (mergedSettled.status === 'rejected') throw mergedSettled.reason;
+                    const { isMetaDialogue, results } = mergedSettled.value;
+                    if (results) await syncRealtimeSceneKey(chatId, ex.aiIndex, results);
                     if (isMetaDialogue || !results) {
                         console.log('[BB-Memory] Active模式检测到纯元对话，跳过');
                         await markExchangeMetaSkipped(ex.userIndex, ex.aiIndex, ex.hash, 'auto', ex.extraIndices);
@@ -1950,12 +2095,20 @@ async function processLatestExchange(chatId) {
                     sourceMessageHash: cyrb53Hash(ex.aiMessage || ''),
                 };
                 try {
-                    const result = await extractMergedStage(chatId, ex.userMessage, ex.aiMessage, sourceInfo, {
-                        taskId,
-                        mode: 'auto',
-                        floors: taskFloors,
-                        floor: ex.aiIndex,
-                    });
+                    // v9.3.3 实时细节抓取与主提取并行发起；allSettled 保证抓取失败不影响主提取
+                    const [mainSettled] = await Promise.allSettled([
+                        extractMergedStage(chatId, ex.userMessage, ex.aiMessage, sourceInfo, {
+                            taskId,
+                            mode: 'auto',
+                            floors: taskFloors,
+                            floor: ex.aiIndex,
+                        }),
+                        runRealtimeExtraction(chatId, ex),
+                    ]);
+                    if (mainSettled.status === 'rejected') throw mainSettled.reason;
+                    const result = mainSettled.value;
+                    if (result?.seeds) mergeSeedCollectors(batchSeeds, result.seeds);
+                    if (result?.sceneResults) await syncRealtimeSceneKey(chatId, ex.aiIndex, result.sceneResults);
                     if (result && result.isMetaDialogue) {
                         console.log('[BB-Memory] 并行提取：检测到纯元对话，跳过');
                         await markExchangeMetaSkipped(ex.userIndex, ex.aiIndex, ex.hash, 'auto', ex.extraIndices);
@@ -2018,6 +2171,13 @@ async function processLatestExchange(chatId) {
             ? `自动提取完成：${succeeded.length} 个 exchange`
             : '自动提取完成（没有需要保存的新条目）');
     }
+
+    // v9.3.3 AI 整理师：累加计数器，达标则排队整理
+    scheduleCurationAfterExtraction(chatId, batchSeeds);
+    // v9.3.3 实时记忆：按当前楼层推进结算（场景切换 / TTL / 容量）
+    scheduleRealtimeSettlement(chatId, succeeded.length
+        ? Math.max(...succeeded.map(ex => Number(ex.aiIndex) || 0))
+        : (SillyTavern.getContext().chat?.length ?? 0) - 1);
 
     // v6.7.0: 时间线自动更新检测（按成功处理的 exchange 数计数）
     if (getSettings().timelineSummaryEnabled) {
@@ -2101,13 +2261,15 @@ async function saveInitialThreads(chatId, threads, sourceInfo, result) {
             data.summary = mergeTextField(old.summary, thread.summary);
             data.entries = Array.isArray(old.entries) && old.entries.length ? old.entries : (Array.isArray(thread.entries) ? thread.entries : []);
             if (!data.embedding && old.embedding) data.embedding = old.embedding;
-            await upsertTimeline(chatId, data);
+            const savedThread = await upsertTimeline(chatId, data);
             result.merged++;
+            if (Array.isArray(result.ids) && savedThread?.id) result.ids.push(savedThread.id);
         } else {
             const saved = await upsertTimeline(chatId, data);
             byName.set(key, saved);
             result.timeline = (result.timeline || 0) + 1;
             if ('threads' in result) result.threads++;
+            if (Array.isArray(result.ids) && saved?.id) result.ids.push(saved.id);
         }
     }
 }
@@ -2425,6 +2587,9 @@ export async function reextractFloor(chatId, floor, options = {}) {
         }
 
         if (lastExtractFailedFloor === floor) lastExtractFailedFloor = null;
+        // v9.3.3 重新提取写入的条目同样进整理计数，并回填实时记忆的场景标识
+        if (result?.seeds) scheduleCurationAfterExtraction(chatId, result.seeds);
+        if (result?.sceneResults) await syncRealtimeSceneKey(chatId, floor, result.sceneResults);
         completeExtractionProgress(taskId, result, result?.pendingReview
             ? `重新提取完成：${result.pendingReview} 条待审核`
             : `第 ${floor} 层重新提取完成`);
@@ -2552,7 +2717,8 @@ async function saveMemoryCandidate(chatId, mem, sourceInfo, activeMemories) {
     if (decision && dedupAction === 'merge') {
         const updates = mergeMemoryFields(decision.entry, mem);
         await updateMemory(chatId, decision.entry.id, { ...updates, embedding: embedding || decision.entry.embedding, ...sourceInfo });
-        return { saved: 1, merged: 1 };
+        // v9.3.3 返回受影响条目，供整理师收集聚类种子
+        return { saved: 1, merged: 1, entry: decision.entry };
     }
     if (decision && dedupAction === 'skip') {
         return { saved: 0, merged: 0, skipped: 1 };
@@ -2564,11 +2730,12 @@ async function saveMemoryCandidate(chatId, mem, sourceInfo, activeMemories) {
 
     const saved = await addMemory(chatId, { ...mem, embedding, memoryTier: mem.memoryTier || 'stable', source: mem.source || 'auto', ...sourceInfo });
     if (embedding && vectorPool) vectorPool.push(saved);
-    return { saved: 1, merged: 0 };
+    return { saved: 1, merged: 0, entry: saved };
 }
 
 export async function saveExtractedCandidates(chatId, candidates, onProgress) {
-    const result = { npc: 0, items: 0, milestones: 0, timeline: 0, threads: 0, locations: 0, memories: 0, merged: 0, skipped: 0, total: 0 };
+    const result = { npc: 0, items: 0, milestones: 0, timeline: 0, threads: 0, locations: 0, memories: 0, merged: 0, skipped: 0, total: 0, ids: [] };
+    const seeds = makeSeedCollector();  // v9.3.3 审核保存的条目同样进整理计数
     const selected = (Array.isArray(candidates) ? candidates : []).filter(shouldSaveCandidate);
     const settings = getSettings();
     const hasEmbedding = settings.embeddingEnabled && settings.embeddingEndpoint;
@@ -2593,7 +2760,10 @@ export async function saveExtractedCandidates(chatId, candidates, onProgress) {
             if (saved.action === 'merged') result.merged++;
             else if (saved.action === 'skipped') result.skipped++;
             else result.npc++;
-            if (saved.action !== 'skipped') result.total++;
+            if (saved.action !== 'skipped') {
+                result.total++;
+                collectSeed(seeds, 'npc', saved.entry?.id);
+            }
         } else if (pillar === 'item') {
             if (!payload.name) { result.skipped++; reportCandidateProgress(candidate); continue; }
             const embedding = hasEmbedding ? await embedMemoryEntry(payload) : null;
@@ -2601,11 +2771,15 @@ export async function saveExtractedCandidates(chatId, candidates, onProgress) {
             if (saved.action === 'merged') result.merged++;
             else if (saved.action === 'skipped') result.skipped++;
             else result.items++;
-            if (saved.action !== 'skipped') result.total++;
+            if (saved.action !== 'skipped') {
+                result.total++;
+                collectSeed(seeds, 'item', saved.entry?.id);
+            }
         } else if (pillar === 'milestone') {
             if (!payload.event && !payload.summary) { result.skipped++; reportCandidateProgress(candidate); continue; }
             const embedding = hasEmbedding ? await embedMemoryEntry(payload) : null;
-            await upsertMilestone(chatId, { ...payload, embedding, ...sourceInfo });
+            const savedMilestone = await upsertMilestone(chatId, { ...payload, embedding, ...sourceInfo });
+            collectSeed(seeds, 'milestone', savedMilestone?.id);
             result.milestones++;
             result.total++;
         } else if (pillar === 'location') {
@@ -2617,11 +2791,14 @@ export async function saveExtractedCandidates(chatId, candidates, onProgress) {
             if (!payload.name) { result.skipped++; reportCandidateProgress(candidate); continue; }
             const beforeTimeline = result.timeline;
             const beforeMerged = result.merged;
+            const beforeIds = result.ids.length;
             await saveInitialThreads(chatId, [payload], sourceInfo, result);
+            for (const id of result.ids.slice(beforeIds)) collectSeed(seeds, 'timeline', id);
             result.total += (result.timeline - beforeTimeline) + (result.merged - beforeMerged);
         } else {
             if (!payload.content && !payload.summary) { result.skipped++; reportCandidateProgress(candidate); continue; }
             const saved = await saveMemoryCandidate(chatId, payload, sourceInfo, activeMemories);
+            collectSeed(seeds, 'mem', saved.entry?.id);
             result.memories += saved.saved;
             result.merged += saved.merged;
             result.skipped += saved.skipped || 0;
@@ -2629,6 +2806,15 @@ export async function saveExtractedCandidates(chatId, candidates, onProgress) {
         }
 
         reportCandidateProgress(candidate);
+    }
+
+    // v9.3.3 审核保存路径同样累加整理计数器；这里不排 processingChain，
+    // 因为是用户点击触发、不在提取链上，直接后台跑一次判定即可
+    if (result.total > 0) {
+        import('./memory-curator.js').then(async ({ recordCurationSeeds, maybeRunScheduledCuration }) => {
+            const state = recordCurationSeeds(chatId, seeds);
+            if (state.triggered && getChatId() === chatId) await maybeRunScheduledCuration(chatId);
+        }).catch(e => console.warn('[BB-Memory] AI 整理调度失败:', e));
     }
 
     return result;

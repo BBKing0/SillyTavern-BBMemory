@@ -1,13 +1,13 @@
 /**
- * memory-assistant.js —— BB-Memory v5.0 记忆管家面板
+ * memory-assistant.js —— BB-Memory v9.3.3 记忆管家面板
  *
- * 四柱浏览：NPC档案 / 物品栏 / 里程碑 / 记忆条目 + 仪表盘。
+ * 五柱浏览：NPC档案 / 物品栏 / 里程碑 / 记忆条目 / 实时记忆 + 仪表盘。
  */
 
-import { MEMORY_TYPES } from './memory-types.js';
+import { MEMORY_TYPES, REALTIME_KINDS, REALTIME_SETTLE_STATES } from './memory-types.js';
 import { NPC_TIERS, ITEM_TIERS } from './entity-tiers.js';
 import {
-    getNpcProfiles, getItems, getMilestones, getMemories,
+    getNpcProfiles, getItems, getMilestones, getMemories, getRealtimeMemories,
     removeNpcProfile, removeItem, removeMilestone, removeMemory,
     updateNpcProfile, updateItem, updateMilestone, updateMemory,
     addMilestone, getMemoryStats, getSettings,
@@ -29,13 +29,13 @@ export async function openAssistant(chatId, initialTab = 'dashboard') {
     currentChatId = chatId;
     currentTab = initialTab;
 
-    const [npc, items, timeline, memories] = await Promise.all([
-        getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId),
+    const [npc, items, timeline, memories, realtime] = await Promise.all([
+        getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId), getRealtimeMemories(chatId),
     ]);
 
     currentWindow = document.createElement('div');
     currentWindow.className = 'bb-assistant-window';
-    currentWindow.innerHTML = buildAssistantHTML(npc, items, timeline, memories);
+    currentWindow.innerHTML = buildAssistantHTML(npc, items, timeline, memories, realtime);
     document.body.appendChild(currentWindow);
 
     initDrag(currentWindow);
@@ -51,7 +51,7 @@ export function closeAssistant() {
 //  主 HTML
 // ═══════════════════════════════════════════════════════════
 
-function buildAssistantHTML(npc, items, timeline, memories) {
+function buildAssistantHTML(npc, items, timeline, memories, realtime) {
     return `<div class="bb-assistant-header" id="bb_assistant_drag_handle">
         <span>记忆管家</span>
         <div class="bb-assistant-header-btns">
@@ -65,10 +65,11 @@ function buildAssistantHTML(npc, items, timeline, memories) {
         <button class="bb-assistant-tab" data-tab="items">物品栏 <span class="bb-tab-count">${items.length}</span></button>
         <button class="bb-assistant-tab" data-tab="timeline">里程碑 <span class="bb-tab-count">${timeline.length}</span></button>
         <button class="bb-assistant-tab" data-tab="memories">记忆条目 <span class="bb-tab-count">${memories.length}</span></button>
+        <button class="bb-assistant-tab" data-tab="realtime">实时 <span class="bb-tab-count">${realtime.length}</span></button>
     </div>
     <div class="bb-assistant-panels">
         <div class="bb-assistant-panel" data-panel="dashboard" style="display:block">
-            ${buildDashboardHTML(npc, items, timeline, memories)}
+            ${buildDashboardHTML(npc, items, timeline, memories, realtime)}
         </div>
         <div class="bb-assistant-panel" data-panel="npc" style="display:none">
             ${buildNpcBrowseHTML(npc)}
@@ -82,6 +83,9 @@ function buildAssistantHTML(npc, items, timeline, memories) {
         <div class="bb-assistant-panel" data-panel="memories" style="display:none">
             ${buildMemoriesBrowseHTML(memories)}
         </div>
+        <div class="bb-assistant-panel" data-panel="realtime" style="display:none">
+            ${buildRealtimeBrowseHTML(realtime)}
+        </div>
     </div>`;
 }
 
@@ -89,7 +93,7 @@ function buildAssistantHTML(npc, items, timeline, memories) {
 //  仪表盘
 // ═══════════════════════════════════════════════════════════
 
-function buildDashboardHTML(npc, items, timeline, memories) {
+function buildDashboardHTML(npc, items, timeline, memories, realtime = []) {
     const byTier = (arr) => {
         const c = { transient: 0, stable: 0, core: 0, eternal: 0 };
         for (const e of arr) { const t = e.memoryTier || 'transient'; if (c[t] !== undefined) c[t]++; }
@@ -129,6 +133,10 @@ function buildDashboardHTML(npc, items, timeline, memories) {
             <div class="bb-dash-card memories">
                 <div class="bb-dash-num">${memories.length}</div><div>记忆条目</div>
                 <div class="bb-dash-detail">核心:${memTiers.core} 稳定:${memTiers.stable} 瞬时:${memTiers.transient}</div>
+            </div>
+            <div class="bb-dash-card realtime">
+                <div class="bb-dash-num">${realtime.length}</div><div>实时记忆</div>
+                <div class="bb-dash-detail">生效:${realtime.filter(e => e.settleState === 'active').length} 待结算:${realtime.filter(e => e.settleState === 'pending_settle').length}</div>
             </div>
         </div>
         <div class="bb-dash-recent">
@@ -333,6 +341,42 @@ function buildMemoryItemHTML(m) {
     </div>`;
 }
 
+function buildRealtimeBrowseHTML(entries) {
+    const sorted = (Array.isArray(entries) ? entries : []).slice().sort((a, b) =>
+        Number(b.lastSeenFloor ?? b.createdFloor ?? -1) - Number(a.lastSeenFloor ?? a.createdFloor ?? -1));
+    return `<div class="bb-browse-controls">
+        <div class="bb-browse-filters">
+            ${Object.values(REALTIME_SETTLE_STATES).map(state => `<button class="bb-browse-filter-btn" data-filter="${state.id}">${state.label}</button>`).join('')}
+            <button class="bb-browse-filter-btn active" data-filter="all">全部</button>
+        </div>
+        <input type="text" class="bb-browse-search" placeholder="搜索实时细节..." id="bb_realtime_search">
+    </div>
+    <div class="bb-realtime-help">实时记忆无条件注入当前场景；已结算条目留档但不再注入。</div>
+    <div class="bb-browse-list" id="bb_realtime_list">
+        ${sorted.length ? sorted.map(buildRealtimeBrowseItemHTML).join('') : '<div class="bb-mem-empty">暂无实时场景细节</div>'}
+    </div>`;
+}
+
+function buildRealtimeBrowseItemHTML(entry) {
+    const kind = REALTIME_KINDS[entry.kind] || REALTIME_KINDS.detail;
+    const state = REALTIME_SETTLE_STATES[entry.settleState] || REALTIME_SETTLE_STATES.active;
+    const first = Number(entry.createdFloor);
+    const last = Number(entry.lastSeenFloor);
+    const floor = Number.isFinite(last) ? last : (Number.isFinite(first) ? first : '?');
+    return `<div class="bb-browse-item realtime-item" data-id="${escapeHtml(entry.id)}" data-state="${escapeHtml(entry.settleState || 'active')}">
+        <div class="bb-browse-item-header">
+            <span class="bb-type-badge" style="color:${kind.color}"><i class="${kind.icon}"></i> ${escapeHtml(kind.label)}</span>
+            <span class="bb-status-badge" style="color:${state.color}">${escapeHtml(state.label)}</span>
+            ${entry.promotedTo ? '<span class="bb-mtier-badge">已晋升</span>' : ''}
+            <span class="bb-time-badge">第 ${floor} 层</span>
+        </div>
+        <div class="bb-browse-item-body">
+            <div>${escapeHtml(entry.text)}</div>
+            ${entry.sceneKey ? `<div style="opacity:.65"><i class="fa-solid fa-location-dot"></i> ${escapeHtml(entry.sceneKey)}</div>` : ''}
+        </div>
+    </div>`;
+}
+
 // ═══════════════════════════════════════════════════════════
 //  事件绑定
 // ═══════════════════════════════════════════════════════════
@@ -340,21 +384,23 @@ function buildMemoryItemHTML(m) {
 function bindAssistantEvents(win, chatId) {
     win.querySelector('#bb_assistant_close')?.addEventListener('click', closeAssistant);
     win.querySelector('#bb_assistant_refresh')?.addEventListener('click', async () => {
-        const [npc, items, timeline, memories] = await Promise.all([
-            getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId),
+        const [npc, items, timeline, memories, realtime] = await Promise.all([
+            getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId), getRealtimeMemories(chatId),
         ]);
         const panels = win.querySelector('.bb-assistant-panels');
-        panels.querySelector('[data-panel="dashboard"]').innerHTML = buildDashboardHTML(npc, items, timeline, memories);
+        panels.querySelector('[data-panel="dashboard"]').innerHTML = buildDashboardHTML(npc, items, timeline, memories, realtime);
         panels.querySelector('[data-panel="npc"]').innerHTML = buildNpcBrowseHTML(npc);
         panels.querySelector('[data-panel="items"]').innerHTML = buildItemsBrowseHTML(items);
         panels.querySelector('[data-panel="timeline"]').innerHTML = buildTimelineBrowseHTML(timeline);
         panels.querySelector('[data-panel="memories"]').innerHTML = buildMemoriesBrowseHTML(memories);
+        panels.querySelector('[data-panel="realtime"]').innerHTML = buildRealtimeBrowseHTML(realtime);
         // 更新 tab 计数
         const tabs = win.querySelectorAll('.bb-assistant-tab .bb-tab-count');
         if (tabs[0]) tabs[0].textContent = npc.length;
         if (tabs[1]) tabs[1].textContent = items.length;
         if (tabs[2]) tabs[2].textContent = timeline.length;
         if (tabs[3]) tabs[3].textContent = memories.length;
+        if (tabs[4]) tabs[4].textContent = realtime.length;
         bindBrowseEvents(win, chatId);
         switchTab(win, currentTab);
     });
@@ -382,14 +428,15 @@ function bindBrowseEvents(win, chatId) {
             const items = panel.querySelectorAll('.bb-browse-item');
             items.forEach(item => {
                 if (filter === 'all') { item.style.display = ''; return; }
-                const match = item.dataset.tier === filter || item.dataset.status === filter || item.dataset.type === filter;
+                const match = item.dataset.tier === filter || item.dataset.status === filter
+                    || item.dataset.state === filter || item.dataset.type === filter;
                 item.style.display = match ? '' : 'none';
             });
         });
     });
 
     // Search inputs
-    ['bb_npc_search', 'bb_item_search', 'bb_mem_search'].forEach(id => {
+    ['bb_npc_search', 'bb_item_search', 'bb_mem_search', 'bb_realtime_search'].forEach(id => {
         const input = win.querySelector('#' + id);
         if (!input) return;
         input.addEventListener('input', () => {

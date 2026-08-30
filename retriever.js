@@ -5,7 +5,7 @@
  * 简化为 5 维评分 + 实体展开。
  */
 
-import { MEMORY_TYPES, TRUTH_STATUS } from './memory-types.js';
+import { MEMORY_TYPES, TRUTH_STATUS, REALTIME_KINDS } from './memory-types.js';
 import {
     tierScoreMultiplier,
     buildNpcIndexCard,
@@ -52,6 +52,8 @@ const DEFAULT_INJECTION_SECTION_HEADERS = Object.freeze({
     milestone: '【故事里程碑】',
     memory: '【相关记忆】',
     map: '【世界地图 —— 空间关系{{worldRefSuffix}}】',
+    // v9.3.3 第五柱：不参与检索、无条件注入
+    realtime: '【当前场景细节】（最近场景的临时细节，用于保持连续性；不是长期设定）',
 });
 
 const TOKEN_BUDGET_MODES = Object.freeze({
@@ -68,6 +70,9 @@ const SECTION_BUDGET_RATIOS = Object.freeze({
     memory: 0.70,
     map: 0.18,
     clue: 0.15,
+    // v9.3.3 实时记忆的实际约束是它自己的双硬上限（条数 + token），
+    // 这个比例只在 strict_total 模式下才会被用到。
+    realtime: 0.20,
 });
 
 const SECTION_LABELS = Object.freeze({
@@ -79,6 +84,7 @@ const SECTION_LABELS = Object.freeze({
     memory: '记忆',
     map: '地图',
     clue: '线索板',
+    realtime: '实时',
 });
 
 function getInjectionHeader(settings, key, replacements = {}) {
@@ -141,6 +147,14 @@ export function getRetrieverPromptTemplates() {
             category: '地图注入',
             description: '长期记忆注入中世界地图/空间关系区块的标题，{{worldRefSuffix}} 会带入全局现实参考。',
             defaultValue: DEFAULT_INJECTION_SECTION_HEADERS.map,
+        },
+        {
+            key: 'injection.realtimeHeader',
+            title: '实时记忆注入标题',
+            category: '实时记忆',
+            description: '第五柱「当前场景细节」区块的标题。这一柱不参与检索、无条件注入，'
+                + '标题里最好写明它是临时细节而非长期设定，避免模型把它当作永久设定。',
+            defaultValue: DEFAULT_INJECTION_SECTION_HEADERS.realtime,
         },
     ];
 }
@@ -1006,6 +1020,118 @@ function allocateBudgetSections(sections, settings, tokenBudget) {
     return { renderedSections, selectedItems, tokenEstimate, truncated, budgetMode: mode };
 }
 
+// ═══════════════════════════════════════════════════════════
+//  v9.3.3 实时记忆注入（第五柱）
+// ═══════════════════════════════════════════════════════════
+
+function clampIntSetting(value, min, max, fallback) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
+/**
+ * 按 REALTIME_KINDS 的声明顺序分组，每类一行；组内按楼层从旧到新，读起来符合时间顺序。
+ *
+ * 楼层标注按「楼层段」合并而不是逐条附加：一条「（第42层）」按 estimateTokens 要 4 token，
+ * 逐条标注 15 条就吃掉 60 token（默认 300 上限的 20%）。同层的条目共用一个标注后，
+ * 标注开销降到每个楼层段一次。
+ */
+function formatRealtimeGroups(entries) {
+    const byKind = new Map();
+    for (const entry of entries) {
+        const kind = REALTIME_KINDS[entry.kind] ? entry.kind : 'detail';
+        if (!byKind.has(kind)) byKind.set(kind, []);
+        byKind.get(kind).push(entry);
+    }
+    const lines = [];
+    for (const kind of Object.keys(REALTIME_KINDS)) {
+        const group = byKind.get(kind);
+        if (!group?.length) continue;
+        const ordered = group.slice().sort((a, b) =>
+            (Number(a.lastSeenFloor ?? -1) - Number(b.lastSeenFloor ?? -1))
+            || (Number(a.createdAt || 0) - Number(b.createdAt || 0)));
+
+        const runs = [];
+        for (const entry of ordered) {
+            const text = String(entry.text || '').trim();
+            if (!text) continue;
+            const floorNum = Number(entry.lastSeenFloor);
+            const floor = Number.isFinite(floorNum) && floorNum >= 0 ? floorNum : null;
+            const last = runs[runs.length - 1];
+            if (last && last.floor === floor) last.texts.push(text);
+            else runs.push({ floor, texts: [text] });
+        }
+        if (!runs.length) continue;
+
+        const body = runs
+            .map(run => run.floor === null
+                ? run.texts.join('，')
+                : `${run.texts.join('，')}（第${run.floor}层）`)
+            .join('；');
+        lines.push({
+            kind,
+            text: `· ${REALTIME_KINDS[kind].label}：${body}`,
+            ids: ordered.map(entry => entry.id),
+        });
+    }
+    return lines;
+}
+
+/**
+ * 挑出要注入的实时记忆并渲染成按类分组的行。
+ *
+ * 关键约束：**自带条数 + token 双硬上限，不依赖全局 token 预算**。
+ * 因为注入项会标 resident=true，在默认的 resident_unlimited 模式下会完全绕过预算
+ * （retriever 的 unlimited 判定），漏掉这层上限会让长会话的注入无声膨胀。
+ *
+ * 过滤规则：已结算（settled）或已晋升（promotedTo）的不注入——前者已退场，
+ * 后者内容已进长期库，再注入就是重复。待结算（pending_settle）仍注入，
+ * 这样结算失败时细节不会凭空消失。
+ */
+export function getRealtimeForInjection(entries, settings) {
+    const activeSettings = settings || getSettings();
+    const empty = { lines: [], totalCount: 0, injectedCount: 0, tokenEstimate: 0, truncated: false, enabled: false };
+    if (!activeSettings.realtimeEnabled) return empty;
+
+    const pool = (Array.isArray(entries) ? entries : []).filter(entry =>
+        entry && String(entry.text || '').trim()
+        && entry.settleState !== 'settled'
+        && !entry.promotedTo);
+    if (!pool.length) return { ...empty, enabled: true };
+
+    // 新到旧：截断时先丢最旧的
+    const sorted = pool.slice().sort((a, b) =>
+        (Number(b.lastSeenFloor ?? -1) - Number(a.lastSeenFloor ?? -1))
+        || (Number(b.createdAt || 0) - Number(a.createdAt || 0)));
+
+    const maxCount = clampIntSetting(activeSettings.realtimeInjectionMax, 0, 200, 15);
+    const tokenCap = clampIntSetting(activeSettings.realtimeInjectionTokenCap, 0, 8000, 300);
+
+    const chosen = [];
+    let lines = [];
+    let tokenEstimate = 0;
+    for (const entry of sorted) {
+        if (maxCount > 0 && chosen.length >= maxCount) break;
+        const nextLines = formatRealtimeGroups([...chosen, entry]);
+        const nextTokens = nextLines.reduce((sum, line) => sum + estimateTokens(line.text), 0);
+        // 首条即超上限时仍然放行：宁可略微超一条的量，也不要让整个分区变空
+        if (tokenCap > 0 && nextTokens > tokenCap && chosen.length) break;
+        chosen.push(entry);
+        lines = nextLines;
+        tokenEstimate = nextTokens;
+    }
+
+    return {
+        lines,
+        totalCount: pool.length,
+        injectedCount: chosen.length,
+        tokenEstimate,
+        truncated: chosen.length < pool.length,
+        enabled: true,
+    };
+}
+
 function buildInjectionStats(selectedItems) {
     const stats = {
         npcCount: 0,
@@ -1015,6 +1141,8 @@ function buildInjectionStats(selectedItems) {
         memoryCount: 0,
         threadCount: 0,
         mapCount: 0,
+        realtimeCount: 0,
+        realtimeKinds: [],
         npcIds: [],
         itemIds: [],
         milestoneIds: [],
@@ -1031,6 +1159,7 @@ function buildInjectionStats(selectedItems) {
         timeline: new Set(),
         thread: new Set(),
         map: new Set(),
+        realtime: new Set(),
     };
 
     const addUnique = (collection, id, listKey, countKey) => {
@@ -1050,6 +1179,8 @@ function buildInjectionStats(selectedItems) {
         else if (item.collection === 'mem') addUnique('mem', item.id, 'memoryIds', 'memoryCount');
         else if (item.collection === 'thread') addUnique('thread', item.id, 'threadIds', 'threadCount');
         else if (item.collection === 'map') addUnique('map', item.id, 'mapLocationIds', 'mapCount');
+        // v9.3.3 实时记忆按分类计数（一个注入项 = 一个 kind 分组）
+        else if (item.collection === 'realtime') addUnique('realtime', item.id, 'realtimeKinds', 'realtimeCount');
     }
     stats.threadIds = stats.timelineIds.length ? [...stats.timelineIds] : stats.threadIds;
     stats.threadCount = stats.timelineCount || stats.threadCount;
@@ -1068,7 +1199,7 @@ function buildInjectionStats(selectedItems) {
  * @param {object} params.settings
  * @returns {{ text: string, tokenEstimate: number, stats: object }}
  */
-export async function buildMemoryInjectionPrompt({ npcProfiles, items, milestones, timeline, threadSummary, relevantResults, settings, chatLength = 0, clueBoard = null, mapData = null, queryText = '', queryEmbedding = null }) {
+export async function buildMemoryInjectionPrompt({ npcProfiles, items, milestones, timeline, threadSummary, relevantResults, settings, chatLength = 0, clueBoard = null, mapData = null, queryText = '', queryEmbedding = null, realtimeEntries = null }) {
     const activeSettings = settings || getSettings();
     const tokenBudget = normalizeTokenBudget(activeSettings);
     const budgetSections = [];
@@ -1201,9 +1332,30 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, milestone
         }
     }
 
+    // v9.3.3 实时记忆放在最后：它是最贴近当前这一轮的即时上下文。
+    // 已在 getRealtimeForInjection 里做过条数 + token 双硬上限，这里标 resident 让它
+    // 在默认预算模式下不再被全局裁剪；strict_total 模式下用 priority 0 优先占位。
+    const realtime = getRealtimeForInjection(realtimeEntries, activeSettings);
+    if (realtime.lines.length) {
+        budgetSections.push(makeBudgetSection(
+            'realtime',
+            getInjectionHeader(activeSettings, 'realtime') || DEFAULT_INJECTION_SECTION_HEADERS.realtime,
+            realtime.lines.map(line => makeBudgetItem(line.text, {
+                resident: true,
+                priority: 0,
+                collection: 'realtime',
+                id: line.kind,
+            })),
+            { extraTruncated: realtime.truncated ? `实时(${realtime.injectedCount}/${realtime.totalCount})` : '' }
+        ));
+    }
+
     const allocation = allocateBudgetSections(budgetSections, activeSettings, tokenBudget);
     const text = allocation.renderedSections.join('\n\n');
     const stats = buildInjectionStats(allocation.selectedItems);
+    stats.realtimeEntryCount = realtime.injectedCount;
+    stats.realtimeTotalCount = realtime.totalCount;
+    stats.realtimeTokens = realtime.tokenEstimate;
 
     return {
         text,
