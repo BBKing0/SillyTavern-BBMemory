@@ -1,5 +1,5 @@
 /**
- * memory-manager.js —— BB-Memory v9.3.3 记忆管理器
+ * memory-manager.js —— BB-Memory v9.3.4 记忆管理器
  *
  * 全屏覆盖弹窗，统一管理长期记忆、实时记忆、存档、时间线与归档。
  */
@@ -1641,6 +1641,14 @@ async function renderRealtimePanel(overlay, chatId) {
     if (!panel) return;
     panel.innerHTML = '<div class="bb-mem-empty"><i class="fa-solid fa-spinner fa-spin"></i> 正在读取实时记忆...</div>';
     try {
+        let pruned = 0;
+        try {
+            const chatLength = SillyTavern.getContext()?.chat?.length ?? 0;
+            const { pruneSettledRealtimeMemories } = await import('./realtime-memory.js');
+            pruned = await pruneSettledRealtimeMemories(chatId, chatLength > 0 ? chatLength - 1 : undefined);
+        } catch (error) {
+            if (getSettings().debugLogging) console.warn('[BB-Memory] 实时留档楼层清理失败:', error);
+        }
         const entries = (await getRealtimeMemories(chatId)).slice().sort((a, b) =>
             Number(b.lastSeenFloor ?? b.createdFloor ?? -1) - Number(a.lastSeenFloor ?? a.createdFloor ?? -1));
         const counts = {
@@ -1666,10 +1674,11 @@ async function renderRealtimePanel(overlay, chatId) {
                     <button class="menu_button" id="bb_rt_refresh"><i class="fa-solid fa-arrows-rotate"></i> 刷新</button>
                 </div>
             </div>
-            <div class="bb-realtime-help">实时记忆会绕过向量检索并受独立条数/token 上限保护；“留档”只停止注入，不会立即删除数据。</div>
+            <div class="bb-realtime-help">实时记忆会绕过向量检索并受独立条数/token 上限保护；“留档”停止注入，并只在设置的最近楼层窗口内保留。</div>
             <div class="bb-realtime-list">
                 ${entries.length ? entries.map(buildRealtimeManagerItem).join('') : '<div class="bb-mem-empty">暂无实时场景细节</div>'}
             </div>`;
+        if (pruned) showToast(`已按保留楼层设置清理 ${pruned} 条过期实时留档`, 'success');
 
         panel.querySelector('#bb_rt_state_filter')?.addEventListener('change', (event) => {
             const state = event.currentTarget.value;
@@ -1726,7 +1735,7 @@ async function renderRealtimePanel(overlay, chatId) {
             btn.disabled = true;
             try {
                 await updateRealtimeMemory(chatId, btn.dataset.id, { settleState: 'settled', settleReason: 'discarded' });
-                showToast('已留档；数据仍保留，可随时恢复', 'success');
+                showToast('已停止注入；将在设置的保留楼层窗口内留档', 'success');
                 await renderRealtimePanel(overlay, chatId);
             } catch (error) { showToast(`留档失败: ${error.message}`, 'error'); btn.disabled = false; }
         }));

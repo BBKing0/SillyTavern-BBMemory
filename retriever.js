@@ -5,7 +5,12 @@
  * 简化为 5 维评分 + 实体展开。
  */
 
-import { MEMORY_TYPES, TRUTH_STATUS, REALTIME_KINDS } from './memory-types.js';
+import {
+    MEMORY_TYPES,
+    TRUTH_STATUS,
+    REALTIME_KINDS,
+    getRealtimeKindSlotLimits,
+} from './memory-types.js';
 import {
     tierScoreMultiplier,
     buildNpcIndexCard,
@@ -19,6 +24,7 @@ import {
     isArchived, getSettings,
 } from './memory-store.js';
 import { fillPromptTemplate, getPromptTemplate } from './prompt-templates.js';
+import { normalizeIdentityText } from './dedup-engine.js';
 
 // ═══════════════════════════════════════════════════════════
 //  评分权重（4 维）
@@ -1094,16 +1100,35 @@ export function getRealtimeForInjection(entries, settings) {
     const empty = { lines: [], totalCount: 0, injectedCount: 0, tokenEstimate: 0, truncated: false, enabled: false };
     if (!activeSettings.realtimeEnabled) return empty;
 
-    const pool = (Array.isArray(entries) ? entries : []).filter(entry =>
+    const rawPool = (Array.isArray(entries) ? entries : []).filter(entry =>
         entry && String(entry.text || '').trim()
         && entry.settleState !== 'settled'
         && !entry.promotedTo);
-    if (!pool.length) return { ...empty, enabled: true };
+    if (!rawPool.length) return { ...empty, enabled: true };
 
-    // 新到旧：截断时先丢最旧的
-    const sorted = pool.slice().sort((a, b) =>
+    // 新到旧：分类槽位与全局截断都优先保留最新状态。0 槽分类立即停止注入，
+    // 不必等下一轮提取把旧数据推进 settled。
+    const newestFirst = rawPool.slice().sort((a, b) =>
         (Number(b.lastSeenFloor ?? -1) - Number(a.lastSeenFloor ?? -1))
         || (Number(b.createdAt || 0) - Number(a.createdAt || 0)));
+    const kindLimits = getRealtimeKindSlotLimits(activeSettings);
+    const kindCounts = {};
+    const seenExact = new Set();
+    const seenSlots = new Set();
+    const sorted = newestFirst.filter(entry => {
+        const kind = REALTIME_KINDS[entry.kind] ? entry.kind : 'detail';
+        const exactKey = `${kind}|${normalizeIdentityText(entry.text)}`;
+        const normalizedSlot = normalizeIdentityText(entry.slotKey);
+        const slotKey = normalizedSlot ? `${kind}|${normalizedSlot}` : '';
+        if (seenExact.has(exactKey) || (slotKey && seenSlots.has(slotKey))) return false;
+        const used = kindCounts[kind] || 0;
+        if (used >= kindLimits[kind]) return false;
+        kindCounts[kind] = used + 1;
+        seenExact.add(exactKey);
+        if (slotKey) seenSlots.add(slotKey);
+        return true;
+    });
+    if (!sorted.length) return { ...empty, enabled: true };
 
     const maxCount = clampIntSetting(activeSettings.realtimeInjectionMax, 0, 200, 15);
     const tokenCap = clampIntSetting(activeSettings.realtimeInjectionTokenCap, 0, 8000, 300);
@@ -1124,10 +1149,10 @@ export function getRealtimeForInjection(entries, settings) {
 
     return {
         lines,
-        totalCount: pool.length,
+        totalCount: sorted.length,
         injectedCount: chosen.length,
         tokenEstimate,
-        truncated: chosen.length < pool.length,
+        truncated: chosen.length < sorted.length,
         enabled: true,
     };
 }

@@ -73,15 +73,43 @@ export const TRUTH_STATUS = Object.freeze({
  * （query 里没有「车」字，"坐车来电影院"就永远检索不到）。
  */
 export const REALTIME_KINDS = Object.freeze({
-    transport: { id: 'transport', label: '交通', icon: 'fa-solid fa-bus',            color: '#4fc3f7' },
-    outfit:    { id: 'outfit',    label: '衣着', icon: 'fa-solid fa-shirt',          color: '#f06292' },
-    present:   { id: 'present',   label: '在场', icon: 'fa-solid fa-users',          color: '#81c784' },
-    preference:{ id: 'preference',label: '偏好', icon: 'fa-solid fa-heart-circle-check', color: '#ffb74d' },
-    position:  { id: 'position',  label: '位置', icon: 'fa-solid fa-location-dot',   color: '#9575cd' },
-    state:     { id: 'state',     label: '状态', icon: 'fa-solid fa-wave-square',    color: '#4db6ac' },
-    object:    { id: 'object',    label: '随手物', icon: 'fa-solid fa-hand-holding', color: '#a1887f' },
-    detail:    { id: 'detail',    label: '其他细节', icon: 'fa-solid fa-circle-dot', color: '#90a4ae' },
+    transport: { id: 'transport', label: '交通', icon: 'fa-solid fa-bus',              color: '#4fc3f7' },
+    outfit:    { id: 'outfit',    label: '衣着', icon: 'fa-solid fa-shirt',            color: '#f06292' },
+    present:   { id: 'present',   label: '在场', icon: 'fa-solid fa-users',            color: '#81c784' },
+    preference:{ id: 'preference',label: '偏好/点单', icon: 'fa-solid fa-heart-circle-check', color: '#ffb74d' },
+    position:  { id: 'position',  label: '位置', icon: 'fa-solid fa-location-dot',     color: '#9575cd' },
+    state:     { id: 'state',     label: '状态', icon: 'fa-solid fa-wave-square',      color: '#4db6ac' },
+    object:    { id: 'object',    label: '物品', icon: 'fa-solid fa-hand-holding',     color: '#a1887f' },
+    time:      { id: 'time',      label: '时间', icon: 'fa-solid fa-clock',            color: '#ffd54f' },
+    environment:{ id: 'environment', label: '环境', icon: 'fa-solid fa-cloud-sun',    color: '#64b5f6' },
+    detail:    { id: 'detail',    label: '其他细节', icon: 'fa-solid fa-circle-dot',   color: '#90a4ae' },
 });
+
+/**
+ * 各实时分类对应的用户设置键。值为 0 表示整类关闭；正数既是当前场景的槽位上限，
+ * 也是注入时的分类硬上限。放在纯常量模块里，避免提取、注入和 UI 各维护一份映射。
+ */
+export const REALTIME_KIND_SLOT_SETTINGS = Object.freeze({
+    transport: 'realtimeTransportSlots',
+    outfit: 'realtimeOutfitSlots',
+    present: 'realtimePresentSlots',
+    preference: 'realtimePreferenceSlots',
+    position: 'realtimePositionSlots',
+    state: 'realtimeStateSlots',
+    object: 'realtimeObjectSlots',
+    time: 'realtimeTimeSlots',
+    environment: 'realtimeEnvironmentSlots',
+    detail: 'realtimeDetailSlots',
+});
+
+export function getRealtimeKindSlotLimits(settings = {}) {
+    const limits = {};
+    for (const kind of Object.keys(REALTIME_KINDS)) {
+        const raw = Number(settings[REALTIME_KIND_SLOT_SETTINGS[kind]]);
+        limits[kind] = Number.isFinite(raw) ? Math.max(0, Math.min(20, Math.floor(raw))) : 2;
+    }
+    return limits;
+}
 
 export const DEFAULT_REALTIME_KIND = 'detail';
 
@@ -89,7 +117,14 @@ export function normalizeRealtimeKind(value) {
     const key = String(value || '').trim().toLowerCase();
     if (REALTIME_KINDS[key]) return key;
     // 容错：AI 可能直接回中文标签
-    const byLabel = Object.values(REALTIME_KINDS).find(k => k.label === String(value || '').trim());
+    const label = String(value || '').trim();
+    const aliases = {
+        偏好: 'preference', 点单: 'preference', 临时偏好: 'preference',
+        随手物: 'object', 随手物品: 'object',
+        天气: 'environment', 场景环境: 'environment',
+    };
+    if (aliases[label]) return aliases[label];
+    const byLabel = Object.values(REALTIME_KINDS).find(k => k.label === label);
     return byLabel ? byLabel.id : DEFAULT_REALTIME_KIND;
 }
 

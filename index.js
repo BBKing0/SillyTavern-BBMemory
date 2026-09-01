@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.3.3 主入口
+ * index.js —— BB-Memory v9.3.4 主入口
  *
  * 五柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目 / 实时记忆。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -27,6 +27,7 @@ import {
     getRelevantMemories, getResidentMemories, buildMemoryInjectionPrompt,
     mergeExpandedRelevantResults, simpleSearch,
     getNpcForInjection, getItemsForInjection, getMilestonesForInjection, getTimelineForInjection,
+    getRealtimeForInjection,
     getRetrieverPromptTemplates,
 } from './retriever.js';
 
@@ -74,7 +75,7 @@ import {
 
 import { runHealthCheck, buildHealthCheckPanel } from './memory-health-check.js';
 
-import { openAssistant } from './memory-assistant.js';
+import { openAssistant, openRealtimeSnapshot } from './memory-assistant.js';
 import { openMemoryManager } from './memory-manager.js';
 import {
     getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot,
@@ -102,7 +103,7 @@ let chatSwitchSuppressDeletesUntil = 0;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.3.3';
+const SETTINGS_EXPORT_VERSION = '9.3.4';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
@@ -130,7 +131,11 @@ const SETTINGS_EXPORT_KEYS = [
     'aiCurateUndoDepth', 'dedupTimeConflictScope',
     // v9.3.3 实时记忆（第五柱）
     'realtimeEnabled', 'realtimeExtractEnabled', 'realtimeExtractScope', 'realtimeExtractFirstN',
-    'realtimeMaxDetailsPerFloor', 'realtimeTtlFloors', 'realtimeMaxEntries',
+    'realtimeMaxDetailsPerFloor',
+    'realtimeTransportSlots', 'realtimeOutfitSlots', 'realtimePresentSlots', 'realtimePreferenceSlots',
+    'realtimePositionSlots', 'realtimeStateSlots', 'realtimeObjectSlots', 'realtimeTimeSlots',
+    'realtimeEnvironmentSlots', 'realtimeDetailSlots',
+    'realtimeTtlFloors', 'realtimeMaxEntries', 'realtimeSettledRetentionFloors',
     'realtimeSceneChangeSettle', 'realtimeInjectionMax', 'realtimeInjectionTokenCap',
     'realtimePromotionMode', 'realtimeSettleMode',
     'timelineSummaryEnabled', 'maxActiveTimeline', 'autoBackupEnabled', 'chatMetadataBackupMaxKb', 'cloudVectorSlotMaxKb',
@@ -211,8 +216,19 @@ const SETTING_CONTROL_BINDINGS = {
     realtimeExtractScope: ['#bb_realtime_extract_scope', 'value'],
     realtimeExtractFirstN: ['#bb_realtime_extract_first_n', 'value'],
     realtimeMaxDetailsPerFloor: ['#bb_realtime_max_details_per_floor', 'value'],
+    realtimeTransportSlots: ['#bb_realtime_transport_slots', 'value'],
+    realtimeOutfitSlots: ['#bb_realtime_outfit_slots', 'value'],
+    realtimePresentSlots: ['#bb_realtime_present_slots', 'value'],
+    realtimePreferenceSlots: ['#bb_realtime_preference_slots', 'value'],
+    realtimePositionSlots: ['#bb_realtime_position_slots', 'value'],
+    realtimeStateSlots: ['#bb_realtime_state_slots', 'value'],
+    realtimeObjectSlots: ['#bb_realtime_object_slots', 'value'],
+    realtimeTimeSlots: ['#bb_realtime_time_slots', 'value'],
+    realtimeEnvironmentSlots: ['#bb_realtime_environment_slots', 'value'],
+    realtimeDetailSlots: ['#bb_realtime_detail_slots', 'value'],
     realtimeTtlFloors: ['#bb_realtime_ttl_floors', 'value'],
     realtimeMaxEntries: ['#bb_realtime_max_entries', 'value'],
+    realtimeSettledRetentionFloors: ['#bb_realtime_settled_retention_floors', 'value'],
     realtimeSceneChangeSettle: ['#bb_realtime_scene_change_settle', 'checkbox'],
     realtimeInjectionMax: ['#bb_realtime_injection_max', 'value'],
     realtimeInjectionTokenCap: ['#bb_realtime_injection_token_cap', 'value'],
@@ -334,7 +350,7 @@ function getPromptTemplateDefinitions() {
             title: '实时细节抓取',
             category: '实时记忆',
             description: '每层与主提取并行发起的轻量抓取提示词，只抓「当下有效的具体细节」（交通/衣着/在场/点的东西等）。'
-                + '可用占位符：{{maxDetails}} {{location}} {{storyTime}} {{aiMessage}}。',
+                + '可用占位符：{{maxDetails}} {{location}} {{storyTime}} {{aiMessage}}；现有槽位与分类上限会由系统强制追加。',
             defaultValue: DEFAULT_REALTIME_DETAIL_EXTRACT_PROMPT,
         },
         {
@@ -2127,13 +2143,52 @@ function bindSidebarEvents() {
     bindSelect('#bb_realtime_extract_scope', 'realtimeExtractScope');
     bindInput('#bb_realtime_extract_first_n', 'realtimeExtractFirstN', 'number');
     bindInput('#bb_realtime_max_details_per_floor', 'realtimeMaxDetailsPerFloor', 'number');
+    bindInput('#bb_realtime_transport_slots', 'realtimeTransportSlots', 'number');
+    bindInput('#bb_realtime_outfit_slots', 'realtimeOutfitSlots', 'number');
+    bindInput('#bb_realtime_present_slots', 'realtimePresentSlots', 'number');
+    bindInput('#bb_realtime_preference_slots', 'realtimePreferenceSlots', 'number');
+    bindInput('#bb_realtime_position_slots', 'realtimePositionSlots', 'number');
+    bindInput('#bb_realtime_state_slots', 'realtimeStateSlots', 'number');
+    bindInput('#bb_realtime_object_slots', 'realtimeObjectSlots', 'number');
+    bindInput('#bb_realtime_time_slots', 'realtimeTimeSlots', 'number');
+    bindInput('#bb_realtime_environment_slots', 'realtimeEnvironmentSlots', 'number');
+    bindInput('#bb_realtime_detail_slots', 'realtimeDetailSlots', 'number');
     bindInput('#bb_realtime_ttl_floors', 'realtimeTtlFloors', 'number');
     bindInput('#bb_realtime_max_entries', 'realtimeMaxEntries', 'number');
+    bindInput('#bb_realtime_settled_retention_floors', 'realtimeSettledRetentionFloors', 'number');
     bindCheckbox('#bb_realtime_scene_change_settle', 'realtimeSceneChangeSettle');
     bindInput('#bb_realtime_injection_max', 'realtimeInjectionMax', 'number');
     bindInput('#bb_realtime_injection_token_cap', 'realtimeInjectionTokenCap', 'number');
     bindSelect('#bb_realtime_promotion_mode', 'realtimePromotionMode');
     bindSelect('#bb_realtime_settle_mode', 'realtimeSettleMode');
+    document.querySelector('#bb_realtime_settled_retention_floors')?.addEventListener('change', async () => {
+        const chatId = getChatId();
+        if (!chatId) {
+            showToast('实时留档保留范围已更新，将在进入聊天后生效', 'success');
+            return;
+        }
+        try {
+            const chatLength = SillyTavern.getContext()?.chat?.length ?? 0;
+            const { pruneSettledRealtimeMemories } = await import('./realtime-memory.js');
+            const pruned = await pruneSettledRealtimeMemories(chatId, chatLength > 0 ? chatLength - 1 : undefined);
+            showToast(pruned
+                ? `保留范围已更新，并清理 ${pruned} 条过期实时留档`
+                : '实时留档保留范围已更新，当前没有过期条目', 'success');
+            refreshRealtimeStatus();
+            refreshFloatingHub();
+        } catch (error) {
+            showToast(`应用实时留档保留范围失败: ${error.message}`, 'error');
+        }
+    });
+    for (const id of ['#bb_realtime_transport_slots', '#bb_realtime_outfit_slots', '#bb_realtime_present_slots',
+        '#bb_realtime_preference_slots', '#bb_realtime_position_slots', '#bb_realtime_state_slots',
+        '#bb_realtime_object_slots', '#bb_realtime_time_slots', '#bb_realtime_environment_slots',
+        '#bb_realtime_detail_slots']) {
+        document.querySelector(id)?.addEventListener('change', () => {
+            refreshRealtimeStatus();
+            refreshFloatingHub();
+        });
+    }
     // 注入上限改了立刻刷新状态行里的注入预览
     for (const sel of ['#bb_realtime_injection_max', '#bb_realtime_injection_token_cap']) {
         document.querySelector(sel)?.addEventListener('change', refreshRealtimeStatus);
@@ -4237,8 +4292,9 @@ async function refreshFloatingHubData() {
     if (realtimeCount) {
         try {
             const chatId = getChatId();
-            const entries = chatId && getSettings().realtimeEnabled !== false ? await getRealtimeMemories(chatId) : [];
-            const visibleCount = entries.filter(entry => entry.settleState !== 'settled' && !entry.promotedTo).length;
+            const settings = getSettings();
+            const entries = chatId && settings.realtimeEnabled !== false ? await getRealtimeMemories(chatId) : [];
+            const visibleCount = getRealtimeForInjection(entries, settings).totalCount;
             realtimeCount.textContent = String(visibleCount);
             realtimeCount.title = `当前有 ${visibleCount} 条实时场景细节会参与注入或等待结算`;
         } catch {
@@ -4357,7 +4413,7 @@ async function handleFloatingMenuAction(action) {
             break;
         }
         case 'open_realtime': {
-            if (chatId) openAssistant(chatId, 'realtime');
+            if (chatId) openRealtimeSnapshot(chatId);
             break;
         }
         case 'open_manager': {
@@ -4429,7 +4485,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.3.3 初始化开始...');
+    console.log('[BB-Memory] v9.3.4 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -4625,7 +4681,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.3.3 初始化完成');
+    console.log('[BB-Memory] v9.3.4 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆

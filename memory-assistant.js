@@ -1,10 +1,15 @@
 /**
- * memory-assistant.js —— BB-Memory v9.3.3 记忆管家面板
+ * memory-assistant.js —— BB-Memory v9.3.4 记忆管家面板
  *
  * 五柱浏览：NPC档案 / 物品栏 / 里程碑 / 记忆条目 / 实时记忆 + 仪表盘。
  */
 
-import { MEMORY_TYPES, REALTIME_KINDS, REALTIME_SETTLE_STATES } from './memory-types.js';
+import {
+    MEMORY_TYPES,
+    REALTIME_KINDS,
+    REALTIME_SETTLE_STATES,
+    getRealtimeKindSlotLimits,
+} from './memory-types.js';
 import { NPC_TIERS, ITEM_TIERS } from './entity-tiers.js';
 import {
     getNpcProfiles, getItems, getMilestones, getMemories, getRealtimeMemories,
@@ -14,6 +19,7 @@ import {
 } from './memory-store.js';
 import { simpleSearch } from './retriever.js';
 import { getExtractionFloorStatus } from './message-state.js';
+import { normalizeIdentityText } from './dedup-engine.js';
 
 // ═══════════════════════════════════════════════════════════
 //  窗口管理
@@ -43,6 +49,119 @@ export async function openAssistant(chatId, initialTab = 'dashboard') {
     switchTab(currentWindow, initialTab);
 }
 
+function selectCurrentRealtimeEntries(entries, settings) {
+    const unresolved = (Array.isArray(entries) ? entries : [])
+        .filter(entry => entry && String(entry.text || '').trim()
+            && entry.settleState !== 'settled' && !entry.promotedTo)
+        .sort((a, b) => Number(b.lastSeenFloor ?? b.createdFloor ?? -1) - Number(a.lastSeenFloor ?? a.createdFloor ?? -1));
+    if (!unresolved.length) return [];
+    const currentSceneKey = String(unresolved[0].sceneKey || '').trim();
+    const sameScene = currentSceneKey
+        ? unresolved.filter(entry => !entry.sceneKey || String(entry.sceneKey) === currentSceneKey)
+        : unresolved;
+    const limits = getRealtimeKindSlotLimits(settings);
+    const counts = {};
+    const seenExact = new Set();
+    const seenSlots = new Set();
+    return sameScene.filter(entry => {
+        const kind = REALTIME_KINDS[entry.kind] ? entry.kind : 'detail';
+        const exactKey = `${kind}|${normalizeIdentityText(entry.text)}`;
+        const normalizedSlot = normalizeIdentityText(entry.slotKey);
+        const slotKey = normalizedSlot ? `${kind}|${normalizedSlot}` : '';
+        if (seenExact.has(exactKey) || (slotKey && seenSlots.has(slotKey))) return false;
+        const used = counts[kind] || 0;
+        if (used >= limits[kind]) return false;
+        counts[kind] = used + 1;
+        seenExact.add(exactKey);
+        if (slotKey) seenSlots.add(slotKey);
+        return true;
+    });
+}
+
+function buildRealtimeSnapshotBody(entries, settings) {
+    const current = selectCurrentRealtimeEntries(entries, settings);
+    if (!current.length) {
+        return '<div class="bb-realtime-snapshot-empty"><i class="fa-regular fa-moon"></i><span>当前没有生效中的实时细节</span></div>';
+    }
+    const newest = current[0];
+    const sceneLabel = [newest.location, newest.storyTime].filter(Boolean).join(' · ')
+        || String(newest.sceneKey || '').replace('|', ' · ')
+        || '场景尚未识别';
+    const byFloor = new Map();
+    for (const entry of current) {
+        const value = Number(entry.lastSeenFloor ?? entry.createdFloor);
+        const floor = Number.isFinite(value) && value >= 0 ? value : 'unknown';
+        if (!byFloor.has(floor)) byFloor.set(floor, []);
+        byFloor.get(floor).push(entry);
+    }
+    const groups = [...byFloor.entries()].sort(([a], [b]) => {
+        if (a === 'unknown') return 1;
+        if (b === 'unknown') return -1;
+        return Number(b) - Number(a);
+    });
+    return `<div class="bb-realtime-snapshot-summary">
+        <span><i class="fa-solid fa-location-dot"></i> ${escapeHtml(sceneLabel)}</span>
+        <span>${current.length} 条当前细节</span>
+    </div>
+    <div class="bb-realtime-snapshot-floors">
+        ${groups.map(([floor, floorEntries]) => `<section class="bb-realtime-snapshot-floor">
+            <div class="bb-realtime-snapshot-floor-label">${floor === 'unknown' ? '未知楼层' : `第 ${floor} 层`}</div>
+            <div class="bb-realtime-snapshot-details">
+                ${floorEntries.map(entry => {
+                    const kind = REALTIME_KINDS[entry.kind] || REALTIME_KINDS.detail;
+                    return `<div class="bb-realtime-snapshot-detail">
+                        <span class="bb-realtime-snapshot-kind" style="--bb-rt-kind:${kind.color}" title="${escapeHtml(kind.label)}"><i class="${kind.icon}"></i></span>
+                        <span>${escapeHtml(entry.text)}</span>
+                    </div>`;
+                }).join('')}
+            </div>
+        </section>`).join('')}
+    </div>`;
+}
+
+/** 悬浮球专用：只展示当前场景细节与来源楼层，不带筛选、编辑、晋升或结算操作。 */
+export async function openRealtimeSnapshot(chatId) {
+    if (currentWindow) closeAssistant();
+    if (!chatId) { console.warn('[BB-Memory] 无 chatId，无法打开实时细节快照'); return; }
+    currentChatId = chatId;
+    currentTab = 'realtime';
+
+    const win = document.createElement('aside');
+    win.className = 'bb-realtime-snapshot';
+    win.setAttribute('aria-label', '当前实时细节');
+    win.innerHTML = `<div class="bb-realtime-snapshot-header" id="bb_assistant_drag_handle">
+        <span><i class="fa-solid fa-bolt"></i> 当前实时细节</span>
+        <div class="bb-realtime-snapshot-controls">
+            <button type="button" id="bb_realtime_snapshot_refresh" title="刷新" aria-label="刷新实时细节"><i class="fa-solid fa-arrows-rotate"></i></button>
+            <button type="button" id="bb_realtime_snapshot_close" title="关闭" aria-label="关闭实时细节"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+    </div>
+    <div class="bb-realtime-snapshot-body"><div class="bb-realtime-snapshot-loading"><i class="fa-solid fa-spinner fa-spin"></i> 正在读取当前场景...</div></div>`;
+    document.body.appendChild(win);
+    currentWindow = win;
+
+    const render = async () => {
+        const body = win.querySelector('.bb-realtime-snapshot-body');
+        const refresh = win.querySelector('#bb_realtime_snapshot_refresh');
+        if (!body || !refresh) return;
+        refresh.disabled = true;
+        refresh.querySelector('i')?.classList.add('fa-spin');
+        body.innerHTML = '<div class="bb-realtime-snapshot-loading"><i class="fa-solid fa-spinner fa-spin"></i> 正在刷新...</div>';
+        try {
+            const entries = await getRealtimeMemories(chatId);
+            body.innerHTML = buildRealtimeSnapshotBody(entries, getSettings());
+        } catch (error) {
+            body.innerHTML = `<div class="bb-realtime-snapshot-empty"><i class="fa-solid fa-triangle-exclamation"></i><span>读取失败：${escapeHtml(error.message)}</span></div>`;
+        } finally {
+            refresh.disabled = false;
+            refresh.querySelector('i')?.classList.remove('fa-spin');
+        }
+    };
+    win.querySelector('#bb_realtime_snapshot_close')?.addEventListener('click', closeAssistant);
+    win.querySelector('#bb_realtime_snapshot_refresh')?.addEventListener('click', render);
+    await render();
+}
+
 export function closeAssistant() {
     if (currentWindow) { currentWindow.remove(); currentWindow = null; }
 }
@@ -53,10 +172,10 @@ export function closeAssistant() {
 
 function buildAssistantHTML(npc, items, timeline, memories, realtime) {
     return `<div class="bb-assistant-header" id="bb_assistant_drag_handle">
-        <span>记忆管家</span>
-        <div class="bb-assistant-header-btns">
-            <button id="bb_assistant_refresh" title="刷新">↻</button>
-            <button id="bb_assistant_close" title="关闭">×</button>
+        <span class="bb-assistant-title"><i class="fa-solid fa-brain"></i> 记忆管家</span>
+        <div class="bb-assistant-controls">
+            <button type="button" class="bb-assistant-btn" id="bb_assistant_refresh" title="刷新">↻</button>
+            <button type="button" class="bb-assistant-btn bb-assistant-close" id="bb_assistant_close" title="关闭">×</button>
         </div>
     </div>
     <div class="bb-assistant-tabs">
@@ -67,7 +186,7 @@ function buildAssistantHTML(npc, items, timeline, memories, realtime) {
         <button class="bb-assistant-tab" data-tab="memories">记忆条目 <span class="bb-tab-count">${memories.length}</span></button>
         <button class="bb-assistant-tab" data-tab="realtime">实时 <span class="bb-tab-count">${realtime.length}</span></button>
     </div>
-    <div class="bb-assistant-panels">
+    <div class="bb-assistant-panels bb-assistant-body">
         <div class="bb-assistant-panel" data-panel="dashboard" style="display:block">
             ${buildDashboardHTML(npc, items, timeline, memories, realtime)}
         </div>

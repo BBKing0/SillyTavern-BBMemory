@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.3.3</b>
+            <b>BB-Memory v9.3.4</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -570,6 +570,23 @@
                         <input id="bb_realtime_max_details_per_floor" type="number" class="bb-input" min="1" max="50" value="5" />
                     </div>
 
+                    <div class="bb-mem-sidebar-section">
+                        <label>分类与当前场景槽位</label>
+                        <small class="bb-mem-hint">每类最多同时保留多少个对象槽位；默认 2，设 0 即不提取也不注入该类。同一对象再次出现会更新原槽位。“其他细节”用于承接无法归类但遗忘后会造成矛盾的内容。</small>
+                        <div class="bb-realtime-slot-grid">
+                            <label><span><i class="fa-solid fa-bus"></i> 交通</span><input id="bb_realtime_transport_slots" type="number" class="bb-input" min="0" max="20" value="2" /></label>
+                            <label><span><i class="fa-solid fa-shirt"></i> 衣着</span><input id="bb_realtime_outfit_slots" type="number" class="bb-input" min="0" max="20" value="2" /></label>
+                            <label><span><i class="fa-solid fa-users"></i> 在场</span><input id="bb_realtime_present_slots" type="number" class="bb-input" min="0" max="20" value="2" /></label>
+                            <label><span><i class="fa-solid fa-heart-circle-check"></i> 偏好/点单</span><input id="bb_realtime_preference_slots" type="number" class="bb-input" min="0" max="20" value="2" /></label>
+                            <label><span><i class="fa-solid fa-location-dot"></i> 位置</span><input id="bb_realtime_position_slots" type="number" class="bb-input" min="0" max="20" value="2" /></label>
+                            <label><span><i class="fa-solid fa-wave-square"></i> 状态</span><input id="bb_realtime_state_slots" type="number" class="bb-input" min="0" max="20" value="2" /></label>
+                            <label><span><i class="fa-solid fa-hand-holding"></i> 物品</span><input id="bb_realtime_object_slots" type="number" class="bb-input" min="0" max="20" value="2" /></label>
+                            <label><span><i class="fa-solid fa-clock"></i> 时间</span><input id="bb_realtime_time_slots" type="number" class="bb-input" min="0" max="20" value="2" /></label>
+                            <label><span><i class="fa-solid fa-cloud-sun"></i> 环境</span><input id="bb_realtime_environment_slots" type="number" class="bb-input" min="0" max="20" value="2" /></label>
+                            <label><span><i class="fa-solid fa-circle-dot"></i> 其他细节</span><input id="bb_realtime_detail_slots" type="number" class="bb-input" min="0" max="20" value="2" /></label>
+                        </div>
+                    </div>
+
                     <div style="font-size:0.72em;opacity:0.55;margin:8px 0 2px;">
                         注入上限：这一柱刻意<b>不受全局 token 预算约束</b>（否则又会被裁掉、白做），
                         所以必须靠下面两个硬上限自己管住体积。两者取先到者。
@@ -604,8 +621,14 @@
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_realtime_max_entries">生效条数上限</label>
-                        <small class="bb-mem-hint">同时生效的细节上限（默认40）。超出时最旧的先进待结算。留档条目按此值的 2 倍机械修剪。</small>
+                        <small class="bb-mem-hint">同时生效的细节总上限（默认40）。超出时最旧的先进待结算；分类槽位会更早限制单类体积。</small>
                         <input id="bb_realtime_max_entries" type="number" class="bb-input" min="0" max="500" value="40" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_realtime_settled_retention_floors">已结算保留楼层</label>
+                        <small class="bb-mem-hint">已回收/已晋升的实时细节只保留最近 N 层（默认5），更早的会物理删除；设 0 表示结算后即可清理，撤销快照仍按原设置保留。</small>
+                        <input id="bb_realtime_settled_retention_floors" type="number" class="bb-input" min="0" max="500" value="5" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">

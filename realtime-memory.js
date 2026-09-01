@@ -1,5 +1,5 @@
 /**
- * realtime-memory.js — BB-Memory v9.3.3 实时记忆（第五柱）
+ * realtime-memory.js — BB-Memory v9.3.4 实时记忆（第五柱）
  *
  * 解决的问题：检索完全由最后一条用户消息驱动，query 里没有「车」字，
  * 「坐公交车来电影院」这条记忆就永远进不了注入，后文于是写出「开车回家」。
@@ -16,6 +16,7 @@ import {
     getSettings,
     getRealtimeMemories,
     addRealtimeMemories,
+    updateRealtimeMemory,
     updateRealtimeMemories,
     removeRealtimeMemories,
     restoreEntriesVerbatim,
@@ -32,10 +33,15 @@ import {
     getPromptTemplate,
 } from './prompt-templates.js';
 import { storyTimeDateSignature, normalizeIdentityText } from './dedup-engine.js';
-import { normalizeRealtimeKind, REALTIME_KINDS } from './memory-types.js';
+import {
+    normalizeRealtimeKind,
+    REALTIME_KINDS,
+    getRealtimeKindSlotLimits,
+} from './memory-types.js';
 
 /** 单条细节的长度上限。提示词要求 20 字以内，这里留一倍余量做硬截断。 */
 const MAX_DETAIL_CHARS = 60;
+const MAX_SLOT_KEY_CHARS = 40;
 /** 送进抓取提示词的回复长度上限。轻量调用，不需要整层原文。 */
 const MAX_AI_MESSAGE_CHARS = 1800;
 
@@ -176,6 +182,10 @@ function extractJsonObject(rawText) {
  */
 export function parseRealtimeDetails(rawText, options = {}) {
     const maxDetails = clampInt(options.maxDetails, 1, 50, 5);
+    const allowedKinds = options.allowedKinds instanceof Set
+        ? options.allowedKinds
+        : new Set(Array.isArray(options.allowedKinds) ? options.allowedKinds : Object.keys(REALTIME_KINDS));
+    const existingIds = new Set((Array.isArray(options.existingIds) ? options.existingIds : []).map(String));
     const parsed = extractJsonObject(rawText);
     if (!parsed) {
         return { details: [], rejected: [{ reason: '响应里找不到可解析的 JSON', raw: String(rawText || '').slice(0, 160) }], totalReturned: 0 };
@@ -197,15 +207,30 @@ export function parseRealtimeDetails(rawText, options = {}) {
             rejected.push({ reason: '细节文本为空', raw: JSON.stringify(item) });
             continue;
         }
-        const dedupKey = normalizeIdentityText(text);
+        const kind = normalizeRealtimeKind(item.k ?? item.kind);
+        if (!allowedKinds.has(kind)) {
+            rejected.push({ reason: `分类 ${kind} 已关闭`, raw: text });
+            continue;
+        }
+        const slotKey = String(item.s ?? item.slot ?? item.slotKey ?? '').trim().replace(/\s+/g, ' ');
+        const replaceId = String(item.r ?? item.replaceId ?? '').trim();
+        if (replaceId && !existingIds.has(replaceId)) {
+            rejected.push({ reason: '引用的现有槽位不存在', raw: replaceId });
+            continue;
+        }
+        const dedupKey = replaceId
+            ? `replace:${replaceId}`
+            : `${kind}|${normalizeIdentityText(slotKey || text)}`;
         if (!dedupKey || seen.has(dedupKey)) {
             rejected.push({ reason: '同批次重复', raw: text });
             continue;
         }
         seen.add(dedupKey);
         details.push({
-            kind: normalizeRealtimeKind(item.k ?? item.kind),
+            kind,
             text: text.length > MAX_DETAIL_CHARS ? text.slice(0, MAX_DETAIL_CHARS) + '…' : text,
+            slotKey: slotKey.length > MAX_SLOT_KEY_CHARS ? slotKey.slice(0, MAX_SLOT_KEY_CHARS) : slotKey,
+            replaceId,
         });
     }
     return { details, rejected, totalReturned: raw.length };
@@ -228,12 +253,191 @@ export function buildRealtimePrompt(aiMessage, options = {}) {
     const settings = options.settings || {};
     const template = getPromptTemplate(settings, 'realtime.detailExtract', DEFAULT_REALTIME_DETAIL_EXTRACT_PROMPT);
     const body = String(aiMessage || '').slice(0, MAX_AI_MESSAGE_CHARS);
-    return fillPromptTemplate(template, {
+    const base = fillPromptTemplate(template, {
         maxDetails: clampInt(settings.realtimeMaxDetailsPerFloor, 1, 50, 5),
         location: options.location || '（未知）',
         storyTime: options.storyTime || '（未知）',
         aiMessage: body,
     });
+    const limits = getRealtimeKindSlotLimits(settings);
+    const enabled = Object.keys(REALTIME_KINDS).filter(kind => limits[kind] > 0);
+    const disabled = Object.keys(REALTIME_KINDS).filter(kind => limits[kind] <= 0);
+    const existing = (Array.isArray(options.existingEntries) ? options.existingEntries : [])
+        .filter(entry => entry && entry.settleState !== 'settled' && !entry.promotedTo)
+        .slice()
+        .sort((a, b) => Number(b.lastSeenFloor ?? -1) - Number(a.lastSeenFloor ?? -1));
+    const occupied = {};
+    for (const entry of existing) {
+        const kind = REALTIME_KINDS[entry.kind] ? entry.kind : 'detail';
+        occupied[kind] = (occupied[kind] || 0) + 1;
+    }
+    const rules = enabled.map(kind =>
+        `- ${kind}（${REALTIME_KINDS[kind].label}）：最多 ${limits[kind]} 槽，当前 ${occupied[kind] || 0}/${limits[kind]}`)
+        .join('\n') || '- 所有分类均已关闭，本次必须返回 {"details":[]}';
+    const existingText = existing.length
+        ? existing.map(entry => {
+            const kind = REALTIME_KINDS[entry.kind] ? entry.kind : 'detail';
+            const slot = String(entry.slotKey || '').trim() || '未命名槽位';
+            return `- id=${entry.id} | ${kind} | s=${slot} | ${String(entry.text || '').slice(0, MAX_DETAIL_CHARS)}`;
+        }).join('\n')
+        : '- 暂无';
+
+    // 运行时强制追加，确保用户沿用旧版自定义提示词时也能获得去重上下文与槽位限制。
+    return `${base}\n\n## 系统追加：本次分类槽位硬约束\n${rules}`
+        + (disabled.length ? `\n- 已关闭分类（不得输出）：${disabled.join('、')}` : '')
+        + `\n\n## 系统追加：当前场景已存在的实时细节\n${existingText}`
+        + '\n同一事实不得新增副本；重复或变化时用 r 指向现有 id 并沿用其 s。只输出 JSON。';
+}
+
+function entryBelongsToScene(entry, sceneKey) {
+    if (!entry || entry.settleState === 'settled' || entry.promotedTo) return false;
+    const target = String(sceneKey || '').trim();
+    const own = String(entry.sceneKey || '').trim();
+    // 场景信息尚未回填时宁可参与当前槽位去重，避免并行抓取先写出重复项。
+    return !target || !own || target === own;
+}
+
+function newestRealtimeFirst(a, b) {
+    return (Number(b.lastSeenFloor ?? b.createdFloor ?? -1) - Number(a.lastSeenFloor ?? a.createdFloor ?? -1))
+        || (Number(b.updatedAt || 0) - Number(a.updatedAt || 0))
+        || (Number(b.createdAt || 0) - Number(a.createdAt || 0));
+}
+
+/**
+ * 规划实时细节的 upsert、重复退场与分类槽位限制。纯函数，便于零 API 回归。
+ * 同槽位或完全相同文本会更新原条目；只有新槽位且仍有容量时才新增。
+ */
+export function planRealtimeDetailWrites(existingEntries, details, context = {}) {
+    const limits = getRealtimeKindSlotLimits(context.settings || {});
+    let working = (Array.isArray(existingEntries) ? existingEntries : [])
+        .filter(entry => entryBelongsToScene(entry, context.sceneKey))
+        .map(entry => ({ ...entry }));
+    const retire = [];
+    const retireIds = new Set();
+    const reject = (detail, reason) => ({ detail, reason });
+
+    // 先收拢历史完全重复项。保留最近被看到的那条，副本退出注入并等待楼层清理。
+    const exactGroups = new Map();
+    for (const entry of working) {
+        const kind = REALTIME_KINDS[entry.kind] ? entry.kind : 'detail';
+        const identity = normalizeIdentityText(entry.text);
+        if (!identity) continue;
+        const key = `${kind}|${identity}`;
+        if (!exactGroups.has(key)) exactGroups.set(key, []);
+        exactGroups.get(key).push(entry);
+    }
+    for (const group of exactGroups.values()) {
+        const ordered = group.slice().sort(newestRealtimeFirst);
+        for (const duplicate of ordered.slice(1)) {
+            retireIds.add(String(duplicate.id));
+            retire.push({ id: duplicate.id, reason: 'duplicate' });
+        }
+    }
+    working = working.filter(entry => !retireIds.has(String(entry.id)));
+
+    // 用户把槽位调小（或设为 0）后，旧数据也按最近优先立即收敛。
+    for (const kind of Object.keys(REALTIME_KINDS)) {
+        const group = working.filter(entry => (REALTIME_KINDS[entry.kind] ? entry.kind : 'detail') === kind)
+            .sort(newestRealtimeFirst);
+        for (const overflow of group.slice(limits[kind])) {
+            if (retireIds.has(String(overflow.id))) continue;
+            retireIds.add(String(overflow.id));
+            retire.push({ id: overflow.id, reason: 'slot_capacity' });
+        }
+    }
+    working = working.filter(entry => !retireIds.has(String(entry.id)));
+
+    const updates = [];
+    const adds = [];
+    const rejected = [];
+    const floor = Number.isFinite(Number(context.floor)) ? Number(context.floor) : -1;
+
+    for (const detail of (Array.isArray(details) ? details : [])) {
+        const kind = normalizeRealtimeKind(detail?.kind);
+        if (limits[kind] <= 0) {
+            rejected.push(reject(detail, `分类 ${kind} 已关闭`));
+            continue;
+        }
+        const normalizedText = normalizeIdentityText(detail?.text);
+        const normalizedSlot = normalizeIdentityText(detail?.slotKey);
+        let target = detail?.replaceId
+            ? working.find(entry => String(entry.id) === String(detail.replaceId))
+            : null;
+        if (target && normalizeRealtimeKind(target.kind) !== kind) {
+            rejected.push(reject(detail, '引用槽位的分类不一致'));
+            continue;
+        }
+        if (!target && normalizedText) {
+            target = working.find(entry => normalizeRealtimeKind(entry.kind) === kind
+                && normalizeIdentityText(entry.text) === normalizedText);
+        }
+        if (!target && normalizedSlot) {
+            target = working.find(entry => normalizeRealtimeKind(entry.kind) === kind
+                && normalizeIdentityText(entry.slotKey) === normalizedSlot);
+        }
+
+        if (target) {
+            const patch = {
+                kind,
+                text: String(detail.text || '').trim(),
+                slotKey: String(detail.slotKey || target.slotKey || '').trim(),
+                lastSeenFloor: floor >= 0 ? floor : target.lastSeenFloor,
+                sceneKey: context.sceneKey || target.sceneKey || '',
+                location: context.location || target.location || '',
+                storyTime: context.storyTime || target.storyTime || '',
+                settleState: 'active',
+                settleReason: '',
+                sourceExchange: context.sourceExchange || target.sourceExchange || '',
+                sourceFloor: floor >= 0 ? floor : target.sourceFloor,
+            };
+            updates.push({ id: target.id, patch });
+            Object.assign(target, patch);
+            continue;
+        }
+
+        const occupied = working.filter(entry => normalizeRealtimeKind(entry.kind) === kind).length
+            + adds.filter(entry => entry.kind === kind).length;
+        if (occupied >= limits[kind]) {
+            rejected.push(reject(detail, `${REALTIME_KINDS[kind].label}槽位已满（${occupied}/${limits[kind]}）`));
+            continue;
+        }
+        adds.push({
+            kind,
+            text: String(detail.text || '').trim(),
+            slotKey: String(detail.slotKey || '').trim(),
+            sceneKey: context.sceneKey || '',
+            location: context.location || '',
+            storyTime: context.storyTime || '',
+            createdFloor: floor,
+            lastSeenFloor: floor,
+            source: 'auto',
+            sourceExchange: context.sourceExchange || '',
+            sourceFloor: floor,
+            sourceChatId: context.chatId || '',
+        });
+    }
+    return { adds, updates, retire, rejected, limits };
+}
+
+export async function saveRealtimeDetailsWithSlots(chatId, details, context = {}) {
+    const existing = await getRealtimeMemories(chatId);
+    const plan = planRealtimeDetailWrites(existing, details, { ...context, chatId });
+    for (const reason of ['duplicate', 'slot_capacity']) {
+        const ids = plan.retire.filter(item => item.reason === reason).map(item => item.id);
+        if (ids.length) {
+            await updateRealtimeMemories(chatId, ids, {
+                settleState: 'settled',
+                settleReason: reason,
+            });
+        }
+    }
+    const updated = [];
+    for (const item of plan.updates) {
+        const entry = await updateRealtimeMemory(chatId, item.id, item.patch);
+        if (entry) updated.push(entry);
+    }
+    const added = plan.adds.length ? await addRealtimeMemories(chatId, plan.adds) : [];
+    return { added, updated, retired: plan.retire, rejected: plan.rejected };
 }
 
 /**
@@ -249,7 +453,7 @@ export function buildRealtimePrompt(aiMessage, options = {}) {
 export async function extractRealtimeDetails(chatId, exchange, options = {}) {
     const settings = options.settings || getSettings();
     const result = {
-        ok: false, skipped: false, reason: '', saved: [], rejected: [],
+        ok: false, skipped: false, reason: '', saved: [], updated: [], retired: [], rejected: [],
         apiMode: '', durationMs: 0, sceneKey: '', error: '',
     };
     if (!chatId || !exchange) { result.skipped = true; result.reason = 'no-exchange'; return result; }
@@ -260,12 +464,11 @@ export async function extractRealtimeDetails(chatId, exchange, options = {}) {
     const floor = Number.isFinite(Number(exchange.aiIndex)) ? Number(exchange.aiIndex) : -1;
 
     // 场景状态：优先用调用方给的提示（主提取刚算出来的），否则从现有条目反推
+    let existing = [];
+    try { existing = await getRealtimeMemories(chatId); } catch { existing = []; }
     let scene = options.sceneHint;
-    if (!scene) {
-        let existing = [];
-        try { existing = await getRealtimeMemories(chatId); } catch { existing = []; }
-        scene = deriveSceneState(existing);
-    }
+    if (!scene) scene = deriveSceneState(existing);
+    const sceneEntries = existing.filter(entry => entryBelongsToScene(entry, scene.sceneKey));
 
     const gate = shouldExtractRealtime(settings, {
         sceneKey: scene.sceneKey,
@@ -288,6 +491,7 @@ export async function extractRealtimeDetails(chatId, exchange, options = {}) {
         settings,
         location: scene.location,
         storyTime: scene.storyTime,
+        existingEntries: sceneEntries,
     });
 
     const startedAt = Date.now();
@@ -304,6 +508,9 @@ export async function extractRealtimeDetails(chatId, exchange, options = {}) {
 
     const parsed = parseRealtimeDetails(rawText, {
         maxDetails: settings.realtimeMaxDetailsPerFloor,
+        allowedKinds: Object.entries(getRealtimeKindSlotLimits(settings))
+            .filter(([, slots]) => slots > 0).map(([kind]) => kind),
+        existingIds: sceneEntries.map(entry => entry.id),
     });
     result.rejected = parsed.rejected;
     result.sceneKey = scene.sceneKey;
@@ -319,22 +526,21 @@ export async function extractRealtimeDetails(chatId, exchange, options = {}) {
     }
 
     try {
-        result.saved = await addRealtimeMemories(chatId, parsed.details.map(detail => ({
-            kind: detail.kind,
-            text: detail.text,
+        const write = await saveRealtimeDetailsWithSlots(chatId, parsed.details, {
+            settings,
             sceneKey: scene.sceneKey,
             location: scene.location,
             storyTime: scene.storyTime,
-            createdFloor: floor,
-            lastSeenFloor: floor,
-            source: 'auto',
+            floor,
             sourceExchange: exchange.hash || '',
-            sourceFloor: floor,
-            sourceChatId: chatId,
-        })));
+        });
+        result.saved = write.added;
+        result.updated = write.updated;
+        result.retired = write.retired;
+        result.rejected.push(...write.rejected.map(item => ({ reason: item.reason, raw: item.detail?.text || '' })));
         result.ok = true;
         if (settings.debugLogging) {
-            console.log(`[BB-Memory] 实时抓取：第 ${floor} 层入库 ${result.saved.length} 条细节`
+            console.log(`[BB-Memory] 实时抓取：第 ${floor} 层新增 ${result.saved.length} 条、更新 ${result.updated.length} 条细节`
                 + `（${api.mode} API，${result.durationMs}ms）`);
         }
     } catch (e) {
@@ -402,15 +608,6 @@ export function pickSceneInfoFromExtraction(results = {}) {
 
 const SETTLE_UNDO_KEY_PREFIX = 'bb_rt_settle_undo_';
 const SETTLE_UNDO_SCHEMA = 'bb-memory-realtime-settle-undo-v1';
-/**
- * 已结算条目的留档倍数上限。
- *
- * discard 刻意**不删数据**，只标 settled（不再注入）。这样 AI 的任何判断都不会直接
- * 丢掉事实——「判错就丢事实」的风险归零。真正的删除只发生在这层机械修剪上，
- * 对象是已被判定无长期价值的留档，规则纯粹按时间，不含任何 AI 判断。
- */
-const SETTLED_RETENTION_MULTIPLIER = 2;
-
 export const SETTLE_ACTIONS = Object.freeze(['promote', 'discard', 'keep']);
 export const PROMOTE_PILLARS = Object.freeze(['mem', 'npc', 'item', 'milestone']);
 
@@ -420,6 +617,8 @@ export const SETTLE_REASON_LABELS = Object.freeze({
     capacity: '超出容量上限',
     manual: '手动结算',
     discarded: '判定无长期价值',
+    duplicate: '重复细节',
+    slot_capacity: '分类槽位已满',
 });
 
 const PROMOTE_PILLAR_LABELS = Object.freeze({
@@ -510,17 +709,34 @@ export function planSettlement(entries, currentFloor, settings = {}) {
 
 /**
  * 已结算留档的修剪计划（纯函数）。
- * 只挑 settled 且未晋升的条目——已晋升的条目带着 promotedTo，是晋升溯源链的一环，不修剪。
+ * 按楼层窗口保留：距离当前楼层超过 realtimeSettledRetentionFloors 的 settled 条目删除。
+ * 晋升条目的长期副本已经落在目标柱，实时溯源仍可由撤销快照恢复，因此同样遵守窗口。
  */
-export function planSettledPrune(entries, settings = {}) {
+export function planSettledPrune(entries, currentFloor, settings = {}) {
     const settled = (Array.isArray(entries) ? entries : [])
-        .filter(e => e && e.settleState === 'settled' && !e.promotedTo);
-    const cap = clampInt(settings.realtimeMaxEntries, 0, 500, 40) * SETTLED_RETENTION_MULTIPLIER;
-    if (cap <= 0 || settled.length <= cap) return [];
-    const oldestFirst = settled.slice().sort((a, b) =>
-        (Number(a.updatedAt || 0) - Number(b.updatedAt || 0))
-        || (Number(a.createdAt || 0) - Number(b.createdAt || 0)));
-    return oldestFirst.slice(0, settled.length - cap).map(entry => entry.id);
+        .filter(e => e && e.settleState === 'settled');
+    const retention = clampInt(settings.realtimeSettledRetentionFloors, 0, 500, 5);
+    if (retention === 0) return settled.map(entry => entry.id);
+    let floor = Number(currentFloor);
+    if (!Number.isFinite(floor)) {
+        floor = (Array.isArray(entries) ? entries : []).reduce((max, entry) => {
+            const seen = Number(entry?.lastSeenFloor ?? entry?.createdFloor);
+            return Number.isFinite(seen) ? Math.max(max, seen) : max;
+        }, -1);
+    }
+    if (!Number.isFinite(floor) || floor < 0) return [];
+    return settled.filter(entry => {
+        const seen = Number(entry.lastSeenFloor ?? entry.createdFloor);
+        return Number.isFinite(seen) && seen >= 0 && floor - seen > retention;
+    }).map(entry => entry.id);
+}
+
+export async function pruneSettledRealtimeMemories(chatId, currentFloor, options = {}) {
+    if (!chatId) return 0;
+    const settings = options.settings || getSettings();
+    const entries = options.entries || await getRealtimeMemories(chatId);
+    const ids = planSettledPrune(entries, currentFloor, settings);
+    return ids.length ? removeRealtimeMemories(chatId, ids) : 0;
 }
 
 /**
@@ -554,8 +770,7 @@ export async function checkSettlement(chatId, currentFloor, options = {}) {
     }
 
     const afterMark = await getRealtimeMemories(chatId);
-    const pruneIds = planSettledPrune(afterMark, settings);
-    if (pruneIds.length) result.pruned = await removeRealtimeMemories(chatId, pruneIds);
+    result.pruned = await pruneSettledRealtimeMemories(chatId, currentFloor, { settings, entries: afterMark });
     result.pendingCount = afterMark.filter(e => e.settleState === 'pending_settle').length;
 
     if (settings.debugLogging && (result.marked || result.pruned)) {
@@ -841,7 +1056,7 @@ export async function applySettleDecisions(chatId, decisions, missing = [], opti
     const currentFloor = Number(options.currentFloor);
     const result = {
         ok: true, snapshotId: '', promoted: [], discarded: [], kept: [],
-        failed: [], summary: '', createdRefs: [],
+        failed: [], summary: '', createdRefs: [], pruned: 0, cleanupError: '',
     };
     const list = (Array.isArray(decisions) ? decisions : []).filter(Boolean);
     const keepIds = new Set((Array.isArray(missing) ? missing : []).map(String));
@@ -908,6 +1123,17 @@ export async function applySettleDecisions(chatId, decisions, missing = [], opti
         }
     }
 
+    // 快照已覆盖本轮受影响条目，超出保留楼层的 settled 项现在可以安全物理清理；
+    // 用户撤销时 restoreEntriesVerbatim 会按原 id 写回。
+    if (Number.isFinite(currentFloor)) {
+        try {
+            result.pruned = await pruneSettledRealtimeMemories(chatId, currentFloor, { settings });
+        } catch (error) {
+            result.cleanupError = error.message || String(error);
+            console.warn('[BB-Memory] 实时结算已完成，但过期留档清理失败:', error);
+        }
+    }
+
     const parts = [];
     if (result.promoted.length) {
         const byPillar = {};
@@ -919,6 +1145,8 @@ export async function applySettleDecisions(chatId, decisions, missing = [], opti
     }
     if (result.discarded.length) parts.push(`留档 ${result.discarded.length} 条`);
     if (result.kept.length) parts.push(`延期 ${result.kept.length} 条`);
+    if (result.pruned) parts.push(`清理过期留档 ${result.pruned} 条`);
+    if (result.cleanupError) parts.push('过期留档清理将在下次重试');
     if (result.failed.length) parts.push(`${result.failed.length} 条失败`);
     result.summary = parts.join('，') || '无改动';
 
@@ -1326,9 +1554,9 @@ export function __selfTestRealtime() {
     // ── 响应解析 ──
     const okJson = JSON.stringify({
         details: [
-            { k: 'transport', t: 'A和B坐公交车前往电影院' },
-            { k: '衣着', t: 'A穿连衣裙' },
-            { k: 'bogus', t: 'B把伞靠在门边' },
+            { k: 'transport', s: 'A和B的交通', t: 'A和B坐公交车前往电影院' },
+            { k: '衣着', s: 'A的衣着', t: 'A穿连衣裙' },
+            { k: 'bogus', s: '门边的雨伞', t: 'B把伞靠在门边' },
         ],
     });
     const okParsed = parseRealtimeDetails(okJson, { maxDetails: 5 });
@@ -1336,6 +1564,7 @@ export function __selfTestRealtime() {
     add('kind 英文键原样', okParsed.details[0].kind === 'transport');
     add('kind 中文标签被归一化', okParsed.details[1].kind === 'outfit', okParsed.details[1].kind);
     add('kind 未知值回退 detail', okParsed.details[2].kind === 'detail', okParsed.details[2].kind);
+    add('槽位名被解析', okParsed.details[0].slotKey === 'A和B的交通', okParsed.details[0].slotKey);
 
     add('带代码块与外包文字仍可解析',
         parseRealtimeDetails('好的：\n```json\n{"details":[{"k":"outfit","t":"A穿风衣"}]}\n```', {}).details.length === 1);
@@ -1375,6 +1604,17 @@ export function __selfTestRealtime() {
     })(), String(parseRealtimeDetails(JSON.stringify({ details: [{ k: 'detail', t: '很长的细节'.repeat(40) }] }), {}).details[0]?.text.length));
     add('兼容 text/kind 长字段名',
         parseRealtimeDetails('{"details":[{"kind":"present","text":"检票员在场"}]}', {}).details[0].kind === 'present');
+    add('关闭分类在解析层被拦截', (() => {
+        const res = parseRealtimeDetails('{"details":[{"k":"outfit","s":"A","t":"A穿风衣"}]}', {
+            allowedKinds: ['transport'],
+        });
+        return res.details.length === 0 && res.rejected[0]?.reason.includes('已关闭');
+    })());
+    add('r 只能引用现有槽位 id', (() => {
+        const pass = parseRealtimeDetails('{"details":[{"k":"outfit","r":"old1","t":"A换成风衣"}]}', { existingIds: ['old1'] });
+        const reject = parseRealtimeDetails('{"details":[{"k":"outfit","r":"ghost","t":"A换成风衣"}]}', { existingIds: ['old1'] });
+        return pass.details[0]?.replaceId === 'old1' && reject.details.length === 0;
+    })());
 
     // ── 提示词构建 ──
     const prompt = buildRealtimePrompt('A和B坐公交车来到电影院，A穿着连衣裙。', {
@@ -1388,9 +1628,10 @@ export function __selfTestRealtime() {
     add('提示词带入地点与时间', prompt.includes('电影院') && prompt.includes('2026年4月9日下午'));
     add('提示词带入本层回复', prompt.includes('A和B坐公交车来到电影院'));
     add('提示词明确排除里程碑级内容', prompt.includes('里程碑级内容'));
-    add('自定义模板覆盖生效',
-        buildRealtimePrompt('x', { settings: { customPromptTemplates: { 'realtime.detailExtract': '自定义：{{aiMessage}}' } } })
-            === '自定义：x');
+    add('自定义模板覆盖生效且仍追加系统槽位约束', (() => {
+        const custom = buildRealtimePrompt('x', { settings: { customPromptTemplates: { 'realtime.detailExtract': '自定义：{{aiMessage}}' } } });
+        return custom.startsWith('自定义：x') && custom.includes('本次分类槽位硬约束');
+    })());
     add('超长回复被截断',
         buildRealtimePrompt('字'.repeat(5000), { settings: {} }).length < 5000 + 2000,
         String(buildRealtimePrompt('字'.repeat(5000), { settings: {} }).length));
@@ -1407,8 +1648,39 @@ export function __selfTestRealtime() {
         (() => { const p = pickSceneInfoFromExtraction({}); return p.location === '' && p.storyTime === ''; })());
     add('记忆时间兜底',
         pickSceneInfoFromExtraction({ memories: [{ storyTime: 'd9' }] }).storyTime === 'd9');
-    add('8 种分类全部可被归一化命中',
+    add('10 种分类全部可被归一化命中',
         Object.keys(REALTIME_KINDS).every(k => normalizeRealtimeKind(k) === k));
+
+    // ── 固定分类槽位与 upsert ──
+    const slotExisting = [
+        { id: 'o1', kind: 'outfit', slotKey: 'A的衣着', text: 'A穿红裙', sceneKey: 'S', createdFloor: 10, lastSeenFloor: 10, settleState: 'active' },
+    ];
+    const slotSettings = { realtimeOutfitSlots: 1 };
+    const replacePlan = planRealtimeDetailWrites(slotExisting, [
+        { kind: 'outfit', slotKey: 'A的衣着', text: 'A换成蓝裙' },
+    ], { settings: slotSettings, sceneKey: 'S', floor: 12 });
+    add('同分类同槽位更新原条目而不新增',
+        replacePlan.updates.length === 1 && replacePlan.adds.length === 0
+        && replacePlan.updates[0].id === 'o1' && replacePlan.updates[0].patch.text === 'A换成蓝裙',
+        JSON.stringify(replacePlan));
+    const fullPlan = planRealtimeDetailWrites(slotExisting, [
+        { kind: 'outfit', slotKey: 'B的衣着', text: 'B穿风衣' },
+    ], { settings: slotSettings, sceneKey: 'S', floor: 12 });
+    add('分类槽位已满时拒绝新增对象',
+        fullPlan.adds.length === 0 && fullPlan.rejected[0]?.reason.includes('槽位已满'), JSON.stringify(fullPlan));
+    const duplicatePlan = planRealtimeDetailWrites([
+        ...slotExisting,
+        { ...slotExisting[0], id: 'o2', createdFloor: 11, lastSeenFloor: 11 },
+    ], [], { settings: { realtimeOutfitSlots: 2 }, sceneKey: 'S', floor: 12 });
+    add('历史完全重复项只保留最新一条参与当前场景',
+        duplicatePlan.retire.length === 1 && duplicatePlan.retire[0].id === 'o1'
+        && duplicatePlan.retire[0].reason === 'duplicate', JSON.stringify(duplicatePlan.retire));
+    add('分类设 0 时旧活跃项退出、新条目被拒绝', (() => {
+        const plan = planRealtimeDetailWrites(slotExisting, [
+            { kind: 'outfit', slotKey: 'A的衣着', text: 'A穿红裙' },
+        ], { settings: { realtimeOutfitSlots: 0 }, sceneKey: 'S', floor: 12 });
+        return plan.retire.some(item => item.id === 'o1') && plan.adds.length === 0 && plan.rejected.length === 1;
+    })());
 
     // ── Task 9：结算触发器 ──
     const mk = (over = {}) => ({
@@ -1485,17 +1757,22 @@ export function __selfTestRealtime() {
 
     // 留档修剪
     const settledMany = Array.from({ length: 10 }, (_, i) =>
-        mk({ id: 'sd' + i, settleState: 'settled', updatedAt: 1000 + i }));
-    const prune = planSettledPrune(settledMany, { realtimeMaxEntries: 3 });
-    add('留档修剪：settled 超过 上限×2 时修剪最旧的',
-        prune.length === 4 && prune.join(',') === 'sd0,sd1,sd2,sd3', prune.join(','));
-    add('留档修剪：未超上限不修剪',
-        planSettledPrune(settledMany, { realtimeMaxEntries: 40 }).length === 0);
-    add('留档修剪：已晋升条目不修剪（晋升溯源链）',
+        mk({ id: 'sd' + i, settleState: 'settled', createdFloor: 30 + i, lastSeenFloor: 30 + i, updatedAt: 1000 + i }));
+    const prune = planSettledPrune(settledMany, 40, { realtimeSettledRetentionFloors: 5 });
+    add('留档修剪：只删除当前楼层 5 层范围以外的 settled',
+        prune.length === 5 && prune.join(',') === 'sd0,sd1,sd2,sd3,sd4', prune.join(','));
+    add('留档修剪：正好相距 5 层仍保留',
+        !prune.includes('sd5'));
+    add('留档修剪：窗口足够大时不修剪',
+        planSettledPrune(settledMany, 40, { realtimeSettledRetentionFloors: 20 }).length === 0);
+    add('留档修剪：窗口设 0 时所有 settled 立即清理',
+        planSettledPrune(settledMany, 40, { realtimeSettledRetentionFloors: 0 }).length === settledMany.length);
+    add('留档修剪：已晋升条目同样遵守楼层窗口',
         planSettledPrune(settledMany.map(e => ({ ...e, promotedTo: { pillar: 'mem', id: 'm1' } })),
-            { realtimeMaxEntries: 1 }).length === 0);
+            40, { realtimeSettledRetentionFloors: 5 }).length === 5);
     add('留档修剪：活跃条目不修剪',
-        planSettledPrune(Array.from({ length: 10 }, (_, i) => mk({ id: 'a' + i })), { realtimeMaxEntries: 1 }).length === 0);
+        planSettledPrune(Array.from({ length: 10 }, (_, i) => mk({ id: 'a' + i })), 99,
+            { realtimeSettledRetentionFloors: 0 }).length === 0);
 
     // ── Task 9：决定解析 ──
     const pendingFixture = [

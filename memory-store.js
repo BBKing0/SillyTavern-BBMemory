@@ -121,8 +121,19 @@ export const DEFAULT_SETTINGS = Object.freeze({
     realtimeExtractScope: 'always',    // 'always' 每层都抓 | 'first_n' 仅每个场景前 N 层
     realtimeExtractFirstN: 6,          // realtimeExtractScope='first_n' 时的层数
     realtimeMaxDetailsPerFloor: 5,     // 单层最多抓几条细节
+    realtimeTransportSlots: 2,         // 每类 0=关闭，正数=当前场景槽位上限
+    realtimeOutfitSlots: 2,
+    realtimePresentSlots: 2,
+    realtimePreferenceSlots: 2,
+    realtimePositionSlots: 2,
+    realtimeStateSlots: 2,
+    realtimeObjectSlots: 2,
+    realtimeTimeSlots: 2,
+    realtimeEnvironmentSlots: 2,
+    realtimeDetailSlots: 2,            // 无法归类但会造成矛盾的小细节兜底
     realtimeTtlFloors: 12,            // 条目存活多少楼层后进入待结算
     realtimeMaxEntries: 40,           // 第五柱容量上限，超出时最旧的进待结算
+    realtimeSettledRetentionFloors: 5,// 已结算条目只保留最近 N 层，超出后物理删除
     realtimeSceneChangeSettle: true,   // 场景切换时结算上一场景的条目
     realtimeInjectionMax: 15,          // 注入条数硬上限
     realtimeInjectionTokenCap: 300,    // 注入 token 硬上限（不依赖全局预算，必须自带）
@@ -996,6 +1007,7 @@ function normalizeRealtimeEntry(data = {}, options = {}) {
         sceneKey: String(data.sceneKey || '').trim(),
         location: String(data.location || '').trim(),
         storyTime: String(data.storyTime || '').trim(),
+        slotKey: String(data.slotKey || '').trim(),
         createdFloor: floor,
         lastSeenFloor: typeof data.lastSeenFloor === 'number' ? data.lastSeenFloor : floor,
         settleState: normalizeSettleState(data.settleState),
@@ -1612,7 +1624,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.3.3',
+        version: '9.3.4',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2000,7 +2012,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
         realtime,
     };
     const backup = {
-        version: '9.3.3',
+        version: '9.3.4',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2788,7 +2800,7 @@ export async function exportMemories(chatId) {
     await normalizeDataEmbeddingsToRefs(chatId, data);
     const vectorPack = await buildVectorPack(chatId, data);
     return JSON.stringify({
-        version: '9.3.3',
+        version: '9.3.4',
         schema: 'bb-memory-vector-ref-v1',
         exportedAt: Date.now(),
         data: stripRuntimeEmbeddings(data),
