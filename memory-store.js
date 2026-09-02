@@ -356,6 +356,10 @@ async function saveCollection(type, chatId, data) {
 }
 
 const SOURCE_ROLLBACK_KEY = '_bbmemSourceRollback';
+// 同一聊天可能在一次 DOM 变更中同时删除多个楼层。每次清理都要经历
+// “读取整柱 → 修改 → 写回整柱”，若并发执行，后写入的旧快照会复活先前已删条目。
+// 因此来源删除必须按 chatId 串行化；不同聊天仍可并行。
+const sourceDeleteQueues = new Map();
 
 function deepClonePlain(value) {
     if (!value || typeof value !== 'object') return value;
@@ -1635,7 +1639,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.4.0',
+        version: '9.4.2',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -1682,7 +1686,7 @@ export async function getEntriesBySource(chatId, exchangeHash, options = {}) {
 /**
  * 按 exchange hash / 楼层来源删除关联的记忆条目（支持 ROLL 后清理）
  */
-export async function deleteByExchange(chatId, exchangeHash, options = {}) {
+async function deleteByExchangeUnlocked(chatId, exchangeHash, options = {}) {
     const criteria = normalizeSourceCriteria(exchangeHash, options);
     if (!criteria.exchangeHash && criteria.sourceFloor === null && !criteria.sourceMessageHash) {
         return { npc: 0, items: 0, milestones: 0, timeline: 0, memories: 0, map: 0, deleted: {}, restored: {} };
@@ -1772,6 +1776,23 @@ export async function deleteByExchange(chatId, exchangeHash, options = {}) {
     if (saves.length) await Promise.all(saves);
     if (saves.length || removed.map) scheduleAutoBackup(chatId);
     return removed;
+}
+
+/**
+ * 按聊天串行执行楼层来源删除/回滚，防止多个楼层同时删除时发生整柱覆盖竞态。
+ */
+export async function deleteByExchange(chatId, exchangeHash, options = {}) {
+    const queueKey = String(chatId || '__no_chat__');
+    const previous = sourceDeleteQueues.get(queueKey) || Promise.resolve();
+    const operation = previous
+        .catch(() => {})
+        .then(() => deleteByExchangeUnlocked(chatId, exchangeHash, options));
+    sourceDeleteQueues.set(queueKey, operation);
+    try {
+        return await operation;
+    } finally {
+        if (sourceDeleteQueues.get(queueKey) === operation) sourceDeleteQueues.delete(queueKey);
+    }
 }
 
 async function deleteByExchangeLegacy(chatId, exchangeHash) {
@@ -2023,7 +2044,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
         realtime,
     };
     const backup = {
-        version: '9.4.0',
+        version: '9.4.2',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2811,7 +2832,7 @@ export async function exportMemories(chatId) {
     await normalizeDataEmbeddingsToRefs(chatId, data);
     const vectorPack = await buildVectorPack(chatId, data);
     return JSON.stringify({
-        version: '9.4.0',
+        version: '9.4.2',
         schema: 'bb-memory-vector-ref-v1',
         exportedAt: Date.now(),
         data: stripRuntimeEmbeddings(data),

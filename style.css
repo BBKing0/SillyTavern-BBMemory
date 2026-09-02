@@ -2224,13 +2224,29 @@
 .bb-active-review-overlay {
     position: fixed;
     inset: 0;
-    z-index: 1000200;
+    z-index: 2147483000 !important;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: clamp(0.5rem, 3vh, 1.25rem);
     background: rgba(0, 0, 0, 0.58);
     box-sizing: border-box;
+}
+
+/* v9.4.2: Popover API 把关键弹窗提升到浏览器 top layer，避免被 ST 移动端抽屉覆盖。 */
+.bb-native-top-layer[popover] {
+    margin: 0 !important;
+    border: 0 !important;
+    padding: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    height: 100dvh !important;
+    max-width: 100vw !important;
+    max-height: 100vh !important;
+    max-height: 100dvh !important;
+    overflow: visible !important;
+    box-sizing: border-box !important;
+    color: inherit;
 }
 
 .bb-active-review-panel {
@@ -2381,15 +2397,18 @@
     color: #ff8a80;
 }
 
-@media (max-width: 480px) {
+@media (max-width: 768px) {
     .bb-active-review-overlay {
-        align-items: flex-end;
-        padding: 0.5rem;
+        align-items: stretch;
+        justify-content: stretch;
+        padding: max(0.35rem, env(safe-area-inset-top)) max(0.35rem, env(safe-area-inset-right)) max(0.35rem, env(safe-area-inset-bottom)) max(0.35rem, env(safe-area-inset-left));
     }
 
     .bb-active-review-panel {
         width: 100%;
-        max-height: calc(100dvh - 1rem);
+        height: 100%;
+        min-height: 0;
+        max-height: 100%;
     }
 
     .bb-active-review-header,
@@ -2519,7 +2538,16 @@
     padding: clamp(8px, 3vh, 20px) !important;
     box-sizing: border-box;
     isolation: isolate;
-    z-index: 1000200 !important;
+    z-index: 2147483000 !important;
+    pointer-events: auto !important;
+}
+
+.bb-native-top-layer.bb-form-overlay[popover],
+.bb-native-top-layer.bb-manager-form-overlay[popover],
+.bb-native-top-layer.bb-active-review-overlay[popover] {
+    position: fixed !important;
+    inset: 0 !important;
+    display: flex !important;
 }
 
 .bb-form-overlay .bb-mem-form-popup,
@@ -2532,7 +2560,8 @@
 .bb-form-overlay .bb-mem-form-popup,
 .bb-manager-form-overlay .bb-mem-form-popup {
     position: relative;
-    z-index: 1000201 !important;
+    z-index: 2147483001 !important;
+    pointer-events: auto !important;
 }
 
 .bb-mem-form-popup {
@@ -5717,7 +5746,7 @@
     .bb-manager-form-overlay {
         position: fixed !important;
         inset: 0 !important;
-        z-index: 1000200 !important;
+        z-index: 2147483000 !important;
         align-items: flex-start !important;
         overflow-y: auto !important;
         padding: max(0.5rem, env(safe-area-inset-top)) max(0.5rem, env(safe-area-inset-right)) max(0.5rem, env(safe-area-inset-bottom)) max(0.5rem, env(safe-area-inset-left)) !important;
@@ -5725,7 +5754,9 @@
 
     .bb-form-overlay .bb-mem-form-popup,
     .bb-manager-form-overlay .bb-mem-form-popup {
-        z-index: 1000201 !important;
+        width: 100% !important;
+        max-width: 36rem !important;
+        z-index: 2147483001 !important;
         max-height: calc(100dvh - 1rem) !important;
         overflow: hidden !important;
     }

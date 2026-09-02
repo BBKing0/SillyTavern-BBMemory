@@ -1,5 +1,5 @@
 /**
- * memory-curator.js — BB-Memory v9.3.3 AI 记忆整理师
+ * memory-curator.js — BB-Memory v9.4.2 AI 记忆整理师
  *
  * 解决增量两两去重的结构性盲区：`findBestDuplicate` 只让每条新条目与已有条目
  * 逐一比较并取最高分，因此「渐进细化」型重复（5 条同一件事逐层补细节，相邻
@@ -34,6 +34,7 @@ import {
     fillPromptTemplate,
     getPromptTemplate,
 } from './prompt-templates.js';
+import { mountInTopLayer } from './ui-top-layer.js';
 
 // ═══════════════════════════════════════════════════════════
 //  柱定义与默认参数
@@ -1897,7 +1898,7 @@ export function openCurationReviewPanel(chatId, ops, options = {}) {
                     <button class="menu_button" type="button" data-action="apply">应用选中</button>
                 </div>
             </div>`;
-        document.body.appendChild(overlay);
+        mountInTopLayer(overlay);
 
         const tabEl = overlay.querySelector('.bb-active-review-tabs');
         const listEl = overlay.querySelector('.bb-active-review-list');

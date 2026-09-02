@@ -1,5 +1,5 @@
 /**
- * memory-assistant.js —— BB-Memory v9.4.0 记忆管家面板
+ * memory-assistant.js —— BB-Memory v9.4.2 记忆管家面板
  *
  * 五柱浏览：NPC档案 / 物品栏 / 里程碑 / 记忆条目 / 实时记忆 + 仪表盘。
  */

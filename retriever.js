@@ -1,5 +1,5 @@
 /**
- * retriever.js —— BB-Memory v5.0 检索与注入系统
+ * retriever.js —— BB-Memory v9.4.2 检索与注入系统
  *
  * 长期记忆注入格式：角色档案 / 重要物品 / 故事里程碑 / 故事时间线 / 相关记忆。
  * 简化为 5 维评分 + 实体展开。
@@ -55,14 +55,17 @@ export const INJECTION_LEVELS = Object.freeze({
 const DEFAULT_INJECTION_SECTION_HEADERS = Object.freeze({
     thread: '以下是持续故事线与事件顺序。',
     timeline: '以下是持续故事线与事件顺序。',
-    npc: '格式：-姓名|身份|关系|性格|外貌|位置|级别\n只有检索命中的人物才会追加“【详细介绍】”。',
+    npc: '格式：-姓名|级别|身份|关系|性格|外貌|位置\n只有检索命中的人物才会追加“【详细介绍】”。',
     item: '格式：-物品名|持有者或地点|状态\n条目按持有者、地点连续排列；只有检索命中的物品才会追加“【详细说明】”。',
     milestone: '格式：日期：内容',
-    memory: '格式：序号.[日期]内容|人物对话',
-    map: '以下是地点与空间关系{{worldRefSuffix}}。',
+    memory: '格式：序号.[日期]内容\n（说话者→对话对象）人物对话',
+    map: '以下是地点与空间关系{{worldRefSuffix}}。\n格式：-地点名 | 区域:区域名 | 父地点:地点名 | 说明:地点说明 | 现实参考:参考地点\n下方缩进行表示“可前往 / 入口来源 / 子地点 / 同区域地点 / 局部空间链”。',
     // v9.3.3 第五柱：不参与检索、无条件注入
     realtime: '以下是当前场景仍然有效的临时细节，用于保持连续性，不是长期设定。',
 });
+
+const MAP_INJECTION_FORMAT_GUIDE = '格式：-地点名 | 区域:区域名 | 父地点:地点名 | 说明:地点说明 | 现实参考:参考地点\n'
+    + '下方缩进行表示“可前往 / 入口来源 / 子地点 / 同区域地点 / 局部空间链”。';
 
 const SECTION_XML_TAGS = Object.freeze({
     timeline: 'Story_Timeline',
@@ -115,6 +118,25 @@ function getInjectionHeader(settings, key, replacements = {}) {
         : defaultValue;
     const template = getPromptTemplate(activeSettings, `injection.${key}Header`, fallback);
     return fillPromptTemplate(template, replacements).trim();
+}
+
+function getStructuredInjectionHeader(settings, key, replacements = {}) {
+    let header = getInjectionHeader(settings, key, replacements);
+    // 只迁移旧版内置格式文案，不覆盖用户真正自定义的说明。
+    if (key === 'npc') {
+        header = header.replace(
+            '-姓名|身份|关系|性格|外貌|位置|级别',
+            '-姓名|级别|身份|关系|性格|外貌|位置',
+        );
+    } else if (key === 'memory') {
+        header = header.replace(
+            '格式：序号.[日期]内容|人物对话',
+            '格式：序号.[日期]内容\n（说话者→对话对象）人物对话',
+        );
+    } else if (key === 'map' && !header.includes('格式：-地点名')) {
+        header = [header, MAP_INJECTION_FORMAT_GUIDE].filter(Boolean).join('\n');
+    }
+    return header;
 }
 
 export function getRetrieverPromptTemplates() {
@@ -684,12 +706,12 @@ function formatNpcLine(npc) {
     const tierLabel = NPC_TIERS[npc.npcTier]?.label || npc.npcTier || '配角';
     const row = [
         npc.name || '未命名',
+        tierLabel,
         cleanMergedField(npc.role, 36, true),
         formatNpcRelationship(npc),
         cleanMergedField(npc.personality, 54, true),
         cleanMergedField(npc.appearance, 54, true),
         cleanMergedField(npc.location, 32, true),
-        tierLabel,
     ].join('|');
     if (npc._bbInjectMode !== 'full') return `-${row}`;
 
@@ -762,7 +784,20 @@ function formatMemoryLine(m, chatLength = 0, level = 'L2', settings = getSetting
     }
     const date = String(m.storyTime || m.date || m.time || '时间未明').trim();
     const dialogue = String(m.verbatim || '').trim();
-    return `[${date}]${String(content || '').trim()}${dialogue ? `|${dialogue}` : ''}`;
+    if (!dialogue) return `[${date}]${String(content || '').trim()}`;
+
+    const participants = Array.isArray(m.participants)
+        ? m.participants.map(name => String(name || '').trim()).filter(Boolean)
+        : [];
+    const speaker = String(m.subject || m.speaker || m.from || participants[0] || '说话者未明').trim();
+    const listener = String(
+        m.target
+        || m.listener
+        || m.to
+        || participants.find(name => name !== speaker)
+        || '对象未明'
+    ).trim();
+    return `[${date}]${String(content || '').trim()}\n（${speaker}→${listener}）${dialogue}`;
 }
 
 function formatMapEdgeMeta(edge) {
@@ -859,7 +894,7 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
     const selected = [...selectedMap.values()];
 
     const worldRef = settings.worldRealWorldRef || '';
-    const header = getInjectionHeader(settings, 'map', {
+    const header = getStructuredInjectionHeader(settings, 'map', {
         worldRef,
         worldRefSuffix: worldRef ? `｜现实参考：${worldRef}` : '',
     }) || (worldRef ? `地点与空间关系（现实参考：${worldRef}）` : '地点与空间关系');
@@ -1317,7 +1352,7 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, milestone
     if (npcProfiles?.length) {
         budgetSections.push(makeBudgetSection(
             'npc',
-            getInjectionHeader(activeSettings, 'npc') || DEFAULT_INJECTION_SECTION_HEADERS.npc,
+            getStructuredInjectionHeader(activeSettings, 'npc') || DEFAULT_INJECTION_SECTION_HEADERS.npc,
             npcProfiles.map(npc => makeBudgetItem(formatNpcLine(npc), {
                 resident: isResidentEntry(npc) || npc.npcTier === 'core',
                 priority: priorityForNpc(npc),
@@ -1385,7 +1420,7 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, milestone
         }
         budgetSections.push(makeBudgetSection(
             'memory',
-            getInjectionHeader(activeSettings, 'memory') || DEFAULT_INJECTION_SECTION_HEADERS.memory,
+            getStructuredInjectionHeader(activeSettings, 'memory') || DEFAULT_INJECTION_SECTION_HEADERS.memory,
             memoryItems
         ));
     }

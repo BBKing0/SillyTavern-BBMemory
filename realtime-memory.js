@@ -1,5 +1,5 @@
 /**
- * realtime-memory.js — BB-Memory v9.4.0 实时记忆（第五柱）
+ * realtime-memory.js — BB-Memory v9.4.2 实时记忆（第五柱）
  *
  * 解决的问题：检索完全由最后一条用户消息驱动，query 里没有「车」字，
  * 「坐公交车来电影院」这条记忆就永远进不了注入，后文于是写出「开车回家」。

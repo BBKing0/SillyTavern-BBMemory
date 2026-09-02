@@ -1,5 +1,5 @@
 /**
- * memory-manager.js —— BB-Memory v9.4.0 记忆管理器
+ * memory-manager.js —— BB-Memory v9.4.2 记忆管理器
  *
  * 全屏覆盖弹窗，统一管理长期记忆、实时记忆、存档、时间线与归档。
  */
@@ -28,16 +28,19 @@ import { NPC_TIERS, ITEM_TIERS, normalizeNpcTier, normalizeItemTier } from './en
 import { attachEntryEmbedding } from './auto-generator.js';
 import { markExchangeExtracted, hideExchange, unmarkExchangeProcessed, getExtractionFloorStatus } from './message-state.js';
 import { fuzzyMemory, archiveMemory, restoreMemory } from './memory-maintainer.js';
+import { mountInTopLayer, removeTopLayerElement } from './ui-top-layer.js';
 
 // ═══ 全局状态 ═══
 let activeFilter = 'all';
 
-const MANAGER_FORM_OVERLAY_Z = 1000200;
-const MANAGER_FORM_POPUP_Z = 1000201;
+// ST 主题、抽屉和第三方扩展可能使用百万级 z-index。编辑表单是管理器的
+// 当前交互面，必须稳定处于最上层，否则会看得见却被下方管理器截获点击。
+const MANAGER_FORM_OVERLAY_Z = 2147483000;
+const MANAGER_FORM_POPUP_Z = 2147483001;
 
 function closeManagerFormOverlays() {
     document.querySelectorAll('.bb-manager-form-overlay, .bb-form-overlay, .bb-thread-form-overlay')
-        .forEach(el => el.remove());
+        .forEach(removeTopLayerElement);
 }
 
 function applyManagerFormLayer(formOverlay) {
@@ -46,6 +49,8 @@ function applyManagerFormLayer(formOverlay) {
     formOverlay.style.setProperty('position', 'fixed', 'important');
     formOverlay.style.setProperty('inset', '0', 'important');
     formOverlay.style.setProperty('z-index', String(MANAGER_FORM_OVERLAY_Z), 'important');
+    formOverlay.style.setProperty('pointer-events', 'auto', 'important');
+    formOverlay.style.setProperty('isolation', 'isolate', 'important');
     const popup = formOverlay.querySelector('.bb-mem-form-popup');
     if (popup) {
         popup.style.setProperty('position', 'relative');
@@ -58,7 +63,7 @@ function createManagerFormOverlay(extraClass = '') {
     const formOverlay = document.createElement('div');
     formOverlay.className = ['bb-form-overlay', 'bb-manager-form-overlay', extraClass].filter(Boolean).join(' ');
     applyManagerFormLayer(formOverlay);
-    document.body.appendChild(formOverlay);
+    mountInTopLayer(formOverlay);
     return formOverlay;
 }
 

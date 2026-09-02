@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.4.0 主入口
+ * index.js —— BB-Memory v9.4.2 主入口
  *
  * 五柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目 / 实时记忆。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -86,13 +86,21 @@ import {
     getCharacterDisplayName, autoRescueSlots, primeIdentityCache,
 } from './slot-identity.js';
 import { getCharacterWorldRealWorldRef } from './character-settings.js';
+import { mountInTopLayer } from './ui-top-layer.js';
 
 // ═══ 常量 ═══
 const INJECTION_KEY = 'bb_memory_injection';
 const REALTIME_INJECTION_KEY = 'bb_memory_realtime_injection';
-const POSITION_AFTER_PROMPT = 0; // SillyTavern: After Main Prompt / Story String
 const POSITION_IN_CHAT = 1;
 const ROLE_SYSTEM = 0;
+const MAX_IN_CHAT_DEPTH = 9999;
+
+// 插到聊天历史最前方，使长期记忆成为独立 system 消息：位于 Story String
+// 之后、Post-History Instructions 之前，不再与预设正文拼成同一条消息。
+function getLongTermInjectionDepth(chat) {
+    const chatLength = Array.isArray(chat) ? chat.length : 0;
+    return Math.min(MAX_IN_CHAT_DEPTH, Math.max(1, chatLength));
+}
 
 // ═══ 全局状态 ═══
 let lastRetrievalResult = null;
@@ -106,7 +114,7 @@ let chatSwitchSuppressDeletesUntil = 0;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.4.0';
+const SETTINGS_EXPORT_VERSION = '9.4.2';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
@@ -588,17 +596,24 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         if (!/<BBMemory\b[^>]*>[\s\S]*<\/BBMemory>/i.test(injectionText)) {
             injectionText = `<BBMemory>\n${injectionText.trim()}\n</BBMemory>`;
         }
-        ctx.setExtensionPrompt(INJECTION_KEY, injectionText, POSITION_AFTER_PROMPT, 0, ROLE_SYSTEM);
+        ctx.setExtensionPrompt(
+            INJECTION_KEY,
+            injectionText,
+            POSITION_IN_CHAT,
+            getLongTermInjectionDepth(chat),
+            false,
+            ROLE_SYSTEM,
+        );
     } else {
-        ctx.setExtensionPrompt(INJECTION_KEY, '', POSITION_AFTER_PROMPT, 0, ROLE_SYSTEM);
+        ctx.setExtensionPrompt(INJECTION_KEY, '', POSITION_IN_CHAT, 0, false, ROLE_SYSTEM);
     }
 
     if (realtimeText.trim()) {
         const realtimeInjectionText = `<BBMemory>\n${realtimeText.trim()}\n</BBMemory>`;
         // depth=0：紧跟聊天历史的最后一条已发送消息，独立于前置长期记忆。
-        ctx.setExtensionPrompt(REALTIME_INJECTION_KEY, realtimeInjectionText, POSITION_IN_CHAT, 0, ROLE_SYSTEM);
+        ctx.setExtensionPrompt(REALTIME_INJECTION_KEY, realtimeInjectionText, POSITION_IN_CHAT, 0, false, ROLE_SYSTEM);
     } else {
-        ctx.setExtensionPrompt(REALTIME_INJECTION_KEY, '', POSITION_IN_CHAT, 0, ROLE_SYSTEM);
+        ctx.setExtensionPrompt(REALTIME_INJECTION_KEY, '', POSITION_IN_CHAT, 0, false, ROLE_SYSTEM);
     }
 
     if (truncated.length > 0) {
@@ -671,8 +686,8 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
 function clearInjection() {
     try {
         const ctx = SillyTavern.getContext();
-        ctx.setExtensionPrompt(INJECTION_KEY, '', POSITION_AFTER_PROMPT, 0, ROLE_SYSTEM);
-        ctx.setExtensionPrompt(REALTIME_INJECTION_KEY, '', POSITION_IN_CHAT, 0, ROLE_SYSTEM);
+        ctx.setExtensionPrompt(INJECTION_KEY, '', POSITION_IN_CHAT, 0, false, ROLE_SYSTEM);
+        ctx.setExtensionPrompt(REALTIME_INJECTION_KEY, '', POSITION_IN_CHAT, 0, false, ROLE_SYSTEM);
     } catch { /* ignore */ }
 }
 
@@ -782,7 +797,7 @@ function showFloatingReviewPanel(chatId, candidates) {
             </div>
         </div>
     `;
-    document.body.appendChild(overlay);
+    mountInTopLayer(overlay);
 
     const tabEl = overlay.querySelector('.bb-active-review-tabs');
     const listEl = overlay.querySelector('.bb-active-review-list');
@@ -4525,7 +4540,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.4.0 初始化开始...');
+    console.log('[BB-Memory] v9.4.2 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -4721,7 +4736,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.4.0 初始化完成');
+    console.log('[BB-Memory] v9.4.2 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆

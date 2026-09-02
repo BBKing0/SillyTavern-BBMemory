@@ -31,6 +31,7 @@ export const DEFAULT_INITIALIZATION_PROMPT = `你是 BB-Memory 初始化提取�
 - milestones 只输出未被 timeline.entries 覆盖的关键时间点、伏笔或阶段转折。
 - 每个已输出条目都要优先、尽量填写完整字段；能从上下文推断的时间、地点、主体、目标、参与者、状态和标签不要留空。
 - memories[].c 写事实摘要，保留人物、地点、事件和关键原话；不要写文学化、感官化描写；时间留在 st/storyTime 字段。
+- memories[].v 只写人物原话；只要 v 非空，s 必须填写说话者，a 必须填写该句话的对话对象，不能把二者颠倒或留空。
 
 {{CONCRETE_TIME_RULE}}
 
@@ -38,7 +39,7 @@ export const DEFAULT_INITIALIZATION_PROMPT = `你是 BB-Memory 初始化提取�
 {{selectedLines}}
 
 字段格式：
-1. memories 数组：{ "n":"标题", "tp":"event/emotion/habit/fact", "m":"一句话摘要", "c":"1-3句事实摘要", "v":"重要原话", "s":"主体", "a":"目标", "i":0.6, "e":0.2, "st":"具体故事时间", "g":["标签"] }
+1. memories 数组：{ "n":"标题", "tp":"event/emotion/habit/fact", "m":"一句话摘要", "c":"1-3句事实摘要", "v":"人物重要原话", "s":"说话者/事实主体", "a":"对话对象/事实目标", "i":0.6, "e":0.2, "st":"具体故事时间", "g":["标签"] }
 2. npc 数组：{ "n":"姓名", "r":"身份/职业", "p":"性格", "a":"外貌", "s":"状态", "l":"所在地", "rt":[{"n":"关联角色","r":"关系","a":"态度"}], "nt":"core/important/minor/background", "ic":"一句话索引卡", "g":["标签"] }
 3. items 数组：{ "n":"物品名", "o":"持有者", "s":"held/used/lost/destroyed", "l":"所在地点", "sig":"意义与用途", "kp":false, "it":"key/equipped/clue/consumable/background", "g":["标签"] }
 4. milestones 数组：{ "t":"具体故事时间", "e":"事件摘要", "p":["参与者"], "l":"地点", "active":true, "imp":"影响", "g":["标签"] }
