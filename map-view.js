@@ -8,7 +8,13 @@ import {
     getMap, getLocations, addLocation, updateLocation, removeLocation,
     addEdge, addBidirectionalEdge, removeEdge, getRegions, autoLayout,
 } from './map-store.js';
-import { getItems, getSettings, updateSettings } from './memory-store.js';
+import { getItems, getSettings } from './memory-store.js';
+import {
+    getCharacterWorldRealWorldRef,
+    getCurrentStableCharacterId,
+    setCharacterWorldRealWorldRef,
+} from './character-settings.js';
+import { getCharacterDisplayName } from './slot-identity.js';
 import {
     createGraphViewport,
     fitToGraph,
@@ -1001,7 +1007,9 @@ export async function openMapView(chatId) {
     let items = await getItems(chatId);
     let regions = await getRegions(chatId);
     let visibleRegions = new Set(getRegionKeys(Object.values(map.locations || {}), regions));
-    let globalRef = settings.worldRealWorldRef || '';
+    const stableCharacterId = getCurrentStableCharacterId();
+    const characterLabel = getCharacterDisplayName(stableCharacterId) || '当前角色';
+    let globalRef = getCharacterWorldRealWorldRef(settings, stableCharacterId);
     let viewMode = loadMapUiPref().viewMode === 'list' ? 'list' : 'spatial'; // 'spatial' | 'list'
     let editMode = false; // v8.8.1 编辑布局模式
 
@@ -1027,11 +1035,15 @@ export async function openMapView(chatId) {
         <button class="bb-map-close-btn" style="background:none;border:none;color:inherit;font-size:20px;cursor:pointer;opacity:0.6;line-height:1;padding:0 4px;">&times;</button>`;
     header.querySelector('.bb-map-close-btn').addEventListener('click', () => closeOverlay());
     header.querySelector('.bb-map-edit-ref').addEventListener('click', () => {
-        const val = prompt('全局现实参考：', globalRef);
+        const val = prompt(`${characterLabel}的地图现实参考：`, globalRef);
         if (val === null) return;
-        globalRef = val.trim();
-        updateSettings({ worldRealWorldRef: globalRef });
-        renderRefBar();
+        try {
+            globalRef = setCharacterWorldRealWorldRef(val.trim(), stableCharacterId);
+            renderRefBar();
+            showToast(`已保存「${characterLabel}」的地图现实参考`, 'success');
+        } catch (error) {
+            showToast(error.message || '地图现实参考保存失败', 'error');
+        }
     });
     header.querySelector('.bb-map-view-toggle').addEventListener('click', () => {
         viewMode = viewMode === 'spatial' ? 'list' : 'spatial';
@@ -1104,7 +1116,9 @@ export async function openMapView(chatId) {
     panel.appendChild(refBar);
 
     function renderRefBar() {
-        refBar.innerHTML = globalRef ? `🌍 全局参考: <strong>${escapeHtml(globalRef)}</strong>` : '🌍 未设置全局现实参考';
+        refBar.innerHTML = globalRef
+            ? `🌍 ${escapeHtml(characterLabel)}的参考: <strong>${escapeHtml(globalRef)}</strong>`
+            : `🌍 ${escapeHtml(characterLabel)}尚未设置现实参考`;
     }
 
     // 主体

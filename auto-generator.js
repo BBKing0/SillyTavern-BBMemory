@@ -22,12 +22,14 @@ import {
 import { normalizeNpcTier, normalizeItemTier } from './entity-tiers.js';
 import {
     DEFAULT_CONCRETE_TIME_RULE,
+    DEFAULT_ENTITY_MERGE_SUMMARY_PROMPT,
     DEFAULT_INITIALIZATION_PROMPT,
     fillPromptTemplate,
     getPromptTemplate,
 } from './prompt-templates.js';
 import { hydrateCollectionEmbeddings } from './vector-store.js';
 import { findBestDuplicate, mergeEntityAliases, normalizeAliases } from './dedup-engine.js';
+import { getCharacterWorldRealWorldRef } from './character-settings.js';
 
 // ═══ v9.3.0 混合去重：文本指纹 + 结构字段 + 可选向量 ═══
 
@@ -151,6 +153,78 @@ function mergeEntityPatch(pillar, existing, incoming) {
     };
 }
 
+function countEntitySupplementMarkers(pillar, entry) {
+    const fields = pillar === 'npc'
+        ? [entry?.personality, entry?.appearance]
+        : [entry?.significance];
+    return fields.reduce((sum, value) => {
+        const matches = String(value || '').match(/\[\s*(?:补充|初始化合并|追加|新增)\s*\]|【\s*(?:补充|追加|新增)\s*】/g);
+        return sum + (matches?.length || 0);
+    }, 0);
+}
+
+function parseEntitySummaryObject(responseText) {
+    let text = String(responseText || '').trim()
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```$/i, '');
+    if (!text.startsWith('{')) {
+        const match = text.match(/\{[\s\S]*\}/);
+        text = match ? match[0] : '';
+    }
+    if (!text) throw new Error('副 API 未返回 JSON 对象');
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('副 API 返回的档案摘要不是对象');
+    return parsed;
+}
+
+function sanitizeEntitySummaryPatch(pillar, raw) {
+    const allowed = pillar === 'npc'
+        ? ['role', 'personality', 'appearance', 'status', 'location', 'indexCard']
+        : ['owner', 'status', 'location', 'significance'];
+    const out = {};
+    for (const key of allowed) {
+        if (!Object.prototype.hasOwnProperty.call(raw, key)) continue;
+        const value = String(raw[key] ?? '').trim();
+        if (value) out[key] = value;
+    }
+    if (pillar === 'item' && out.status && !['held', 'used', 'lost', 'destroyed'].includes(out.status)) {
+        delete out.status;
+    }
+    const mainField = pillar === 'npc' ? (out.personality || out.appearance || out.indexCard) : out.significance;
+    if (!mainField) throw new Error('副 API 返回的摘要缺少主要描述字段');
+    return out;
+}
+
+async function summarizeMergedEntity(pillar, entry, mergeCount) {
+    const settings = getSettings();
+    if (!String(settings.autoGenEndpoint || '').trim()) return null;
+    const safeEntry = pillar === 'npc'
+        ? {
+            role: entry.role || '', personality: entry.personality || '', appearance: entry.appearance || '',
+            status: entry.status || '', location: entry.location || '', indexCard: entry.indexCard || '',
+        }
+        : {
+            owner: entry.owner || '', status: entry.status || '', location: entry.location || '',
+            significance: entry.significance || '',
+        };
+    const outputSchema = pillar === 'npc'
+        ? '{"role":"...","personality":"...","appearance":"...","status":"...","location":"...","indexCard":"..."}'
+        : '{"owner":"...","status":"held|used|lost|destroyed","location":"...","significance":"..."}';
+    const prompt = fillPromptTemplate(
+        getPromptTemplate(settings, 'entity.mergeSummary', DEFAULT_ENTITY_MERGE_SUMMARY_PROMPT),
+        {
+            pillar,
+            pillarLabel: pillar === 'npc' ? '角色' : '物品',
+            name: entry.name || '',
+            mergeCount,
+            entryJson: JSON.stringify(safeEntry, null, 2),
+            outputSchema,
+        },
+    );
+    const response = await callCustomApi(prompt, { isMerged: true });
+    return sanitizeEntitySummaryPatch(pillar, parseEntitySummaryObject(response));
+}
+
 // ═══ v9.3.3 AI 整理师聚类种子收集 ═══
 
 /**
@@ -195,11 +269,47 @@ export async function saveEntityWithDedup(chatId, pillar, incoming, sourceInfo =
     const action = resolveAmbiguousDedupAction(decision);
 
     if (decision && action === 'merge') {
-        const entry = await updater(chatId, decision.entry.id, {
+        const inferredExistingCount = Math.max(
+            Math.max(0, Number(decision.entry.mergeCount) || 0),
+            countEntitySupplementMarkers(pillar, decision.entry),
+        );
+        const mergeCount = inferredExistingCount + 1;
+        const thresholdValue = Number(settings.entityMergeSummaryThreshold);
+        const summaryThreshold = Number.isFinite(thresholdValue) ? Math.max(0, Math.floor(thresholdValue)) : 5;
+        let patch = {
             ...mergeEntityPatch(pillar, decision.entry, incoming),
+            mergeCount,
             ...sourceInfo,
-        });
-        return { entry, action: 'merged', decision };
+        };
+        let summarized = false;
+        if (summaryThreshold > 0 && mergeCount >= summaryThreshold && String(settings.autoGenEndpoint || '').trim()) {
+            try {
+                const summaryPatch = await summarizeMergedEntity(pillar, { ...decision.entry, ...patch }, mergeCount);
+                if (summaryPatch) {
+                    patch = {
+                        ...patch,
+                        ...summaryPatch,
+                        mergeCount: 0,
+                        mergeSummaryCount: Math.max(0, Number(decision.entry.mergeSummaryCount) || 0) + 1,
+                    };
+                    summarized = true;
+                    globalThis.bbMemoryRecordActivity?.(
+                        'success',
+                        '档案压缩完成',
+                        `${pillar === 'npc' ? '角色' : '物品'}「${decision.entry.name || incoming.name}」累计合并 ${mergeCount} 次，已由副 API 重写去重`,
+                    );
+                }
+            } catch (error) {
+                globalThis.bbMemoryRecordActivity?.(
+                    'warning',
+                    '档案压缩延期',
+                    `${pillar === 'npc' ? '角色' : '物品'}「${decision.entry.name || incoming.name}」副 API 压缩失败：${error.message || '未知错误'}；合并计数已保留`,
+                );
+                if (settings.debugLogging) console.warn('[BB-Memory] 实体档案压缩失败:', error);
+            }
+        }
+        const entry = await updater(chatId, decision.entry.id, patch);
+        return { entry, action: 'merged', decision, summarized, mergeCount: entry?.mergeCount || 0 };
     }
     if (decision && action === 'skip') {
         return { entry: decision.entry, action: 'skipped', decision };
@@ -1519,6 +1629,13 @@ export function getAutoGeneratorPromptTemplates() {
             description: '调用 SillyTavern 主 API 进行提取或总结时使用的系统提示，{{formatHint}} 会被替换。',
             defaultValue: DEFAULT_API_JSON_SYSTEM_PROMPT,
         },
+        {
+            key: 'entity.mergeSummary',
+            title: '人物/物品合并压缩',
+            category: '实体去重',
+            description: '同一人物或物品累计合并达到设置次数后，交给副 API 去重并重写当前档案。',
+            defaultValue: DEFAULT_ENTITY_MERGE_SUMMARY_PROMPT,
+        },
     ];
 }
 
@@ -1646,7 +1763,7 @@ function buildMergedPrompt(settings, styleBias, calDesc) {
     prompt = prompt.replace('{{CALENDAR_REF}}', calRef);
     prompt = prompt.replace('{{STYLE_BIAS}}', styleBias || '');
     // v8.7.1 全局现实原型
-    const worldRef = (s.worldRealWorldRef || '').trim();
+    const worldRef = getCharacterWorldRealWorldRef(s);
     prompt = prompt.replace('{{WORLD_REF}}', worldRef
         ? `⚠ 本世界的现实原型参考：${worldRef}。请基于此参考来推断地理关系、距离、方位。`
         : '');
@@ -1753,8 +1870,9 @@ function buildInitializationPrompt(settings, styleBias, calDesc, selectedPillars
     const calRef = calDesc && calDesc.trim()
         ? `\n世界历法参考：${calDesc.trim()}\n仅用于判断故事时间和事件顺序，不要机械换算。`
         : '';
-    const worldRef = (s.worldRealWorldRef || '').trim()
-        ? `\n现实原型参考：${(s.worldRealWorldRef || '').trim()}。地点、距离、方位可参考这个原型推断。`
+    const activeWorldRef = getCharacterWorldRealWorldRef(s);
+    const worldRef = activeWorldRef
+        ? `\n现实原型参考：${activeWorldRef}。地点、距离、方位可参考这个原型推断。`
         : '';
 
     const concreteTimeRule = getPromptTemplate(s, 'extract.concreteTimeRule', DEFAULT_CONCRETE_TIME_RULE);

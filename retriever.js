@@ -12,6 +12,8 @@ import {
     getRealtimeKindSlotLimits,
 } from './memory-types.js';
 import {
+    NPC_TIERS,
+    ITEM_TIERS,
     tierScoreMultiplier,
     buildNpcIndexCard,
     buildItemIndexCard,
@@ -24,7 +26,7 @@ import {
     isArchived, getSettings,
 } from './memory-store.js';
 import { fillPromptTemplate, getPromptTemplate } from './prompt-templates.js';
-import { normalizeIdentityText } from './dedup-engine.js';
+import { entityNameSimilarity, normalizeIdentityText } from './dedup-engine.js';
 
 // ═══════════════════════════════════════════════════════════
 //  评分权重（4 维）
@@ -51,15 +53,27 @@ export const INJECTION_LEVELS = Object.freeze({
 });
 
 const DEFAULT_INJECTION_SECTION_HEADERS = Object.freeze({
-    thread: '【故事时间线】',
-    timeline: '【故事时间线】',
-    npc: '【角色档案】',
-    item: '【重要物品】',
-    milestone: '【故事里程碑】',
-    memory: '【相关记忆】',
-    map: '【世界地图 —— 空间关系{{worldRefSuffix}}】',
+    thread: '以下是持续故事线与事件顺序。',
+    timeline: '以下是持续故事线与事件顺序。',
+    npc: '格式：-姓名|身份|关系|性格|外貌|位置|级别\n只有检索命中的人物才会追加“【详细介绍】”。',
+    item: '格式：-物品名|持有者或地点|状态\n条目按持有者、地点连续排列；只有检索命中的物品才会追加“【详细说明】”。',
+    milestone: '格式：日期：内容',
+    memory: '格式：序号.[日期]内容|人物对话',
+    map: '以下是地点与空间关系{{worldRefSuffix}}。',
     // v9.3.3 第五柱：不参与检索、无条件注入
-    realtime: '【当前场景细节】（最近场景的临时细节，用于保持连续性；不是长期设定）',
+    realtime: '以下是当前场景仍然有效的临时细节，用于保持连续性，不是长期设定。',
+});
+
+const SECTION_XML_TAGS = Object.freeze({
+    timeline: 'Story_Timeline',
+    thread: 'Story_Timeline',
+    npc: 'Characters',
+    item: 'Items',
+    milestone: 'Milestones',
+    memory: 'Relevant_Memories',
+    map: 'Map',
+    clue: 'Clue_Board',
+    realtime: 'Current_Scene_Details',
 });
 
 const TOKEN_BUDGET_MODES = Object.freeze({
@@ -151,7 +165,7 @@ export function getRetrieverPromptTemplates() {
             key: 'injection.mapHeader',
             title: '地图注入标题',
             category: '地图注入',
-            description: '长期记忆注入中世界地图/空间关系区块的标题，{{worldRefSuffix}} 会带入全局现实参考。',
+            description: '长期记忆注入中世界地图/空间关系区块的标题，{{worldRefSuffix}} 会带入当前角色的现实参考。',
             defaultValue: DEFAULT_INJECTION_SECTION_HEADERS.map,
         },
         {
@@ -475,59 +489,90 @@ function matchesActiveCategory(entry) {
  * NPC 档案：core+important 全注入，minor 按命中
  */
 export function getNpcForInjection(npcProfiles, queryText, queryEmbedding = null) {
-    const required = [];
-    const optional = [];
+    const candidates = [];
     for (const npc of npcProfiles) {
         if (isArchived(npc) || !matchesActiveCategory(npc)) continue;
         const resident = isResidentEntry(npc);
         const alwaysIndex = npc.npcTier === 'core' || npc.npcTier === 'important';
         const hit = entryTextMatches(npc, queryText, ['name', 'role', 'personality', 'appearance', 'status', 'location'], queryEmbedding);
-        if (resident || hit) {
-            const target = resident || alwaysIndex ? required : optional;
-            target.push(cloneForInjection(npc, 'full', resident ? 'resident' : 'hit'));
-        } else if (alwaysIndex) {
-            required.push(cloneForInjection(npc, 'index', 'always_index'));
-        }
+        // 详细介绍严格按命中展开；核心/重要/常驻人物在未命中时也只给固定的一行索引。
+        if (hit) candidates.push(cloneForInjection(npc, 'full', 'hit'));
+        else if (resident || alwaysIndex) candidates.push(cloneForInjection(npc, 'index', resident ? 'resident_index' : 'always_index'));
     }
-    // 排序：tier 优先
     const tierOrder = { core: 0, important: 1, minor: 2, background: 3 };
-    const sortNpc = (a, b) => {
-        const residentDelta = (isResidentEntry(b) ? 1 : 0) - (isResidentEntry(a) ? 1 : 0);
-        if (residentDelta) return residentDelta;
-        return (tierOrder[a.npcTier] || 2) - (tierOrder[b.npcTier] || 2);
-    };
-    required.sort(sortNpc);
-    optional.sort(sortNpc);
-    return uniqueById([...required, ...optional.slice(0, getSettings().npcInjectionMax ?? 8)]);
+    candidates.sort((a, b) => {
+        const hitDelta = (b._bbInjectReason === 'hit' ? 1 : 0) - (a._bbInjectReason === 'hit' ? 1 : 0);
+        if (hitDelta) return hitDelta;
+        return (tierOrder[a.npcTier] ?? 2) - (tierOrder[b.npcTier] ?? 2);
+    });
+    const max = clampIntSetting(getSettings().npcInjectionMax, 0, 100, 8);
+    return uniqueById(candidates).slice(0, max);
 }
 
 /**
- * 物品栏：eternal/core/keepPermanent 常驻；stable 按关键词/向量命中；transient/积灰不主动注入。
+ * 物品栏：命中时展开；达到命中次数阈值时常态注入一行索引；其余按稳定概率少量抽样。
  */
 export function getItemsForInjection(items, queryText, queryEmbedding = null) {
-    const required = [];
-    const optional = [];
+    const settings = getSettings();
+    const max = clampIntSetting(settings.itemInjectionMax, 0, 100, 5);
+    if (max <= 0) return [];
+    const hitThreshold = clampIntSetting(settings.itemResidentHitCountThreshold, 0, 100000, 5);
+    const fallbackProbability = clampIntSetting(settings.itemFallbackInjectionProbability, 0, 100, 5);
+    const fallbackMax = clampIntSetting(settings.itemFallbackInjectionMax, 0, 50, 2);
+    const hits = [];
+    const frequent = [];
+    const fallback = [];
+
+    const stableRoll = (item) => {
+        const seed = `${item.id || item.name}|${normalizeIdentityText(queryText)}`;
+        let hash = 2166136261;
+        for (let i = 0; i < seed.length; i++) {
+            hash ^= seed.charCodeAt(i);
+            hash = Math.imul(hash, 16777619);
+        }
+        return (hash >>> 0) % 100;
+    };
+
     for (const item of items) {
         if (isArchived(item) || !matchesActiveCategory(item)) continue;
-        const resident = isResidentEntry(item);
-        const alwaysIndex = resident || item.keepPermanent;
         const hit = !isDustyItem(item) && entryTextMatches(item, queryText, ['name', 'owner', 'status', 'significance', 'location'], queryEmbedding);
-        if (resident || hit) {
-            const target = resident || alwaysIndex ? required : optional;
-            target.push(cloneForInjection(item, 'full', resident ? 'resident' : 'hit'));
-        } else if (alwaysIndex) {
-            required.push(cloneForInjection(item, 'index', 'always_index'));
+        if (hit) {
+            hits.push(cloneForInjection(item, 'full', 'hit'));
+            continue;
+        }
+        if ((Number(item.hitCount) || 0) >= hitThreshold) {
+            frequent.push(cloneForInjection(item, 'index', 'frequent_index'));
+            continue;
+        }
+        if (!isDustyItem(item) && fallbackProbability > 0 && stableRoll(item) < fallbackProbability) {
+            fallback.push(cloneForInjection(item, 'index', 'fallback_sample'));
         }
     }
+
     const tierOrder = { key: 0, equipped: 1, clue: 2, consumable: 3, background: 4 };
-    const sortItem = (a, b) => {
-        const residentDelta = (isResidentEntry(b) ? 1 : 0) - (isResidentEntry(a) ? 1 : 0);
-        if (residentDelta) return residentDelta;
-        return (tierOrder[a.itemTier] || 3) - (tierOrder[b.itemTier] || 3);
+    const qualitySort = (a, b) => {
+        const tierDelta = (tierOrder[a.itemTier] ?? 3) - (tierOrder[b.itemTier] ?? 3);
+        if (tierDelta) return tierDelta;
+        const hitDelta = (Number(b.hitCount) || 0) - (Number(a.hitCount) || 0);
+        if (hitDelta) return hitDelta;
+        return (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0);
     };
-    required.sort(sortItem);
-    optional.sort(sortItem);
-    return uniqueById([...required, ...optional.slice(0, getSettings().itemInjectionMax ?? 5)]);
+    hits.sort(qualitySort);
+    frequent.sort(qualitySort);
+    fallback.sort(qualitySort);
+    const distinct = [];
+    for (const candidate of uniqueById([...hits, ...frequent, ...fallback.slice(0, fallbackMax)])) {
+        if (distinct.some(existing => entityNameSimilarity('item', candidate, existing) >= 0.94)) continue;
+        distinct.push(candidate);
+    }
+    const selected = distinct.slice(0, max);
+
+    // 最终展示以“持有人 > 地点 > 未归属”为主键，同一人的物品保持连续，避免 121212 交错。
+    const groupKey = item => normalizeIdentityText(item.owner)
+        ? `0|${normalizeIdentityText(item.owner)}`
+        : (normalizeIdentityText(item.location) ? `1|${normalizeIdentityText(item.location)}` : '2|');
+    selected.sort((a, b) => groupKey(a).localeCompare(groupKey(b), 'zh-CN') || qualitySort(a, b));
+    return selected;
 }
 
 /**
@@ -585,21 +630,12 @@ export function getTimelineForInjection(timeline, maxActive = 5) {
     const lines = [header];
     const blocks = [];
     for (const line of forInjection) {
-        const statusMark = line.status === 'resident' ? '★常驻' :
-                          line.status === 'ongoing' ? '●进行中' :
-                          line.status === 'paused' ? '⏸暂停' : '';
-        const typeMark = line.type === 'emotional' ? '[感情]' :
-                         line.type === 'side' ? '[支线]' :
-                         line.type === 'world' ? '[世界]' : '';
-        const summarySuffix = line.summary ? ` — ${line.summary}` : '';
-        const blockLines = [`${statusMark} ${typeMark} ${line.name}${summarySuffix}`];
+        const summarySuffix = line.summary ? `：${line.summary}` : '';
+        const blockLines = [`-${line.name}${summarySuffix}`];
         for (const entry of (line.entries || [])) {
-            const entryStatus = entry.status === 'ongoing' ? '→' :
-                               entry.status === 'ended' ? '✓' :
-                               entry.status === 'milestone' ? '◆' : '·';
             const period = entry.period || entry.storyTime || entry.time || '';
             const event = entry.event || entry.title || entry.summary || entry.note || '';
-            blockLines.push(`  ${entryStatus} ${period} ${event}`);
+            blockLines.push(`  ${period || '时间未明'}：${event}`);
         }
         lines.push(...blockLines);
         blocks.push({ text: blockLines.join('\n'), timeline: line, thread: line });
@@ -614,39 +650,73 @@ export const getThreadSummaryForInjection = getTimelineForInjection;
 //  格式化
 // ═══════════════════════════════════════════════════════════
 
-function formatNpcLine(npc) {
-    if (npc._bbInjectMode === 'index') {
-        return '◆ ' + buildNpcIndexCard(npc);
+function cleanMergedField(value, maxChars = 80, preferLatest = false) {
+    const segments = String(value || '')
+        .split(/\n?\s*(?:\[\s*(?:补充|初始化合并|追加|新增)\s*\]|【\s*(?:补充|追加|新增)\s*】)\s*/g)
+        .map(text => text.trim().replace(/[\r\n]+/g, ' '))
+        .filter(Boolean);
+    const seen = new Set();
+    const unique = [];
+    for (const segment of segments) {
+        const key = normalizeIdentityText(segment);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        unique.push(segment);
     }
-    const parts = [npc.name, npc.role, npc.personality, npc.appearance, npc.status].filter(Boolean);
-    const line = '◆ ' + parts.join(' | ');
-    const relLines = (npc.relationships || []).map(r =>
-        `  关系：${r.name ? '与' + r.name : ''}${r.type || ''}${r.attitude ? '（' + r.attitude + '）' : ''}`
-    );
-    return line + (relLines.length ? '\n' + relLines.join('\n') : '');
+    const source = preferLatest ? unique.slice().reverse() : unique;
+    const text = source.join('；');
+    const limit = Math.max(0, Number(maxChars) || 0);
+    if (!limit || text.length <= limit) return text;
+    return text.slice(0, Math.max(1, limit - 1)).trimEnd() + '…';
+}
+
+function formatNpcRelationship(npc, maxChars = 54) {
+    const text = (npc.relationships || []).map(r => {
+        const name = String(r?.name || '').trim();
+        const relation = String(r?.type || r?.relation || '').trim();
+        const attitude = String(r?.attitude || '').trim();
+        return [name, relation, attitude].filter(Boolean).join(':');
+    }).filter(Boolean).join('；');
+    return cleanMergedField(text, maxChars);
+}
+
+function formatNpcLine(npc) {
+    const tierLabel = NPC_TIERS[npc.npcTier]?.label || npc.npcTier || '配角';
+    const row = [
+        npc.name || '未命名',
+        cleanMergedField(npc.role, 36, true),
+        formatNpcRelationship(npc),
+        cleanMergedField(npc.personality, 54, true),
+        cleanMergedField(npc.appearance, 54, true),
+        cleanMergedField(npc.location, 32, true),
+        tierLabel,
+    ].join('|');
+    if (npc._bbInjectMode !== 'full') return `-${row}`;
+
+    const maxChars = clampIntSetting(getSettings().entityDetailInjectionMaxChars, 40, 2000, 320);
+    const notes = (npc.notes || []).map(note => typeof note === 'string' ? note : note?.content).filter(Boolean).join('；');
+    const detail = cleanMergedField([
+        npc.indexCard,
+        npc.status ? `当前状态：${npc.status}` : '',
+        npc.personality ? `性格：${npc.personality}` : '',
+        npc.appearance ? `外貌：${npc.appearance}` : '',
+        notes,
+    ].filter(Boolean).join('；'), maxChars);
+    return `-${row}${detail ? `\n【详细介绍】${detail}` : ''}`;
 }
 
 function formatItemLine(item) {
-    if (item._bbInjectMode === 'index') {
-        return '◆ ' + buildItemIndexCard(item);
-    }
     const statusLabel = { held: '持有中', used: '已使用', lost: '已失去', destroyed: '已销毁' }[item.status] || item.status;
-    const parts = [
-        '◆ ' + item.name,
-        item.owner ? '持有者：' + item.owner : '',
-        '状态：' + statusLabel,
-        item.significance || '',
-        item.keepPermanent ? '（永久保留）' : '',
-    ].filter(Boolean);
-    return parts.join(' | ');
+    const holderOrLocation = cleanMergedField(item.owner || item.location || '未归属', 36, true);
+    const row = `-${item.name || '未命名'}|${holderOrLocation}|${statusLabel || '状态未明'}`;
+    if (item._bbInjectMode !== 'full') return row;
+    const maxChars = clampIntSetting(getSettings().entityDetailInjectionMaxChars, 40, 2000, 320);
+    const detail = cleanMergedField(item.significance, maxChars);
+    return `${row}${detail ? `\n【详细说明】${detail}` : ''}`;
 }
 
 function formatTimelineLine(t) {
-    const timeStr = t.storyTime || '';
-    const activeMark = isForeshadowTimeline(t) ? '【伏笔】' :
-                       (t.status === 'ongoing' || t.isActive) ? '（里程碑·进行中）' : '（里程碑）';
-    const modeMark = isResidentMilestone(t) ? '常驻' : '向量命中';
-    return `▸ ${timeStr} ${t.event} ${activeMark} [${modeMark}]\n  ${t.summary}${t.impact ? ' — ' + t.impact : ''}`;
+    return `${t.storyTime || '时间未明'}：${t.event || t.summary || ''}`;
 }
 
 function formatHiddenNotesForInjection(m) {
@@ -673,34 +743,26 @@ function isRecentSourceMemory(m, chatLength = 0, settings = getSettings()) {
 }
 
 function formatMemoryLine(m, chatLength = 0, level = 'L2', settings = getSettings()) {
-    const parts = [];
-    if (m.title) parts.push(`[${m.title}]`);
-    const typeLabel = MEMORY_TYPES[m.type]?.label || '';
-    if (typeLabel) parts.push(`(${typeLabel})`);
-    if (m.truthStatus && m.truthStatus !== 'true') {
-        const ts = TRUTH_STATUS[m.truthStatus];
-        if (ts) parts.push(`{${ts.label}}`);
-    }
     const isResident = isResidentEntry(m);
     const isFuzzy = m.memoryTier === 'transient' && !isResident;
     const recentFull = isRecentSourceMemory(m, chatLength, settings);
     const shouldUseFull = !isFuzzy && (isResident || recentFull || level === 'L3' || level === 'L4');
+    let content = '';
 
     if (isFuzzy) {
-        parts.push(m.summary || buildDefaultIndexCard(m) || (m.content || '').slice(0, 120));
+        content = m.summary || buildDefaultIndexCard(m) || (m.content || '').slice(0, 120);
     } else if (level === 'L1' && !shouldUseFull) {
-        parts.push(buildDefaultIndexCard(m));
+        content = buildDefaultIndexCard(m);
     } else if (shouldUseFull && m.content) {
-        parts.push(m.content);
+        content = m.content;
     } else if (m.summary) {
-        parts.push(m.summary);
+        content = m.summary;
     } else {
-        parts.push(m.content || m.summary);
+        content = m.content || m.summary;
     }
-    if (m.verbatim) parts.push(`「${m.verbatim}」`);
-    if (m.subject && m.target) parts.push(`(${m.subject} → ${m.target})`);
-    else if (m.subject) parts.push(`(${m.subject})`);
-    return parts.join(' ') + formatHiddenNotesForInjection(m);
+    const date = String(m.storyTime || m.date || m.time || '时间未明').trim();
+    const dialogue = String(m.verbatim || '').trim();
+    return `[${date}]${String(content || '').trim()}${dialogue ? `|${dialogue}` : ''}`;
 }
 
 function formatMapEdgeMeta(edge) {
@@ -732,7 +794,8 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
         }
     }
 
-    const maxLocations = Math.max(1, settings.mapInjectionMax || 8);
+    const maxLocations = clampIntSetting(settings.mapInjectionMax, 0, 100, 8);
+    if (maxLocations <= 0) return { lines: [], blocks: [], tokens: 0, truncated: false, ids: [] };
     const queryTokens = extractTokens(queryText || '');
     const locMatchesQuery = (loc) => {
         if (embeddingSimilarity(loc, queryEmbedding) >= 0.62) return true;
@@ -754,10 +817,17 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
             + (loc.updatedAt || 0) / 10000000000000;
     };
 
-    const baseMatches = locs
+    let baseMatches = locs
         .filter(loc => isResidentEntry(loc) || locMatchesQuery(loc))
-        .sort((a, b) => scoreLoc(b) - scoreLoc(a));
+        .sort((a, b) => scoreLoc(b) - scoreLoc(a))
+        .slice(0, maxLocations);
 
+    // 普通地点既不是 resident、用户本轮也没说地名时，旧逻辑会让整张地图永远为空。
+    // 兜底选最近更新且连接度高的少量地点，让 AI 至少保有当前世界的空间骨架。
+    if (!baseMatches.length) {
+        const fallbackMax = Math.min(maxLocations, clampIntSetting(settings.mapFallbackInjectionMax, 0, 50, 3));
+        baseMatches = locs.slice().sort((a, b) => scoreLoc(b) - scoreLoc(a)).slice(0, fallbackMax);
+    }
     if (!baseMatches.length) return { lines: [], blocks: [], tokens: 0, truncated: false, ids: [] };
 
     const selectedMap = new Map();
@@ -766,7 +836,10 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
         selectedMap.set(loc.id, { ...loc, _bbMapInjectReason: reason });
     };
 
-    for (const loc of baseMatches) addSelected(loc, isResidentEntry(loc) ? 'resident' : 'hit');
+    for (const loc of baseMatches) {
+        if (selectedMap.size >= maxLocations) break;
+        addSelected(loc, isResidentEntry(loc) ? 'resident' : (locMatchesQuery(loc) ? 'hit' : 'fallback'));
+    }
     for (const loc of baseMatches) {
         if (selectedMap.size >= maxLocations) break;
         const neighbors = [
@@ -789,7 +862,7 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
     const header = getInjectionHeader(settings, 'map', {
         worldRef,
         worldRefSuffix: worldRef ? `｜现实参考：${worldRef}` : '',
-    }) || (worldRef ? `【世界地图 — 空间关系】(现实参考: ${worldRef})` : '【世界地图 — 空间关系】');
+    }) || (worldRef ? `地点与空间关系（现实参考：${worldRef}）` : '地点与空间关系');
     const lines = [header];
     const blocks = [];
     let tokens = 0;
@@ -813,10 +886,7 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
             .filter(other => other.id !== loc.id)
             .slice(0, 5)
             .map(other => other.name || other.id);
-        const mark = loc._bbMapInjectReason === 'resident' ? '★常驻' :
-                     loc._bbMapInjectReason === 'same_region' ? '同区域' :
-                     loc._bbMapInjectReason === 'nearby' ? '周边' : '命中';
-        const parts = [`◆ [${mark}] ${loc.name || loc.id}`];
+        const parts = [`-${loc.name || loc.id}`];
         if (loc.region) parts.push(`区域:${loc.region}`);
         if (parent) parts.push(`父地点:${parent.name || parent.id}`);
         if (loc.description) parts.push(`说明:${loc.description.slice(0, 80)}`);
@@ -846,7 +916,7 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
         tokens += lt;
     }
 
-    return { lines, blocks, tokens, truncated: selected.length < baseMatches.length, ids: blocks.map(l => l.id) };
+    return { lines, blocks, tokens, truncated: selected.length < locs.length, ids: blocks.map(l => l.id) };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -929,13 +999,19 @@ function makeBudgetItem(text, options = {}) {
 
 function makeBudgetSection(key, header, items, options = {}) {
     const normalizedItems = (items || []).filter(item => item && String(item.text || '').trim());
+    const xmlTag = options.xmlTag || SECTION_XML_TAGS[key] || '';
+    const openTag = xmlTag ? `<${xmlTag}>` : '';
+    const closeTag = xmlTag ? `</${xmlTag}>` : '';
     return {
         key,
         label: options.label || SECTION_LABELS[key] || key,
         header: String(header || '').trim(),
-        headerTokens: estimateTokens(header || ''),
+        openTag,
+        closeTag,
+        headerTokens: estimateTokens([openTag, header, closeTag].filter(Boolean).join('\n')),
         items: normalizedItems,
         extraTruncated: options.extraTruncated || '',
+        allowFirstOverSectionCap: options.allowFirstOverSectionCap === true,
     };
 }
 
@@ -984,6 +1060,9 @@ function allocateBudgetSections(sections, settings, tokenBudget) {
                 const sectionCap = Math.max(1, Math.floor(tokenBudget * ratio));
                 const nextSectionUsed = (sectionBudgetUsed.get(section.key) || 0) + actualCost;
                 fits = budgetUsed + actualCost <= tokenBudget && nextSectionUsed <= sectionCap;
+                if (!fits && section.allowFirstOverSectionCap && !selectedSections.has(sectionIndex)) {
+                    fits = budgetUsed + actualCost <= tokenBudget;
+                }
             } else {
                 fits = budgetUsed + actualCost <= tokenBudget;
             }
@@ -1012,7 +1091,12 @@ function allocateBudgetSections(sections, settings, tokenBudget) {
     sections.forEach((section, sectionIndex) => {
         const selected = section.items.filter((_, itemIndex) => selectedKeys.has(`${sectionIndex}:${itemIndex}`));
         if (selected.length) {
-            renderedSections.push([section.header, ...selected.map(item => item.text)].filter(Boolean).join('\n'));
+            renderedSections.push([
+                section.openTag,
+                section.header,
+                ...selected.map(item => item.text),
+                section.closeTag,
+            ].filter(Boolean).join('\n'));
             selectedItems.push(...selected);
         }
         if (selected.length < section.items.length) {
@@ -1058,23 +1142,9 @@ function formatRealtimeGroups(entries) {
             (Number(a.lastSeenFloor ?? -1) - Number(b.lastSeenFloor ?? -1))
             || (Number(a.createdAt || 0) - Number(b.createdAt || 0)));
 
-        const runs = [];
-        for (const entry of ordered) {
-            const text = String(entry.text || '').trim();
-            if (!text) continue;
-            const floorNum = Number(entry.lastSeenFloor);
-            const floor = Number.isFinite(floorNum) && floorNum >= 0 ? floorNum : null;
-            const last = runs[runs.length - 1];
-            if (last && last.floor === floor) last.texts.push(text);
-            else runs.push({ floor, texts: [text] });
-        }
-        if (!runs.length) continue;
-
-        const body = runs
-            .map(run => run.floor === null
-                ? run.texts.join('，')
-                : `${run.texts.join('，')}（第${run.floor}层）`)
-            .join('；');
+        const texts = ordered.map(entry => String(entry.text || '').trim()).filter(Boolean);
+        if (!texts.length) continue;
+        const body = texts.join('，');
         lines.push({
             kind,
             text: `· ${REALTIME_KINDS[kind].label}：${body}`,
@@ -1305,7 +1375,7 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, milestone
                 nonResidentCount++;
             }
             displayIndex++;
-            const line = `${displayIndex}. ${formatMemoryLine(memory, chatLength, result.level, activeSettings)}`;
+            const line = `${displayIndex}.${formatMemoryLine(memory, chatLength, result.level, activeSettings)}`;
             memoryItems.push(makeBudgetItem(line, {
                 resident,
                 priority: priorityForMemory(memory),
@@ -1327,11 +1397,14 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, milestone
             mapContext.lines[0] || getInjectionHeader(activeSettings, 'map') || DEFAULT_INJECTION_SECTION_HEADERS.map,
             mapContext.blocks.map(block => makeBudgetItem(block.text, {
                 resident: block.resident,
-                priority: block.resident ? 0 : 3,
+                priority: block.resident ? 0 : (block.reason === 'hit' ? 1 : 2),
                 collection: 'map',
                 id: block.id,
             })),
-            { extraTruncated: mapContext.truncated ? '地图(按空间关系截断)' : '' }
+            {
+                extraTruncated: mapContext.truncated ? '地图(按空间关系截断)' : '',
+                allowFirstOverSectionCap: true,
+            }
         ));
     }
 
@@ -1357,12 +1430,12 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, milestone
         }
     }
 
-    // v9.3.3 实时记忆放在最后：它是最贴近当前这一轮的即时上下文。
-    // 已在 getRealtimeForInjection 里做过条数 + token 双硬上限，这里标 resident 让它
-    // 在默认预算模式下不再被全局裁剪；strict_total 模式下用 priority 0 优先占位。
+    // 实时记忆必须以独立 extension prompt 注入到聊天末端，不能与前置长期记忆共用位置。
+    // 因此这里单独渲染并返回 realtimeText，不加入长期记忆的 budgetSections。
     const realtime = getRealtimeForInjection(realtimeEntries, activeSettings);
+    let realtimeText = '';
     if (realtime.lines.length) {
-        budgetSections.push(makeBudgetSection(
+        const realtimeSection = makeBudgetSection(
             'realtime',
             getInjectionHeader(activeSettings, 'realtime') || DEFAULT_INJECTION_SECTION_HEADERS.realtime,
             realtime.lines.map(line => makeBudgetItem(line.text, {
@@ -1372,21 +1445,34 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, milestone
                 id: line.kind,
             })),
             { extraTruncated: realtime.truncated ? `实时(${realtime.injectedCount}/${realtime.totalCount})` : '' }
-        ));
+        );
+        realtimeText = [
+            realtimeSection.openTag,
+            realtimeSection.header,
+            ...realtimeSection.items.map(item => item.text),
+            realtimeSection.closeTag,
+        ].filter(Boolean).join('\n');
     }
 
     const allocation = allocateBudgetSections(budgetSections, activeSettings, tokenBudget);
     const text = allocation.renderedSections.join('\n\n');
     const stats = buildInjectionStats(allocation.selectedItems);
+    stats.realtimeKinds = realtime.lines.map(line => line.kind);
+    stats.realtimeCount = stats.realtimeKinds.length;
     stats.realtimeEntryCount = realtime.injectedCount;
     stats.realtimeTotalCount = realtime.totalCount;
     stats.realtimeTokens = realtime.tokenEstimate;
 
     return {
         text,
-        tokenEstimate: allocation.tokenEstimate,
+        realtimeText,
+        longTermTokenEstimate: allocation.tokenEstimate,
+        realtimeTokenEstimate: realtime.tokenEstimate,
+        tokenEstimate: allocation.tokenEstimate + realtime.tokenEstimate,
         stats,
-        truncated: allocation.truncated,
+        truncated: realtime.truncated
+            ? [...allocation.truncated, `实时(${realtime.injectedCount}/${realtime.totalCount})`]
+            : allocation.truncated,
         tokenBudget,
         budgetMode: allocation.budgetMode,
     };

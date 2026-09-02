@@ -143,6 +143,24 @@ export const DEFAULT_CURATE_REVIEW_PROMPT = `你是 BB-Memory 记忆整理师。
 ]}
 只输出这个 JSON 对象。`;
 
+export const DEFAULT_ENTITY_MERGE_SUMMARY_PROMPT = `你是 BB-Memory 实体档案压缩器。下面这个 {{pillarLabel}} 档案经过多次增量合并，字段里可能出现大量“补充”、重复措辞和已经过时的状态。
+
+任务：在不丢失仍然有效的具体事实前提下，把档案重写成简洁的当前版本。不要简单拼接，不要保留“[补充]”“新增”“另外”等缝合标记；状态、持有者、地点等会变化的字段以较新的信息为准。
+
+硬规则：
+1. 只压缩输入中已有的信息，不推测、不创造。
+2. 同义或重复事实只保留一次；冲突且无法判断新旧时，使用中性表述保留不确定性。
+3. 输出纯 JSON 对象，不要 markdown，不要解释。
+4. NPC 只输出 role/personality/appearance/status/location/indexCard；物品只输出 owner/status/location/significance。
+
+档案类型：{{pillar}}
+档案名称：{{name}}
+本轮合并次数：{{mergeCount}}
+当前档案：
+{{entryJson}}
+
+返回格式：{{outputSchema}}`;
+
 export const DEFAULT_REALTIME_DETAIL_EXTRACT_PROMPT = `你是场景细节记录员。只做一件事：从下面这一段角色扮演回复里，抓出**当下有效的具体细节**。
 
 这些细节不进长期记忆库，只在当前场景内临时生效，用来防止后文出现「坐公交来的却开车回家」这类前后矛盾。

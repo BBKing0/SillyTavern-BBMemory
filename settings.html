@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.3.4</b>
+            <b>BB-Memory v9.4.0</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -155,7 +155,30 @@
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_item_injection_max">物品注入上限</label>
-                        <input id="bb_item_injection_max" type="number" class="bb-input" min="1" max="20" value="5" />
+                        <small class="bb-mem-hint">硬上限，包含常态、命中和概率抽样物品。</small>
+                        <input id="bb_item_injection_max" type="number" class="bb-input" min="0" max="100" value="5" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_entity_detail_injection_max_chars">人物/物品详细说明字符上限</label>
+                        <small class="bb-mem-hint">只有检索命中才注入详细说明；用于阻止旧“补充”字段一次占用过多 token。</small>
+                        <input id="bb_entity_detail_injection_max_chars" type="number" class="bb-input" min="40" max="2000" value="320" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_item_resident_hit_count_threshold">物品常态注入命中次数</label>
+                        <small class="bb-mem-hint">累计命中低于此数的物品不常态注入，仍可被检索命中或概率抽样。</small>
+                        <input id="bb_item_resident_hit_count_threshold" type="number" class="bb-input" min="0" max="100000" value="5" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_item_fallback_injection_probability">低频物品抽样概率（%）</label>
+                        <input id="bb_item_fallback_injection_probability" type="number" class="bb-input" min="0" max="100" value="5" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_item_fallback_injection_max">每轮低频物品抽样上限</label>
+                        <input id="bb_item_fallback_injection_max" type="number" class="bb-input" min="0" max="50" value="2" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
@@ -174,7 +197,13 @@
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_map_injection_max">地图地点注入上限 <small>含命中地点及周边地点</small></label>
-                        <input id="bb_map_injection_max" type="number" class="bb-input" min="1" max="30" value="8" />
+                        <input id="bb_map_injection_max" type="number" class="bb-input" min="0" max="100" value="8" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_map_fallback_injection_max">地图无命中兜底地点数</label>
+                        <small class="bb-mem-hint">本轮没有提到地名时，按近期与连接度注入少量地图骨架；0 表示关闭兜底。</small>
+                        <input id="bb_map_fallback_injection_max" type="number" class="bb-input" min="0" max="50" value="3" />
                     </div>
 
                     <label class="checkbox_label" style="margin: 8px 0;">
@@ -210,8 +239,9 @@
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_injection_template">注入模板 <small>用 {{memories}} 代表记忆内容</small></label>
-                        <textarea id="bb_injection_template" class="bb-input bb-mem-textarea" rows="2">[BB-Memory 长期记忆]
-{{memories}}</textarea>
+                        <textarea id="bb_injection_template" class="bb-input bb-mem-textarea" rows="3">&lt;BBMemory&gt;
+{{memories}}
+&lt;/BBMemory&gt;</textarea>
                     </div>
 
                 </div>
@@ -858,6 +888,12 @@
                         <label for="bb_entity_merge_similarity_threshold">实体自动合并阈值</label>
                         <small class="bb-mem-hint">综合名称、别名、持有者、地点和向量判断；默认 0.90，越高越保守</small>
                         <input id="bb_entity_merge_similarity_threshold" type="number" class="bb-input" min="0.60" max="1.00" step="0.01" value="0.90" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_entity_merge_summary_threshold">人物/物品合并压缩次数</label>
+                        <small class="bb-mem-hint">同一档案累计合并到此次数后交给副 API 去重重写；0 表示关闭自动压缩，默认 5。</small>
+                        <input id="bb_entity_merge_summary_threshold" type="number" class="bb-input" min="0" max="100" step="1" value="5" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">

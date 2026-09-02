@@ -44,7 +44,7 @@ const OLD_STORAGE_KEY = 'bb_memory_chat_';
 // ═══ 默认设置 ═══
 export const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
-    injectionTemplate: '[BB-Memory 长期记忆]\n{{memories}}',
+    injectionTemplate: '<BBMemory>\n{{memories}}\n</BBMemory>',
     // 检索
     tokenBudget: 800,
     tokenBudgetMode: 'resident_unlimited', // 'resident_unlimited' | 'strict_total'
@@ -53,12 +53,18 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // v8.0.0 各柱注入上限（独立于 maxResults，后者仅控制记忆条目）
     npcInjectionMax: 8,
     itemInjectionMax: 5,
+    entityDetailInjectionMaxChars: 320, // 命中人物/物品的详细说明单条字符上限
+    itemResidentHitCountThreshold: 5,   // 达到该命中次数才可作为常态物品索引注入
+    itemFallbackInjectionProbability: 5, // 未命中、非常态物品的稳定抽样概率（百分比）
+    itemFallbackInjectionMax: 2,        // 每轮最多抽样几个未命中物品
     milestoneVectorMax: 3,
     milestoneDefaultInjectionMode: 'resident', // 'resident' | 'vector'
     itemDustyMissRounds: 30,
     cloudVectorSlotMaxKb: 2048,
     mapInjectionMax: 8,             // v8.7.0 地图地点注入上限
+    mapFallbackInjectionMax: 3,     // 未命中地名时按近期/连接度兜底注入
     worldRealWorldRef: '',           // v8.7.1 全局现实原型参考
+    worldRealWorldRefs: {},          // v9.4.0 按稳定角色 ID 保存的现实原型参考
     floorRecentWindow: 6,            // 近 N 轮内的记忆用完整内容
     clueBoardInjectionEnabled: true,  // 线索板是否注入给 AI
     // AI 自动生成
@@ -93,6 +99,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     reduceSimilarityThreshold: 0.60,
     entityDedupEnabled: true,
     entityMergeSimilarityThreshold: 0.90,
+    entityMergeSummaryThreshold: 5, // NPC/物品累计合并 N 次后交给副 API 压缩
     dedupReviewSimilarityThreshold: 0.74,
     dedupKnownEntityLimit: 30,
     dedupAmbiguousAction: 'save_review', // 'save_review' | 'merge' | 'skip'
@@ -571,6 +578,8 @@ export async function addNpcProfile(chatId, data) {
         sourceMessageHash: data.sourceMessageHash || '',
         sourceChatId: data.sourceChatId || '',
         dedupReview: data.dedupReview || null,
+        mergeCount: Math.max(0, Number(data.mergeCount) || 0),
+        mergeSummaryCount: Math.max(0, Number(data.mergeSummaryCount) || 0),
     };
     profiles.push(entry);
     await saveCollection('npc', chatId, profiles);
@@ -660,6 +669,8 @@ export async function addItem(chatId, data) {
         sourceMessageHash: data.sourceMessageHash || '',
         sourceChatId: data.sourceChatId || '',
         dedupReview: data.dedupReview || null,
+        mergeCount: Math.max(0, Number(data.mergeCount) || 0),
+        mergeSummaryCount: Math.max(0, Number(data.mergeSummaryCount) || 0),
     };
     items.push(entry);
     await saveCollection('item', chatId, items);
@@ -1624,7 +1635,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.3.4',
+        version: '9.4.0',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2012,7 +2023,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
         realtime,
     };
     const backup = {
-        version: '9.3.4',
+        version: '9.4.0',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2800,7 +2811,7 @@ export async function exportMemories(chatId) {
     await normalizeDataEmbeddingsToRefs(chatId, data);
     const vectorPack = await buildVectorPack(chatId, data);
     return JSON.stringify({
-        version: '9.3.4',
+        version: '9.4.0',
         schema: 'bb-memory-vector-ref-v1',
         exportedAt: Date.now(),
         data: stripRuntimeEmbeddings(data),

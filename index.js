@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.3.4 主入口
+ * index.js —— BB-Memory v9.4.0 主入口
  *
  * 五柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目 / 实时记忆。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -85,10 +85,13 @@ import {
 import {
     getCharacterDisplayName, autoRescueSlots, primeIdentityCache,
 } from './slot-identity.js';
+import { getCharacterWorldRealWorldRef } from './character-settings.js';
 
 // ═══ 常量 ═══
 const INJECTION_KEY = 'bb_memory_injection';
-const POSITION_IN_CHAT = 1; // in-chat
+const REALTIME_INJECTION_KEY = 'bb_memory_realtime_injection';
+const POSITION_AFTER_PROMPT = 0; // SillyTavern: After Main Prompt / Story String
+const POSITION_IN_CHAT = 1;
 const ROLE_SYSTEM = 0;
 
 // ═══ 全局状态 ═══
@@ -103,12 +106,14 @@ let chatSwitchSuppressDeletesUntil = 0;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.3.4';
+const SETTINGS_EXPORT_VERSION = '9.4.0';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
-    'npcInjectionMax', 'itemInjectionMax', 'milestoneVectorMax', 'milestoneDefaultInjectionMode',
-    'mapInjectionMax', 'worldRealWorldRef', 'clueBoardInjectionEnabled',
+    'npcInjectionMax', 'itemInjectionMax', 'entityDetailInjectionMaxChars',
+    'itemResidentHitCountThreshold', 'itemFallbackInjectionProbability', 'itemFallbackInjectionMax',
+    'milestoneVectorMax', 'milestoneDefaultInjectionMode',
+    'mapInjectionMax', 'mapFallbackInjectionMax', 'worldRealWorldRef', 'worldRealWorldRefs', 'clueBoardInjectionEnabled',
     'autoGenEnabled', 'autoGenMode', 'autoGenEndpoint', 'autoGenModel',
     'maxMemoriesPerExchange', 'extractionConfirmMode', 'activeConfirmStyle', 'contextWindowExchanges',
     'batchExtractionCount', 'sourceRollbackFloorWindow', 'extractedMsgDisplay', 'extractionStyle',
@@ -116,6 +121,7 @@ const SETTINGS_EXPORT_KEYS = [
     'customExtractionBias', 'customCorePrinciples', 'customExtractionDimensions', 'customPromptTemplates',
     'embeddingEnabled', 'embeddingEndpoint', 'embeddingModel', 'dedupEnabled', 'mergeSimilarityThreshold',
     'reduceSimilarityThreshold', 'entityDedupEnabled', 'entityMergeSimilarityThreshold',
+    'entityMergeSummaryThreshold',
     'dedupReviewSimilarityThreshold', 'dedupKnownEntityLimit', 'dedupAmbiguousAction',
     'diversityLimitPerTag', 'promotionCooldownRounds', 'hitScorePromoteThreshold', 'hitScoreEternalThreshold',
     'hitScoreDemoteThreshold', 'entityTierPromoteThreshold', 'entityTierDemoteThreshold',
@@ -169,9 +175,14 @@ const SETTING_CONTROL_BINDINGS = {
     floorRecentWindow: ['#bb_floor_recent_window', 'value'],
     npcInjectionMax: ['#bb_npc_injection_max', 'value'],
     itemInjectionMax: ['#bb_item_injection_max', 'value'],
+    entityDetailInjectionMaxChars: ['#bb_entity_detail_injection_max_chars', 'value'],
+    itemResidentHitCountThreshold: ['#bb_item_resident_hit_count_threshold', 'value'],
+    itemFallbackInjectionProbability: ['#bb_item_fallback_injection_probability', 'value'],
+    itemFallbackInjectionMax: ['#bb_item_fallback_injection_max', 'value'],
     milestoneVectorMax: ['#bb_milestone_vector_max', 'value'],
     milestoneDefaultInjectionMode: ['#bb_milestone_default_injection_mode', 'value'],
     mapInjectionMax: ['#bb_map_injection_max', 'value'],
+    mapFallbackInjectionMax: ['#bb_map_fallback_injection_max', 'value'],
     maintenanceMemThreshold: ['#bb_maintenance_mem_threshold', 'value'],
     maintenanceNpcThreshold: ['#bb_maintenance_npc_threshold', 'value'],
     maintenanceItemThreshold: ['#bb_maintenance_item_threshold', 'value'],
@@ -242,6 +253,7 @@ const SETTING_CONTROL_BINDINGS = {
     mergeSimilarityThreshold: ['#bb_merge_similarity_threshold', 'value'],
     reduceSimilarityThreshold: ['#bb_reduce_similarity_threshold', 'value'],
     entityMergeSimilarityThreshold: ['#bb_entity_merge_similarity_threshold', 'value'],
+    entityMergeSummaryThreshold: ['#bb_entity_merge_summary_threshold', 'value'],
     dedupReviewSimilarityThreshold: ['#bb_dedup_review_similarity_threshold', 'value'],
     dedupKnownEntityLimit: ['#bb_dedup_known_entity_limit', 'value'],
     customExtractionBias: ['#bb_custom_extraction_bias', 'value'],
@@ -401,6 +413,10 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     const ctx = SillyTavern.getContext();
     const chatId = ctx.chatId || (ctx.chat?.[0]?.chatId) || null;
     if (!chatId) { clearInjection(); return chat; }
+    const injectionSettings = {
+        ...settings,
+        worldRealWorldRef: getCharacterWorldRealWorldRef(settings),
+    };
 
     // v8.2.1 检测重roll：chat 末尾已是 AI 消息 → 正在覆盖已有回复
     let isReroll = false;
@@ -517,20 +533,14 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         merged.push(...l4, ...rest);
     }
 
-    if (!npcForInjection.length && !itemsForInjection.length &&
-        !milestoneForInjection.ongoing.length && !milestoneForInjection.ended.length && !milestoneForInjection.foreshadow.length &&
-        !merged.length && !timelineForInjection.text && !hasMapData && !hasClueData) {
-        clearInjection(); return chat;
-    }
-
     // 9. 构建注入文本
-    const { text, tokenEstimate, stats, truncated, tokenBudget } = await buildMemoryInjectionPrompt({
+    const { text, realtimeText, tokenEstimate, stats, truncated, tokenBudget } = await buildMemoryInjectionPrompt({
         npcProfiles: npcForInjection,
         items: itemsForInjection,
         milestones: milestoneForInjection,
         timeline: timelineForInjection,
         relevantResults: merged,
-        settings,
+        settings: injectionSettings,
         chatLength: chat.length,
         clueBoard: activeClueBoard,
         mapData,  // v8.7.0
@@ -538,7 +548,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         queryEmbedding,
         realtimeEntries: realtimeAll,  // v9.3.3 第五柱：无条件注入，不参与检索
     });
-    if (!text.trim()) { clearInjection(); return chat; }
+    if (!text.trim() && !realtimeText.trim()) { clearInjection(); return chat; }
 
     // 8. 记录实际注入命中
     const injectedNpcIds = Array.isArray(stats.npcIds) ? new Set(stats.npcIds) : null;
@@ -565,9 +575,31 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     }
 
     // 10. 注入
-    const injectionText = (settings.injectionTemplate || '[BB-Memory 长期记忆]\n{{memories}}')
-        .replace('{{memories}}', text);
-    ctx.setExtensionPrompt(INJECTION_KEY, injectionText, POSITION_IN_CHAT, 4, ROLE_SYSTEM);
+    if (text.trim()) {
+        const configuredTemplate = String(settings.injectionTemplate || '').trim();
+        const legacyDefaultTemplate = /^\[BB-Memory\s+长期记忆\]\s*\{\{memories\}\}$/i.test(configuredTemplate);
+        const template = !configuredTemplate || legacyDefaultTemplate
+            ? '<BBMemory>\n{{memories}}\n</BBMemory>'
+            : settings.injectionTemplate;
+        let injectionText = template.includes('{{memories}}')
+            ? template.replace('{{memories}}', text)
+            : `${template.trim()}\n${text}`;
+        // 旧设置中的自定义外层模板可能仍是 [BB-Memory]；固定补上 XML 外壳，保证升级即生效。
+        if (!/<BBMemory\b[^>]*>[\s\S]*<\/BBMemory>/i.test(injectionText)) {
+            injectionText = `<BBMemory>\n${injectionText.trim()}\n</BBMemory>`;
+        }
+        ctx.setExtensionPrompt(INJECTION_KEY, injectionText, POSITION_AFTER_PROMPT, 0, ROLE_SYSTEM);
+    } else {
+        ctx.setExtensionPrompt(INJECTION_KEY, '', POSITION_AFTER_PROMPT, 0, ROLE_SYSTEM);
+    }
+
+    if (realtimeText.trim()) {
+        const realtimeInjectionText = `<BBMemory>\n${realtimeText.trim()}\n</BBMemory>`;
+        // depth=0：紧跟聊天历史的最后一条已发送消息，独立于前置长期记忆。
+        ctx.setExtensionPrompt(REALTIME_INJECTION_KEY, realtimeInjectionText, POSITION_IN_CHAT, 0, ROLE_SYSTEM);
+    } else {
+        ctx.setExtensionPrompt(REALTIME_INJECTION_KEY, '', POSITION_IN_CHAT, 0, ROLE_SYSTEM);
+    }
 
     if (truncated.length > 0) {
         console.warn(`[BB-Memory] 注入token预算(${tokenBudget})不足，以下区块被截断: ${truncated.join(', ')} | 已用~${tokenEstimate} tokens`);
@@ -638,7 +670,9 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
 
 function clearInjection() {
     try {
-        SillyTavern.getContext().setExtensionPrompt(INJECTION_KEY, '', POSITION_IN_CHAT, 0, ROLE_SYSTEM);
+        const ctx = SillyTavern.getContext();
+        ctx.setExtensionPrompt(INJECTION_KEY, '', POSITION_AFTER_PROMPT, 0, ROLE_SYSTEM);
+        ctx.setExtensionPrompt(REALTIME_INJECTION_KEY, '', POSITION_IN_CHAT, 0, ROLE_SYSTEM);
     } catch { /* ignore */ }
 }
 
@@ -2095,9 +2129,14 @@ function bindSidebarEvents() {
     bindInput('#bb_floor_recent_window', 'floorRecentWindow', 'number');
     bindInput('#bb_npc_injection_max', 'npcInjectionMax', 'number');
     bindInput('#bb_item_injection_max', 'itemInjectionMax', 'number');
+    bindInput('#bb_entity_detail_injection_max_chars', 'entityDetailInjectionMaxChars', 'number');
+    bindInput('#bb_item_resident_hit_count_threshold', 'itemResidentHitCountThreshold', 'number');
+    bindInput('#bb_item_fallback_injection_probability', 'itemFallbackInjectionProbability', 'number');
+    bindInput('#bb_item_fallback_injection_max', 'itemFallbackInjectionMax', 'number');
     bindInput('#bb_milestone_vector_max', 'milestoneVectorMax', 'number');
     bindSelect('#bb_milestone_default_injection_mode', 'milestoneDefaultInjectionMode');
     bindInput('#bb_map_injection_max', 'mapInjectionMax', 'number');
+    bindInput('#bb_map_fallback_injection_max', 'mapFallbackInjectionMax', 'number');
     bindInput('#bb_maintenance_mem_threshold', 'maintenanceMemThreshold', 'number');
     bindInput('#bb_maintenance_npc_threshold', 'maintenanceNpcThreshold', 'number');
     bindInput('#bb_maintenance_item_threshold', 'maintenanceItemThreshold', 'number');
@@ -2209,6 +2248,7 @@ function bindSidebarEvents() {
     bindInput('#bb_merge_similarity_threshold', 'mergeSimilarityThreshold', 'number');
     bindInput('#bb_reduce_similarity_threshold', 'reduceSimilarityThreshold', 'number');
     bindInput('#bb_entity_merge_similarity_threshold', 'entityMergeSimilarityThreshold', 'number');
+    bindInput('#bb_entity_merge_summary_threshold', 'entityMergeSummaryThreshold', 'number');
     bindInput('#bb_dedup_review_similarity_threshold', 'dedupReviewSimilarityThreshold', 'number');
     bindInput('#bb_dedup_known_entity_limit', 'dedupKnownEntityLimit', 'number');
     // v7.8.0 日历描述改为 per-chat 存储
@@ -4485,7 +4525,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.3.4 初始化开始...');
+    console.log('[BB-Memory] v9.4.0 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -4681,7 +4721,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.3.4 初始化完成');
+    console.log('[BB-Memory] v9.4.0 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆

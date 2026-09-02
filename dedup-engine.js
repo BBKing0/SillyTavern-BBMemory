@@ -219,9 +219,16 @@ function entityScore(pillar, incoming, existing) {
         const locationConflict = conflictingField(incoming.location, existing.location);
         if (ownerConflict) score -= 0.14;
         if (ownerConflict && locationConflict) score -= 0.10;
-        // 完全同名但结构字段冲突时仍提示人工审核，不静默丢掉候选。
-        if (name === 1 && ownerConflict) score = Math.max(score, 0.76);
-        return { score: Math.max(0, Math.min(1, score)), reason: name >= vector ? '物品名称相似' : '物品语义相似', conflict: ownerConflict };
+        // 强名称关系（同名、量词变化、短名/完整名）优先解释为同一件物品的流转状态。
+        // 否则“蓝色宝石 → 宝石 → 一块宝石”会因持有者/地点变化被保存成三件物品。
+        // 真正的同名不同物应由提取器使用独立标准名；用户仍可在管理器中拆分误合并项。
+        const stateUpdateLikely = name >= 0.94;
+        if (stateUpdateLikely) score = Math.max(score, 0.94);
+        return {
+            score: Math.max(0, Math.min(1, score)),
+            reason: stateUpdateLikely ? '物品强名称一致，按持有/地点状态更新' : (name >= vector ? '物品名称相似' : '物品语义相似'),
+            conflict: stateUpdateLikely ? false : ownerConflict,
+        };
     }
     if (sameMeaningfulField(incoming.role, existing.role)) score += 0.04;
     if (sameMeaningfulField(incoming.location, existing.location)) score += 0.02;
