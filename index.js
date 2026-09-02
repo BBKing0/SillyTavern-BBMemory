@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.4.2 主入口
+ * index.js —— BB-Memory v9.4.3 主入口
  *
  * 五柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目 / 实时记忆。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -54,6 +54,7 @@ import { getMap } from './map-store.js';  // v8.7.0
 import { hydrateCollectionEmbeddings, hydrateMapEmbeddings } from './vector-store.js';
 import {
     DEFAULT_AGENT_SYSTEM_PROMPT,
+    DEFAULT_CURATE_FULL_AUDIT_PROMPT,
     DEFAULT_CURATE_REVIEW_PROMPT,
     DEFAULT_HEALTH_TAG_PROMPT,
     DEFAULT_REALTIME_DETAIL_EXTRACT_PROMPT,
@@ -114,7 +115,7 @@ let chatSwitchSuppressDeletesUntil = 0;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.4.2';
+const SETTINGS_EXPORT_VERSION = '9.4.3';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
@@ -136,7 +137,9 @@ const SETTINGS_EXPORT_KEYS = [
     'maintenanceMode', 'maintenanceMemThreshold', 'maintenanceNpcThreshold', 'maintenanceItemThreshold', 'itemDustyMissRounds',
     'healthCheckDuplicateThreshold', 'healthCheckIsolationThreshold', 'healthCheckStaleDays',
     'healthCheckStaleHitThreshold', 'healthCheckThreadStaleDays', 'healthCheckClueStaleDays',
-    // v9.3.3 AI 记忆整理
+    // v9.4.3 全库整理（旧 aiCurate* 保留导入兼容）
+    'fullCurationMode', 'fullCurationPillars', 'fullCurationBatchSize',
+    'fullCurationRecallPerEntry', 'fullCurationClusterThreshold', 'fullCurationUndoDepth',
     'aiCurateEnabled', 'aiCurateTriggerMode',
     'aiCurateMemThreshold', 'aiCurateNpcThreshold', 'aiCurateItemThreshold',
     'aiCurateMilestoneThreshold', 'aiCurateTimelineThreshold',
@@ -212,22 +215,12 @@ const SETTING_CONTROL_BINDINGS = {
     healthCheckStaleHitThreshold: ['#bb_health_check_stale_hit_threshold', 'value'],
     healthCheckThreadStaleDays: ['#bb_health_check_thread_stale_days', 'value'],
     healthCheckClueStaleDays: ['#bb_health_check_clue_stale_days', 'value'],
-    // v9.3.3 AI 记忆整理
-    aiCurateEnabled: ['#bb_ai_curate_enabled', 'checkbox'],
-    aiCurateTriggerMode: ['#bb_ai_curate_trigger_mode', 'value'],
-    aiCurateMemThreshold: ['#bb_ai_curate_mem_threshold', 'value'],
-    aiCurateNpcThreshold: ['#bb_ai_curate_npc_threshold', 'value'],
-    aiCurateItemThreshold: ['#bb_ai_curate_item_threshold', 'value'],
-    aiCurateMilestoneThreshold: ['#bb_ai_curate_milestone_threshold', 'value'],
-    aiCurateTimelineThreshold: ['#bb_ai_curate_timeline_threshold', 'value'],
-    aiCurateClusterThreshold: ['#bb_ai_curate_cluster_threshold', 'value'],
-    aiCurateRecallPerEntry: ['#bb_ai_curate_recall_per_entry', 'value'],
-    aiCurateMaxGroupsPerRun: ['#bb_ai_curate_max_groups', 'value'],
-    aiCurateAuthMerge: ['#bb_ai_curate_auth_merge', 'value'],
-    aiCurateAuthRewrite: ['#bb_ai_curate_auth_rewrite', 'value'],
-    aiCurateAuthSplit: ['#bb_ai_curate_auth_split', 'value'],
-    aiCurateAuthDelete: ['#bb_ai_curate_auth_delete', 'value'],
-    aiCurateUndoDepth: ['#bb_ai_curate_undo_depth', 'value'],
+    // v9.4.3 全库整理
+    fullCurationMode: ['#bb_full_curate_mode', 'value'],
+    fullCurationBatchSize: ['#bb_full_curate_batch_size', 'value'],
+    fullCurationClusterThreshold: ['#bb_full_curate_cluster_threshold', 'value'],
+    fullCurationRecallPerEntry: ['#bb_full_curate_recall_per_entry', 'value'],
+    fullCurationUndoDepth: ['#bb_full_curate_undo_depth', 'value'],
     dedupTimeConflictScope: ['#bb_dedup_time_conflict_scope', 'value'],
     // v9.3.3 实时记忆（第五柱）
     realtimeEnabled: ['#bb_realtime_enabled', 'checkbox'],
@@ -356,13 +349,21 @@ function getPromptTemplateDefinitions() {
             defaultValue: DEFAULT_HEALTH_TAG_PROMPT,
         },
         {
-            // v9.3.3 AI 整理师。定义写在这里而非 memory-curator.js，是为了让整理师保持懒加载。
+            // v9.4.3 全库整理·疑似重复模式。
             key: 'curate.review',
-            title: 'AI 记忆整理审查',
-            category: 'AI 整理师',
+            title: '全库整理·疑似重复',
+            category: '全库整理',
             description: '把聚类出的疑似重复分组交给 AI 判断合并/重写/拆分/删除/保留时使用。'
                 + '可用占位符：{{fieldSpec}}（字段说明）{{groupsText}}（待整理分组）{{CONCRETE_TIME_RULE}} {{calRef}}。',
             defaultValue: DEFAULT_CURATE_REVIEW_PROMPT,
+        },
+        {
+            key: 'curate.fullAudit',
+            title: '全库整理·全部审查',
+            category: '全库整理',
+            description: '把所选记忆柱的全部活跃条目分批交给 AI，检查重复、缺失字段与内容质量。'
+                + '可用占位符：{{fieldSpec}} {{groupsText}} {{CONCRETE_TIME_RULE}} {{calRef}}。',
+            defaultValue: DEFAULT_CURATE_FULL_AUDIT_PROMPT,
         },
         {
             // v9.3.3 实时细节抓取。定义内联在这里，让 realtime-memory.js 保持懒加载。
@@ -610,8 +611,9 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
 
     if (realtimeText.trim()) {
         const realtimeInjectionText = `<BBMemory>\n${realtimeText.trim()}\n</BBMemory>`;
-        // depth=0：紧跟聊天历史的最后一条已发送消息，独立于前置长期记忆。
-        ctx.setExtensionPrompt(REALTIME_INJECTION_KEY, realtimeInjectionText, POSITION_IN_CHAT, 0, false, ROLE_SYSTEM);
+        // depth=1：夹在上一条 AI 回复与当前用户消息之间。这样既靠近当前场景，
+        // 又不会与聊天历史后的 system 预设尾部相邻并被合并成同一段。
+        ctx.setExtensionPrompt(REALTIME_INJECTION_KEY, realtimeInjectionText, POSITION_IN_CHAT, 1, false, ROLE_SYSTEM);
     } else {
         ctx.setExtensionPrompt(REALTIME_INJECTION_KEY, '', POSITION_IN_CHAT, 0, false, ROLE_SYSTEM);
     }
@@ -2173,23 +2175,30 @@ function bindSidebarEvents() {
     bindInput('#bb_health_check_stale_hit_threshold', 'healthCheckStaleHitThreshold', 'number');
     bindInput('#bb_health_check_thread_stale_days', 'healthCheckThreadStaleDays', 'number');
     bindInput('#bb_health_check_clue_stale_days', 'healthCheckClueStaleDays', 'number');
-    // v9.3.3 AI 记忆整理
-    bindCheckbox('#bb_ai_curate_enabled', 'aiCurateEnabled', refreshCurateStatus);
-    bindSelect('#bb_ai_curate_trigger_mode', 'aiCurateTriggerMode');
-    document.querySelector('#bb_ai_curate_trigger_mode')?.addEventListener('change', refreshCurateStatus);
-    bindInput('#bb_ai_curate_mem_threshold', 'aiCurateMemThreshold', 'number');
-    bindInput('#bb_ai_curate_npc_threshold', 'aiCurateNpcThreshold', 'number');
-    bindInput('#bb_ai_curate_item_threshold', 'aiCurateItemThreshold', 'number');
-    bindInput('#bb_ai_curate_milestone_threshold', 'aiCurateMilestoneThreshold', 'number');
-    bindInput('#bb_ai_curate_timeline_threshold', 'aiCurateTimelineThreshold', 'number');
-    bindInput('#bb_ai_curate_cluster_threshold', 'aiCurateClusterThreshold', 'number');
-    bindInput('#bb_ai_curate_recall_per_entry', 'aiCurateRecallPerEntry', 'number');
-    bindInput('#bb_ai_curate_max_groups', 'aiCurateMaxGroupsPerRun', 'number');
-    bindSelect('#bb_ai_curate_auth_merge', 'aiCurateAuthMerge');
-    bindSelect('#bb_ai_curate_auth_rewrite', 'aiCurateAuthRewrite');
-    bindSelect('#bb_ai_curate_auth_split', 'aiCurateAuthSplit');
-    bindSelect('#bb_ai_curate_auth_delete', 'aiCurateAuthDelete');
-    bindInput('#bb_ai_curate_undo_depth', 'aiCurateUndoDepth', 'number');
+    // v9.4.3 全库整理：不再自动触发，也没有直接写库授权矩阵。
+    bindSelect('#bb_full_curate_mode', 'fullCurationMode');
+    bindInput('#bb_full_curate_batch_size', 'fullCurationBatchSize', 'number');
+    bindInput('#bb_full_curate_cluster_threshold', 'fullCurationClusterThreshold', 'number');
+    bindInput('#bb_full_curate_recall_per_entry', 'fullCurationRecallPerEntry', 'number');
+    bindInput('#bb_full_curate_undo_depth', 'fullCurationUndoDepth', 'number');
+    document.querySelector('#bb_full_curate_mode')?.addEventListener('change', refreshCurateStatus);
+    const fullPillarInputs = [...document.querySelectorAll('[data-bb-full-curate-pillar]')];
+    const savedFullPillars = new Set(Array.isArray(getSettings().fullCurationPillars)
+        ? getSettings().fullCurationPillars
+        : ['mem', 'npc', 'item', 'milestone', 'timeline']);
+    for (const input of fullPillarInputs) {
+        input.checked = savedFullPillars.has(input.dataset.bbFullCuratePillar);
+        input.addEventListener('change', () => {
+            const selected = fullPillarInputs.filter(el => el.checked).map(el => el.dataset.bbFullCuratePillar);
+            if (!selected.length) {
+                input.checked = true;
+                showToast('全库整理至少选择一个记忆柱', 'warning');
+                return;
+            }
+            updateSettings({ fullCurationPillars: selected });
+            refreshCurateStatus();
+        });
+    }
     bindSelect('#bb_dedup_time_conflict_scope', 'dedupTimeConflictScope');
     // v9.3.3 实时记忆（第五柱）
     bindCheckbox('#bb_realtime_enabled', 'realtimeEnabled', refreshRealtimeStatus);
@@ -2246,11 +2255,6 @@ function bindSidebarEvents() {
     // 注入上限改了立刻刷新状态行里的注入预览
     for (const sel of ['#bb_realtime_injection_max', '#bb_realtime_injection_token_cap']) {
         document.querySelector(sel)?.addEventListener('change', refreshRealtimeStatus);
-    }
-    // 阈值变了立刻刷新进度提示，避免显示旧分母
-    for (const sel of ['#bb_ai_curate_mem_threshold', '#bb_ai_curate_npc_threshold', '#bb_ai_curate_item_threshold',
-        '#bb_ai_curate_milestone_threshold', '#bb_ai_curate_timeline_threshold']) {
-        document.querySelector(sel)?.addEventListener('change', refreshCurateStatus);
     }
     bindInput('#bb_injection_template', 'injectionTemplate', 'string');
     // API 配置字段绑定
@@ -2430,9 +2434,8 @@ function bindSidebarEvents() {
     document.querySelector('#bb_slot_rescue_btn')?.addEventListener('click', () => {
         openSlotRescuePanel().catch(e => showToast(`打开存档救援失败: ${e.message}`, 'error'));
     });
-    // v9.3.3 AI 记忆整理
-    document.querySelector('#bb_curate_now_btn')?.addEventListener('click', () => handleCurateNow(false));
-    document.querySelector('#bb_curate_full_btn')?.addEventListener('click', () => handleCurateNow(true));
+    // v9.4.3 只保留用户主动启动的全库整理。
+    document.querySelector('#bb_curate_full_btn')?.addEventListener('click', handleFullCuration);
     document.querySelector('#bb_curate_undo_btn')?.addEventListener('click', handleCurateUndo);
     refreshCurateStatus();
     // v9.3.3 实时记忆（第五柱）
@@ -4540,7 +4543,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.4.2 初始化开始...');
+    console.log('[BB-Memory] v9.4.3 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -4736,7 +4739,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.4.2 初始化完成');
+    console.log('[BB-Memory] v9.4.3 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
@@ -5082,7 +5085,7 @@ async function debugCuratorBuildGroups(pillar = 'mem', options = {}) {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  v9.3.3 AI 记忆整理：侧边栏入口
+//  v9.4.3 全库整理：侧边栏入口
 // ═══════════════════════════════════════════════════════════
 
 function setCurateStatus(text, tone = '') {
@@ -5093,7 +5096,7 @@ function setCurateStatus(text, tone = '') {
 }
 
 function setCurateButtonsBusy(busy, activeBtn, busyText) {
-    const ids = ['#bb_curate_now_btn', '#bb_curate_full_btn', '#bb_curate_undo_btn'];
+    const ids = ['#bb_curate_full_btn', '#bb_curate_undo_btn'];
     for (const id of ids) {
         const btn = document.querySelector(id);
         if (!btn) continue;
@@ -5111,37 +5114,102 @@ function setCurateButtonsBusy(busy, activeBtn, busyText) {
     }
 }
 
-const CURATE_THRESHOLD_LABELS = Object.freeze({
-    mem: ['记忆', 'aiCurateMemThreshold'],
-    npc: ['NPC', 'aiCurateNpcThreshold'],
-    item: ['物品', 'aiCurateItemThreshold'],
-    milestone: ['里程碑', 'aiCurateMilestoneThreshold'],
-    timeline: ['时间线', 'aiCurateTimelineThreshold'],
+const FULL_CURATION_PILLAR_LABELS = Object.freeze({
+    mem: '记忆条目', npc: 'NPC', item: '物品', milestone: '里程碑', timeline: '时间线',
 });
 
-/** 展示各柱累积计数与阈值，让用户知道还差多少条会自动触发整理。 */
-async function refreshCurateStatus() {
+function normalizeFullCurationPillars(value) {
+    const list = Array.isArray(value) ? value : [];
+    const normalized = [...new Set(list.filter(pillar => FULL_CURATION_PILLAR_LABELS[pillar]))];
+    return normalized.length ? normalized : Object.keys(FULL_CURATION_PILLAR_LABELS);
+}
+
+/** 全库整理不再自动触发；这里只展示下次启动时的默认选择。 */
+function refreshCurateStatus() {
     const el = document.querySelector('#bb_curate_status');
     if (!el) return;
     const s = getSettings();
-    if (!s.aiCurateEnabled) { setCurateStatus('AI 整理已关闭'); return; }
     const chatId = getChatId();
     if (!chatId) { setCurateStatus('未进入对话'); return; }
-    if (s.aiCurateTriggerMode === 'manual') { setCurateStatus('仅手动触发模式'); return; }
-    try {
-        const { getCurationState } = await import('./memory-curator.js');
-        const { counters } = getCurationState(chatId, s);
-        const parts = [];
-        for (const [pillar, [label, key]] of Object.entries(CURATE_THRESHOLD_LABELS)) {
-            const threshold = Number(s[key]);
-            if (!Number.isFinite(threshold) || threshold <= 0) continue;
-            const count = counters[pillar] || 0;
-            if (count > 0) parts.push(`${label} ${count}/${threshold}`);
-        }
-        setCurateStatus(parts.length
-            ? `自动整理进度：${parts.join('，')}（${s.aiCurateTriggerMode === 'all' ? '全部达标' : '任一达标'}触发）`
-            : '自动整理进度：暂无新增条目');
-    } catch { setCurateStatus(''); }
+    const mode = s.fullCurationMode === 'all' ? '全部审查' : '疑似重复';
+    const pillars = normalizeFullCurationPillars(s.fullCurationPillars)
+        .map(pillar => FULL_CURATION_PILLAR_LABELS[pillar]).join('、');
+    setCurateStatus(`手动全库整理：${mode}｜${pillars}`);
+}
+
+function openFullCurationOptionsDialog() {
+    return new Promise(resolve => {
+        document.querySelector('.bb-full-curate-options-overlay')?.remove();
+        const settings = getSettings();
+        const selected = new Set(normalizeFullCurationPillars(settings.fullCurationPillars));
+        const overlay = document.createElement('div');
+        overlay.className = 'bb-form-overlay bb-manager-form-overlay bb-full-curate-options-overlay';
+        overlay.innerHTML = `
+            <div class="bb-mem-form-popup bb-full-curate-options-popup">
+                <div class="bb-mem-form-header">
+                    <h3><i class="fa-solid fa-magnifying-glass-chart"></i> 启动全库整理</h3>
+                    <button class="menu_button" type="button" data-action="cancel">×</button>
+                </div>
+                <div class="bb-mem-form-body">
+                    <div class="bb-mem-form-group">
+                        <label for="bb_full_curate_dialog_mode">整理模式</label>
+                        <select id="bb_full_curate_dialog_mode" class="bb-input">
+                            <option value="duplicates" ${settings.fullCurationMode === 'all' ? '' : 'selected'}>只整理疑似重复</option>
+                            <option value="all" ${settings.fullCurationMode === 'all' ? 'selected' : ''}>全部条目审查（重复、缺字段、内容质量）</option>
+                        </select>
+                    </div>
+                    <div class="bb-mem-form-group">
+                        <label>处理范围</label>
+                        <div class="bb-full-curate-pillars bb-full-curate-dialog-pillars">
+                            ${Object.entries(FULL_CURATION_PILLAR_LABELS).map(([pillar, label]) => `
+                                <label class="checkbox_label">
+                                    <input type="checkbox" data-pillar="${pillar}" ${selected.has(pillar) ? 'checked' : ''} />
+                                    <span>${label}</span>
+                                </label>`).join('')}
+                        </div>
+                    </div>
+                    <div class="bb-mem-form-group">
+                        <label for="bb_full_curate_dialog_batch">每批条目/疑似组数</label>
+                        <input id="bb_full_curate_dialog_batch" class="bb-input" type="number" min="1" max="30"
+                               value="${Math.max(1, Math.min(30, Number(settings.fullCurationBatchSize) || 8))}" />
+                        <small>全部审查会逐批发送每个活跃条目，API 调用次数可能较多；扫描完成后还会显示准确预估。</small>
+                    </div>
+                    <div class="bb-full-curate-safety-note">
+                        <i class="fa-solid fa-shield-halved"></i>
+                        所有 AI 建议都会进入审核窗口，不会在你确认前修改记忆库。
+                    </div>
+                </div>
+                <div class="bb-mem-form-footer">
+                    <button class="menu_button" type="button" data-action="cancel">取消</button>
+                    <button class="menu_button" type="button" data-action="start">扫描并预估</button>
+                </div>
+            </div>`;
+        mountInTopLayer(overlay);
+
+        const finish = (value) => { overlay.remove(); resolve(value); };
+        overlay.addEventListener('click', event => {
+            const action = event.target.closest('[data-action]')?.dataset.action;
+            if (action === 'cancel') { finish(null); return; }
+            if (action !== 'start') return;
+            const pillars = [...overlay.querySelectorAll('[data-pillar]:checked')].map(input => input.dataset.pillar);
+            if (!pillars.length) {
+                showToast('请至少选择一个记忆柱', 'warning');
+                return;
+            }
+            const mode = overlay.querySelector('#bb_full_curate_dialog_mode')?.value === 'all' ? 'all' : 'duplicates';
+            const batchSize = Math.max(1, Math.min(30, Number(overlay.querySelector('#bb_full_curate_dialog_batch')?.value) || 8));
+            updateSettings({ fullCurationMode: mode, fullCurationPillars: pillars, fullCurationBatchSize: batchSize });
+            const settingMode = document.querySelector('#bb_full_curate_mode');
+            if (settingMode) settingMode.value = mode;
+            const settingBatch = document.querySelector('#bb_full_curate_batch_size');
+            if (settingBatch) settingBatch.value = String(batchSize);
+            document.querySelectorAll('[data-bb-full-curate-pillar]').forEach(input => {
+                input.checked = pillars.includes(input.dataset.bbFullCuratePillar);
+            });
+            refreshCurateStatus();
+            finish({ mode, pillars, batchSize });
+        });
+    });
 }
 
 /** 全库整理开销较大，先把预估的 API 调用次数摆出来让用户确认。 */
@@ -5155,12 +5223,14 @@ async function confirmFullCuration(message) {
     return confirm(`全库整理\n\n${message}\n\n继续吗？`);
 }
 
-async function handleCurateNow(fullLibrary) {
+async function handleFullCuration() {
     const chatId = getChatId();
     if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
-    const btnId = fullLibrary ? '#bb_curate_full_btn' : '#bb_curate_now_btn';
+    const options = await openFullCurationOptionsDialog();
+    if (!options) return;
+    const btnId = '#bb_curate_full_btn';
     const onProgress = ({ phase, message, current, total }) => {
-        const prefix = { cluster: '分析', ai: 'AI 整理', apply: '应用', review: '待确认' }[phase] || '处理';
+        const prefix = { cluster: '扫描', ai: 'AI 审查', apply: '应用', review: '待确认' }[phase] || '处理';
         setCurateStatus(message || prefix);
         setCurateButtonsBusy(true, btnId, total ? `${prefix} ${current}/${total}` : prefix);
     };
@@ -5168,47 +5238,36 @@ async function handleCurateNow(fullLibrary) {
     setCurateButtonsBusy(true, btnId, '准备中');
     setCurateStatus('正在准备整理...');
     try {
-        const { runCurationFlow, runFullLibraryCuration, isCurationRunning } = await import('./memory-curator.js');
+        const { runFullLibraryCuration, isCurationRunning } = await import('./memory-curator.js');
         if (isCurationRunning()) {
             showToast('已有整理任务在运行，请稍后再试', 'warning');
             return;
         }
-        if (fullLibrary) {
-            const probe = await runFullLibraryCuration(chatId, { onProgress });
-            if (probe.error) { showToast(probe.error, 'error'); setCurateStatus(probe.error, 'error'); return; }
-            if (!probe.needsConfirm) {
-                showToast(probe.summary, 'info');
-                setCurateStatus(probe.summary);
-                return;
-            }
-            setCurateButtonsBusy(false);
-            if (!await confirmFullCuration(probe.summary)) {
-                setCurateStatus('已取消全库整理');
-                return;
-            }
-            setCurateButtonsBusy(true, btnId, '整理中');
-            // 复用探测阶段已聚好的组，不重跑一遍全库两两比较
-            const report = await runFullLibraryCuration(chatId, {
-                confirmed: true, groups: probe.groups, onProgress,
-            });
-            showToast(report.error ? `全库整理出错：${report.error}` : report.summary,
-                report.error ? 'error' : 'success');
-            setCurateStatus(report.summary || report.error, report.error ? 'error' : 'success');
+        const probe = await runFullLibraryCuration(chatId, { ...options, onProgress });
+        if (probe.error) { showToast(probe.error, 'error'); setCurateStatus(probe.error, 'error'); return; }
+        if (!probe.needsConfirm) {
+            showToast(probe.summary, 'info');
+            setCurateStatus(probe.summary);
             return;
         }
-
-        const report = await runCurationFlow(chatId, { source: 'manual', onProgress });
-        if (report.error) {
-            showToast(`AI 整理失败：${report.error}`, 'error');
-            setCurateStatus(report.error, 'error');
+        setCurateButtonsBusy(false);
+        if (!await confirmFullCuration(probe.summary)) {
+            setCurateStatus('已取消全库整理');
             return;
         }
-        showToast(`AI 整理：${report.summary}`, 'success');
-        setCurateStatus(report.summary
-            + (report.applyResult?.snapshotId ? '（可用「撤销整理」回滚）' : ''), 'success');
+        setCurateButtonsBusy(true, btnId, '整理中');
+        const report = await runFullLibraryCuration(chatId, {
+            ...options,
+            confirmed: true,
+            groups: probe.groups,
+            onProgress,
+        });
+        showToast(report.error ? `全库整理出错：${report.error}` : report.summary,
+            report.error ? 'error' : 'success');
+        setCurateStatus(report.summary || report.error, report.error ? 'error' : 'success');
     } catch (e) {
-        console.warn('[BB-Memory] AI 整理失败:', e);
-        showToast(`AI 整理失败：${e.message}`, 'error');
+        console.warn('[BB-Memory] 全库整理失败:', e);
+        showToast(`全库整理失败：${e.message}`, 'error');
         setCurateStatus(e.message, 'error');
     } finally {
         setCurateButtonsBusy(false);
@@ -5370,7 +5429,7 @@ async function debugCuratorDryRun(pillar = 'mem', options = {}) {
     const grouped = await debugCuratorBuildGroups(pillar, options);
     if (!grouped?.groups?.length) return null;
     const { runCuration } = await import('./memory-curator.js');
-    console.log('[BB-Memory] 正在调用 AI 整理（不写库）...');
+    console.log('[BB-Memory] 正在调用全库整理判断（不写库）...');
     const result = await runCuration(getChatId(), grouped.groups, options);
     if (!result.ok) {
         console.error('[BB-Memory] 整理失败:', result.error);
@@ -5577,11 +5636,6 @@ globalThis.bbMemoryDebug = {
             const { __selfTestCurationAuth } = await import('./memory-curator.js');
             return printCuratorSelfTest('授权矩阵', __selfTestCurationAuth());
         },
-        /** 触发条件与种子归一化自检，不读库不发请求 */
-        selfTestTrigger: async () => {
-            const { __selfTestCurationTrigger } = await import('./memory-curator.js');
-            return printCuratorSelfTest('触发条件', __selfTestCurationTrigger());
-        },
         /** 全部自检 */
         selfTestAll: async () => {
             const { __selfTestCurator } = await import('./memory-curator.js');
@@ -5595,27 +5649,6 @@ globalThis.bbMemoryDebug = {
             const result = await undoLastCuration(chatId);
             console.log(result.ok ? `[BB-Memory] 撤销成功：${result.summary}` : `[BB-Memory] 撤销失败：${result.error}`);
             return result;
-        },
-        /** 查看/重置整理计数器 */
-        counters: async (reset = false) => {
-            const chatId = getChatId();
-            if (!chatId) { console.warn('[BB-Memory] 未打开聊天'); return null; }
-            const { getCurationState, clearCurationCounters, shouldTriggerCuration } = await import('./memory-curator.js');
-            if (reset) {
-                clearCurationCounters(chatId);
-                console.log('[BB-Memory] 整理计数器已清零');
-            }
-            const s = getSettings();
-            const state = getCurationState(chatId, s);
-            console.table(Object.entries(CURATE_THRESHOLD_LABELS).map(([pillar, [label, key]]) => ({
-                柱: label,
-                计数: state.counters[pillar] || 0,
-                阈值: s[key],
-                种子数: state.seeds[pillar]?.length || 0,
-            })));
-            console.log(`[BB-Memory] 触发模式=${s.aiCurateTriggerMode} 是否达标=${shouldTriggerCuration(state.counters, s)}`);
-            refreshCurateStatus();
-            return state;
         },
         /** 列出撤销快照栈 */
         snapshots: async () => {
@@ -5633,22 +5666,6 @@ globalThis.bbMemoryDebug = {
                 柱: (s.pillars || []).join('/'),
             })));
             return list;
-        },
-        /** 完整跑一次整理（会写库，走授权矩阵） */
-        run: async (options = {}) => {
-            const chatId = getChatId();
-            if (!chatId) { console.warn('[BB-Memory] 未打开聊天'); return null; }
-            const { runCurationFlow } = await import('./memory-curator.js');
-            const report = await runCurationFlow(chatId, {
-                source: 'manual',
-                onProgress: ({ message }) => { if (message) console.log('[BB-Memory]', message); },
-                ...options,
-            });
-            console.log(`[BB-Memory] 整理结果：${report.summary}`);
-            if (report.applyResult?.snapshotId) {
-                console.log(`[BB-Memory] 撤销快照 ${report.applyResult.snapshotId}，用 bbMemoryDebug.curator.undo() 回滚`);
-            }
-            return report;
         },
         /** 对当前聊天真实数据跑一次聚类并打印组内相似度矩阵，不写库 */
         buildGroups: debugCuratorBuildGroups,

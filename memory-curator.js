@@ -1,5 +1,5 @@
 /**
- * memory-curator.js — BB-Memory v9.4.2 AI 记忆整理师
+ * memory-curator.js — BB-Memory v9.4.3 全库记忆整理
  *
  * 解决增量两两去重的结构性盲区：`findBestDuplicate` 只让每条新条目与已有条目
  * 逐一比较并取最高分，因此「渐进细化」型重复（5 条同一件事逐层补细节，相邻
@@ -30,6 +30,7 @@ import { mergeEntityAliases } from './dedup-engine.js';
 import { callCustomApi, callMainApi } from './auto-generator.js';
 import {
     DEFAULT_CONCRETE_TIME_RULE,
+    DEFAULT_CURATE_FULL_AUDIT_PROMPT,
     DEFAULT_CURATE_REVIEW_PROMPT,
     fillPromptTemplate,
     getPromptTemplate,
@@ -231,7 +232,7 @@ export function buildCurationGroups(entries, newIds, config = {}) {
     const pillar = normalizeCurationPillar(config.pillar);
     const recallPerEntry = clampInt(config.recallPerEntry, 1, 50, CURATION_DEFAULTS.recallPerEntry);
     const clusterThreshold = clampFloat(config.clusterThreshold, 0.2, 0.99, CURATION_DEFAULTS.clusterThreshold);
-    const maxGroups = clampInt(config.maxGroups, 1, 50, CURATION_DEFAULTS.maxGroups);
+    const maxGroups = clampInt(config.maxGroups, 1, 5000, CURATION_DEFAULTS.maxGroups);
     const maxGroupSize = clampInt(config.maxGroupSize, 2, 40, CURATION_DEFAULTS.maxGroupSize);
     const includeArchived = config.includeArchived === true;
 
@@ -381,6 +382,65 @@ export async function prepareCurationGroups(chatId, pillar, entries, newIds, con
     return buildCurationGroups(pool, newIds, { ...config, pillar });
 }
 
+function fullAuditSortKey(entry, pillar) {
+    const key = pillar === 'mem'
+        ? (entry?.title || entry?.subject || entry?.storyTime)
+        : pillar === 'milestone'
+            ? (entry?.event || entry?.storyTime)
+            : (entry?.name || entry?.title || entry?.storyTime);
+    return `${String(key || '').trim().toLowerCase()}\u0000${String(entry?.id || '')}`;
+}
+
+/**
+ * 全量审查批次：已识别出的疑似重复保持在同一批，其余活跃条目按柱分批。
+ * 每个条目恰好出现一次，既能检查缺失字段，又不会让同一条被多批操作占用。
+ */
+export function buildFullAuditBatches(entries, pillar, duplicateGroups = [], batchSize = 8) {
+    const normalizedPillar = normalizeCurationPillar(pillar);
+    const size = clampInt(batchSize, 1, 30, 8);
+    const activeEntries = (Array.isArray(entries) ? entries : [])
+        .filter(entry => entry?.id && !isEntryArchived(entry));
+    const byId = new Map(activeEntries.map(entry => [String(entry.id), entry]));
+    const used = new Set();
+    const batches = [];
+
+    for (const group of (Array.isArray(duplicateGroups) ? duplicateGroups : [])) {
+        const grouped = (group?.entries || [])
+            .map(entry => byId.get(String(entry?.id || '')))
+            .filter(entry => entry && !used.has(String(entry.id)));
+        if (grouped.length < 2) continue;
+        grouped.forEach(entry => used.add(String(entry.id)));
+        batches.push({
+            ...group,
+            key: `audit:duplicate:${normalizedPillar}:${grouped.map(entry => entry.id).join(',')}`,
+            pillar: normalizedPillar,
+            ids: grouped.map(entry => String(entry.id)),
+            entries: grouped,
+            auditBatch: true,
+            auditKind: 'duplicate',
+        });
+    }
+
+    const remaining = activeEntries
+        .filter(entry => !used.has(String(entry.id)))
+        .sort((a, b) => fullAuditSortKey(a, normalizedPillar).localeCompare(fullAuditSortKey(b, normalizedPillar)));
+    for (let index = 0; index < remaining.length; index += size) {
+        const chunk = remaining.slice(index, index + size);
+        batches.push({
+            key: `audit:quality:${normalizedPillar}:${index / size}`,
+            pillar: normalizedPillar,
+            ids: chunk.map(entry => String(entry.id)),
+            entries: chunk,
+            maxSimilarity: 0,
+            avgSimilarity: 0,
+            pairs: [],
+            auditBatch: true,
+            auditKind: 'quality',
+        });
+    }
+    return batches;
+}
+
 // ═══════════════════════════════════════════════════════════
 //  Task 2：提示词构建 / API 调用 / 操作解析
 // ═══════════════════════════════════════════════════════════
@@ -425,6 +485,7 @@ const PILLAR_FIELD_HINTS = Object.freeze({
 });
 
 const MAX_ENTRY_CHARS_IN_PROMPT = 420;
+const MAX_AUDIT_FIELD_CHARS_IN_PROMPT = 1200;
 /** 缝合痕迹：出现即判定违反「必须重写成最终态」，转人工确认。 */
 const SPLICE_MARKER_PATTERN = /\[\s*(?:补充|补记|追加|附|新增|更新)\s*\]|【\s*(?:补充|补记|追加|新增)\s*】/;
 
@@ -439,22 +500,27 @@ function truncate(value, max) {
 
 // ── 提示词构建 ──
 
-function formatEntryForPrompt(entry, pillar) {
+function formatEntryForPrompt(entry, pillar, options = {}) {
     const fields = PILLAR_WRITABLE_FIELDS[pillar] || PILLAR_WRITABLE_FIELDS.mem;
+    const auditMode = options.auditMode === true;
+    const fieldLimit = auditMode ? MAX_AUDIT_FIELD_CHARS_IN_PROMPT : MAX_ENTRY_CHARS_IN_PROMPT;
+    const arrayLimit = auditMode ? 800 : 120;
     const parts = [];
     for (const field of fields) {
         const value = entry?.[field];
         if (value == null) continue;
         if (Array.isArray(value)) {
-            const flat = value
-                .map(v => (typeof v === 'string' ? v : (v?.name || v?.event || v?.period || '')))
-                .filter(Boolean)
-                .join('、');
-            if (flat) parts.push(`${field}=${truncate(flat, 120)}`);
+            const flat = auditMode
+                ? JSON.stringify(value)
+                : value
+                    .map(v => (typeof v === 'string' ? v : (v?.name || v?.event || v?.period || '')))
+                    .filter(Boolean)
+                    .join('、');
+            if (flat) parts.push(`${field}=${truncate(flat, arrayLimit)}`);
         } else if (typeof value === 'number') {
             parts.push(`${field}=${value}`);
         } else if (typeof value === 'string' && value.trim()) {
-            parts.push(`${field}=${truncate(value, MAX_ENTRY_CHARS_IN_PROMPT)}`);
+            parts.push(`${field}=${truncate(value, fieldLimit)}`);
         }
     }
     const flags = [];
@@ -467,9 +533,14 @@ function formatEntryForPrompt(entry, pillar) {
 export function formatGroupsForPrompt(groups) {
     return (Array.isArray(groups) ? groups : []).map((group, index) => {
         const pillar = normalizeCurationPillar(group.pillar);
-        const header = `【第 ${index + 1} 组】柱=${pillar}（${PILLAR_LABELS[pillar] || pillar}）`
-            + ` 共 ${group.entries?.length || 0} 条，组内最高相似度 ${Number(group.maxSimilarity || 0).toFixed(2)}`;
-        const body = (group.entries || []).map(entry => formatEntryForPrompt(entry, pillar)).join('\n');
+        const header = group.auditBatch
+            ? `【第 ${index + 1} 批】柱=${pillar}（${PILLAR_LABELS[pillar] || pillar}） 共 ${group.entries?.length || 0} 条`
+                + (group.auditKind === 'duplicate' ? '，系统已标记为疑似重复组' : '，请逐条检查质量与缺失字段')
+            : `【第 ${index + 1} 组】柱=${pillar}（${PILLAR_LABELS[pillar] || pillar}）`
+                + ` 共 ${group.entries?.length || 0} 条，组内最高相似度 ${Number(group.maxSimilarity || 0).toFixed(2)}`;
+        const body = (group.entries || []).map(entry => formatEntryForPrompt(entry, pillar, {
+            auditMode: group.auditBatch === true,
+        })).join('\n');
         return `${header}\n${body}`;
     }).join('\n\n');
 }
@@ -482,7 +553,9 @@ function buildFieldSpec(groups) {
 
 export function buildCurationPrompt(groups, options = {}) {
     const settings = options.settings || {};
-    const template = getPromptTemplate(settings, 'curate.review', DEFAULT_CURATE_REVIEW_PROMPT);
+    const template = options.auditMode
+        ? getPromptTemplate(settings, 'curate.fullAudit', DEFAULT_CURATE_FULL_AUDIT_PROMPT)
+        : getPromptTemplate(settings, 'curate.review', DEFAULT_CURATE_REVIEW_PROMPT);
     const calendar = String(options.calendarDescription || '').trim();
     return fillPromptTemplate(template, {
         fieldSpec: buildFieldSpec(groups),
@@ -624,6 +697,9 @@ export function parseCurationOps(rawText, options = {}) {
         : (Array.isArray(parsed.operations) ? parsed.operations
             : (Array.isArray(parsed) ? parsed : []));
     if (!rawOps.length) {
+        if (options.allowEmptyOps) {
+            return { ops: [], rejected: [], parsed, totalReturned: 0 };
+        }
         return {
             ops: [],
             rejected: [{ reason: '响应里没有 ops 数组' }],
@@ -677,6 +753,7 @@ export function parseCurationOps(rawText, options = {}) {
             ids,
             reason: truncate(raw.reason || raw.why || '', 300),
             notes,
+            sourceEntries: targets.map(entry => snapshotEntryForReview(entry, pillar)),
         };
 
         if (op === 'keep') {
@@ -773,6 +850,25 @@ function buildEntryLabels(entries, pillar) {
     return labels;
 }
 
+const REVIEW_META_FIELDS = Object.freeze([
+    'memoryTier', 'npcTier', 'itemTier', 'hitCount', 'sourceFloor', 'sourceExchange',
+    'createdAt', 'updatedAt', 'mergeCount', 'truthStatus',
+]);
+
+function snapshotEntryForReview(entry, pillar) {
+    const snapshot = { id: String(entry?.id || '') };
+    const fields = PILLAR_WRITABLE_FIELDS[pillar] || PILLAR_WRITABLE_FIELDS.mem;
+    for (const field of fields) {
+        if (!Object.prototype.hasOwnProperty.call(entry || {}, field)) continue;
+        snapshot[field] = deepClone(entry[field]);
+    }
+    for (const field of REVIEW_META_FIELDS) {
+        if (!Object.prototype.hasOwnProperty.call(entry || {}, field)) continue;
+        snapshot[field] = deepClone(entry[field]);
+    }
+    return snapshot;
+}
+
 /** 测试别名：方案里约定的纯函数导出名。 */
 export const __parseCurationOps = parseCurationOps;
 
@@ -781,7 +877,7 @@ export const __parseCurationOps = parseCurationOps;
 function pickCurationApi(settings, override) {
     const mode = override || (settings.autoGenMode === 'custom' && settings.autoGenEndpoint ? 'custom' : 'main');
     if (mode === 'custom') {
-        if (!settings.autoGenEndpoint) throw new Error('未配置副 API 端点（autoGenEndpoint），无法运行 AI 整理');
+        if (!settings.autoGenEndpoint) throw new Error('未配置副 API 端点（autoGenEndpoint），无法运行全库整理');
         return { mode, call: callCustomApi };
     }
     return { mode, call: callMainApi };
@@ -795,7 +891,8 @@ function pickCurationApi(settings, override) {
  */
 export async function runCuration(chatId, groups, options = {}) {
     const settings = options.settings || getSettings();
-    const list = (Array.isArray(groups) ? groups : []).filter(g => g?.entries?.length >= 2);
+    const minimumEntries = options.allowSingletons || options.auditMode ? 1 : 2;
+    const list = (Array.isArray(groups) ? groups : []).filter(g => g?.entries?.length >= minimumEntries);
     const base = {
         ok: false,
         ops: [],
@@ -813,7 +910,11 @@ export async function runCuration(chatId, groups, options = {}) {
     let calendarDescription = '';
     try { calendarDescription = (await getCalendarDescription(chatId)) || ''; } catch { /* 可选信息 */ }
 
-    const prompt = buildCurationPrompt(list, { settings, calendarDescription });
+    const prompt = buildCurationPrompt(list, {
+        settings,
+        calendarDescription,
+        auditMode: options.auditMode === true,
+    });
     base.prompt = prompt;
 
     let api;
@@ -835,10 +936,14 @@ export async function runCuration(chatId, groups, options = {}) {
     base.durationMs = Date.now() - startedAt;
 
     const allowedPillars = [...new Set(list.map(g => normalizeCurationPillar(g.pillar)))];
-    const { ops, rejected } = parseCurationOps(rawText, { groups: list, allowedPillars });
+    const { ops, rejected } = parseCurationOps(rawText, {
+        groups: list,
+        allowedPillars,
+        allowEmptyOps: options.auditMode === true,
+    });
 
     if (settings.debugLogging) {
-        console.log(`[BB-Memory] AI 整理：${list.length} 组 / ${base.entryCount} 条 → ${ops.length} 个有效操作，`
+        console.log(`[BB-Memory] 全库整理：${list.length} 组 / ${base.entryCount} 条 → ${ops.length} 个有效操作，`
             + `${rejected.length} 个被拦截，耗时 ${base.durationMs}ms（${api.mode} API）`);
         if (rejected.length) console.warn('[BB-Memory] 被拦截的整理操作:', rejected);
     }
@@ -953,7 +1058,7 @@ async function writeUndoStack(chatId, stack) {
 }
 
 function undoDepth(settings) {
-    return clampInt(settings.aiCurateUndoDepth, 1, 20, 3);
+    return clampInt(settings.fullCurationUndoDepth ?? settings.aiCurateUndoDepth, 1, 20, 3);
 }
 
 /** 各柱的同柱交叉引用字段。merge/delete 会重映射这些引用，快照必须一并覆盖。 */
@@ -1674,32 +1779,39 @@ export async function maybeRunScheduledCuration(chatId, options = {}) {
 }
 
 /**
- * 手动全库整理：忽略计数器与种子，扫描全部条目，按 aiCurateMaxGroupsPerRun 分块送 AI。
+ * 手动全库整理。duplicates 只发送疑似重复组；all 将选中柱的每个活跃条目
+ * 恰好发送一次，并优先把疑似重复放在同一批中。两种模式的结果都只进审核面板。
  *
- * 与自动整理的两点区别：
- *  1. 不受种子限制，会做全库两两比较（O(n²)），所以先返回预估再确认
- *  2. 结果一律进审核面板，不走授权矩阵直接写库
- *
- * @param {object} options { confirmed, onProgress, pillars, settings }
- * @returns {{ needsConfirm?, totalGroups, estimatedChunks, ops, reviewResult, summary, error }}
+ * @param {object} options { confirmed, mode, groups, onProgress, pillars, settings }
  */
 export async function runFullLibraryCuration(chatId, options = {}) {
     const settings = options.settings || getSettings();
+    const mode = options.mode === 'all' ? 'all' : 'duplicates';
     const report = {
         ok: false, error: '', needsConfirm: false,
+        mode,
         totalGroups: 0, estimatedChunks: 0, chunkSize: 0, groups: [],
         entryCount: 0, ops: [], rejected: [], reviewResult: null, summary: '', stats: [],
     };
     if (!chatId) { report.error = '没有当前聊天'; return report; }
     if (curationInFlight) { report.error = '已有整理任务在运行，请稍后再试'; return report; }
 
-    const pillars = (Array.isArray(options.pillars) && options.pillars.length ? options.pillars : CURATION_PILLARS)
-        .map(normalizeCurationPillar);
-    const chunkSize = clampInt(settings.aiCurateMaxGroupsPerRun, 1, 50, CURATION_DEFAULTS.maxGroups);
+    const pillars = [...new Set(
+        (Array.isArray(options.pillars) && options.pillars.length ? options.pillars : CURATION_PILLARS)
+            .map(normalizeCurationPillar)
+            .filter(pillar => CURATION_PILLARS.includes(pillar))
+    )];
+    const batchSize = clampInt(
+        options.batchSize ?? settings.fullCurationBatchSize ?? settings.aiCurateMaxGroupsPerRun,
+        1,
+        30,
+        CURATION_DEFAULTS.maxGroups,
+    );
+    // 疑似重复模式每次可发送多组；全部审查的 group 本身就是一个条目批次。
+    const chunkSize = mode === 'all' ? 1 : batchSize;
     report.chunkSize = chunkSize;
 
-    // ── 1. 全库聚类（不设 maxGroups 上限，先看清总量） ──
-    // 用户确认后会带着 options.groups 回来，避免把 O(n²) 的全库比较跑第二遍。
+    // ── 1. 全库扫描。用户确认后复用 groups，避免重复 O(n²) 比较。 ──
     let allGroups = Array.isArray(options.groups) ? options.groups : null;
     if (!allGroups) {
         allGroups = [];
@@ -1714,16 +1826,22 @@ export async function runFullLibraryCuration(chatId, options = {}) {
             if (!crud) continue;
             let entries = [];
             try { entries = await crud.get(chatId); } catch { continue; }
-            if (!Array.isArray(entries) || entries.length < 2) continue;
-            const result = await prepareCurationGroups(chatId, pillar, entries, [], {
-                recallPerEntry: settings.aiCurateRecallPerEntry,
-                clusterThreshold: settings.aiCurateClusterThreshold,
-                maxGroups: 9999,
+            if (!Array.isArray(entries) || !entries.length) continue;
+            const duplicateResult = await prepareCurationGroups(chatId, pillar, entries, [], {
+                recallPerEntry: settings.fullCurationRecallPerEntry ?? settings.aiCurateRecallPerEntry,
+                clusterThreshold: settings.fullCurationClusterThreshold ?? settings.aiCurateClusterThreshold,
+                maxGroups: 5000,
             });
-            report.stats.push(result.stats);
-            allGroups.push(...result.groups);
+            report.stats.push(duplicateResult.stats);
+            if (mode === 'all') {
+                allGroups.push(...buildFullAuditBatches(entries, pillar, duplicateResult.groups, batchSize));
+            } else {
+                allGroups.push(...duplicateResult.groups);
+            }
         }
-        allGroups.sort((a, b) => (b.maxSimilarity - a.maxSimilarity) || a.key.localeCompare(b.key));
+        if (mode === 'duplicates') {
+            allGroups.sort((a, b) => (b.maxSimilarity - a.maxSimilarity) || a.key.localeCompare(b.key));
+        }
     }
     report.groups = allGroups;
     report.totalGroups = allGroups.length;
@@ -1732,14 +1850,17 @@ export async function runFullLibraryCuration(chatId, options = {}) {
 
     if (!allGroups.length) {
         report.ok = true;
-        report.summary = '全库扫描完成，没有发现疑似重复';
+        report.summary = mode === 'all'
+            ? '所选记忆柱没有可审查的活跃条目'
+            : '全库扫描完成，没有发现疑似重复';
         return report;
     }
-    // 全库扫描可能是几十次 API 调用，先把账单摆出来让用户确认
+    // 全库扫描可能是几十次 API 调用，先把账单摆出来让用户确认。
     if (options.confirmed !== true) {
         report.needsConfirm = true;
-        report.summary = `发现 ${report.totalGroups} 组疑似重复（共 ${report.entryCount} 条），`
-            + `需要约 ${report.estimatedChunks} 次 API 调用`;
+        report.summary = mode === 'all'
+            ? `将完整审查 ${report.entryCount} 条原始条目，分为 ${report.totalGroups} 批，需要约 ${report.estimatedChunks} 次 API 调用`
+            : `发现 ${report.totalGroups} 组疑似重复（共 ${report.entryCount} 条），需要约 ${report.estimatedChunks} 次 API 调用`;
         return report;
     }
 
@@ -1751,9 +1872,16 @@ export async function runFullLibraryCuration(chatId, options = {}) {
             const chunkIndex = Math.floor(i / chunkSize) + 1;
             options.onProgress?.({
                 phase: 'ai', current: chunkIndex, total: report.estimatedChunks,
-                message: `正在请 AI 整理第 ${chunkIndex}/${report.estimatedChunks} 批（${chunk.length} 组）`,
+                message: mode === 'all'
+                    ? `正在完整审查第 ${chunkIndex}/${report.estimatedChunks} 批（${chunk[0]?.entries?.length || 0} 条）`
+                    : `正在整理第 ${chunkIndex}/${report.estimatedChunks} 批（${chunk.length} 组疑似重复）`,
             });
-            const curation = await runCuration(chatId, chunk, { settings, apiMode: options.apiMode });
+            const curation = await runCuration(chatId, chunk, {
+                settings,
+                apiMode: options.apiMode,
+                auditMode: mode === 'all',
+                allowSingletons: mode === 'all',
+            });
             if (!curation.ok) {
                 report.error = curation.error;
                 break; // 已收集的操作仍然交给用户审核，不整批丢弃
@@ -1778,7 +1906,7 @@ export async function runFullLibraryCuration(chatId, options = {}) {
     report.reviewResult = await openCurationReviewPanel(chatId, report.ops, { settings });
     report.ok = true;
     const applied = report.reviewResult?.applyResult?.summary || '未应用任何改动';
-    report.summary = `全库整理：AI 提出 ${report.ops.length} 项，${applied}`
+    report.summary = `${mode === 'all' ? '全部审查' : '疑似重复整理'}：AI 提出 ${report.ops.length} 项，${applied}`
         + (report.rejected.length ? `，${report.rejected.length} 项被拦截` : '')
         + (report.error ? `（中途出错：${report.error}）` : '');
     return report;
@@ -1805,47 +1933,109 @@ function showToast(msg, type = 'info') {
             ctx.toastr[type](msg, '', { timeOut: type === 'error' ? 5000 : 3000 });
         }
     } catch { /* toastr 不可用时静默，调用方另有 activityLog */ }
-    try { globalThis.bbMemoryRecordActivity?.(type, 'AI 整理', String(msg)); } catch { /* ignore */ }
+    try { globalThis.bbMemoryRecordActivity?.(type, '全库整理', String(msg)); } catch { /* ignore */ }
+}
+
+const REVIEW_FIELD_LABELS = Object.freeze({
+    id: 'ID', title: '标题', name: '名称', type: '类型', summary: '摘要', content: '正文',
+    verbatim: '人物原话', subject: '主体/说话者', target: '目标/对话对象', storyTime: '故事时间',
+    importance: '重要性', emotionalWeight: '情感权重', truthStatus: '真值', tags: '标签',
+    aliases: '别名', role: '身份', personality: '性格', appearance: '外貌', status: '状态',
+    location: '位置', indexCard: '索引卡', relationships: '关系', owner: '持有者',
+    significance: '意义/说明', participants: '参与者', event: '事件', impact: '影响',
+    priority: '优先级', entries: '时间线节点', memoryTier: '记忆级别', npcTier: '角色级别',
+    itemTier: '物品级别', hitCount: '命中次数', sourceFloor: '来源楼层', sourceExchange: '来源交换',
+    mergeCount: '合并次数', createdAt: '创建时间', updatedAt: '更新时间',
+});
+
+function formatReviewValue(value, field = '') {
+    if (value == null) return '';
+    if ((field === 'createdAt' || field === 'updatedAt') && Number.isFinite(Number(value))) {
+        try { return new Date(Number(value)).toLocaleString(); } catch { /* 保留原值 */ }
+    }
+    if (Array.isArray(value)) {
+        return value.map(item => {
+            if (typeof item === 'string' || typeof item === 'number') return String(item);
+            if (!item || typeof item !== 'object') return '';
+            if (item.name) return [item.name, item.type || item.relation, item.attitude].filter(Boolean).join('｜');
+            if (item.event || item.period) return [item.period, item.event, item.status].filter(Boolean).join('｜');
+            return JSON.stringify(item);
+        }).filter(Boolean).join('；');
+    }
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+}
+
+function renderReviewFields(entry, options = {}) {
+    const rows = Object.entries(entry || {})
+        .filter(([field, value]) => field !== 'id' && formatReviewValue(value, field).trim())
+        .map(([field, value]) => `
+            <div class="bb-curate-field-row">
+                <span>${escapeHtml(REVIEW_FIELD_LABELS[field] || field)}</span>
+                <div>${escapeHtml(formatReviewValue(value, field))}</div>
+            </div>`).join('');
+    const id = String(entry?.id || options.fallbackId || '').trim();
+    const title = entry?.title || entry?.name || entry?.event || options.title || id || '未命名条目';
+    return `
+        <div class="bb-curate-entry-card ${options.result ? 'is-result' : ''}">
+            <div class="bb-curate-entry-card-head">
+                <strong>${escapeHtml(title)}</strong>
+                ${id ? `<code>${escapeHtml(id)}</code>` : ''}
+            </div>
+            ${rows || '<div class="bb-curate-field-empty">没有可显示的内容字段</div>'}
+        </div>`;
+}
+
+function renderOriginalEntries(op) {
+    const originals = Array.isArray(op.sourceEntries) ? op.sourceEntries : [];
+    if (!originals.length) return '<div class="bb-curate-warn">原条目快照缺失，请谨慎操作。</div>';
+    return `
+        <details class="bb-curate-originals" open>
+            <summary>原条目内容（${originals.length}）</summary>
+            <div class="bb-curate-original-list">${originals.map(entry => renderReviewFields(entry)).join('')}</div>
+        </details>`;
+}
+
+function renderProposedResult(result, title) {
+    return renderReviewFields(result, { result: true, title });
 }
 
 function renderOpDetail(op) {
-    const pillar = normalizeCurationPillar(op.pillar);
     const labelOf = (id) => op.entryLabels?.[id] || id;
+    const originals = renderOriginalEntries(op);
 
     if (op.op === 'merge') {
         const absorbed = (op.removeIds || []).map(id => `<li>${escapeHtml(labelOf(id))}</li>`).join('');
-        return `
+        return `${originals}
             <div class="bb-curate-diff">
                 <div class="bb-curate-diff-row"><span class="bb-curate-diff-tag">保留</span>${escapeHtml(labelOf(op.keepId))}</div>
                 <div class="bb-curate-diff-row"><span class="bb-curate-diff-tag danger">吸收并删除</span><ul>${absorbed}</ul></div>
                 <div class="bb-curate-diff-row"><span class="bb-curate-diff-tag ok">重写为</span>
-                    <div class="bb-curate-diff-body">${escapeHtml(primaryContentOf(op.result, pillar))}</div>
+                    <div>${renderProposedResult(op.result, '合并后的建议条目')}</div>
                 </div>
             </div>`;
     }
     if (op.op === 'rewrite') {
-        return `
+        return `${originals}
             <div class="bb-curate-diff">
                 <div class="bb-curate-diff-row"><span class="bb-curate-diff-tag ok">重写为</span>
-                    <div class="bb-curate-diff-body">${escapeHtml(primaryContentOf(op.result, pillar))}</div>
+                    <div>${renderProposedResult(op.result, '重写后的建议条目')}</div>
                 </div>
             </div>`;
     }
     if (op.op === 'split') {
         const pieces = (op.results || []).map((result, i) =>
-            `<div class="bb-curate-diff-body">${i + 1}. ${escapeHtml(primaryContentOf(result, pillar))}</div>`).join('');
-        return `<div class="bb-curate-diff"><div class="bb-curate-diff-row">
+            renderProposedResult(result, `拆分结果 ${i + 1}`)).join('');
+        return `${originals}<div class="bb-curate-diff"><div class="bb-curate-diff-row">
             <span class="bb-curate-diff-tag ok">拆为 ${op.results?.length || 0} 条</span><div>${pieces}</div>
         </div></div>`;
     }
     if (op.op === 'delete') {
-        const previews = (op.deletePreview || []).map(text =>
-            `<div class="bb-curate-diff-body">${escapeHtml(text)}</div>`).join('');
-        return `<div class="bb-curate-diff"><div class="bb-curate-diff-row">
-            <span class="bb-curate-diff-tag danger">将删除</span><div>${previews}</div>
+        return `${originals}<div class="bb-curate-diff"><div class="bb-curate-diff-row">
+            <span class="bb-curate-diff-tag danger">将删除以上原条目</span>
         </div></div>`;
     }
-    return '';
+    return originals;
 }
 
 /**
@@ -1881,8 +2071,8 @@ export function openCurationReviewPanel(chatId, ops, options = {}) {
             <div class="bb-active-review-panel">
                 <div class="bb-active-review-header">
                     <div>
-                        <div class="bb-active-review-title"><i class="fa-solid fa-wand-magic-sparkles"></i> AI 整理待确认</div>
-                        <div class="bb-active-review-subtitle">未勾选的操作不会执行。删除和有风险提示的项默认不勾选。</div>
+                        <div class="bb-active-review-title"><i class="fa-solid fa-wand-magic-sparkles"></i> 全库整理待确认</div>
+                        <div class="bb-active-review-subtitle">展开查看原条目和建议结果；未勾选的操作不会执行。</div>
                     </div>
                     <button class="menu_button bb-active-review-close" type="button" title="关闭">×</button>
                 </div>

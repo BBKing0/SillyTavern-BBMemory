@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.4.2</b>
+            <b>BB-Memory v9.4.3</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -75,15 +75,12 @@
                 </button>
             </div>
 
-            <!-- 快捷按钮 行4：v9.3.3 AI 记忆整理 -->
+            <!-- 快捷按钮 行4：v9.4.3 全库整理 -->
             <div class="bb-mem-sidebar-buttons">
-                <button id="bb_curate_now_btn" class="menu_button" title="AI 整理记忆——把逐条去重抓不到的渐进细化型重复聚成一组，交给 AI 合并重写">
-                    <i class="fa-solid fa-wand-sparkles"></i> AI 整理
-                </button>
-                <button id="bb_curate_full_btn" class="menu_button" title="全库整理——扫描全部条目找疑似重复（API 调用较多，结果一律先过审核面板）">
+                <button id="bb_curate_full_btn" class="menu_button" title="全库整理——可选择疑似重复整理或全部条目审查，所有结果先由你确认">
                     <i class="fa-solid fa-magnifying-glass-chart"></i> 全库整理
                 </button>
-                <button id="bb_curate_undo_btn" class="menu_button" title="撤销上次 AI 整理，逐字段还原到整理前">
+                <button id="bb_curate_undo_btn" class="menu_button" title="撤销上次全库整理，逐字段还原到整理前">
                     <i class="fa-solid fa-rotate-left"></i> 撤销整理
                 </button>
             </div>
@@ -415,128 +412,60 @@
 
             <hr />
 
-            <!-- v9.3.3 AI 记忆整理 -->
+            <!-- v9.4.3 全库整理 -->
             <div class="bb-settings-section">
-                <div class="bb-settings-section-header" data-section="aicurate">
-                    <span><i class="fa-solid fa-wand-sparkles"></i> AI 记忆整理</span>
+                <div class="bb-settings-section-header" data-section="fullcurate">
+                    <span><i class="fa-solid fa-magnifying-glass-chart"></i> 全库整理</span>
                     <span class="bb-settings-chevron"><i class="fa-solid fa-chevron-down"></i></span>
                 </div>
                 <div class="bb-settings-section-body">
 
                     <div style="font-size:0.72em;opacity:0.6;line-height:1.5;margin-bottom:6px;">
-                        逐条去重只能两两比较，抓不到「渐进细化」型重复（同一件事分 5 层越写越细，相邻两条都在 0.8 上下、谁也过不了合并线）。
-                        整理师用松阈值把整条细化链聚成一组，一次性交给 AI 重写成最终态。
+                        <b>疑似重复</b>只发送相似度聚类出的候选组；<b>全部审查</b>会把所选记忆柱的每个活跃条目分批发送，检查重复、字段缺失和内容混乱。
+                        两种模式都不会直接写库，必须在审核窗口查看原条目和建议结果后手动勾选。
                     </div>
 
-                    <label class="checkbox_label" style="margin: 8px 0;">
-                        <input id="bb_ai_curate_enabled" type="checkbox" />
-                        <span>启用 AI 记忆整理</span>
-                    </label>
-
                     <div class="bb-mem-sidebar-section">
-                        <label for="bb_ai_curate_trigger_mode">触发模式</label>
-                        <small class="bb-mem-hint">决定新增条目累积到什么程度才自动整理。</small>
-                        <select id="bb_ai_curate_trigger_mode" class="bb-input" style="width:100%;">
-                            <option value="any">任一柱达标即触发（默认）</option>
-                            <option value="all">全部柱达标才触发</option>
-                            <option value="manual">仅手动触发</option>
+                        <label for="bb_full_curate_mode">默认整理模式</label>
+                        <select id="bb_full_curate_mode" class="bb-input" style="width:100%;">
+                            <option value="duplicates">只整理疑似重复（默认）</option>
+                            <option value="all">全部条目审查</option>
                         </select>
                     </div>
 
-                    <div style="font-size:0.72em;opacity:0.55;margin:6px 0 2px;">
-                        各柱触发阈值：新增/更新多少条后参与判定。设为 0 表示该柱不参与自动触发。
+                    <div class="bb-mem-sidebar-section">
+                        <label>默认处理范围</label>
+                        <div class="bb-full-curate-pillars">
+                            <label class="checkbox_label"><input type="checkbox" data-bb-full-curate-pillar="mem" />记忆条目</label>
+                            <label class="checkbox_label"><input type="checkbox" data-bb-full-curate-pillar="npc" />NPC</label>
+                            <label class="checkbox_label"><input type="checkbox" data-bb-full-curate-pillar="item" />物品</label>
+                            <label class="checkbox_label"><input type="checkbox" data-bb-full-curate-pillar="milestone" />里程碑</label>
+                            <label class="checkbox_label"><input type="checkbox" data-bb-full-curate-pillar="timeline" />时间线</label>
+                        </div>
                     </div>
 
                     <div class="bb-mem-sidebar-section">
-                        <label for="bb_ai_curate_mem_threshold">记忆条目阈值</label>
-                        <input id="bb_ai_curate_mem_threshold" type="number" class="bb-input" min="0" max="200" value="10" />
-                    </div>
-
-                    <div class="bb-mem-sidebar-section">
-                        <label for="bb_ai_curate_npc_threshold">NPC 阈值</label>
-                        <input id="bb_ai_curate_npc_threshold" type="number" class="bb-input" min="0" max="100" value="5" />
-                    </div>
-
-                    <div class="bb-mem-sidebar-section">
-                        <label for="bb_ai_curate_item_threshold">物品阈值</label>
-                        <input id="bb_ai_curate_item_threshold" type="number" class="bb-input" min="0" max="100" value="5" />
-                    </div>
-
-                    <div class="bb-mem-sidebar-section">
-                        <label for="bb_ai_curate_milestone_threshold">里程碑阈值</label>
-                        <input id="bb_ai_curate_milestone_threshold" type="number" class="bb-input" min="0" max="100" value="5" />
-                    </div>
-
-                    <div class="bb-mem-sidebar-section">
-                        <label for="bb_ai_curate_timeline_threshold">时间线阈值</label>
-                        <input id="bb_ai_curate_timeline_threshold" type="number" class="bb-input" min="0" max="100" value="3" />
-                    </div>
-
-                    <div class="bb-mem-sidebar-section">
-                        <label for="bb_ai_curate_cluster_threshold">聚类建边阈值</label>
+                        <label for="bb_full_curate_cluster_threshold">疑似重复聚类阈值</label>
                         <small class="bb-mem-hint">相似度超过此值就在两条之间连边（默认0.65）。刻意远低于合并线 0.85——靠链式连通抓渐进细化，调高会漏掉长链。</small>
-                        <input id="bb_ai_curate_cluster_threshold" type="number" class="bb-input" min="0.20" max="0.99" step="0.01" value="0.65" />
+                        <input id="bb_full_curate_cluster_threshold" type="number" class="bb-input" min="0.20" max="0.99" step="0.01" value="0.65" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
-                        <label for="bb_ai_curate_recall_per_entry">每条召回数</label>
+                        <label for="bb_full_curate_recall_per_entry">疑似重复召回数</label>
                         <small class="bb-mem-hint">每条新条目向量召回多少条同柱相关旧条目参与聚类（默认5）。调高更容易接上长链，但比较开销上升。</small>
-                        <input id="bb_ai_curate_recall_per_entry" type="number" class="bb-input" min="1" max="50" value="5" />
+                        <input id="bb_full_curate_recall_per_entry" type="number" class="bb-input" min="1" max="50" value="5" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
-                        <label for="bb_ai_curate_max_groups">单次最多整理组数</label>
-                        <small class="bb-mem-hint">一次整理送给 AI 的分组上限（默认8）。也是全库整理的分批大小。</small>
-                        <input id="bb_ai_curate_max_groups" type="number" class="bb-input" min="1" max="50" value="8" />
-                    </div>
-
-                    <div style="font-size:0.72em;opacity:0.55;margin:8px 0 2px;">
-                        授权矩阵：每类操作允许 AI 做到什么程度。
-                        <b>直接执行</b>静默写库只记日志，<b>执行并提醒</b>写库并弹提示，<b>必须确认</b>先进审核面板等你勾选。
-                        系统检测到风险（缝合式合并、结果明显变短、永恒条目被吸收）时会无视此设置强制转人工确认。
+                        <label for="bb_full_curate_batch_size">每批条目/疑似组数</label>
+                        <small class="bb-mem-hint">疑似重复模式表示每次 API 调用发送的组数；全部审查模式表示每批发送的原条目数（默认8）。</small>
+                        <input id="bb_full_curate_batch_size" type="number" class="bb-input" min="1" max="30" value="8" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
-                        <label for="bb_ai_curate_auth_merge">合并（merge）</label>
-                        <select id="bb_ai_curate_auth_merge" class="bb-input" style="width:100%;">
-                            <option value="auto">直接执行</option>
-                            <option value="notify">执行并提醒（默认）</option>
-                            <option value="confirm">必须确认</option>
-                        </select>
-                    </div>
-
-                    <div class="bb-mem-sidebar-section">
-                        <label for="bb_ai_curate_auth_rewrite">重写（rewrite）</label>
-                        <select id="bb_ai_curate_auth_rewrite" class="bb-input" style="width:100%;">
-                            <option value="auto">直接执行</option>
-                            <option value="notify">执行并提醒（默认）</option>
-                            <option value="confirm">必须确认</option>
-                        </select>
-                    </div>
-
-                    <div class="bb-mem-sidebar-section">
-                        <label for="bb_ai_curate_auth_split">拆分（split）</label>
-                        <select id="bb_ai_curate_auth_split" class="bb-input" style="width:100%;">
-                            <option value="auto">直接执行</option>
-                            <option value="notify">执行并提醒</option>
-                            <option value="confirm">必须确认（默认）</option>
-                        </select>
-                    </div>
-
-                    <div class="bb-mem-sidebar-section">
-                        <label for="bb_ai_curate_auth_delete">删除（delete）</label>
-                        <small class="bb-mem-hint">删除不可逆，建议保持"必须确认"。</small>
-                        <select id="bb_ai_curate_auth_delete" class="bb-input" style="width:100%;">
-                            <option value="auto">直接执行</option>
-                            <option value="notify">执行并提醒</option>
-                            <option value="confirm">必须确认（默认）</option>
-                        </select>
-                    </div>
-
-                    <div class="bb-mem-sidebar-section">
-                        <label for="bb_ai_curate_undo_depth">撤销快照层数</label>
+                        <label for="bb_full_curate_undo_depth">撤销快照层数</label>
                         <small class="bb-mem-hint">保留最近几次整理的完整回滚快照（默认3）。快照写不进去时整理会直接中止，不会盲写。</small>
-                        <input id="bb_ai_curate_undo_depth" type="number" class="bb-input" min="1" max="20" value="3" />
+                        <input id="bb_full_curate_undo_depth" type="number" class="bb-input" min="1" max="20" value="3" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">

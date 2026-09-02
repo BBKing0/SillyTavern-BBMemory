@@ -146,8 +146,15 @@ export const DEFAULT_SETTINGS = Object.freeze({
     realtimeInjectionTokenCap: 300,    // 注入 token 硬上限（不依赖全局预算，必须自带）
     realtimePromotionMode: 'auto',     // 'auto' 直接写入长期库 | 'confirm' 确认后写入
     realtimeSettleMode: 'auto',        // 'auto' 自动结算 | 'manual' 仅手动结算
-    // v9.3.3 AI 记忆整理师（跨条目聚类去重，解决渐进细化型重复）
-    aiCurateEnabled: true,
+    // v9.4.3 全库整理：只允许用户主动启动，所有建议进入审核窗口。
+    fullCurationMode: 'duplicates',  // 'duplicates' 疑似重复 | 'all' 全部条目质量审查
+    fullCurationPillars: ['mem', 'npc', 'item', 'milestone', 'timeline'],
+    fullCurationBatchSize: 8,
+    fullCurationRecallPerEntry: 5,
+    fullCurationClusterThreshold: 0.65,
+    fullCurationUndoDepth: 3,
+    // 旧 AI 整理设置仅用于导入兼容；v9.4.3 不再自动调度，也不再显示入口。
+    aiCurateEnabled: false,
     aiCurateTriggerMode: 'any',       // 'any' 任一柱达标 | 'all' 全部达标 | 'manual' 仅手动
     aiCurateMemThreshold: 10,         // 记忆柱新增多少条后触发整理
     aiCurateMilestoneThreshold: 5,
@@ -1639,7 +1646,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.4.2',
+        version: '9.4.3',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2044,7 +2051,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
         realtime,
     };
     const backup = {
-        version: '9.4.2',
+        version: '9.4.3',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2832,7 +2839,7 @@ export async function exportMemories(chatId) {
     await normalizeDataEmbeddingsToRefs(chatId, data);
     const vectorPack = await buildVectorPack(chatId, data);
     return JSON.stringify({
-        version: '9.4.2',
+        version: '9.4.3',
         schema: 'bb-memory-vector-ref-v1',
         exportedAt: Date.now(),
         data: stripRuntimeEmbeddings(data),

@@ -2428,8 +2428,34 @@
 }
 
 /* ═══════════════════════════════════════
-   v9.3.3: AI 整理待确认面板的改动预览
+   v9.4.3: 全库整理选项与原文审核
    ═══════════════════════════════════════ */
+
+.bb-full-curate-pillars {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.4rem 0.75rem;
+    margin-top: 0.4rem;
+}
+
+.bb-full-curate-dialog-pillars {
+    grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+}
+
+.bb-full-curate-options-popup {
+    width: min(38rem, 100%) !important;
+}
+
+.bb-full-curate-safety-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.55rem;
+    padding: 0.7rem;
+    border: 1px solid rgba(76, 175, 80, 0.45);
+    border-radius: 0.55rem;
+    background: rgba(76, 175, 80, 0.1);
+    line-height: 1.45;
+}
 
 .bb-curate-warn {
     display: flex;
@@ -2502,10 +2528,98 @@
     overflow-wrap: anywhere;
 }
 
+.bb-curate-originals {
+    margin-top: 0.65rem;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 0.55rem;
+    overflow: hidden;
+    background: rgba(0, 0, 0, 0.12);
+}
+
+.bb-curate-originals > summary {
+    cursor: pointer;
+    padding: 0.55rem 0.65rem;
+    font-weight: 700;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.bb-curate-original-list {
+    display: grid;
+    gap: 0.6rem;
+    padding: 0.6rem;
+}
+
+.bb-curate-entry-card {
+    min-width: 0;
+    padding: 0.6rem;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 0.5rem;
+    background: var(--SmartThemeChatTintColor, rgba(255, 255, 255, 0.035));
+}
+
+.bb-curate-entry-card.is-result {
+    border-color: rgba(76, 175, 80, 0.55);
+    background: rgba(76, 175, 80, 0.07);
+}
+
+.bb-curate-entry-card-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.6rem;
+    align-items: flex-start;
+    margin-bottom: 0.45rem;
+    overflow-wrap: anywhere;
+}
+
+.bb-curate-entry-card-head code {
+    flex: 0 1 auto;
+    max-width: 48%;
+    font-size: 0.72rem;
+    opacity: 0.58;
+    overflow-wrap: anywhere;
+}
+
+.bb-curate-field-row {
+    display: grid;
+    grid-template-columns: minmax(4.5rem, 7rem) minmax(0, 1fr);
+    gap: 0.55rem;
+    padding: 0.28rem 0;
+    border-top: 1px dashed var(--SmartThemeBorderColor, #444);
+    font-size: 0.82rem;
+    line-height: 1.45;
+}
+
+.bb-curate-field-row > span {
+    opacity: 0.62;
+}
+
+.bb-curate-field-row > div {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.bb-curate-field-empty {
+    font-size: 0.8rem;
+    opacity: 0.58;
+}
+
 @media (max-width: 480px) {
     .bb-curate-diff-row {
         flex-direction: column;
         gap: 0.2rem;
+    }
+
+    .bb-full-curate-pillars,
+    .bb-curate-field-row {
+        grid-template-columns: 1fr;
+    }
+
+    .bb-curate-entry-card-head {
+        flex-direction: column;
+    }
+
+    .bb-curate-entry-card-head code {
+        max-width: 100%;
     }
 }
 
