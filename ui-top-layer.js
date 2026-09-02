@@ -1,5 +1,5 @@
 /**
- * ui-top-layer.js — BB-Memory v9.4.3 原生顶层弹窗适配
+ * ui-top-layer.js — BB-Memory v9.4.4 原生顶层弹窗适配
  *
  * SillyTavern 的移动端抽屉可能通过 popover/dialog 进入浏览器 top layer。
  * 普通 fixed 元素即使使用最大 z-index 也无法覆盖它，因此 BB-Memory 的

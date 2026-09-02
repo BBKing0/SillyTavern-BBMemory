@@ -1,5 +1,5 @@
 /**
- * memory-manager.js —— BB-Memory v9.4.3 记忆管理器
+ * memory-manager.js —— BB-Memory v9.4.4 记忆管理器
  *
  * 全屏覆盖弹窗，统一管理长期记忆、实时记忆、存档、时间线与归档。
  */

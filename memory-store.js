@@ -150,6 +150,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     fullCurationMode: 'duplicates',  // 'duplicates' 疑似重复 | 'all' 全部条目质量审查
     fullCurationPillars: ['mem', 'npc', 'item', 'milestone', 'timeline'],
     fullCurationBatchSize: 8,
+    fullCurationParallel: 2,
     fullCurationRecallPerEntry: 5,
     fullCurationClusterThreshold: 0.65,
     fullCurationUndoDepth: 3,
@@ -1646,7 +1647,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.4.3',
+        version: '9.4.4',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2051,7 +2052,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
         realtime,
     };
     const backup = {
-        version: '9.4.3',
+        version: '9.4.4',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2839,7 +2840,7 @@ export async function exportMemories(chatId) {
     await normalizeDataEmbeddingsToRefs(chatId, data);
     const vectorPack = await buildVectorPack(chatId, data);
     return JSON.stringify({
-        version: '9.4.3',
+        version: '9.4.4',
         schema: 'bb-memory-vector-ref-v1',
         exportedAt: Date.now(),
         data: stripRuntimeEmbeddings(data),

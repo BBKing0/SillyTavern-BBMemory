@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.4.3 主入口
+ * index.js —— BB-Memory v9.4.4 主入口
  *
  * 五柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目 / 实时记忆。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -115,7 +115,7 @@ let chatSwitchSuppressDeletesUntil = 0;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.4.3';
+const SETTINGS_EXPORT_VERSION = '9.4.4';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
@@ -138,7 +138,7 @@ const SETTINGS_EXPORT_KEYS = [
     'healthCheckDuplicateThreshold', 'healthCheckIsolationThreshold', 'healthCheckStaleDays',
     'healthCheckStaleHitThreshold', 'healthCheckThreadStaleDays', 'healthCheckClueStaleDays',
     // v9.4.3 全库整理（旧 aiCurate* 保留导入兼容）
-    'fullCurationMode', 'fullCurationPillars', 'fullCurationBatchSize',
+    'fullCurationMode', 'fullCurationPillars', 'fullCurationBatchSize', 'fullCurationParallel',
     'fullCurationRecallPerEntry', 'fullCurationClusterThreshold', 'fullCurationUndoDepth',
     'aiCurateEnabled', 'aiCurateTriggerMode',
     'aiCurateMemThreshold', 'aiCurateNpcThreshold', 'aiCurateItemThreshold',
@@ -218,6 +218,7 @@ const SETTING_CONTROL_BINDINGS = {
     // v9.4.3 全库整理
     fullCurationMode: ['#bb_full_curate_mode', 'value'],
     fullCurationBatchSize: ['#bb_full_curate_batch_size', 'value'],
+    fullCurationParallel: ['#bb_full_curate_parallel', 'value'],
     fullCurationClusterThreshold: ['#bb_full_curate_cluster_threshold', 'value'],
     fullCurationRecallPerEntry: ['#bb_full_curate_recall_per_entry', 'value'],
     fullCurationUndoDepth: ['#bb_full_curate_undo_depth', 'value'],
@@ -2178,6 +2179,7 @@ function bindSidebarEvents() {
     // v9.4.3 全库整理：不再自动触发，也没有直接写库授权矩阵。
     bindSelect('#bb_full_curate_mode', 'fullCurationMode');
     bindInput('#bb_full_curate_batch_size', 'fullCurationBatchSize', 'number');
+    bindInput('#bb_full_curate_parallel', 'fullCurationParallel', 'number');
     bindInput('#bb_full_curate_cluster_threshold', 'fullCurationClusterThreshold', 'number');
     bindInput('#bb_full_curate_recall_per_entry', 'fullCurationRecallPerEntry', 'number');
     bindInput('#bb_full_curate_undo_depth', 'fullCurationUndoDepth', 'number');
@@ -4543,7 +4545,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.4.3 初始化开始...');
+    console.log('[BB-Memory] v9.4.4 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -4739,7 +4741,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.4.3 初始化完成');
+    console.log('[BB-Memory] v9.4.4 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
@@ -5134,7 +5136,8 @@ function refreshCurateStatus() {
     const mode = s.fullCurationMode === 'all' ? '全部审查' : '疑似重复';
     const pillars = normalizeFullCurationPillars(s.fullCurationPillars)
         .map(pillar => FULL_CURATION_PILLAR_LABELS[pillar]).join('、');
-    setCurateStatus(`手动全库整理：${mode}｜${pillars}`);
+    const parallel = Math.max(1, Math.min(8, Number(s.fullCurationParallel) || 2));
+    setCurateStatus(`手动全库整理：${mode}｜${pillars}｜并行 ${parallel}`);
 }
 
 function openFullCurationOptionsDialog() {
@@ -5174,6 +5177,12 @@ function openFullCurationOptionsDialog() {
                                value="${Math.max(1, Math.min(30, Number(settings.fullCurationBatchSize) || 8))}" />
                         <small>全部审查会逐批发送每个活跃条目，API 调用次数可能较多；扫描完成后还会显示准确预估。</small>
                     </div>
+                    <div class="bb-mem-form-group">
+                        <label for="bb_full_curate_dialog_parallel">审查并行请求数</label>
+                        <input id="bb_full_curate_dialog_parallel" class="bb-input" type="number" min="1" max="8"
+                               value="${Math.max(1, Math.min(8, Number(settings.fullCurationParallel) || 2))}" />
+                        <small>同时审查多少批。接口容易限速时设为 1；本地模型或额度充足时可以调高。</small>
+                    </div>
                     <div class="bb-full-curate-safety-note">
                         <i class="fa-solid fa-shield-halved"></i>
                         所有 AI 建议都会进入审核窗口，不会在你确认前修改记忆库。
@@ -5198,16 +5207,19 @@ function openFullCurationOptionsDialog() {
             }
             const mode = overlay.querySelector('#bb_full_curate_dialog_mode')?.value === 'all' ? 'all' : 'duplicates';
             const batchSize = Math.max(1, Math.min(30, Number(overlay.querySelector('#bb_full_curate_dialog_batch')?.value) || 8));
-            updateSettings({ fullCurationMode: mode, fullCurationPillars: pillars, fullCurationBatchSize: batchSize });
+            const parallel = Math.max(1, Math.min(8, Number(overlay.querySelector('#bb_full_curate_dialog_parallel')?.value) || 2));
+            updateSettings({ fullCurationMode: mode, fullCurationPillars: pillars, fullCurationBatchSize: batchSize, fullCurationParallel: parallel });
             const settingMode = document.querySelector('#bb_full_curate_mode');
             if (settingMode) settingMode.value = mode;
             const settingBatch = document.querySelector('#bb_full_curate_batch_size');
             if (settingBatch) settingBatch.value = String(batchSize);
+            const settingParallel = document.querySelector('#bb_full_curate_parallel');
+            if (settingParallel) settingParallel.value = String(parallel);
             document.querySelectorAll('[data-bb-full-curate-pillar]').forEach(input => {
                 input.checked = pillars.includes(input.dataset.bbFullCuratePillar);
             });
             refreshCurateStatus();
-            finish({ mode, pillars, batchSize });
+            finish({ mode, pillars, batchSize, parallel });
         });
     });
 }

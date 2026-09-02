@@ -1,5 +1,5 @@
 /**
- * memory-curator.js — BB-Memory v9.4.3 全库记忆整理
+ * memory-curator.js — BB-Memory v9.4.4 全库记忆整理
  *
  * 解决增量两两去重的结构性盲区：`findBestDuplicate` 只让每条新条目与已有条目
  * 逐一比较并取最高分，因此「渐进细化」型重复（5 条同一件事逐层补细节，相邻
@@ -78,6 +78,29 @@ function clampFloat(value, min, max, fallback) {
     const n = Number(value);
     if (!Number.isFinite(n)) return fallback;
     return Math.max(min, Math.min(max, n));
+}
+
+/**
+ * 有界并发执行器。结果始终按输入顺序返回，避免并行完成顺序改变审核列表顺序。
+ * 导出用于回归测试，也便于后续其它人工审查任务复用同一并发语义。
+ */
+export async function runCurationTasksConcurrently(tasks, parallel, handler, onSettled) {
+    const list = Array.isArray(tasks) ? tasks : [];
+    if (!list.length) return [];
+    const limit = clampInt(parallel, 1, 8, 1);
+    const results = new Array(list.length);
+    let cursor = 0;
+    let completed = 0;
+    const worker = async () => {
+        while (cursor < list.length) {
+            const index = cursor++;
+            results[index] = await handler(list[index], index);
+            completed++;
+            onSettled?.({ index, completed, total: list.length, result: results[index] });
+        }
+    };
+    await Promise.all(Array.from({ length: Math.min(limit, list.length) }, () => worker()));
+    return results;
 }
 
 export function normalizeCurationPillar(value) {
@@ -1782,7 +1805,7 @@ export async function maybeRunScheduledCuration(chatId, options = {}) {
  * 手动全库整理。duplicates 只发送疑似重复组；all 将选中柱的每个活跃条目
  * 恰好发送一次，并优先把疑似重复放在同一批中。两种模式的结果都只进审核面板。
  *
- * @param {object} options { confirmed, mode, groups, onProgress, pillars, settings }
+ * @param {object} options { confirmed, mode, groups, onProgress, pillars, batchSize, parallel, settings }
  */
 export async function runFullLibraryCuration(chatId, options = {}) {
     const settings = options.settings || getSettings();
@@ -1790,7 +1813,7 @@ export async function runFullLibraryCuration(chatId, options = {}) {
     const report = {
         ok: false, error: '', needsConfirm: false,
         mode,
-        totalGroups: 0, estimatedChunks: 0, chunkSize: 0, groups: [],
+        totalGroups: 0, estimatedChunks: 0, chunkSize: 0, parallel: 1, groups: [],
         entryCount: 0, ops: [], rejected: [], reviewResult: null, summary: '', stats: [],
     };
     if (!chatId) { report.error = '没有当前聊天'; return report; }
@@ -1810,6 +1833,7 @@ export async function runFullLibraryCuration(chatId, options = {}) {
     // 疑似重复模式每次可发送多组；全部审查的 group 本身就是一个条目批次。
     const chunkSize = mode === 'all' ? 1 : batchSize;
     report.chunkSize = chunkSize;
+    report.parallel = clampInt(options.parallel ?? settings.fullCurationParallel, 1, 8, 2);
 
     // ── 1. 全库扫描。用户确认后复用 groups，避免重复 O(n²) 比较。 ──
     let allGroups = Array.isArray(options.groups) ? options.groups : null;
@@ -1859,36 +1883,46 @@ export async function runFullLibraryCuration(chatId, options = {}) {
     if (options.confirmed !== true) {
         report.needsConfirm = true;
         report.summary = mode === 'all'
-            ? `将完整审查 ${report.entryCount} 条原始条目，分为 ${report.totalGroups} 批，需要约 ${report.estimatedChunks} 次 API 调用`
-            : `发现 ${report.totalGroups} 组疑似重复（共 ${report.entryCount} 条），需要约 ${report.estimatedChunks} 次 API 调用`;
+            ? `将完整审查 ${report.entryCount} 条原始条目，分为 ${report.totalGroups} 批，需要约 ${report.estimatedChunks} 次 API 调用（并行 ${report.parallel}）`
+            : `发现 ${report.totalGroups} 组疑似重复（共 ${report.entryCount} 条），需要约 ${report.estimatedChunks} 次 API 调用（并行 ${report.parallel}）`;
         return report;
     }
 
     // ── 2. 分块送 AI ──
     curationInFlight = true;
     try {
-        for (let i = 0; i < allGroups.length; i += chunkSize) {
-            const chunk = allGroups.slice(i, i + chunkSize);
-            const chunkIndex = Math.floor(i / chunkSize) + 1;
-            options.onProgress?.({
-                phase: 'ai', current: chunkIndex, total: report.estimatedChunks,
-                message: mode === 'all'
-                    ? `正在完整审查第 ${chunkIndex}/${report.estimatedChunks} 批（${chunk[0]?.entries?.length || 0} 条）`
-                    : `正在整理第 ${chunkIndex}/${report.estimatedChunks} 批（${chunk.length} 组疑似重复）`,
-            });
-            const curation = await runCuration(chatId, chunk, {
-                settings,
-                apiMode: options.apiMode,
-                auditMode: mode === 'all',
-                allowSingletons: mode === 'all',
-            });
-            if (!curation.ok) {
-                report.error = curation.error;
-                break; // 已收集的操作仍然交给用户审核，不整批丢弃
+        const chunks = [];
+        for (let i = 0; i < allGroups.length; i += chunkSize) chunks.push(allGroups.slice(i, i + chunkSize));
+        options.onProgress?.({
+            phase: 'ai', current: 0, total: chunks.length,
+            message: `已启动 ${Math.min(report.parallel, chunks.length)} 个并行审查请求`,
+        });
+        const outcomes = await runCurationTasksConcurrently(
+            chunks,
+            report.parallel,
+            async chunk => {
+                return runCuration(chatId, chunk, {
+                    settings,
+                    apiMode: options.apiMode,
+                    auditMode: mode === 'all',
+                    allowSingletons: mode === 'all',
+                });
+            },
+            ({ completed, total }) => options.onProgress?.({
+                phase: 'ai', current: completed, total,
+                message: `已完成 ${completed}/${total} 批，并行 ${Math.min(report.parallel, total)}`,
+            }),
+        );
+        const errors = [];
+        for (const outcome of outcomes) {
+            if (!outcome?.ok) {
+                if (outcome?.error) errors.push(outcome.error);
+                continue;
             }
-            report.ops.push(...curation.ops);
-            report.rejected.push(...curation.rejected);
+            report.ops.push(...outcome.ops);
+            report.rejected.push(...outcome.rejected);
         }
+        if (errors.length) report.error = `${errors.length} 批审查失败：${errors[0]}`;
     } finally {
         curationInFlight = false;
     }

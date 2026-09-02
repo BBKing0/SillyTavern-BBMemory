@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.4.3</b>
+            <b>BB-Memory v9.4.4</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -460,6 +460,12 @@
                         <label for="bb_full_curate_batch_size">每批条目/疑似组数</label>
                         <small class="bb-mem-hint">疑似重复模式表示每次 API 调用发送的组数；全部审查模式表示每批发送的原条目数（默认8）。</small>
                         <input id="bb_full_curate_batch_size" type="number" class="bb-input" min="1" max="30" value="8" />
+                    </div>
+
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_full_curate_parallel">审查并行请求数</label>
+                        <small class="bb-mem-hint">同时发送多少批审查请求（默认2，范围1-8）。接口限速严格时请设为1；提高会加快整理，但会增加瞬时请求压力。</small>
+                        <input id="bb_full_curate_parallel" type="number" class="bb-input" min="1" max="8" value="2" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
