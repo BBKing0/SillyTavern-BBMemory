@@ -73,6 +73,7 @@ export const TRUTH_STATUS = Object.freeze({
  * （query 里没有「车」字，"坐车来电影院"就永远检索不到）。
  */
 export const REALTIME_KINDS = Object.freeze({
+    schedule: { id: 'schedule', label: '日程', icon: 'fa-solid fa-calendar-days', color: '#80cbc4' },
     transport: { id: 'transport', label: '交通', icon: 'fa-solid fa-bus',              color: '#4fc3f7' },
     outfit:    { id: 'outfit',    label: '衣着', icon: 'fa-solid fa-shirt',            color: '#f06292' },
     present:   { id: 'present',   label: '在场', icon: 'fa-solid fa-users',            color: '#81c784' },
@@ -105,6 +106,7 @@ export const REALTIME_KIND_SLOT_SETTINGS = Object.freeze({
 export function getRealtimeKindSlotLimits(settings = {}) {
     const limits = {};
     for (const kind of Object.keys(REALTIME_KINDS)) {
+        if (kind === 'schedule') { limits[kind] = 0; continue; } // 日程走独立的按天规则
         const raw = Number(settings[REALTIME_KIND_SLOT_SETTINGS[kind]]);
         limits[kind] = Number.isFinite(raw) ? Math.max(0, Math.min(20, Math.floor(raw))) : 2;
     }

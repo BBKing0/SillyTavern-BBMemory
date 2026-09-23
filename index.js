@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.4.4 主入口
+ * index.js —— BB-Memory v9.4.5 主入口
  *
  * 五柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目 / 实时记忆。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -115,7 +115,7 @@ let chatSwitchSuppressDeletesUntil = 0;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.4.4';
+const SETTINGS_EXPORT_VERSION = '9.4.5';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
@@ -147,6 +147,7 @@ const SETTINGS_EXPORT_KEYS = [
     'aiCurateAuthMerge', 'aiCurateAuthRewrite', 'aiCurateAuthSplit', 'aiCurateAuthDelete',
     'aiCurateUndoDepth', 'dedupTimeConflictScope',
     // v9.3.3 实时记忆（第五柱）
+    'realtimeExtractCharLimit', 'realtimeScheduleEnabled', 'realtimeScheduleDays', 'realtimeScheduleActionsPerDay', 'realtimeScheduleActionChars', 'realtimeScheduleTokenCap', 'correctionFuzzyEnabled', 'correctionRelatedEnabled', 'correctionPageSize',
     'realtimeEnabled', 'realtimeExtractEnabled', 'realtimeExtractScope', 'realtimeExtractFirstN',
     'realtimeMaxDetailsPerFloor',
     'realtimeTransportSlots', 'realtimeOutfitSlots', 'realtimePresentSlots', 'realtimePreferenceSlots',
@@ -224,6 +225,15 @@ const SETTING_CONTROL_BINDINGS = {
     fullCurationUndoDepth: ['#bb_full_curate_undo_depth', 'value'],
     dedupTimeConflictScope: ['#bb_dedup_time_conflict_scope', 'value'],
     // v9.3.3 实时记忆（第五柱）
+    realtimeExtractCharLimit: ['#bb_realtime_extract_char_limit', 'value'],
+    realtimeScheduleEnabled: ['#bb_realtime_schedule_enabled', 'checkbox'],
+    realtimeScheduleDays: ['#bb_realtime_schedule_days', 'value'],
+    realtimeScheduleActionsPerDay: ['#bb_realtime_schedule_actions_per_day', 'value'],
+    realtimeScheduleActionChars: ['#bb_realtime_schedule_action_chars', 'value'],
+    realtimeScheduleTokenCap: ['#bb_realtime_schedule_token_cap', 'value'],
+    correctionFuzzyEnabled: ['#bb_correction_fuzzy_enabled', 'checkbox'],
+    correctionRelatedEnabled: ['#bb_correction_related_enabled', 'checkbox'],
+    correctionPageSize: ['#bb_correction_page_size', 'value'],
     realtimeEnabled: ['#bb_realtime_enabled', 'checkbox'],
     realtimeExtractEnabled: ['#bb_realtime_extract_enabled', 'checkbox'],
     realtimeExtractScope: ['#bb_realtime_extract_scope', 'value'],
@@ -371,7 +381,7 @@ function getPromptTemplateDefinitions() {
             key: 'realtime.detailExtract',
             title: '实时细节抓取',
             category: '实时记忆',
-            description: '每层与主提取并行发起的轻量抓取提示词，只抓「当下有效的具体细节」（交通/衣着/在场/点的东西等）。'
+            description: '每层与主提取并行发起的轻量抓取提示词，只抓影响后续因果和行动的逻辑事实，排除普通外貌、表情和环境渲染，并记录每日行动日程。'
                 + '可用占位符：{{maxDetails}} {{location}} {{storyTime}} {{aiMessage}}；现有槽位与分类上限会由系统强制追加。',
             defaultValue: DEFAULT_REALTIME_DETAIL_EXTRACT_PROMPT,
         },
@@ -2203,6 +2213,15 @@ function bindSidebarEvents() {
     }
     bindSelect('#bb_dedup_time_conflict_scope', 'dedupTimeConflictScope');
     // v9.3.3 实时记忆（第五柱）
+    bindInput('#bb_realtime_extract_char_limit', 'realtimeExtractCharLimit', 'number');
+    bindCheckbox('#bb_realtime_schedule_enabled', 'realtimeScheduleEnabled');
+    bindInput('#bb_realtime_schedule_days', 'realtimeScheduleDays', 'number');
+    bindInput('#bb_realtime_schedule_actions_per_day', 'realtimeScheduleActionsPerDay', 'number');
+    bindInput('#bb_realtime_schedule_action_chars', 'realtimeScheduleActionChars', 'number');
+    bindInput('#bb_realtime_schedule_token_cap', 'realtimeScheduleTokenCap', 'number');
+    bindCheckbox('#bb_correction_fuzzy_enabled', 'correctionFuzzyEnabled');
+    bindCheckbox('#bb_correction_related_enabled', 'correctionRelatedEnabled');
+    bindInput('#bb_correction_page_size', 'correctionPageSize', 'number');
     bindCheckbox('#bb_realtime_enabled', 'realtimeEnabled', refreshRealtimeStatus);
     bindCheckbox('#bb_realtime_extract_enabled', 'realtimeExtractEnabled');
     bindSelect('#bb_realtime_extract_scope', 'realtimeExtractScope');
@@ -2412,17 +2431,7 @@ function bindSidebarEvents() {
         }
     });
     // v7.9.0 换楼刷新（从悬浮窗移到侧边栏）
-    document.querySelector('#bb_floor_refresh_btn')?.addEventListener('click', async () => {
-        const chatId = getChatId();
-        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
-        const stats = await refreshAllSourceFloors(chatId);
-        const total = stats.npc + stats.items + stats.timeline + stats.memories;
-        if (total === 0) {
-            showToast('当前没有需要刷新的楼层记忆', 'info');
-        } else {
-            showToast(`已标记 ${total} 条记忆为旧聊天来源（NPC:${stats.npc} 物品:${stats.items} 里程碑:${stats.milestones || stats.timeline} 记忆:${stats.memories}）`, 'success');
-        }
-    });
+    document.querySelector('#bb_floor_refresh_btn')?.addEventListener('click', handleFloorRefresh);
     document.querySelector('#bb_clue_board_btn')?.addEventListener('click', () => {
         const chatId = getChatId();
         if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
@@ -3788,17 +3797,7 @@ function registerSlashCommands() {
         }
     }, '删除并重新提取指定楼层的记忆');
 
-    addCmd('bb-floor-refresh', async () => {
-        const chatId = getChatId();
-        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
-        const stats = await refreshAllSourceFloors(chatId);
-        const total = stats.npc + stats.items + stats.timeline + stats.memories;
-        if (total === 0) {
-            showToast('当前没有需要刷新的楼层记忆（所有记忆已标记为旧聊天来源）', 'info');
-        } else {
-            showToast(`楼层刷新完成！已标记 ${total} 条记忆为旧聊天来源（NPC:${stats.npc} 物品:${stats.items} 里程碑:${stats.milestones || stats.timeline} 记忆:${stats.memories}）`, 'success');
-        }
-    }, '换楼刷新 — 将所有记忆的楼层标记为旧聊天来源（开新聊天后使用）');
+    addCmd('bb-floor-refresh', () => handleFloorRefresh(), '换楼刷新 — 将所有记忆及实时细节标记为旧聊天来源');
 
     addCmd('bb-clue', async () => {
         const chatId = getChatId();
@@ -4545,7 +4544,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.4.4 初始化开始...');
+    console.log('[BB-Memory] v9.4.5 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -4741,7 +4740,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.4.4 初始化完成');
+    console.log('[BB-Memory] v9.4.5 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
@@ -5741,4 +5740,22 @@ try {
     console.error('[BB-Memory] 启动失败:', e);
     if (document.readyState === 'complete') initOnce();
     else window.addEventListener('load', initOnce);
+}
+
+// v9.4.5 换楼反馈统一，侧边栏与斜杠命令共享第五柱刷新。
+async function handleFloorRefresh(event) {
+    const chatId = getChatId();
+    if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+    const button = event?.currentTarget;
+    if (button) button.disabled = true;
+    showToast('正在刷新来源楼层（含实时细节和日程）…', 'info');
+    try {
+        const stats = await refreshAllSourceFloors(chatId);
+        const total = stats.npc + stats.items + stats.milestones + stats.memories + stats.realtime;
+        showToast(total ? `已标记 ${total} 条为旧聊天：NPC ${stats.npc} / 物品 ${stats.items} / 里程碑 ${stats.milestones} / 记忆 ${stats.memories} / 实时与日程 ${stats.realtime}` : '全部条目已是旧聊天来源', total ? 'success' : 'info');
+        await refreshRealtimeStatus();
+        document.querySelector('.bb-mem-overlay')?.dispatchEvent(new CustomEvent('bb-memory-floor-refresh', { detail: { chatId } }));
+        document.querySelector('#bb_realtime_snapshot_refresh, #bb_assistant_refresh')?.click();
+    } catch (error) { showToast(`换楼刷新失败：${error.message}，请重试`, 'error'); }
+    finally { if (button) button.disabled = false; }
 }

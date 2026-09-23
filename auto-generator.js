@@ -1224,7 +1224,14 @@ async function runRealtimeExtraction(chatId, exchange) {
         const settings = getSettings();
         if (!settings.realtimeEnabled || !settings.realtimeExtractEnabled) return null;
         const { extractRealtimeDetails } = await import('./realtime-memory.js');
-        return await extractRealtimeDetails(chatId, exchange, { settings });
+        const result = await extractRealtimeDetails(chatId, exchange, { settings });
+        const warnings = result.rejected?.filter(item => /日程/.test(item.reason || '')).map(item => item.reason) || [];
+        if (result.error || warnings.length) {
+            const message = result.error || [...new Set(warnings)].join('；');
+            globalThis.bbShowToast?.(message, result.error ? 'error' : 'warning');
+            globalThis.bbMemoryRecordActivity?.('warning', '实时细节/日程', message);
+        }
+        return result;
     } catch (e) {
         console.warn('[BB-Memory] 实时细节抓取异常（已隔离，不影响主提取）:', e);
         return null;

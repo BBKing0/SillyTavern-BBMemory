@@ -1,5 +1,5 @@
 /**
- * memory-curator.js — BB-Memory v9.4.4 全库记忆整理
+ * memory-curator.js — BB-Memory v9.4.5 全库记忆整理
  *
  * 解决增量两两去重的结构性盲区：`findBestDuplicate` 只让每条新条目与已有条目
  * 逐一比较并取最高分，因此「渐进细化」型重复（5 条同一件事逐层补细节，相邻

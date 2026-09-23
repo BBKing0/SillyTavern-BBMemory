@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.4.4</b>
+            <b>BB-Memory v9.4.5</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -499,7 +499,7 @@
 
                     <div style="font-size:0.72em;opacity:0.6;line-height:1.5;margin-bottom:6px;">
                         检索由最后一条用户消息驱动，问句里没有「车」字，「坐公交车来电影院」就永远进不了注入，后文于是写出「开车回家」。
-                        这一柱专收「坐什么车来的、穿了什么、谁在场、点了什么」这类当下细节，<b>不做向量、不参与检索、无条件注入</b>——
+                        这一柱专收「交通约束、携带物、异常痕迹、未完成事项」这类当下细节，<b>不做向量、不参与检索、无条件注入</b>——
                         正是这个绕过检索的性质解决了长线逻辑断裂。场景结束时再逐条判定晋升长期库还是留档。
                     </div>
 
@@ -514,6 +514,22 @@
                     </label>
                     <small class="bb-mem-hint" style="margin-bottom:8px;">与主提取并行发起的轻量调用。关掉后仍可手动添加细节，只是不再自动抓。</small>
 
+                    <div class="bb-mem-sidebar-section">
+                        <label class="checkbox_label"><input id="bb_realtime_schedule_enabled" type="checkbox" /><span>记录每日行动日程</span></label>
+                        <small class="bb-mem-hint">与细节共用一次调用。按故事日期记录上午、午间、晚间的已发生行动，换地点不会结算日程。开启时即使细节只抓前N层，后续层仍调用日程提取。</small>
+                        <label>提取原文最多字符（0=不限）<input id="bb_realtime_extract_char_limit" type="number" class="bb-input" min="0" max="200000" value="12000" /></label>
+                        <label>注入最近几个故事日<input id="bb_realtime_schedule_days" type="number" class="bb-input" min="1" max="30" value="3" /></label>
+                        <label>每日最多行动条数<input id="bb_realtime_schedule_actions_per_day" type="number" class="bb-input" min="1" max="200" value="30" /></label>
+                        <label>每项行动最多字数<input id="bb_realtime_schedule_action_chars" type="number" class="bb-input" min="1" max="500" value="80" /></label>
+                        <label>日程独立 token 上限<input id="bb_realtime_schedule_token_cap" type="number" class="bb-input" min="1" max="8000" value="600" /></label>
+                    </div>
+                    <div class="bb-mem-sidebar-section">
+                        <label>记忆纠错（记忆管理 → 纠错）</label>
+                        <label class="checkbox_label"><input id="bb_correction_fuzzy_enabled" type="checkbox" /><span>中文片段宽匹配（减少漏检）</span></label>
+                        <label class="checkbox_label"><input id="bb_correction_related_enabled" type="checkbox" /><span>扩展引用关联条目</span></label>
+                        <label>每页候选条数<input id="bb_correction_page_size" type="number" class="bb-input" min="1" max="100" value="30" /></label>
+                        <small class="bb-mem-hint">本地扫描所有分类及归档，不消耗 API；姓名、别名、职业同义词及隐藏备注均参与。候选只供人工核对，保存后才修改原条目。</small>
+                    </div>
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_realtime_extract_scope">抓取范围</label>
                         <small class="bb-mem-hint">每层都抓最完整但每层多一次 API 调用；只抓场景前 N 层可省调用，代价是场景后段的新细节会漏。</small>

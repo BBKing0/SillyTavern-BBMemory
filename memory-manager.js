@@ -1,5 +1,5 @@
 /**
- * memory-manager.js —— BB-Memory v9.4.4 记忆管理器
+ * memory-manager.js —— BB-Memory v9.4.5 记忆管理器
  *
  * 全屏覆盖弹窗，统一管理长期记忆、实时记忆、存档、时间线与归档。
  */
@@ -10,7 +10,7 @@ import {
     getMilestones as getTimeline, addMilestone as addTimelineEntry, updateMilestone as updateTimelineEntry, removeMilestone as removeTimelineEntry,
     getTimeline as getTimelineThreads, upsertTimeline as upsertTimelineThread, removeTimeline as removeTimelineThread,
     getMemories, addMemory, updateMemory, removeMemory,
-    getRealtimeMemories, updateRealtimeMemory,
+    getRealtimeMemories, addRealtimeMemory, updateRealtimeMemory,
     clearAllData, deleteByExchange, getMemoryStats, getSettings, updateSettings,
     exportMemories, importMemories, updateFactContent, addHiddenNote, removeHiddenNote,
     isArchived, archiveEntry, restoreEntry,
@@ -19,6 +19,7 @@ import {
     getCharacterId, listSlots, saveToSlot, loadFromSlot, createEmptySlot, deleteSlot, exportSlot, getRemoteSlotIndex,
     getCloudVectorSlot, pushSlotVectorsToCloud, pullCloudVectors, getSlotOwnerChatId,
 } from './memory-slots.js';
+import { realtimeFloorLabel, getScheduleDays, scheduleDayKey } from './realtime-schedule.js';
 import { simpleSearch } from './retriever.js';
 import {
     MEMORY_TYPES, TRUTH_STATUS, HIDDEN_NOTE_TYPES, TIMELINE_STATUS, ITEM_STATUS,
@@ -166,6 +167,7 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) 
             <button class="bb-mgr-tab" data-tab="realtime">
                 <i class="fa-solid fa-bolt"></i> 实时
             </button>
+            <button class="bb-mgr-tab" data-tab="correction"><i class="fa-solid fa-pen-to-square"></i> 纠错</button>
             <button class="bb-mgr-tab" data-tab="dashboard">
                 <i class="fa-solid fa-gauge-high"></i> 仪表盘
             </button>
@@ -290,6 +292,7 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) 
             </div>
         </div>
 
+        <div class="bb-mgr-panel" data-panel="correction" style="display:none;"><div id="bb_correction_panel" class="bb-correction-panel"></div></div>
         <!-- 仪表盘标签页 -->
         <div class="bb-mgr-panel" data-panel="dashboard" style="display:none;">
             <div id="bb_dashboard_content">
@@ -607,6 +610,13 @@ function bindManagerControlsToggle(overlay) {
 }
 
 function bindManagerEvents(overlay, chatId) {
+    overlay.addEventListener('bb-memory-floor-refresh', async event => {
+        if (event.detail?.chatId !== chatId) return;
+        try {
+            if (overlay.querySelector('.bb-mgr-tab.active')?.dataset.tab === 'realtime') await renderRealtimePanel(overlay, chatId);
+            await rerenderManagerList(overlay, chatId);
+        } catch (error) { showToast(`刷新面板失败：${error.message}`, 'error'); }
+    });
     // 关闭
     overlay.querySelector('.bb-mem-close')?.addEventListener('click', () => overlay.remove());
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
@@ -630,6 +640,14 @@ function bindManagerEvents(overlay, chatId) {
                 await renderThreadPanel(overlay, chatId);
             } else if (panelName === 'realtime') {
                 await renderRealtimePanel(overlay, chatId);
+            } else if (panelName === 'correction') {
+                try {
+                    const { renderCorrectionPanel } = await import('./memory-correction-ui.js');
+                    renderCorrectionPanel(overlay.querySelector('#bb_correction_panel'), chatId, {
+                        createForm: createManagerFormOverlay, toast: showToast,
+                        onChange: () => rerenderManagerList(overlay, chatId),
+                    });
+                } catch (error) { showToast(`打开记忆纠错失败：${error.message}`, 'error'); }
             } else if (panelName === 'categories') {
                 await renderCategoriesPanel(overlay, chatId);
             } else if (panelName === 'warehouse') {
@@ -1603,14 +1621,6 @@ function bindFormEvents_inner(formOverlay, chatId, pillar, editInfo) {
 
 // ═══ 实时记忆标签页（v9.3.3） ═══
 
-function realtimeFloorLabel(entry) {
-    const first = Number(entry.createdFloor);
-    const last = Number(entry.lastSeenFloor);
-    if (!Number.isFinite(first) && !Number.isFinite(last)) return '未知楼层';
-    if (first === last || !Number.isFinite(last)) return `第 ${Number.isFinite(first) ? first : last} 层`;
-    return `第 ${Number.isFinite(first) ? first : '?'}–${last} 层`;
-}
-
 function buildRealtimeManagerItem(entry) {
     const kind = REALTIME_KINDS[entry.kind] || REALTIME_KINDS.detail;
     const state = REALTIME_SETTLE_STATES[entry.settleState] || REALTIME_SETTLE_STATES.active;
@@ -1633,7 +1643,7 @@ function buildRealtimeManagerItem(entry) {
         </div>
         <div class="bb-realtime-actions">
             <button class="menu_button bb-rt-edit" data-id="${escapeAttr(entry.id)}"><i class="fa-solid fa-pen"></i> 编辑</button>
-            ${!promoted ? `<button class="menu_button bb-rt-promote" data-id="${escapeAttr(entry.id)}"><i class="fa-solid fa-arrow-up"></i> 手动晋升</button>` : ''}
+            ${!promoted && entry.kind !== 'schedule' ? `<button class="menu_button bb-rt-promote" data-id="${escapeAttr(entry.id)}"><i class="fa-solid fa-arrow-up"></i> 手动晋升</button>` : ''}
             ${entry.settleState !== 'settled'
                 ? `<button class="menu_button bb-rt-discard" data-id="${escapeAttr(entry.id)}"><i class="fa-solid fa-box-archive"></i> 留档</button>`
                 : (!promoted ? `<button class="menu_button bb-rt-reactivate" data-id="${escapeAttr(entry.id)}"><i class="fa-solid fa-rotate-left"></i> 恢复生效</button>` : '')}
@@ -1664,7 +1674,7 @@ async function renderRealtimePanel(overlay, chatId) {
         panel.innerHTML = `
             <div class="bb-realtime-toolbar">
                 <div>
-                    <strong><i class="fa-solid fa-bolt"></i> 当前场景细节</strong>
+                    <strong><i class="fa-solid fa-bolt"></i> 实时细节与日程</strong>
                     <div class="bb-realtime-summary">生效 ${counts.active} · 待结算 ${counts.pending} · 已结算 ${counts.settled}</div>
                 </div>
                 <div class="bb-realtime-toolbar-actions">
@@ -1676,12 +1686,15 @@ async function renderRealtimePanel(overlay, chatId) {
                     </select>
                     <button class="menu_button" id="bb_rt_settle_now"><i class="fa-solid fa-flag-checkered"></i> 立即结算</button>
                     <button class="menu_button" id="bb_rt_undo"><i class="fa-solid fa-rotate-left"></i> 撤销结算</button>
+                    <button class="menu_button" id="bb_rt_add_schedule"><i class="fa-solid fa-calendar-plus"></i> 补记日程</button>
                     <button class="menu_button" id="bb_rt_refresh"><i class="fa-solid fa-arrows-rotate"></i> 刷新</button>
                 </div>
             </div>
-            <div class="bb-realtime-help">实时记忆会绕过向量检索并受独立条数/token 上限保护；“留档”停止注入，并只在设置的最近楼层窗口内保留。</div>
+            <div class="bb-realtime-help">日程按故事日保存行动轨迹，独立于场景结算；默认注入最近3天，较早日程仍可查看和纠错。普通细节留档后按楼层窗口清理。</div>
             <div class="bb-realtime-list">
-                ${entries.length ? entries.map(buildRealtimeManagerItem).join('') : '<div class="bb-mem-empty">暂无实时场景细节</div>'}
+                ${getScheduleDays(entries.filter(e => e.kind === 'schedule').map(e => ({ ...e, settleState: 'active' })), { scheduleAllDays: true }).map(day => `<section class="bb-schedule-day"><h4><i class="fa-solid fa-calendar-days"></i> ${escapeHtml(day.label)}</h4>${day.entries.map(e => buildRealtimeManagerItem(entries.find(original => original.id === e.id))).join('')}</section>`).join('')}
+                ${entries.filter(e => e.kind !== 'schedule').map(buildRealtimeManagerItem).join('')}
+                ${!entries.length ? '<div class="bb-mem-empty">暂无实时细节或日程</div>' : ''}
             </div>`;
         if (pruned) showToast(`已按保留楼层设置清理 ${pruned} 条过期实时留档`, 'success');
 
@@ -1690,6 +1703,10 @@ async function renderRealtimePanel(overlay, chatId) {
             panel.querySelectorAll('.bb-realtime-item').forEach(item => {
                 item.style.display = state === 'all' || item.dataset.state === state ? '' : 'none';
             });
+        });
+        panel.querySelector('#bb_rt_add_schedule')?.addEventListener('click', () => {
+            const latest = getScheduleDays(entries).at(-1);
+            showRealtimeEditForm(overlay, chatId, { kind: 'schedule', text: '', dayLabel: latest?.label || '', dayKey: latest?.key || '', dayOrder: latest?.order });
         });
         panel.querySelector('#bb_rt_refresh')?.addEventListener('click', () => renderRealtimePanel(overlay, chatId));
         panel.querySelector('#bb_rt_settle_now')?.addEventListener('click', async (event) => {
@@ -1740,7 +1757,7 @@ async function renderRealtimePanel(overlay, chatId) {
             btn.disabled = true;
             try {
                 await updateRealtimeMemory(chatId, btn.dataset.id, { settleState: 'settled', settleReason: 'discarded' });
-                showToast('已停止注入；将在设置的保留楼层窗口内留档', 'success');
+                showToast('已停止注入；日程可随时恢复，普通细节按保留楼层清理', 'success');
                 await renderRealtimePanel(overlay, chatId);
             } catch (error) { showToast(`留档失败: ${error.message}`, 'error'); btn.disabled = false; }
         }));
@@ -1764,9 +1781,10 @@ function showRealtimeEditForm(managerOverlay, chatId, entry) {
         <div class="bb-mem-form-header"><h3><i class="fa-solid fa-pen"></i> 编辑实时记忆</h3><span class="bb-mem-form-close">&times;</span></div>
         <div class="bb-mem-form-body">
             <div class="bb-mem-form-group"><label>细节分类</label><select class="bb-input" id="bb_rt_edit_kind">
-                ${Object.values(REALTIME_KINDS).map(kind => `<option value="${kind.id}" ${kind.id === entry.kind ? 'selected' : ''}>${escapeHtml(kind.label)}</option>`).join('')}
+                ${Object.values(REALTIME_KINDS).filter(kind => entry.kind === 'schedule' ? kind.id === 'schedule' : kind.id !== 'schedule').map(kind => `<option value="${kind.id}" ${kind.id === entry.kind ? 'selected' : ''}>${escapeHtml(kind.label)}</option>`).join('')}
             </select></div>
             <div class="bb-mem-form-group"><label>细节内容</label><textarea class="bb-input" id="bb_rt_edit_text" rows="4">${escapeHtml(entry.text)}</textarea></div>
+            ${entry.kind === 'schedule' ? `<div class="bb-mem-form-group"><label>故事日期（不明确时填写“日期未注明”）</label><input class="bb-input" id="bb_rt_edit_day" value="${escapeAttr(entry.dayLabel || '')}"></div>` : ''}
             <div class="bb-mem-form-group"><label>场景标识</label><input class="bb-input" id="bb_rt_edit_scene" value="${escapeAttr(entry.sceneKey || '')}"></div>
         </div>
         <div class="bb-mem-form-footer"><button class="menu_button" id="bb_rt_edit_cancel">取消</button><button class="menu_button" id="bb_rt_edit_save"><i class="fa-solid fa-floppy-disk"></i> 保存</button></div>
@@ -1781,11 +1799,21 @@ function showRealtimeEditForm(managerOverlay, chatId, entry) {
         btn.disabled = true;
         btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 保存中...';
         try {
-            await updateRealtimeMemory(chatId, entry.id, {
-                kind: formOverlay.querySelector('#bb_rt_edit_kind')?.value || 'detail',
-                text,
+            const patch = {
+                kind: formOverlay.querySelector('#bb_rt_edit_kind')?.value || 'detail', text,
                 sceneKey: formOverlay.querySelector('#bb_rt_edit_scene')?.value.trim() || '',
-            });
+            };
+            if (entry.kind === 'schedule') {
+                const label = formOverlay.querySelector('#bb_rt_edit_day').value.trim();
+                if (!label) throw new Error('请填写故事日期或“日期未注明”');
+                const siblings = await getRealtimeMemories(chatId);
+                const sameDay = siblings.find(e => e.kind === 'schedule' && e.dayLabel === label);
+                Object.assign(patch, { dayLabel: label, dayKey: sameDay?.dayKey || scheduleDayKey(label),
+                    dayOrder: sameDay?.dayOrder || entry.dayOrder || Date.now(), storyTime: label });
+            }
+            if (entry.id) {
+                if (!await updateRealtimeMemory(chatId, entry.id, patch)) throw new Error('条目已不存在');
+            } else await addRealtimeMemory(chatId, { ...patch, source: 'manual', actionOrder: Date.now() });
             close();
             showToast('实时记忆已更新', 'success');
             await renderRealtimePanel(managerOverlay, chatId);

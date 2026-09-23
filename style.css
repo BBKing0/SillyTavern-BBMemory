@@ -6201,3 +6201,29 @@
     .bb-rescue-slot-count { white-space: normal; }
     .bb-rescue-ns-sum { margin-left: 0; }
 }
+/* v9.4.5 纠错与按日日程 */
+.bb-correction-panel { display:flex; flex-direction:column; min-height:0; width:100%; height:100%; padding:0.8em; box-sizing:border-box; gap:0.65em; }
+.bb-correction-controls { flex:0 0 auto; }
+.bb-correction-controls p { font-size:0.85em; opacity:0.8; margin:0.5em 0; }
+.bb-correction-controls textarea { width:100%; box-sizing:border-box; resize:vertical; }
+.bb-correction-buttons,.bb-correction-pages,.bb-correction-card-head { display:flex; align-items:center; gap:0.5em; flex-wrap:wrap; }
+.bb-correction-pages { justify-content:center; flex:0 0 auto; }
+.bb-correction-results { overflow-y:auto; min-height:0; flex:1; }
+.bb-correction-card { border:1px solid var(--SmartThemeBorderColor,#555); border-radius:0.5em; padding:0.75em; margin-bottom:0.7em; overflow-wrap:anywhere; }
+.bb-correction-card-head strong { flex:1; min-width:0; }
+.bb-correction-meta,.bb-correction-reason,#bb_correct_status { font-size:0.8em; opacity:0.8; margin:0.4em 0; overflow-wrap:anywhere; }
+.bb-correction-reason { max-height:5em; overflow-y:auto; }
+.bb-correction-card dt { font-weight:bold; margin-top:0.5em; }
+.bb-correction-card dd { margin:0.2em 0 0.5em 0; white-space:pre-wrap; }
+.bb-correction-card summary { cursor:pointer; }
+.bb-schedule-day { border-left:0.2em solid #80cbc4; padding-left:0.7em; margin-bottom:1em; }
+.bb-schedule-day h4 { margin:0.5em 0; }
+@media (max-width:480px) {
+    .bb-correction-panel { padding:0.5em; }
+    .bb-correction-controls textarea { max-height:18vh; }
+    .bb-correction-card-head { align-items:flex-start; }
+    .bb-correction-card-head button { flex:0 0 auto; }
+    .bb-correction-buttons button { flex:1; }
+    .bb-correction-form .bb-mem-form-popup { width:96vw; max-height:90dvh; }
+}
+.bb-realtime-schedule-action { display:block; line-height:1.55; margin:0.3em 0; white-space:normal; overflow-wrap:anywhere; }

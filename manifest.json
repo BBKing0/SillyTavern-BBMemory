@@ -4,9 +4,9 @@
     "js": "index.js",
     "css": "style.css",
     "author": "BB-Memory Dev",
-    "version": "9.4.4",
+    "version": "9.4.5",
     "homePage": "https://github.com/BBKing0/SillyTavern-BBMemory",
     "auto_update": true,
     "generate_interceptor": "bbMemoryInterceptor",
-    "description": "Smart long-term memory extension v9.4.4 - configurable parallel full-library curation"
+    "description": "Smart long-term memory extension v9.4.5 - daily action schedules, logical realtime details and broad-recall memory correction"
 }

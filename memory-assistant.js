@@ -1,9 +1,10 @@
 /**
- * memory-assistant.js —— BB-Memory v9.4.4 记忆管家面板
+ * memory-assistant.js —— BB-Memory v9.4.5 记忆管家面板
  *
  * 五柱浏览：NPC档案 / 物品栏 / 里程碑 / 记忆条目 / 实时记忆 + 仪表盘。
  */
 
+import { realtimeFloorLabel, getScheduleDays } from './realtime-schedule.js';
 import {
     MEMORY_TYPES,
     REALTIME_KINDS,
@@ -51,7 +52,7 @@ export async function openAssistant(chatId, initialTab = 'dashboard') {
 
 function selectCurrentRealtimeEntries(entries, settings) {
     const unresolved = (Array.isArray(entries) ? entries : [])
-        .filter(entry => entry && String(entry.text || '').trim()
+        .filter(entry => entry && entry.kind !== 'schedule' && String(entry.text || '').trim()
             && entry.settleState !== 'settled' && !entry.promotedTo)
         .sort((a, b) => Number(b.lastSeenFloor ?? b.createdFloor ?? -1) - Number(a.lastSeenFloor ?? a.createdFloor ?? -1));
     if (!unresolved.length) return [];
@@ -79,9 +80,11 @@ function selectCurrentRealtimeEntries(entries, settings) {
 }
 
 function buildRealtimeSnapshotBody(entries, settings) {
+    const schedule = settings.realtimeScheduleEnabled === false ? '' : getScheduleDays(entries, settings)
+        .map(day => `<section class="bb-schedule-day"><h4>${escapeHtml(day.label)} · 日程</h4>${day.entries.map(e => `<div class="bb-realtime-schedule-action">${escapeHtml(e.text)}</div>`).join('')}</section>`).join('');
     const current = selectCurrentRealtimeEntries(entries, settings);
     if (!current.length) {
-        return '<div class="bb-realtime-snapshot-empty"><i class="fa-regular fa-moon"></i><span>当前没有生效中的实时细节</span></div>';
+        return schedule || '<div class="bb-realtime-snapshot-empty"><i class="fa-regular fa-moon"></i><span>当前没有生效中的实时细节或日程</span></div>';
     }
     const newest = current[0];
     const sceneLabel = [newest.location, newest.storyTime].filter(Boolean).join(' · ')
@@ -99,13 +102,13 @@ function buildRealtimeSnapshotBody(entries, settings) {
         if (b === 'unknown') return -1;
         return Number(b) - Number(a);
     });
-    return `<div class="bb-realtime-snapshot-summary">
+    return `${schedule}<div class="bb-realtime-snapshot-summary">
         <span><i class="fa-solid fa-location-dot"></i> ${escapeHtml(sceneLabel)}</span>
         <span>${current.length} 条当前细节</span>
     </div>
     <div class="bb-realtime-snapshot-floors">
         ${groups.map(([floor, floorEntries]) => `<section class="bb-realtime-snapshot-floor">
-            <div class="bb-realtime-snapshot-floor-label">${floor === 'unknown' ? '未知楼层' : `第 ${floor} 层`}</div>
+            <div class="bb-realtime-snapshot-floor-label">${floor === 'unknown' ? '旧聊天' : `第 ${floor} 层`}</div>
             <div class="bb-realtime-snapshot-details">
                 ${floorEntries.map(entry => {
                     const kind = REALTIME_KINDS[entry.kind] || REALTIME_KINDS.detail;
@@ -130,7 +133,7 @@ export async function openRealtimeSnapshot(chatId) {
     win.className = 'bb-realtime-snapshot';
     win.setAttribute('aria-label', '当前实时细节');
     win.innerHTML = `<div class="bb-realtime-snapshot-header" id="bb_assistant_drag_handle">
-        <span><i class="fa-solid fa-bolt"></i> 当前实时细节</span>
+        <span><i class="fa-solid fa-bolt"></i> 实时细节与日程</span>
         <div class="bb-realtime-snapshot-controls">
             <button type="button" id="bb_realtime_snapshot_refresh" title="刷新" aria-label="刷新实时细节"><i class="fa-solid fa-arrows-rotate"></i></button>
             <button type="button" id="bb_realtime_snapshot_close" title="关闭" aria-label="关闭实时细节"><i class="fa-solid fa-xmark"></i></button>
@@ -479,18 +482,15 @@ function buildRealtimeBrowseHTML(entries) {
 function buildRealtimeBrowseItemHTML(entry) {
     const kind = REALTIME_KINDS[entry.kind] || REALTIME_KINDS.detail;
     const state = REALTIME_SETTLE_STATES[entry.settleState] || REALTIME_SETTLE_STATES.active;
-    const first = Number(entry.createdFloor);
-    const last = Number(entry.lastSeenFloor);
-    const floor = Number.isFinite(last) ? last : (Number.isFinite(first) ? first : '?');
     return `<div class="bb-browse-item realtime-item" data-id="${escapeHtml(entry.id)}" data-state="${escapeHtml(entry.settleState || 'active')}">
         <div class="bb-browse-item-header">
             <span class="bb-type-badge" style="color:${kind.color}"><i class="${kind.icon}"></i> ${escapeHtml(kind.label)}</span>
             <span class="bb-status-badge" style="color:${state.color}">${escapeHtml(state.label)}</span>
             ${entry.promotedTo ? '<span class="bb-mtier-badge">已晋升</span>' : ''}
-            <span class="bb-time-badge">第 ${floor} 层</span>
+            <span class="bb-time-badge">${escapeHtml(realtimeFloorLabel(entry))}</span>
         </div>
         <div class="bb-browse-item-body">
-            <div>${escapeHtml(entry.text)}</div>
+            <div>${entry.kind === 'schedule' ? escapeHtml(entry.dayLabel || '日期未注明') + ' · ' : ''}${escapeHtml(entry.text)}</div>
             ${entry.sceneKey ? `<div style="opacity:.65"><i class="fa-solid fa-location-dot"></i> ${escapeHtml(entry.sceneKey)}</div>` : ''}
         </div>
     </div>`;

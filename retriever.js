@@ -1,10 +1,11 @@
 /**
- * retriever.js —— BB-Memory v9.4.4 检索与注入系统
+ * retriever.js —— BB-Memory v9.4.5 检索与注入系统
  *
  * 长期记忆注入格式：角色档案 / 重要物品 / 故事里程碑 / 故事时间线 / 相关记忆。
  * 简化为 5 维评分 + 实体展开。
  */
 
+import { getScheduleDays, scheduleLimit } from './realtime-schedule.js';
 import {
     MEMORY_TYPES,
     TRUTH_STATUS,
@@ -61,7 +62,7 @@ const DEFAULT_INJECTION_SECTION_HEADERS = Object.freeze({
     memory: '格式：序号.[日期]内容\n（说话者→对话对象）人物对话',
     map: '以下是地点与空间关系{{worldRefSuffix}}。\n格式：-地点名 | 区域:区域名 | 父地点:地点名 | 说明:地点说明 | 现实参考:参考地点\n下方缩进行表示“可前往 / 入口来源 / 子地点 / 同区域地点 / 局部空间链”。',
     // v9.3.3 第五柱：不参与检索、无条件注入
-    realtime: '以下是当前场景仍然有效的临时细节，用于保持连续性，不是长期设定。',
+    realtime: '日程按故事日及行动先后记录已发生的轨迹，保持早晚顺序，不要把过去行程当作当前地点。其它内容是仍有效的逻辑细节；不据此编造职业、身份或线索成因。',
 });
 
 const MAP_INJECTION_FORMAT_GUIDE = '格式：-地点名 | 区域:区域名 | 父地点:地点名 | 说明:地点说明 | 现实参考:参考地点\n'
@@ -1206,10 +1207,11 @@ export function getRealtimeForInjection(entries, settings) {
     if (!activeSettings.realtimeEnabled) return empty;
 
     const rawPool = (Array.isArray(entries) ? entries : []).filter(entry =>
-        entry && String(entry.text || '').trim()
+        entry && entry.kind !== 'schedule' && String(entry.text || '').trim()
         && entry.settleState !== 'settled'
         && !entry.promotedTo);
-    if (!rawPool.length) return { ...empty, enabled: true };
+    const scheduleDays = activeSettings.realtimeScheduleEnabled === false ? [] : getScheduleDays(entries, activeSettings);
+    if (!rawPool.length && !scheduleDays.length) return { ...empty, enabled: true };
 
     // 新到旧：分类槽位与全局截断都优先保留最新状态。0 槽分类立即停止注入，
     // 不必等下一轮提取把旧数据推进 settled。
@@ -1233,7 +1235,7 @@ export function getRealtimeForInjection(entries, settings) {
         if (slotKey) seenSlots.add(slotKey);
         return true;
     });
-    if (!sorted.length) return { ...empty, enabled: true };
+    if (!sorted.length && !scheduleDays.length) return { ...empty, enabled: true };
 
     const maxCount = clampIntSetting(activeSettings.realtimeInjectionMax, 0, 200, 15);
     const tokenCap = clampIntSetting(activeSettings.realtimeInjectionTokenCap, 0, 8000, 300);
@@ -1252,12 +1254,30 @@ export function getRealtimeForInjection(entries, settings) {
         tokenEstimate = nextTokens;
     }
 
+    // 日程有独立预算，优先最近一天；每一天仍从早到晚，截断要明确告知模型。
+    const scheduleCap = scheduleLimit(activeSettings.realtimeScheduleTokenCap, 600, 8000);
+    const scheduleLines = [];
+    let scheduleTokens = 0, scheduleCount = 0;
+    const totalSchedule = scheduleDays.reduce((sum, day) => sum + day.entries.length, 0);
+    for (const day of scheduleDays.slice().reverse()) {
+        const kept = [];
+        for (const entry of day.entries) {
+            const text = `· 日程【${day.label}】：${[...kept, entry].map(e => e.text).join('；')}`;
+            if (scheduleTokens + estimateTokens(text + '（后续日程因预算省略）') > scheduleCap) break;
+            kept.push(entry);
+        }
+        if (!kept.length) continue;
+        const text = `· 日程【${day.label}】：${kept.map(e => e.text).join('；')}`
+            + (kept.length < day.entries.length ? '（后续日程因预算省略）' : '');
+        scheduleLines.unshift({ kind: 'schedule', text, ids: kept.map(e => e.id) });
+        scheduleTokens += estimateTokens(text); scheduleCount += kept.length;
+    }
     return {
-        lines,
-        totalCount: sorted.length,
-        injectedCount: chosen.length,
-        tokenEstimate,
-        truncated: chosen.length < sorted.length,
+        lines: [...scheduleLines, ...lines],
+        totalCount: sorted.length + totalSchedule,
+        injectedCount: chosen.length + scheduleCount,
+        tokenEstimate: tokenEstimate + scheduleTokens,
+        truncated: chosen.length < sorted.length || scheduleCount < totalSchedule,
         enabled: true,
     };
 }

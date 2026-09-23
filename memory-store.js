@@ -121,8 +121,17 @@ export const DEFAULT_SETTINGS = Object.freeze({
     maintenanceNpcThreshold: 5,    // NPC 维护阈值
     maintenanceItemThreshold: 20,  // 物品维护阈值
     // v9.3.3 实时记忆（第五柱）
-    // 装「坐什么车来的、穿了什么、谁在场」这类当下有效的场景细节。
+    // 保存影响后文因果的逻辑事实，以及独立于场景结算的每日行动轨迹。
     // 无条件注入、不参与向量检索——正是这个"绕过检索"的性质解决了长线逻辑断裂。
+    realtimeScheduleEnabled: true,
+    realtimeScheduleDays: 3,           // 注入最近几个故事日，较早日程仍可查看/纠错
+    realtimeScheduleActionsPerDay: 30,
+    realtimeScheduleActionChars: 80,
+    realtimeScheduleTokenCap: 600,
+    realtimeExtractCharLimit: 12000,   // 保留长回复后段的行程，0=完整原文
+    correctionFuzzyEnabled: true,
+    correctionRelatedEnabled: true,
+    correctionPageSize: 30,
     realtimeEnabled: true,
     realtimeExtractEnabled: true,
     realtimeExtractScope: 'always',    // 'always' 每层都抓 | 'first_n' 仅每个场景前 N 层
@@ -1026,6 +1035,12 @@ function normalizeRealtimeEntry(data = {}, options = {}) {
     return {
         id: data.id || generateId(),
         kind: normalizeRealtimeKind(data.kind),
+        ...(normalizeRealtimeKind(data.kind) === 'schedule' ? {
+            dayKey: String(data.dayKey || ''), dayLabel: String(data.dayLabel || ''),
+            dayOrder: Number(data.dayOrder || data.createdAt || now),
+            actionOrder: Number(data.actionOrder || data.createdAt || now),
+            sourceActionIndex: Number.isInteger(data.sourceActionIndex) ? data.sourceActionIndex : -1,
+        } : {}),
         text: String(data.text || '').trim(),
         sceneKey: String(data.sceneKey || '').trim(),
         location: String(data.location || '').trim(),
@@ -1647,7 +1662,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.4.4',
+        version: '9.4.5',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -1840,20 +1855,31 @@ async function deleteByExchangeLegacy(chatId, exchangeHash) {
  * 用于玩家"换楼"（开新聊天）后，将旧楼层的记忆标记为无特定楼层来源
  */
 export async function refreshAllSourceFloors(chatId) {
-    const [npc, items, milestones, memories] = await Promise.all([
-        getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId),
+    const [npc, items, milestones, memories, realtime] = await Promise.all([
+        getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId), getRealtimeMemories(chatId),
     ]);
-    const stats = { npc: 0, items: 0, milestones: 0, timeline: 0, memories: 0 };
-    for (const e of npc) { if (typeof e.sourceFloor === 'number' && e.sourceFloor >= 0) { e.sourceFloor = -1; stats.npc++; } }
-    for (const e of items) { if (typeof e.sourceFloor === 'number' && e.sourceFloor >= 0) { e.sourceFloor = -1; stats.items++; } }
-    for (const e of milestones) { if (typeof e.sourceFloor === 'number' && e.sourceFloor >= 0) { e.sourceFloor = -1; stats.milestones++; stats.timeline++; } }
-    for (const e of memories) { if (typeof e.sourceFloor === 'number' && e.sourceFloor >= 0) { e.sourceFloor = -1; stats.memories++; } }
+    const stats = { npc: 0, items: 0, milestones: 0, timeline: 0, memories: 0, realtime: 0 };
+    for (const [key, list] of Object.entries({ npc, items, milestones, memories, realtime })) {
+        for (const e of list) {
+            const fields = key === 'realtime' ? ['sourceFloor', 'createdFloor', 'lastSeenFloor'] : ['sourceFloor'];
+            if (!fields.some(field => typeof e[field] === 'number' && e[field] >= 0)) continue;
+            for (const field of fields) e[field] = -1;
+            if (key === 'realtime') {
+                e.sourceExchange = ''; e.sourceMessageHash = '';
+                e.updatedAt = Date.now();
+            }
+            stats[key]++;
+        }
+    }
+    stats.timeline = stats.milestones; // 兼容旧调用方，避免重复计数
     await Promise.all([
-        saveCollection('npc', chatId, npc),
-        saveCollection('item', chatId, items),
-        saveCollection('milestone', chatId, milestones),
-        saveCollection('mem', chatId, memories),
+        saveCollection('npc', chatId, npc), saveCollection('item', chatId, items),
+        saveCollection('milestone', chatId, milestones), saveCollection('mem', chatId, memories),
+        saveCollection('realtime', chatId, realtime),
     ]);
+    const { rebaseRealtimeSettlementFloors } = await import('./realtime-memory.js');
+    await rebaseRealtimeSettlementFloors(chatId);
+    scheduleAutoBackup(chatId);
     return stats;
 }
 
@@ -2052,7 +2078,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
         realtime,
     };
     const backup = {
-        version: '9.4.4',
+        version: '9.4.5',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2376,7 +2402,9 @@ async function restoreRealtimeBackup(chatId, entries, idMaps = {}) {
 
     const existing = await getRealtimeMemories(chatId);
     const existingIds = new Set(existing.map(e => String(e.id)));
-    const existingKeys = new Set(existing.map(e => `${normalizeIdentityText(e.text)}|${e.sceneKey || ''}`));
+    const realtimeRestoreKey = e => `${normalizeIdentityText(e.text)}|${e.sceneKey || ''}`
+        + (e.kind === 'schedule' ? `|schedule:${e.dayKey || e.dayLabel || ''}` : '');
+    const existingKeys = new Set(existing.map(realtimeRestoreKey));
     const pillarMaps = { mem: idMaps.mem, npc: idMaps.npc, item: idMaps.item, milestone: idMaps.milestone };
 
     const next = existing.slice();
@@ -2386,7 +2414,7 @@ async function restoreRealtimeBackup(chatId, entries, idMaps = {}) {
         if (!raw || typeof raw !== 'object') { skipped++; continue; }
         const text = String(raw.text || '').trim();
         if (!text) { skipped++; continue; }
-        const key = `${normalizeIdentityText(text)}|${raw.sceneKey || ''}`;
+        const key = realtimeRestoreKey({ ...raw, text });
         if (existingKeys.has(key)) { skipped++; continue; }
 
         const entry = normalizeRealtimeEntry({ ...raw, text });
@@ -2840,7 +2868,7 @@ export async function exportMemories(chatId) {
     await normalizeDataEmbeddingsToRefs(chatId, data);
     const vectorPack = await buildVectorPack(chatId, data);
     return JSON.stringify({
-        version: '9.4.4',
+        version: '9.4.5',
         schema: 'bb-memory-vector-ref-v1',
         exportedAt: Date.now(),
         data: stripRuntimeEmbeddings(data),

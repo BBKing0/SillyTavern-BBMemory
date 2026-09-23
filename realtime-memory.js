@@ -1,11 +1,11 @@
 /**
- * realtime-memory.js — BB-Memory v9.4.4 实时记忆（第五柱）
+ * realtime-memory.js — BB-Memory v9.4.5 实时记忆（第五柱）
  *
  * 解决的问题：检索完全由最后一条用户消息驱动，query 里没有「车」字，
  * 「坐公交车来电影院」这条记忆就永远进不了注入，后文于是写出「开车回家」。
  * 这是检索机制的结构性盲区，调阈值无解。
  *
- * 做法：抓一层「当下有效的具体细节」，**不做 embedding、不参与检索、无条件注入**。
+ * 做法：抓「影响后文的逻辑事实」及按日行动轨迹，不做 embedding、不参与检索。
  * 正是这个「绕过检索」的性质解决了长线逻辑断裂。
  *
  * 生命周期：抓取 → 无条件注入 → 结算（场景切换 / TTL / 容量 / 手动）。
@@ -32,6 +32,7 @@ import {
     fillPromptTemplate,
     getPromptTemplate,
 } from './prompt-templates.js';
+import { buildSchedulePrompt, planScheduleWrites } from './realtime-schedule.js';
 import { storyTimeDateSignature, normalizeIdentityText } from './dedup-engine.js';
 import {
     normalizeRealtimeKind,
@@ -39,11 +40,11 @@ import {
     getRealtimeKindSlotLimits,
 } from './memory-types.js';
 
-/** 单条细节的长度上限。提示词要求 20 字以内，这里留一倍余量做硬截断。 */
+/** 普通逻辑细节的安全长度上限；日程有独立的可配置长度。 */
 const MAX_DETAIL_CHARS = 60;
 const MAX_SLOT_KEY_CHARS = 40;
-/** 送进抓取提示词的回复长度上限。轻量调用，不需要整层原文。 */
-const MAX_AI_MESSAGE_CHARS = 1800;
+/** 默认提取原文长度；设置可调，0表示全文。 */
+const MAX_AI_MESSAGE_CHARS = 12000;
 
 // ═══════════════════════════════════════════════════════════
 //  场景标识（纯函数）
@@ -79,7 +80,7 @@ export function isSceneChanged(prevKey, nextKey) {
  */
 export function deriveSceneState(entries) {
     const pool = (Array.isArray(entries) ? entries : []).filter(e =>
-        e && e.settleState !== 'settled');
+        e && e.kind !== 'schedule' && e.settleState !== 'settled');
     if (!pool.length) return { sceneKey: '', location: '', storyTime: '', floors: [] };
     const newest = pool.reduce((best, entry) => {
         const a = Number(entry.lastSeenFloor ?? -1);
@@ -252,7 +253,8 @@ function pickApi(settings, override) {
 export function buildRealtimePrompt(aiMessage, options = {}) {
     const settings = options.settings || {};
     const template = getPromptTemplate(settings, 'realtime.detailExtract', DEFAULT_REALTIME_DETAIL_EXTRACT_PROMPT);
-    const body = String(aiMessage || '').slice(0, MAX_AI_MESSAGE_CHARS);
+    const limit = clampInt(settings.realtimeExtractCharLimit, 0, 200000, MAX_AI_MESSAGE_CHARS);
+    const body = limit ? String(aiMessage || '').slice(0, limit) : String(aiMessage || '');
     const base = fillPromptTemplate(template, {
         maxDetails: clampInt(settings.realtimeMaxDetailsPerFloor, 1, 50, 5),
         location: options.location || '（未知）',
@@ -260,8 +262,8 @@ export function buildRealtimePrompt(aiMessage, options = {}) {
         aiMessage: body,
     });
     const limits = getRealtimeKindSlotLimits(settings);
-    const enabled = Object.keys(REALTIME_KINDS).filter(kind => limits[kind] > 0);
-    const disabled = Object.keys(REALTIME_KINDS).filter(kind => limits[kind] <= 0);
+    const enabled = Object.keys(REALTIME_KINDS).filter(kind => kind !== 'schedule' && limits[kind] > 0);
+    const disabled = Object.keys(REALTIME_KINDS).filter(kind => kind !== 'schedule' && limits[kind] <= 0);
     const existing = (Array.isArray(options.existingEntries) ? options.existingEntries : [])
         .filter(entry => entry && entry.settleState !== 'settled' && !entry.promotedTo)
         .slice()
@@ -286,11 +288,13 @@ export function buildRealtimePrompt(aiMessage, options = {}) {
     return `${base}\n\n## 系统追加：本次分类槽位硬约束\n${rules}`
         + (disabled.length ? `\n- 已关闭分类（不得输出）：${disabled.join('、')}` : '')
         + `\n\n## 系统追加：当前场景已存在的实时细节\n${existingText}`
-        + '\n同一事实不得新增副本；重复或变化时用 r 指向现有 id 并沿用其 s。只输出 JSON。';
+        + '\n同一事实不得新增副本；重复或变化时用 r 指向现有 id 并沿用其 s。只输出 JSON。'
+        + '\n内容筛选：仅记原文明示且影响后续因果/行动约束/可追问线索的事实。不要环境渲染、表情变化、普通外貌衣着。保留“A带着历史书”，去掉“指尖泛白”；保留“A裙子上有泥点”，不要“A穿白裙”。不推测书的用途、泥点来历或职业身份。'
+        + buildSchedulePrompt(options.scheduleEntries || [], settings);
 }
 
 function entryBelongsToScene(entry, sceneKey) {
-    if (!entry || entry.settleState === 'settled' || entry.promotedTo) return false;
+    if (!entry || entry.kind === 'schedule' || entry.settleState === 'settled' || entry.promotedTo) return false;
     const target = String(sceneKey || '').trim();
     const own = String(entry.sceneKey || '').trim();
     // 场景信息尚未回填时宁可参与当前槽位去重，避免并行抓取先写出重复项。
@@ -475,7 +479,8 @@ export async function extractRealtimeDetails(chatId, exchange, options = {}) {
         sceneFloors: scene.floors,
         floor,
     });
-    if (!gate.extract) { result.skipped = true; result.reason = gate.reason; return result; }
+    const scheduleEnabled = settings.realtimeEnabled && settings.realtimeExtractEnabled && settings.realtimeScheduleEnabled !== false;
+    if (!gate.extract && !scheduleEnabled) { result.skipped = true; result.reason = gate.reason; return result; }
 
     let api;
     try {
@@ -492,6 +497,7 @@ export async function extractRealtimeDetails(chatId, exchange, options = {}) {
         location: scene.location,
         storyTime: scene.storyTime,
         existingEntries: sceneEntries,
+        scheduleEntries: existing,
     });
 
     const startedAt = Date.now();
@@ -506,6 +512,10 @@ export async function extractRealtimeDetails(chatId, exchange, options = {}) {
     }
     result.durationMs = Date.now() - startedAt;
 
+    if (!extractJsonObject(rawText)) {
+        result.error = '实时细节/日程返回的 JSON 无法解析，请重新提取';
+        return result;
+    }
     const parsed = parseRealtimeDetails(rawText, {
         maxDetails: settings.realtimeMaxDetailsPerFloor,
         allowedKinds: Object.entries(getRealtimeKindSlotLimits(settings))
@@ -515,7 +525,12 @@ export async function extractRealtimeDetails(chatId, exchange, options = {}) {
     result.rejected = parsed.rejected;
     result.sceneKey = scene.sceneKey;
 
-    if (!parsed.details.length) {
+    if (!gate.extract) parsed.details = [];
+    const schedulePlan = planScheduleWrites(existing, extractJsonObject(rawText)?.schedule, {
+        settings, chatId, floor, sourceExchange: exchange.hash || '',
+    });
+    result.rejected.push(...schedulePlan.rejected.map(reason => ({ reason, raw: '' })));
+    if (!parsed.details.length && !schedulePlan.adds.length) {
         result.ok = true;
         result.reason = parsed.rejected.length ? 'all-rejected' : 'no-details';
         if (settings.debugLogging) {
@@ -534,7 +549,8 @@ export async function extractRealtimeDetails(chatId, exchange, options = {}) {
             floor,
             sourceExchange: exchange.hash || '',
         });
-        result.saved = write.added;
+        const scheduleAdded = schedulePlan.adds.length ? await addRealtimeMemories(chatId, schedulePlan.adds) : [];
+        result.saved = [...write.added, ...scheduleAdded];
         result.updated = write.updated;
         result.retired = write.retired;
         result.rejected.push(...write.rejected.map(item => ({ reason: item.reason, raw: item.detail?.text || '' })));
@@ -571,7 +587,7 @@ export async function updateSceneKeyForFloor(chatId, floor, sceneInfo = {}) {
     let entries = [];
     try { entries = await getRealtimeMemories(chatId); } catch { return { updated: 0, sceneKey }; }
     const targets = entries.filter(entry =>
-        Number(entry.createdFloor) === targetFloor
+        entry.kind !== 'schedule' && Number(entry.createdFloor) === targetFloor
         && entry.settleState !== 'settled'
         && String(entry.sceneKey || '') !== sceneKey);
     if (!targets.length) return { updated: 0, sceneKey };
@@ -664,7 +680,7 @@ function cloneForSnapshot(value) {
  */
 export function planSettlement(entries, currentFloor, settings = {}) {
     const all = Array.isArray(entries) ? entries.filter(Boolean) : [];
-    const pool = all.filter(e => e.settleState === 'active');
+    const pool = all.filter(e => e.kind !== 'schedule' && e.settleState === 'active');
     if (!pool.length) return { marks: [], byReason: {}, activeCount: 0 };
 
     const floor = Number(currentFloor);
@@ -714,7 +730,7 @@ export function planSettlement(entries, currentFloor, settings = {}) {
  */
 export function planSettledPrune(entries, currentFloor, settings = {}) {
     const settled = (Array.isArray(entries) ? entries : [])
-        .filter(e => e && e.settleState === 'settled');
+        .filter(e => e && e.kind !== 'schedule' && e.settleState === 'settled');
     const retention = clampInt(settings.realtimeSettledRetentionFloors, 0, 500, 5);
     if (retention === 0) return settled.map(entry => entry.id);
     let floor = Number(currentFloor);
@@ -785,7 +801,7 @@ export async function checkSettlement(chatId, currentFloor, options = {}) {
 export async function markAllPendingSettle(chatId) {
     if (!chatId) return 0;
     const entries = await getRealtimeMemories(chatId);
-    const ids = entries.filter(e => e.settleState === 'active').map(e => e.id);
+    const ids = entries.filter(e => e.kind !== 'schedule' && e.settleState === 'active').map(e => e.id);
     if (!ids.length) return 0;
     return updateRealtimeMemories(chatId, ids, { settleState: 'pending_settle', settleReason: 'manual' });
 }
@@ -964,6 +980,17 @@ async function writeSettleUndoStack(chatId, stack) {
     if (!lf || !chatId) return false;
     await lf.setItem(SETTLE_UNDO_KEY_PREFIX + chatId, stack);
     return true;
+}
+
+/** 换楼同步刷新撤销快照，防止随后撤销结算又带回三百多层。 */
+export async function rebaseRealtimeSettlementFloors(chatId) {
+    const stack = await readSettleUndoStack(chatId);
+    if (!stack.entries.length) return;
+    for (const record of stack.entries) for (const entry of record.before || []) {
+        entry.sourceFloor = -1; entry.createdFloor = -1; entry.lastSeenFloor = -1;
+        entry.sourceExchange = ''; entry.sourceMessageHash = '';
+    }
+    await writeSettleUndoStack(chatId, stack);
 }
 
 /**
@@ -1248,7 +1275,7 @@ export async function settleRealtimeMemories(chatId, options = {}) {
         else await checkSettlement(chatId, options.currentFloor, { settings });
 
         const entries = await getRealtimeMemories(chatId);
-        const pending = entries.filter(e => e.settleState === 'pending_settle');
+        const pending = entries.filter(e => e.kind !== 'schedule' && e.settleState === 'pending_settle');
         report.pendingCount = pending.length;
         if (!pending.length) {
             report.ok = true;
@@ -1627,14 +1654,14 @@ export function __selfTestRealtime() {
     add('提示词带入 maxDetails', prompt.includes('最多 4 条'));
     add('提示词带入地点与时间', prompt.includes('电影院') && prompt.includes('2026年4月9日下午'));
     add('提示词带入本层回复', prompt.includes('A和B坐公交车来到电影院'));
-    add('提示词明确排除里程碑级内容', prompt.includes('里程碑级内容'));
+    add('提示词避免重复完整里程碑，但允许轻量物证线索', prompt.includes('不重复主提取的完整里程碑') && prompt.includes('轻量线索仍可记'));
     add('自定义模板覆盖生效且仍追加系统槽位约束', (() => {
         const custom = buildRealtimePrompt('x', { settings: { customPromptTemplates: { 'realtime.detailExtract': '自定义：{{aiMessage}}' } } });
         return custom.startsWith('自定义：x') && custom.includes('本次分类槽位硬约束');
     })());
-    add('超长回复被截断',
-        buildRealtimePrompt('字'.repeat(5000), { settings: {} }).length < 5000 + 2000,
-        String(buildRealtimePrompt('字'.repeat(5000), { settings: {} }).length));
+    add('提取字符上限可调整，0读取全文',
+        !buildRealtimePrompt('字'.repeat(5000) + '末尾标记', { settings: { realtimeExtractCharLimit: 2000 } }).includes('末尾标记')
+        && buildRealtimePrompt('字'.repeat(5000) + '末尾标记', { settings: { realtimeExtractCharLimit: 0 } }).includes('末尾标记'));
 
     // ── 主提取结果里取场景信息 ──
     const picked = pickSceneInfoFromExtraction({
