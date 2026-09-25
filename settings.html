@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.4.5</b>
+            <b>BB-Memory v9.4.6</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -524,6 +524,16 @@
                         <label>日程独立 token 上限<input id="bb_realtime_schedule_token_cap" type="number" class="bb-input" min="1" max="8000" value="600" /></label>
                     </div>
                     <div class="bb-mem-sidebar-section">
+                        <label>记忆管家 · 全库核查与维护建议</label>
+                        <label>每次调查最多轮数<input id="bb_agent_max_rounds" type="number" class="bb-input" min="1" max="30" value="8" /></label>
+                        <label>搜索/维护每页条数<input id="bb_agent_page_size" type="number" class="bb-input" min="1" max="100" value="20" /></label>
+                        <label>单次原文读取字符数<input id="bb_agent_detail_chars" type="number" class="bb-input" min="1000" max="50000" value="12000" /></label>
+                        <label>携带最近对话消息数<input id="bb_agent_history_messages" type="number" class="bb-input" min="0" max="100" value="12" /></label>
+                        <label>每次 API 请求超时（秒）<input id="bb_agent_timeout_seconds" type="number" class="bb-input" min="10" max="600" value="90" /></label>
+                        <label>每次 API 输出 token 上限<input id="bb_agent_max_tokens" type="number" class="bb-input" min="256" max="16000" value="3000" /></label>
+                        <small class="bb-mem-hint">使用副 API 调查当前聊天全库，包含归档和暂停分类。建议显示原值及改动，选择执行后才写入。大库可调高轮数或继续追问；重置只清空对话与待执行建议。</small>
+                    </div>
+                    <div class="bb-mem-sidebar-section">
                         <label>记忆纠错（记忆管理 → 纠错）</label>
                         <label class="checkbox_label"><input id="bb_correction_fuzzy_enabled" type="checkbox" /><span>中文片段宽匹配（减少漏检）</span></label>
                         <label class="checkbox_label"><input id="bb_correction_related_enabled" type="checkbox" /><span>扩展引用关联条目</span></label>
@@ -902,7 +912,7 @@
                         <div class="bb-experimental-card-head">
                             <i class="fa-solid fa-robot"></i>
                             <div>
-                                <strong>记忆管家 Agent（测试版）</strong>
+                                <strong>记忆管家</strong>
                                 <small>用自然语言检索、分类和管理记忆</small>
                             </div>
                         </div>
@@ -910,7 +920,7 @@
                             <i class="fa-solid fa-triangle-exclamation"></i>
                             实验功能，可能执行写操作；建议先备份当前聊天记忆，并在操作后复核结果。
                         </div>
-                        <button id="bb_agent_btn" class="menu_button bb-experimental-action" title="打开记忆管家 Agent 测试版——实验功能，建议备份后使用">
+                        <button id="bb_agent_btn" class="menu_button bb-experimental-action" title="打开记忆管家——全库核查、修改建议与维护建议">
                             <i class="fa-solid fa-flask"></i> 打开 Agent 测试版
                         </button>
                     </div>

@@ -14,6 +14,7 @@ import {
     getCalendarDescription,
 } from './memory-store.js';
 import { callCustomApi, callMainApi } from './auto-generator.js';
+import { filterIgnoredIssues } from './maintenance-state.js';
 import {
     DEFAULT_CONCRETE_TIME_RULE,
     DEFAULT_THREAD_SUMMARY_PROMPT,
@@ -99,7 +100,7 @@ export async function checkMaintenanceNeeded(chatId) {
         getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId),
     ]);
 
-    const issues = [];
+    let issues = [];
     const now = Date.now();
     const roundMs = 60 * 1000;
 
@@ -171,6 +172,8 @@ export async function checkMaintenanceNeeded(chatId) {
         });
     }
 
+    issues = issues.filter(issue => !issue.item.archived && !['archived', 'deleted'].includes(issue.item.status) && issue.item.memoryTier !== 'eternal' && !issue.item.keepPermanent);
+    issues = await filterIgnoredIssues(chatId, issues);
     cache.pending = issues;
     cache.lastCheck = now;
 
@@ -210,6 +213,10 @@ export async function performMaintenance(chatId, actions) {
         const updateFn = updateFns[collection];
         const removeFn = removeFns[collection];
         const loadFn = loadFns[collection];
+        if (!loadFn || !updateFn || !removeFn) throw new Error('未知维护集合');
+        const current = (await loadFn(chatId)).find(entry => entry.id === id);
+        if (!current) throw new Error('条目已不存在，请重新检查');
+        if (current.memoryTier === 'eternal' || current.keepPermanent) throw new Error('永恒或永久保留条目不参与维护');
 
         switch (op) {
             case 'keep':
@@ -261,6 +268,8 @@ export async function performMaintenance(chatId, actions) {
                 await updateItem(chatId, id, { memoryTier: 'eternal', keepPermanent: true, missStreak: 0, hitScore: 0, archived: false });
                 results.promoted++;
                 break;
+            default:
+                throw new Error('未知维护操作: ' + op);
         }
     }
 

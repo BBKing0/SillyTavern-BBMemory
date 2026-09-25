@@ -132,6 +132,13 @@ export const DEFAULT_SETTINGS = Object.freeze({
     correctionFuzzyEnabled: true,
     correctionRelatedEnabled: true,
     correctionPageSize: 30,
+    agentMaxRounds: 8,
+    agentPageSize: 20,
+    agentDetailChars: 12000,
+    agentHistoryMessages: 12,
+    agentTimeoutSeconds: 90,
+    agentMaxTokens: 3000,
+
     realtimeEnabled: true,
     realtimeExtractEnabled: true,
     realtimeExtractScope: 'always',    // 'always' 每层都抓 | 'first_n' 仅每个场景前 N 层
@@ -1662,7 +1669,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.4.5',
+        version: '9.4.6',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2078,7 +2085,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
         realtime,
     };
     const backup = {
-        version: '9.4.5',
+        version: '9.4.6',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2868,7 +2875,7 @@ export async function exportMemories(chatId) {
     await normalizeDataEmbeddingsToRefs(chatId, data);
     const vectorPack = await buildVectorPack(chatId, data);
     return JSON.stringify({
-        version: '9.4.5',
+        version: '9.4.6',
         schema: 'bb-memory-vector-ref-v1',
         exportedAt: Date.now(),
         data: stripRuntimeEmbeddings(data),

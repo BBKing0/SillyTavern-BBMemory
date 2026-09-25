@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.4.5 主入口
+ * index.js —— BB-Memory v9.4.6 主入口
  *
  * 五柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目 / 实时记忆。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -115,7 +115,7 @@ let chatSwitchSuppressDeletesUntil = 0;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.4.5';
+const SETTINGS_EXPORT_VERSION = '9.4.6';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
@@ -135,6 +135,7 @@ const SETTINGS_EXPORT_KEYS = [
     'diversityLimitPerTag', 'promotionCooldownRounds', 'hitScorePromoteThreshold', 'hitScoreEternalThreshold',
     'hitScoreDemoteThreshold', 'entityTierPromoteThreshold', 'entityTierDemoteThreshold',
     'maintenanceMode', 'maintenanceMemThreshold', 'maintenanceNpcThreshold', 'maintenanceItemThreshold', 'itemDustyMissRounds',
+    'agentMaxRounds', 'agentPageSize', 'agentDetailChars', 'agentHistoryMessages', 'agentTimeoutSeconds', 'agentMaxTokens',
     'healthCheckDuplicateThreshold', 'healthCheckIsolationThreshold', 'healthCheckStaleDays',
     'healthCheckStaleHitThreshold', 'healthCheckThreadStaleDays', 'healthCheckClueStaleDays',
     // v9.4.3 全库整理（旧 aiCurate* 保留导入兼容）
@@ -210,6 +211,12 @@ const SETTING_CONTROL_BINDINGS = {
     maxActiveTimeline: ['#bb_max_active_timeline', 'value'],
     chatMetadataBackupMaxKb: ['#bb_chat_metadata_backup_max_kb', 'value'],
     cloudVectorSlotMaxKb: ['#bb_cloud_vector_slot_max_kb', 'value'],
+    agentMaxRounds: ['#bb_agent_max_rounds', 'value'],
+    agentPageSize: ['#bb_agent_page_size', 'value'],
+    agentDetailChars: ['#bb_agent_detail_chars', 'value'],
+    agentHistoryMessages: ['#bb_agent_history_messages', 'value'],
+    agentTimeoutSeconds: ['#bb_agent_timeout_seconds', 'value'],
+    agentMaxTokens: ['#bb_agent_max_tokens', 'value'],
     healthCheckDuplicateThreshold: ['#bb_health_check_duplicate_threshold', 'value'],
     healthCheckIsolationThreshold: ['#bb_health_check_isolation_threshold', 'value'],
     healthCheckStaleDays: ['#bb_health_check_stale_days', 'value'],
@@ -2180,6 +2187,12 @@ function bindSidebarEvents() {
     bindInput('#bb_max_active_timeline', 'maxActiveTimeline', 'number');
     bindInput('#bb_chat_metadata_backup_max_kb', 'chatMetadataBackupMaxKb', 'number');
     bindInput('#bb_cloud_vector_slot_max_kb', 'cloudVectorSlotMaxKb', 'number');
+    bindInput('#bb_agent_max_rounds', 'agentMaxRounds', 'number');
+    bindInput('#bb_agent_page_size', 'agentPageSize', 'number');
+    bindInput('#bb_agent_detail_chars', 'agentDetailChars', 'number');
+    bindInput('#bb_agent_history_messages', 'agentHistoryMessages', 'number');
+    bindInput('#bb_agent_timeout_seconds', 'agentTimeoutSeconds', 'number');
+    bindInput('#bb_agent_max_tokens', 'agentMaxTokens', 'number');
     bindInput('#bb_health_check_duplicate_threshold', 'healthCheckDuplicateThreshold', 'number');
     bindInput('#bb_health_check_isolation_threshold', 'healthCheckIsolationThreshold', 'number');
     bindInput('#bb_health_check_stale_days', 'healthCheckStaleDays', 'number');
@@ -3430,6 +3443,7 @@ function showMaintenancePopup(chatId, result) {
         // 移除空的分类
         body.querySelectorAll('.bb-maint-category').forEach(cat => {
             if (!cat.querySelector('.bb-maint-issue-item')) cat.remove();
+            else cat.querySelector('.bb-maint-cat-count').textContent = cat.querySelectorAll('.bb-maint-issue-item').length + '条';
         });
         if (total === 0) {
             body.innerHTML = '<div style="text-align:center;padding:40px;opacity:0.6;">所有待维护项已处理</div>';
@@ -3540,6 +3554,36 @@ function showMaintenancePopup(chatId, result) {
             });
 
             cat.appendChild(catHeader);
+            const batchBar = document.createElement('div');
+            batchBar.className = 'bb-maint-batch-bar';
+            const batchActions = type === 'dusty_item'
+                ? [['ignore', '一键忽略'], ['archive_item', '一键归档'], ['item_to_vector', '一键升稳定']]
+                : [['ignore', '一键忽略'], ['keep', '一键保留'], ...(type === 'compressible_timeline' ? [['compress_timeline', '一键压缩']] : [])];
+            for (const [op, label] of batchActions) {
+                const button = document.createElement('button'); button.className = 'menu_button'; button.textContent = label;
+                button.addEventListener('click', async () => {
+                    if (overlay.dataset.busy === 'true') return;
+                    overlay.dataset.busy = 'true';
+                    const controls = [...overlay.querySelectorAll('button')].map(el => [el, el.disabled]);
+                    controls.forEach(([el]) => { el.disabled = true; });
+                    const progress = document.createElement('div'); progress.className = 'bb-maint-batch-result'; progress.setAttribute('role', 'status'); batchBar.after(progress);
+                    try {
+                        const { executeMaintenanceBatch } = await import('./maintenance-actions.js');
+                        const targets = issues.filter(issue => issue.type === type).map(issue => ({ ...issue, source: 'pending', id: issue.item.id, entry: issue.item }));
+                        const outcome = await executeMaintenanceBatch(chatId, targets, op, { onProgress: (done, total) => { progress.textContent = `${label}：${done}/${total}`; } });
+                        const done = new Set(outcome.succeeded.map(issue => `${issue.type}:${issue.collection}:${issue.id}`));
+                        for (let i = issues.length - 1; i >= 0; i--) if (done.has(`${issues[i].type}:${issues[i].collection}:${issues[i].item.id}`)) issues.splice(i, 1);
+                        renderPending(); refreshBadges();
+                        const message = `${label}：成功 ${outcome.succeeded.length}，失败 ${outcome.failed.length}${outcome.cancelled ? '，已停止' : ''}`;
+                        const feedback = document.createElement('div'); feedback.className = 'bb-maint-batch-result';
+                        feedback.textContent = [message, ...outcome.failed.map(f => `${f.issue.item?.name || f.issue.item?.title || f.issue.id}：${f.error}`)].join('\n');
+                        body.prepend(feedback); showToast(message, outcome.failed.length ? 'warning' : 'success');
+                    } catch (error) { progress.textContent = `处理失败：${error.message}`; showToast(error.message, 'error'); }
+                    finally { delete overlay.dataset.busy; controls.forEach(([el, disabled]) => { el.disabled = disabled; }); }
+                });
+                batchBar.appendChild(button);
+            }
+            cat.appendChild(batchBar);
             cat.appendChild(itemList);
             body.appendChild(cat);
         }
@@ -3558,7 +3602,7 @@ function showMaintenancePopup(chatId, result) {
                 body.innerHTML = '<div style="text-align:center;padding:40px;opacity:0.6;">所有待维护项已保留</div>';
                 // 同步更新 result.issues
                 const actionIds = new Set(actions.map(a => a.id));
-                result.issues = result.issues.filter(i => !actionIds.has(i.item.id));
+                for (let i = issues.length - 1; i >= 0; i--) if (actionIds.has(issues[i].item.id)) issues.splice(i, 1);
                 refreshBadges();
             }, { loadingText: '正在全部保留...', successText: '已全部保留' });
         });
@@ -3589,6 +3633,7 @@ function showMaintenancePopup(chatId, result) {
             // 展示详细操作内容
             const r = entry.results || {};
             const parts = [];
+            if (Array.isArray(r.details)) parts.push(...r.details);
             if (r.kept) parts.push(`保留 ${r.kept} 条`);
             if (r.deleted) parts.push(`删除 ${r.deleted} 条`);
             if (r.promoted) parts.push(`升级 ${r.promoted} 条`);
@@ -4544,7 +4589,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.4.5 初始化开始...');
+    console.log('[BB-Memory] v9.4.6 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -4740,7 +4785,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.4.5 初始化完成');
+    console.log('[BB-Memory] v9.4.6 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆

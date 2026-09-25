@@ -23,6 +23,7 @@ import {
     getPromptTemplate,
 } from './prompt-templates.js';
 import { hydrateCollectionEmbeddings, hydrateMapEmbeddings } from './vector-store.js';
+import { filterIgnoredIssues, resetIgnoredIssues } from './maintenance-state.js';
 
 // ═══════════════════════════════════════════════════════════
 //  工具函数
@@ -590,7 +591,10 @@ export async function runHealthCheck(chatId) {
     results.categories.embedding = {
         label: '语义向量完整性',
         icon: 'fa-solid fa-vector-square',
-        issues: detectMissingEmbeddings(memories, settings.embeddingEnabled),
+        issues: Object.entries({ mem: memories, npc: npcs, item: items, milestone: milestones, timeline,
+            map: Object.values(mapData?.locations || {}) }).flatMap(([collection, entries]) =>
+            detectMissingEmbeddings(entries.filter(e => !e.archived && e.memoryTier !== 'archived' && !['archived', 'deleted'].includes(e.status)), settings.embeddingEnabled)
+                .map(issue => ({ ...issue, collection, title: issue.entry.name || issue.entry.title || issue.entry.event || issue.id }))),
     };
 
     // Category 3: Near duplicates (only if embedding enabled)
@@ -668,6 +672,11 @@ export async function runHealthCheck(chatId) {
         icon: 'fa-solid fa-map',
         issues: detectMapIsolation(mapData, items),
     };
+
+    for (const cat of Object.values(results.categories)) cat.issues = await filterIgnoredIssues(chatId, cat.issues.filter(issue => {
+        const entry = issue.entry;
+        return !entry?.archived && entry?.memoryTier !== 'archived' && !['archived', 'deleted'].includes(entry?.status);
+    }));
 
     // Compute summary
     let totalIssues = 0;
@@ -872,6 +881,14 @@ export function buildHealthCheckPanel(chatId, result, callbacks) {
     banner.querySelector('.bb-health-rerun-btn').addEventListener('click', () => {
         if (callbacks.onRefresh) callbacks.onRefresh();
     });
+    const reset = document.createElement('button');
+    reset.className = 'menu_button';
+    reset.textContent = '恢复已忽略问题';
+    reset.addEventListener('click', withFeedback(reset, async () => {
+        await resetIgnoredIssues(chatId);
+        await callbacks.onRefresh?.();
+    }, { successText: '已恢复忽略项并重新检查' }));
+    container.appendChild(reset);
 
     // --- Categories ---
     const categoriesWithIssues = Object.entries(result.categories)
@@ -928,9 +945,57 @@ function buildCategorySection(catKey, cat, chatId, callbacks) {
     });
 
     section.appendChild(header);
+    // 按具体问题类型分组；每组仅提供所有条目都支持的批量动作。
+    const groups = Map.groupBy ? Map.groupBy(cat.issues, issue => issue.type) : cat.issues.reduce((map, issue) => {
+        if (!map.has(issue.type)) map.set(issue.type, []);
+        map.get(issue.type).push(issue); return map;
+    }, new Map());
+    for (const group of groups.values()) {
+        const bar = document.createElement('div');
+        bar.className = 'bb-maint-batch-bar';
+        const label = document.createElement('span');
+        label.textContent = `${String(group[0].detail || group[0].type).replace(/（.*$/, '').slice(0, 36)} · ${group.length} 条`;
+        bar.appendChild(label);
+        const actions = [{ op: 'ignore', label: '一键忽略' }];
+        if (['missing_embedding', 'embedding_isolated'].includes(group[0].type)) actions.unshift({ op: 're_embed', label: '一键重新生成向量' });
+        for (const action of actions) {
+            const btn = document.createElement('button');
+            btn.className = 'menu_button'; btn.textContent = action.label;
+            btn.addEventListener('click', async () => {
+                if (containerBusy(section)) return;
+                const root = section.parentElement;
+                const statusHost = root.parentElement;
+                const disabled = [...root.querySelectorAll('button')].map(b => [b, b.disabled]);
+                disabled.forEach(([b]) => { b.disabled = true; });
+                root.dataset.busy = 'true';
+                const progress = document.createElement('div');
+                progress.className = 'bb-maint-batch-result'; progress.setAttribute('role', 'status'); bar.after(progress);
+                try {
+                    const { executeMaintenanceBatch } = await import('./maintenance-actions.js');
+                    const outcome = await executeMaintenanceBatch(chatId, group, action.op, {
+                        onProgress: (done, total) => { progress.textContent = `${action.label}：${done}/${total}`; },
+                    });
+                    const message = `${action.label}：成功 ${outcome.succeeded.length}，失败 ${outcome.failed.length}${outcome.cancelled ? '，已停止' : ''}`;
+                    await callbacks.onRefresh?.();
+                    if (typeof toastr !== 'undefined') toastr[outcome.failed.length ? 'warning' : 'success'](message);
+                    const status = document.createElement('div'); status.className = 'bb-maint-batch-result'; status.setAttribute('role', 'status');
+                    status.textContent = [message, ...outcome.failed.map(f => `${f.issue.title || f.issue.id}：${f.error}`)].join('\n');
+                    // onRefresh 会替换体检容器，反馈挂到仍存活的面板 body 上。
+                    (root.isConnected ? root : statusHost)?.prepend(status);
+                } catch (error) {
+                    progress.textContent = `处理失败：${error.message}`;
+                    if (typeof toastr !== 'undefined') toastr.error(error.message);
+                } finally { delete root.dataset.busy; disabled.forEach(([b, value]) => { b.disabled = value; }); }
+            });
+            bar.appendChild(btn);
+        }
+        section.appendChild(bar);
+    }
     section.appendChild(itemsDiv);
     return section;
 }
+
+function containerBusy(section) { return section.parentElement?.dataset.busy === 'true'; }
 
 function buildIssueRow(issue, chatId, callbacks) {
     const item = document.createElement('div');
@@ -955,7 +1020,15 @@ function buildIssueRow(issue, chatId, callbacks) {
     const buttons = getActionButtonsForIssue(issue);
     for (const btnDef of buttons) {
         const btn = createActionButton(btnDef.label, btnDef.op, btnDef.color, async (op) => {
-            await handleHealthAction(op, issue, chatId, callbacks, item);
+            await withFeedback(btn, async () => {
+                if (['ignore', 're_embed'].includes(op)) {
+                    const { executeMaintenanceBatch } = await import('./maintenance-actions.js');
+                    const outcome = await executeMaintenanceBatch(chatId, [issue], op);
+                    if (outcome.failed.length) throw new Error(outcome.failed[0].error);
+                    if (outcome.cancelled) throw new Error('聊天已切换，操作已停止');
+                    await callbacks.onRefresh?.();
+                } else await handleHealthAction(op, issue, chatId, callbacks, item);
+            }, { successText: `${btnDef.label}完成` })();
         });
         actionDiv.appendChild(btn);
     }
@@ -1008,40 +1081,6 @@ async function handleHealthAction(op, issue, chatId, callbacks, rowEl) {
                 }
             }
             itemEl.remove();
-            break;
-        }
-        case 'ignore': {
-            // v8.2.1 楼层断层忽略 → 标记楼层为已跳过
-            if (issue.type === 'floor_gap' && typeof issue.floor === 'number') {
-                const ctx = getContext();
-                const chat = ctx?.chat;
-                if (chat && chat[issue.floor]) {
-                    chat[issue.floor]._bbmem_skipped = true;
-                    chat[issue.floor]._bbmem_pendingExtraction = false;
-                }
-            }
-            itemEl.remove();
-            break;
-        }
-        case 're_embed': {
-            try {
-                const { callEmbeddingApi } = await import('./auto-generator.js');
-                const mem = issue.entry;
-                const text = (mem.summary || mem.content || '').slice(0, 200);
-                if (text) {
-                    const embedding = await callEmbeddingApi(text);
-                    if (embedding && Array.isArray(embedding) && embedding.length > 0) {
-                        await updateMemory(chatId, issue.id, { embedding });
-                        itemEl.remove();
-                        notifyCallbacks(callbacks, `已生成向量: ${(issue.title || issue.id).slice(0, 30)}`);
-                    } else {
-                        if (typeof toastr !== 'undefined') toastr.warning('向量生成失败，请检查 Embedding API 设置');
-                    }
-                }
-            } catch (e) {
-                console.warn('[BB-HealthCheck] 向量生成失败:', e);
-                if (typeof toastr !== 'undefined') toastr.error('向量生成失败: ' + e.message);
-            }
             break;
         }
         case 'ai_tag': {

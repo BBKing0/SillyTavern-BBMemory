@@ -6201,6 +6201,39 @@
     .bb-rescue-slot-count { white-space: normal; }
     .bb-rescue-ns-sum { margin-left: 0; }
 }
+/* v9.4.6 管家建议和批量维护 */
+.bb-agent-controls, .bb-maint-batch-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .45rem;
+}
+.bb-maint-batch-bar { padding: .5rem 0; }
+.bb-maint-batch-bar > span { flex: 1 1 12em; font-size: .8em; }
+.bb-maint-batch-result { white-space: pre-wrap; overflow-wrap: anywhere; padding: .6rem; font-size: .85em; }
+.bb-agent-msg { white-space: pre-wrap; flex-shrink: 0; }
+.bb-agent-body { min-height: 6em; }
+.bb-agent-proposals:empty { display: none; }
+.bb-agent-proposals { overflow: auto; max-height: 32vh; flex: 0 1 auto; padding: .7rem 1rem; border-top: 1px solid var(--SmartThemeBorderColor, #555); }
+.bb-agent-proposal { margin-top: .5rem; padding: .5rem; border: 1px solid var(--SmartThemeBorderColor, #555); border-radius: .4rem; overflow-wrap: anywhere; }
+.bb-agent-proposal summary { cursor: pointer; display: flex; align-items: flex-start; gap: .5rem; }
+.bb-agent-proposal pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: .85em; }
+.bb-agent-status { font-size: .8em; padding: .3rem 0; min-height: 1.2em; }
+.bb-agent-footer, .bb-agent-header { flex-shrink: 0; }
+.bb-agent-input-row textarea { min-width: 0; }
+.bb-health-item { flex-wrap: wrap; }
+@media (max-width: 480px) {
+    .bb-agent-panel { height: 95dvh; max-height: 95dvh; }
+    .bb-agent-header { flex-wrap: wrap; gap: .5rem; padding: .65rem; }
+    .bb-agent-body { padding: .6rem; }
+    .bb-agent-footer { padding: .6rem; }
+    .bb-agent-proposals { max-height: 28dvh; padding: .6rem; }
+    .bb-agent-controls button, .bb-maint-batch-bar button { font-size: .8em; }
+    .bb-agent-msg-agent, .bb-agent-msg-user { margin: 0; }
+    .bb-maint-issue-item { flex-wrap: wrap; }
+    .bb-maint-issue-item > div:last-child { flex-wrap: wrap; max-width: 100%; }
+}
+
 /* v9.4.5 纠错与按日日程 */
 .bb-correction-panel { display:flex; flex-direction:column; min-height:0; width:100%; height:100%; padding:0.8em; box-sizing:border-box; gap:0.65em; }
 .bb-correction-controls { flex:0 0 auto; }
