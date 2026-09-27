@@ -1,7 +1,7 @@
 /** v9.4.6：管家与维护面板共用的可核验批量执行器。 */
 import * as store from './memory-store.js';
 import { saveCorrection } from './memory-correction.js';
-import { runHealthCheck } from './memory-health-check.js';
+import { runHealthCheck, getActionButtonsForIssue, executeHealthMaintenanceAction } from './memory-health-check.js';
 import { checkMaintenanceNeeded, performMaintenance, addMaintenanceResolved } from './memory-maintainer.js';
 import { maintenanceIssueKey, maintenanceFingerprint, ignoreMaintenanceIssues } from './maintenance-state.js';
 import { callEmbeddingApi } from './auto-generator.js';
@@ -9,17 +9,21 @@ import { buildEmbeddingText } from './vector-store.js';
 import { getLocations, updateLocation } from './map-store.js';
 
 export const MAINTENANCE_OP_LABELS = { ignore: '忽略', re_embed: '重新生成向量', keep: '保留', promote: '升级', demote: '降级',
+    delete: '删除', item_to_core: '升为常驻', compress_thread: '生成压缩建议',
     archive: '归档', archive_item: '归档物品', item_to_vector: '升为稳定', item_to_eternal: '升为永恒',
     compress_timeline: '压缩里程碑', thread_fix_status: '修正时间线状态', thread_pause: '暂停时间线' };
 
+export function pendingMaintenanceButtons(type) {
+    const ops = type === 'dusty_item' ? ['archive_item', 'item_to_core', 'item_to_vector', 'item_to_eternal', 'ignore']
+        : type === 'long_timeline' ? ['compress_thread', 'ignore']
+        : ['keep', 'promote', 'demote', 'delete', ...(type === 'compressible_timeline' ? ['compress_timeline'] : []), 'ignore'];
+    return ops.map(op => ({ op, label: op === 'archive_item' ? '归档' : MAINTENANCE_OP_LABELS[op] }));
+}
 export function availableMaintenanceOps(issue) {
     if (issue.source === 'pending') {
-        if (issue.type === 'dusty_item') return ['ignore', 'archive_item', 'item_to_vector', 'item_to_eternal'];
-        return ['ignore', 'keep', 'promote', 'demote', 'archive', ...(issue.type === 'compressible_timeline' ? ['compress_timeline'] : [])];
+        return [...pendingMaintenanceButtons(issue.type).map(b => b.op), 'archive'];
     }
-    const types = { missing_embedding: ['re_embed'], embedding_isolated: ['re_embed'], stale: ['keep', 'demote', 'archive'],
-        thread_empty: ['archive'], thread_stale: ['thread_pause'], thread_status_mismatch: ['thread_fix_status'], map_isolated_location: ['archive'] };
-    return ['ignore', ...(types[issue.type] || [])];
+    return [...new Set([...getActionButtonsForIssue(issue).map(b => b.op), ...(['thread_empty', 'map_isolated_location', 'stale'].includes(issue.type) ? ['archive'] : [])])];
 }
 
 export async function getMaintenanceReport(chatId) {
@@ -59,6 +63,9 @@ export function buildArchivePatch(row, archived) {
 async function executeOne(chatId, issue, op, signal) {
     if (!availableMaintenanceOps(issue).includes(op)) throw new Error('此问题不支持该操作');
     if (op === 'ignore') { await ignoreMaintenanceIssues(chatId, [issue]); return; }
+    if (issue.source !== 'pending' && op !== 're_embed' && op !== 'archive') {
+        return executeHealthMaintenanceAction(op, issue, chatId);
+    }
     const pillar = collectionOf(issue);
     const row = await loadRow(chatId, pillar, issue.id);
     if (issue.entry || issue.item) {
@@ -101,6 +108,13 @@ export async function executeMaintenanceBatch(chatId, issues, op, { onProgress, 
     const result = { succeeded: [], failed: [], cancelled: false, total: unique.length };
     try {
         onProgress?.(0, unique.length, result);
+        if (op === 'compress_thread') {
+            const { reviewTimelineCompression } = await import('./timeline-compression.js');
+            const review = await reviewTimelineCompression(chatId, { ids: unique.map(i => i.id), signal, onProgress: message => onProgress?.(0, unique.length, { ...result, message }) });
+            result.succeeded = unique.filter(i => review.appliedIds.includes(i.id));
+            result.cancelled = result.succeeded.length < unique.length;
+            return result;
+        }
         if (op === 'ignore' && !signal?.aborted && String(globalThis.SillyTavern?.getContext?.()?.chatId) === String(chatId)) {
             // 同类忽略一次持久化，避免大量条目重复写整份记录和聊天元数据。
             try { await ignoreMaintenanceIssues(chatId, unique); result.succeeded.push(...unique); }

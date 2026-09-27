@@ -347,7 +347,7 @@ function buildEntryItemHTML(e) {
         const tier = ITEM_TIERS[e.itemTier];
         if (tier) statusBadges += `<span class="bb-item-badge" style="background:${pillarConfig.color}22;color:${pillarConfig.color};border:1px solid ${pillarConfig.color}44;">${tier.label}</span>`;
         const injectTier = e.keepPermanent || e.memoryTier === 'eternal' || e.memoryTier === 'core' || e.resident
-            ? { label: '永恒·常驻', color: '#ff9800' }
+            ? { label: e.memoryTier === 'core' && !e.keepPermanent ? '核心·常驻' : '永恒·常驻', color: '#ff9800' }
             : e.memoryTier === 'transient'
                 ? { label: '积灰', color: '#9e9e9e' }
                 : { label: '稳定·向量命中', color: '#4caf50' };
@@ -507,6 +507,7 @@ function buildEntryItemHTML(e) {
             <button class="menu_button bb-mem-btn-sm bb-mem-re-extract" data-floor="${e.sourceFloor}" title="重新提取该楼层记忆" style="font-size:0.75em;opacity:0.6;">
                 <i class="fa-solid fa-rotate"></i>
             </button>` : ''}
+            ${pillar === 'npc' ? `<button class="menu_button bb-npc-biography" data-id="${escapeAttr(e.id)}">人物小传${e.biography ? ' · 已保存' : ''}</button>` : ''}
             <button class="menu_button bb-mem-btn-sm bb-mem-edit" data-id="${escapeAttr(e.id)}" data-pillar="${escapeAttr(pillar)}" title="编辑" style="font-size:0.85em;">
                 <i class="fa-solid fa-pen"></i>
             </button>
@@ -1002,6 +1003,16 @@ function rebindItemActions(overlay, chatId) {
             showQuickEditForm(overlay, chatId, id, pillar);
         });
     });
+    overlay.querySelectorAll('.bb-npc-biography').forEach(btn => {
+        btn.addEventListener('click', async event => {
+            event.stopPropagation(); btn.disabled = true;
+            try {
+                const { openNpcBiography } = await import('./npc-biography.js');
+                await openNpcBiography(chatId, btn.dataset.id, () => rerenderManagerList(overlay, chatId));
+            } catch (error) { showToast(error.message, 'error'); }
+            finally { btn.disabled = false; }
+        });
+    });
 
     // 升降格按钮
     overlay.querySelectorAll('.bb-mem-tier-up').forEach(btn => {
@@ -1120,7 +1131,7 @@ function showQuickAddForm(overlay, chatId) {
                 <input class="bb-input bb-f-significance" placeholder="对剧情的重要性" style="width:100%;margin-bottom:8px;" />
                 <div style="display:flex;gap:8px;">
                     <div style="flex:1;"><label style="font-size:0.85em;">物品等级</label><select class="bb-input bb-f-itemTier" style="width:100%;margin-bottom:8px;">${Object.values(ITEM_TIERS).map(t => `<option value="${t.id}" ${t.id === 'consumable' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div>
-                    <div style="flex:1;"><label style="font-size:0.85em;">注入层级</label><select class="bb-input bb-f-memoryTier" style="width:100%;margin-bottom:8px;"><option value="transient">积灰</option><option value="stable" selected>稳定·向量命中</option><option value="eternal">永恒·常驻</option></select></div>
+                    <div style="flex:1;"><label style="font-size:0.85em;">注入层级</label><select class="bb-input bb-f-memoryTier" style="width:100%;margin-bottom:8px;"><option value="transient">积灰</option><option value="stable" selected>稳定·向量命中</option><option value="core">核心·常驻</option><option value="eternal">永恒·常驻</option></select></div>
                 </div>
                 <label style="font-size:0.85em;">标签</label>
                 <input class="bb-input bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
@@ -1279,7 +1290,7 @@ function buildPillarFormFields_inner(p) {
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">持有者</label><input class="bb-input bb-f-owner" placeholder="当前持有者" style="width:100%;margin-bottom:8px;" /></div><div style="flex:1;"><label style="font-size:0.85em;">状态</label><select class="bb-input bb-f-status" style="width:100%;margin-bottom:8px;"><option value="held">持有中</option><option value="used">已使用</option><option value="lost">已丢失</option><option value="destroyed">已销毁</option></select></div></div>
             <label style="font-size:0.85em;">所在地点</label><input class="bb-input bb-f-location" placeholder="物品所在的地图地点" list="bb-location-datalist" style="width:100%;margin-bottom:8px;" />
             <label style="font-size:0.85em;">重要性</label><input class="bb-input bb-f-significance" placeholder="对剧情的重要性" style="width:100%;margin-bottom:8px;" />
-            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">物品等级</label><select class="bb-input bb-f-itemTier" style="width:100%;margin-bottom:8px;">${Object.values(ITEM_TIERS).map(t => `<option value="${t.id}" ${t.id === 'consumable' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div><div style="flex:1;"><label style="font-size:0.85em;">注入层级</label><select class="bb-input bb-f-memoryTier" style="width:100%;margin-bottom:8px;"><option value="transient">积灰</option><option value="stable" selected>稳定·向量命中</option><option value="eternal">永恒·常驻</option></select></div></div>
+            <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">物品等级</label><select class="bb-input bb-f-itemTier" style="width:100%;margin-bottom:8px;">${Object.values(ITEM_TIERS).map(t => `<option value="${t.id}" ${t.id === 'consumable' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div><div style="flex:1;"><label style="font-size:0.85em;">注入层级</label><select class="bb-input bb-f-memoryTier" style="width:100%;margin-bottom:8px;"><option value="transient">积灰</option><option value="stable" selected>稳定·向量命中</option><option value="core">核心·常驻</option><option value="eternal">永恒·常驻</option></select></div></div>
             <label style="font-size:0.85em;">标签</label><input class="bb-input bb-f-tags" placeholder="逗号分隔" style="width:100%;margin-bottom:8px;" />`;
         case 'milestone':
         case 'timeline': return `
@@ -1478,7 +1489,7 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
                     if (prefill.itemTier) { const el = formOverlay.querySelector('.bb-f-itemTier'); if (el) el.value = prefill.itemTier; }
                     {
                         const el = formOverlay.querySelector('.bb-f-memoryTier');
-                        if (el) el.value = (prefill.keepPermanent || prefill.memoryTier === 'core' || prefill.memoryTier === 'eternal')
+                        if (el) el.value = prefill.memoryTier === 'core' && !prefill.keepPermanent ? 'core' : (prefill.keepPermanent || prefill.memoryTier === 'eternal')
                             ? 'eternal'
                             : (prefill.memoryTier === 'transient' ? 'transient' : 'stable');
                     }
@@ -2585,9 +2596,11 @@ async function renderThreadPanel(overlay, chatId) {
             btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 生成中...';
             try {
                 const { regenerateThreadSummary } = await import('./memory-maintainer.js');
-                await regenerateThreadSummary(chatId);
+                const result = await regenerateThreadSummary(chatId);
+                if (result.error) throw new Error(result.error);
                 await renderThreadPanel(overlay, chatId);
             } catch (e) {
+                showToast(`故事线生成失败：${e.message}`, 'error');
                 btn.disabled = false;
                 btn.innerHTML = '<i class="fa-solid fa-rotate"></i> 刷新时间线总结';
             }
@@ -2721,6 +2734,7 @@ async function renderThreadPanel(overlay, chatId) {
         try {
             const { regenerateThreadSummary } = await import('./memory-maintainer.js');
             const result = await regenerateThreadSummary(chatId);
+            if (result.error) throw new Error(result.error);
             if (result.threadCount > 0) {
                 await renderThreadPanel(overlay, chatId);
             } else {
@@ -2728,6 +2742,7 @@ async function renderThreadPanel(overlay, chatId) {
                 btn.innerHTML = '<i class="fa-solid fa-rotate"></i> 刷新总结';
             }
         } catch (e) {
+            showToast(`故事线生成失败：${e.message}`, 'error');
             btn.disabled = false;
             btn.innerHTML = '<i class="fa-solid fa-rotate"></i> 刷新总结';
         }

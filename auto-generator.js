@@ -694,13 +694,14 @@ const DEFAULT_API_JSON_SYSTEM_PROMPT = '你是一个JSON格式的记忆提取助
 export async function callMainApi(prompt, options = {}) {
     const { generateRaw } = SillyTavern.getContext();
     const formatHint = options.isMerged ? '纯JSON对象' : '纯JSON';
-    const systemPrompt = fillPromptTemplate(
+    const systemPrompt = options.systemPrompt ?? fillPromptTemplate(
         getPromptTemplate(getSettings(), 'extract.apiJsonSystem', DEFAULT_API_JSON_SYSTEM_PROMPT),
         { formatHint }
     );
     const result = await generateRaw({
         systemPrompt,
         prompt,
+        ...(options.maxTokens ? { responseLength: options.maxTokens } : {}),
     });
     return result;
 }
@@ -714,7 +715,7 @@ export async function callCustomApi(prompt, options = {}) {
     if (settings.debugLogging) console.log('[BB-Memory] 副API请求端点:', endpoint);
 
     const formatHint = options.isMerged ? '纯JSON对象' : '纯JSON';
-    const systemPrompt = fillPromptTemplate(
+    const systemPrompt = options.systemPrompt ?? fillPromptTemplate(
         getPromptTemplate(settings, 'extract.apiJsonSystem', DEFAULT_API_JSON_SYSTEM_PROMPT),
         { formatHint }
     );
@@ -732,6 +733,7 @@ export async function callCustomApi(prompt, options = {}) {
                 { role: 'user', content: prompt },
             ],
             temperature: 0.3,
+            ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
         }),
     }, 60000);
 

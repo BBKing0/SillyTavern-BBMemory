@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.4.6</b>
+            <b>BB-Memory v9.4.7</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -525,6 +525,21 @@
                     </div>
                     <div class="bb-mem-sidebar-section">
                         <label>记忆管家 · 全库核查与维护建议</label>
+                    <div class="bb-v947-options">
+                        <strong>地图精简 / 故事线压缩 / 整理分类</strong>
+                    <label>地图邻接展开跳数<input id="bb_map_neighbor_depth" type="number" class="bb-input" min="0" max="4" value="2" /></label>
+                    <label>地图起点最多分支数<input id="bb_map_root_neighbor_limit" type="number" class="bb-input" min="0" max="12" value="3" /></label>
+                    <label>地图后续每点最多分支数<input id="bb_map_branch_limit" type="number" class="bb-input" min="0" max="8" value="2" /></label>
+                    <label>地图起点描述字数<input id="bb_map_description_max_chars" type="number" class="bb-input" min="0" max="500" value="60" /></label>
+                    <label>故事线事件数提醒阈值<input id="bb_timeline_compression_entry_threshold" type="number" class="bb-input" min="2" max="1000" value="12" /></label>
+                    <label>故事线字符数提醒阈值<input id="bb_timeline_compression_char_threshold" type="number" class="bb-input" min="100" max="100000" value="1800" /></label>
+                    <label>压缩目标事件数<input id="bb_timeline_compression_target_entries" type="number" class="bb-input" min="1" max="100" value="6" /></label>
+                    <label>单条故事线压缩输入上限<input id="bb_timeline_compression_context_chars" type="number" class="bb-input" min="2000" max="500000" value="60000" /></label>
+                    <label>故事线压缩输出 token 上限<input id="bb_timeline_compression_max_tokens" type="number" class="bb-input" min="256" max="32000" value="3000" /></label>
+                    <label>全库整理最多问题类别（另加其他）<input id="bb_curation_category_limit" type="number" class="bb-input" min="1" max="5" value="5" /></label>
+                        <label>故事线压缩 API<select id="bb_timeline_compression_api" class="bb-input"><option value="main">主 API</option><option value="custom">副 API</option></select></label>
+                        <small>地图按图上最近的连接展开；同区域地点不自动扩展。故事线达到任一阈值会提醒，压缩建议需编辑确认后保存。人物小传在 NPC 条目中生成。</small>
+                    </div>
                         <label>每次调查最多轮数<input id="bb_agent_max_rounds" type="number" class="bb-input" min="1" max="30" value="8" /></label>
                         <label>搜索/维护每页条数<input id="bb_agent_page_size" type="number" class="bb-input" min="1" max="100" value="20" /></label>
                         <label>单次原文读取字符数<input id="bb_agent_detail_chars" type="number" class="bb-input" min="1000" max="50000" value="12000" /></label>

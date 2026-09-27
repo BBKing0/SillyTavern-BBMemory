@@ -15,6 +15,7 @@ import {
 } from './memory-store.js';
 import { callCustomApi, callMainApi } from './auto-generator.js';
 import { filterIgnoredIssues } from './maintenance-state.js';
+import { timelineTextSize } from './timeline-compression.js';
 import {
     DEFAULT_CONCRETE_TIME_RULE,
     DEFAULT_THREAD_SUMMARY_PROMPT,
@@ -96,8 +97,8 @@ export async function checkMaintenanceNeeded(chatId) {
     const cache = getCache(chatId);
     cleanResolved(cache);
 
-    const [npc, items, milestones, memories] = await Promise.all([
-        getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId),
+    const [npc, items, milestones, memories, threads] = await Promise.all([
+        getNpcProfiles(chatId), getItems(chatId), getMilestones(chatId), getMemories(chatId), getTimeline(chatId),
     ]);
 
     let issues = [];
@@ -172,6 +173,13 @@ export async function checkMaintenanceNeeded(chatId) {
         });
     }
 
+    for (const thread of threads) {
+        const chars = timelineTextSize(thread);
+        if (thread.entries?.length && ((thread.entries.length >= (settings.timelineCompressionEntryThreshold || 12)) || chars >= (settings.timelineCompressionCharThreshold || 1800))) {
+            issues.push({ type: 'long_timeline', collection: 'timeline', item: thread, severity: 'warning',
+                reason: `${thread.name} — ${thread.entries.length} 个事件 / ${chars} 字符，可生成精简故事骨架并确认修改` });
+        }
+    }
     issues = issues.filter(issue => !issue.item.archived && !['archived', 'deleted'].includes(issue.item.status) && issue.item.memoryTier !== 'eternal' && !issue.item.keepPermanent);
     issues = await filterIgnoredIssues(chatId, issues);
     cache.pending = issues;
@@ -264,6 +272,10 @@ export async function performMaintenance(chatId, actions) {
                 await updateItem(chatId, id, { memoryTier: 'stable', keepPermanent: false, missStreak: 0, hitScore: 0, archived: false });
                 results.promoted++;
                 break;
+            case 'item_to_core':
+                await updateItem(chatId, id, { memoryTier: 'core', keepPermanent: false, missStreak: 0, hitScore: 0, archived: false });
+                results.promoted++;
+                break;
             case 'item_to_eternal':
                 await updateItem(chatId, id, { memoryTier: 'eternal', keepPermanent: true, missStreak: 0, hitScore: 0, archived: false });
                 results.promoted++;
@@ -327,6 +339,10 @@ export async function restoreMemory(chatId, memoryId) {
  * 读取所有里程碑 + 现有时间线，让 LLM 输出更新后的时间线列表
  */
 export async function regenerateThreadSummary(chatId, options = {}) {
+    if ((await getTimeline(chatId)).some(t => t.entries?.length && !t.archived && t.status !== 'archived')) {
+        const { reviewTimelineCompression } = await import('./timeline-compression.js');
+        return reviewTimelineCompression(chatId, options);
+    }
     const milestones = await getMilestones(chatId);
     const existingTimeline = await getTimeline(chatId);
     const settings = getSettings();
@@ -433,9 +449,8 @@ ${timelineText}
             nt.updatedAt = Date.now();
         }
 
-        await saveTimeline(chatId, newTimeline);
-        console.log(`[BB-Memory] 时间线总结更新: ${newTimeline.length} 条时间线`);
-        return { timelineCount: newTimeline.length, threadCount: newTimeline.length };
+        const { reviewTimelineRegeneration } = await import('./timeline-compression.js');
+        return await reviewTimelineRegeneration(chatId, newTimeline, existingTimeline);
     } catch (e) {
         console.warn('[BB-Memory] 时间线总结JSON解析失败:', e.message);
         return { timelineCount: 0, threadCount: 0, error: e.message };

@@ -1,5 +1,5 @@
 /**
- * index.js —— BB-Memory v9.4.6 主入口
+ * index.js —— BB-Memory v9.4.7 主入口
  *
  * 五柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目 / 实时记忆。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -75,6 +75,7 @@ import {
 } from './memory-maintainer.js';
 
 import { runHealthCheck, buildHealthCheckPanel } from './memory-health-check.js';
+import { pendingMaintenanceButtons } from './maintenance-actions.js';
 
 import { openAssistant, openRealtimeSnapshot } from './memory-assistant.js';
 import { openMemoryManager } from './memory-manager.js';
@@ -115,7 +116,7 @@ let chatSwitchSuppressDeletesUntil = 0;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.4.6';
+const SETTINGS_EXPORT_VERSION = '9.4.7';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
@@ -136,6 +137,7 @@ const SETTINGS_EXPORT_KEYS = [
     'hitScoreDemoteThreshold', 'entityTierPromoteThreshold', 'entityTierDemoteThreshold',
     'maintenanceMode', 'maintenanceMemThreshold', 'maintenanceNpcThreshold', 'maintenanceItemThreshold', 'itemDustyMissRounds',
     'agentMaxRounds', 'agentPageSize', 'agentDetailChars', 'agentHistoryMessages', 'agentTimeoutSeconds', 'agentMaxTokens',
+    'mapNeighborDepth', 'mapRootNeighborLimit', 'mapBranchLimit', 'mapDescriptionMaxChars', 'timelineCompressionEntryThreshold', 'timelineCompressionCharThreshold', 'timelineCompressionTargetEntries', 'timelineCompressionContextChars', 'timelineCompressionMaxTokens', 'curationCategoryLimit', 'biographyApi', 'biographyUseWorldBook', 'biographyUsePreset', 'biographyUseMemory', 'biographyWorldBooks', 'biographyMaxChars', 'biographyContextChars', 'biographyMaxTokens', 'timelineCompressionApi',
     'healthCheckDuplicateThreshold', 'healthCheckIsolationThreshold', 'healthCheckStaleDays',
     'healthCheckStaleHitThreshold', 'healthCheckThreadStaleDays', 'healthCheckClueStaleDays',
     // v9.4.3 全库整理（旧 aiCurate* 保留导入兼容）
@@ -170,6 +172,17 @@ const SETTING_CONTROL_BINDINGS = {
     entityDedupEnabled: ['#bb_entity_dedup_enabled', 'checkbox'],
     debugLogging: ['#bb_debug_logging', 'checkbox'],
     timelineSummaryEnabled: ['#bb_timeline_summary_enabled', 'checkbox'],
+    mapNeighborDepth: ['#bb_map_neighbor_depth', 'value'],
+    mapRootNeighborLimit: ['#bb_map_root_neighbor_limit', 'value'],
+    mapBranchLimit: ['#bb_map_branch_limit', 'value'],
+    mapDescriptionMaxChars: ['#bb_map_description_max_chars', 'value'],
+    timelineCompressionEntryThreshold: ['#bb_timeline_compression_entry_threshold', 'value'],
+    timelineCompressionCharThreshold: ['#bb_timeline_compression_char_threshold', 'value'],
+    timelineCompressionTargetEntries: ['#bb_timeline_compression_target_entries', 'value'],
+    timelineCompressionContextChars: ['#bb_timeline_compression_context_chars', 'value'],
+    timelineCompressionMaxTokens: ['#bb_timeline_compression_max_tokens', 'value'],
+    curationCategoryLimit: ['#bb_curation_category_limit', 'value'],
+    timelineCompressionApi: ['#bb_timeline_compression_api', 'value'],
     clueBoardInjectionEnabled: ['#bb_clue_board_injection_enabled', 'checkbox'],
     autoBackupEnabled: ['#bb_auto_backup_enabled', 'checkbox'],
     autoGenMode: ['#bb_auto_gen_mode', 'value'],
@@ -535,8 +548,9 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         ? getTimelineForInjection(timeline, settings.maxActiveTimeline ?? settings.maxActiveThreads ?? 5)
         : { text: '', timeline: [], threads: [] };
     const residentMems = getResidentMemories(memories);
+    const residentIds = new Set(residentMems.map(m => m.id));
     // v8.2.2 重roll 时扩大候选集 + 同分段局部 shuffle，保证质量不下降
-    const relevantResults = getRelevantMemories(memories, userMessage, {
+    const relevantResults = getRelevantMemories(memories.filter(m => !residentIds.has(m.id)), userMessage, {
         maxResults: isReroll ? (settings.maxResults || 10) + 3 : (settings.maxResults || 10),
         minScore: settings.minScoreThreshold ?? 0.05,
         queryEmbedding,
@@ -575,7 +589,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         queryEmbedding,
         realtimeEntries: realtimeAll,  // v9.3.3 第五柱：无条件注入，不参与检索
     });
-    if (!text.trim() && !realtimeText.trim()) { clearInjection(); return chat; }
+    // 即使预算排除了所有内容，也保留本轮候选/实际注入统计，并在下面清空旧提示。
 
     // 8. 记录实际注入命中
     const injectedNpcIds = Array.isArray(stats.npcIds) ? new Set(stats.npcIds) : null;
@@ -663,13 +677,15 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         level: r.level,
         memoryTier: r.memory.memoryTier || '',
     }));
-    const visibleMemoryHits = memoryHitRecords.filter(h => h.memoryTier !== 'eternal');
-    const eternalInjectedCount = memoryHitRecords.length - visibleMemoryHits.length;
+    const eternalInjectedCount = memoryHitRecords.filter(h => h.memoryTier === 'eternal').length;
 
     lastRetrievalResult = {
         chatId, timestamp: Date.now(),
-        hits: visibleMemoryHits,
+        hits: memoryHitRecords,
         memoryHitsAll: memoryHitRecords,
+        memoryCandidateCount: merged.length,
+        memoryNotInjectedCount: merged.length - memoryHitRecords.length,
+        tokenBudget, truncated,
         eternalInjectedCount,
         npcHits: injectedNpcs.map(n => ({ id: n.id, name: n.name, npcTier: n.npcTier })),
         itemHits: injectedItems.map(i => ({ id: i.id, name: i.name, itemTier: i.itemTier })),
@@ -704,6 +720,8 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
 };
 
 function clearInjection() {
+    lastRetrievalResult = null;
+    updateSidebarHitList();
     try {
         const ctx = SillyTavern.getContext();
         ctx.setExtensionPrompt(INJECTION_KEY, '', POSITION_IN_CHAT, 0, false, ROLE_SYSTEM);
@@ -2193,6 +2211,17 @@ function bindSidebarEvents() {
     bindInput('#bb_agent_history_messages', 'agentHistoryMessages', 'number');
     bindInput('#bb_agent_timeout_seconds', 'agentTimeoutSeconds', 'number');
     bindInput('#bb_agent_max_tokens', 'agentMaxTokens', 'number');
+    bindInput('#bb_map_neighbor_depth', 'mapNeighborDepth', 'number');
+    bindInput('#bb_map_root_neighbor_limit', 'mapRootNeighborLimit', 'number');
+    bindInput('#bb_map_branch_limit', 'mapBranchLimit', 'number');
+    bindInput('#bb_map_description_max_chars', 'mapDescriptionMaxChars', 'number');
+    bindInput('#bb_timeline_compression_entry_threshold', 'timelineCompressionEntryThreshold', 'number');
+    bindInput('#bb_timeline_compression_char_threshold', 'timelineCompressionCharThreshold', 'number');
+    bindInput('#bb_timeline_compression_target_entries', 'timelineCompressionTargetEntries', 'number');
+    bindInput('#bb_timeline_compression_context_chars', 'timelineCompressionContextChars', 'number');
+    bindInput('#bb_timeline_compression_max_tokens', 'timelineCompressionMaxTokens', 'number');
+    bindInput('#bb_curation_category_limit', 'curationCategoryLimit', 'number');
+    bindSelect('#bb_timeline_compression_api', 'timelineCompressionApi');
     bindInput('#bb_health_check_duplicate_threshold', 'healthCheckDuplicateThreshold', 'number');
     bindInput('#bb_health_check_isolation_threshold', 'healthCheckIsolationThreshold', 'number');
     bindInput('#bb_health_check_stale_days', 'healthCheckStaleDays', 'number');
@@ -2433,6 +2462,7 @@ function bindSidebarEvents() {
         showToast('正在生成时间线总结...', 'info');
         try {
             const result = await regenerateThreadSummary(chatId);
+            if (result.error) throw new Error(result.error);
             if (result.threadCount > 0) {
                 showToast(`时间线总结完成：${result.timelineCount || result.threadCount} 条时间线`, 'success');
             } else {
@@ -3431,6 +3461,7 @@ function showMaintenancePopup(chatId, result) {
         dusty_item:           { icon: 'fa-solid fa-box-archive', label: '积灰物品' },
         status_changed_item:   { icon: 'fa-solid fa-box',     label: '状态变更的物品' },
         compressible_timeline: { icon: 'fa-solid fa-compress', label: '可压缩的里程碑' },
+        long_timeline:         { icon: 'fa-solid fa-timeline', label: '故事线可压缩' },
         low_tier_npc:          { icon: 'fa-solid fa-user',     label: '低优先级NPC' },
         foreshadow:            { icon: 'fa-solid fa-eye',      label: '待确认伏笔' },
     };
@@ -3516,30 +3547,24 @@ function showMaintenancePopup(chatId, result) {
                     btn.addEventListener('mouseleave', () => { btn.style.background = 'transparent'; });
                     btn.addEventListener('click', (e) => {
                         e.stopPropagation();
+                        if (overlay.dataset.busy === 'true') return;
+                        if (op === 'delete' && !confirm(`确认删除「${label}」？`)) return;
                         withFeedback(btn, async () => {
-                            await performMaintenance(chatId, [{ collection: iss.collection, id: item.id, op }]);
+                            const { executeMaintenanceBatch } = await import('./maintenance-actions.js');
+                            const outcome = await executeMaintenanceBatch(chatId, [{ ...iss, source: 'pending', id: item.id, entry: item }], op);
+                            if (outcome.failed.length) throw new Error(outcome.failed[0].error);
+                            if (!outcome.succeeded.length) { showToast('未应用修改，原条目保留', 'info'); return; }
                             itemDiv.remove();
                             // 同步移除 result.issues 中的对应项
-                            const idx = result.issues.findIndex(i => i.item.id === item.id && i.collection === iss.collection);
+                            const idx = result.issues.findIndex(i => i.item.id === item.id && i.collection === iss.collection && i.type === iss.type);
                             if (idx >= 0) result.issues.splice(idx, 1);
                             refreshBadges();
-                        }, { successText: `${text}: ${label}` });
+                            showToast(`${text}: ${label}`, 'success');
+                        }).catch(() => {});
                     });
                     actionDiv.appendChild(btn);
                 };
-                if (type === 'dusty_item') {
-                    addBtn('archive_item', '#9e9e9e', '归档');
-                    addBtn('item_to_vector', '#2196f3', '升稳定');
-                    addBtn('item_to_eternal', '#ff9800', '升永恒');
-                } else {
-                    addBtn('keep', '#4caf50', '保留');
-                    addBtn('promote', '#2196f3', '升级');
-                    addBtn('demote', '#ff9800', '降级');
-                    addBtn('delete', '#f44336', '删除');
-                }
-                if (type === 'compressible_timeline') {
-                    addBtn('compress_timeline', '#9c27b0', '压缩');
-                }
+                for (const action of pendingMaintenanceButtons(type)) addBtn(action.op, action.op === 'delete' ? '#f44336' : '#90caf9', action.label);
 
                 itemDiv.appendChild(infoDiv);
                 itemDiv.appendChild(actionDiv);
@@ -3556,13 +3581,12 @@ function showMaintenancePopup(chatId, result) {
             cat.appendChild(catHeader);
             const batchBar = document.createElement('div');
             batchBar.className = 'bb-maint-batch-bar';
-            const batchActions = type === 'dusty_item'
-                ? [['ignore', '一键忽略'], ['archive_item', '一键归档'], ['item_to_vector', '一键升稳定']]
-                : [['ignore', '一键忽略'], ['keep', '一键保留'], ...(type === 'compressible_timeline' ? [['compress_timeline', '一键压缩']] : [])];
+            const batchActions = pendingMaintenanceButtons(type).map(b => [b.op, `一键${b.label}`]);
             for (const [op, label] of batchActions) {
                 const button = document.createElement('button'); button.className = 'menu_button'; button.textContent = label;
                 button.addEventListener('click', async () => {
                     if (overlay.dataset.busy === 'true') return;
+                    if (op === 'delete' && !confirm(`确认删除本组 ${typeIssues.length} 条？`)) return;
                     overlay.dataset.busy = 'true';
                     const controls = [...overlay.querySelectorAll('button')].map(el => [el, el.disabled]);
                     controls.forEach(([el]) => { el.disabled = true; });
@@ -3570,7 +3594,7 @@ function showMaintenancePopup(chatId, result) {
                     try {
                         const { executeMaintenanceBatch } = await import('./maintenance-actions.js');
                         const targets = issues.filter(issue => issue.type === type).map(issue => ({ ...issue, source: 'pending', id: issue.item.id, entry: issue.item }));
-                        const outcome = await executeMaintenanceBatch(chatId, targets, op, { onProgress: (done, total) => { progress.textContent = `${label}：${done}/${total}`; } });
+                        const outcome = await executeMaintenanceBatch(chatId, targets, op, { onProgress: (done, total, state) => { progress.textContent = state?.message || `${label}：${done}/${total}`; } });
                         const done = new Set(outcome.succeeded.map(issue => `${issue.type}:${issue.collection}:${issue.id}`));
                         for (let i = issues.length - 1; i >= 0; i--) if (done.has(`${issues[i].type}:${issues[i].collection}:${issues[i].item.id}`)) issues.splice(i, 1);
                         renderPending(); refreshBadges();
@@ -3593,18 +3617,15 @@ function showMaintenancePopup(chatId, result) {
         bottomBar.style.cssText = 'display:flex;gap:8px;padding:12px 0 0;flex-wrap:wrap;border-top:1px solid var(--SmartThemeBorderColor,#45475a);margin-top:8px;';
         const keepAllBtn = document.createElement('button');
         keepAllBtn.className = 'bb-maint-btn-auto menu_button';
-        keepAllBtn.textContent = '全部保留';
+        keepAllBtn.textContent = '全部忽略';
         keepAllBtn.addEventListener('click', () => {
             withFeedback(keepAllBtn, async () => {
-                const items = body.querySelectorAll('.bb-maint-issue-item');
-                const actions = [...items].map(el => ({ collection: el.dataset.collection, id: el.dataset.id, op: 'keep' }));
-                const res = await performMaintenance(chatId, actions);
-                body.innerHTML = '<div style="text-align:center;padding:40px;opacity:0.6;">所有待维护项已保留</div>';
-                // 同步更新 result.issues
-                const actionIds = new Set(actions.map(a => a.id));
-                for (let i = issues.length - 1; i >= 0; i--) if (actionIds.has(issues[i].item.id)) issues.splice(i, 1);
+                const { executeMaintenanceBatch } = await import('./maintenance-actions.js');
+                const outcome = await executeMaintenanceBatch(chatId, issues.map(i => ({ ...i, source: 'pending', id: i.item.id, entry: i.item })), 'ignore');
+                if (outcome.failed.length || outcome.cancelled) throw new Error(outcome.failed[0]?.error || '已停止');
+                issues.splice(0);
                 refreshBadges();
-            }, { loadingText: '正在全部保留...', successText: '已全部保留' });
+            }, { loadingText: '正在忽略...', successText: '已忽略全部待维护项' }).catch(() => {});
         });
         const laterBtn = document.createElement('button');
         laterBtn.className = 'bb-maint-btn-later menu_button';
@@ -4031,8 +4052,14 @@ function renderEternalInjectionNote(count) {
     const n = Number(count || 0);
     if (n <= 0) return '';
     return `<div class="bb-hit-eternal-note">
-        <i class="fa-solid fa-infinity"></i> 永恒记忆 ${n} 条已全部注入，未计入普通命中列表
+        <i class="fa-solid fa-infinity"></i> 其中永恒记忆 ${n} 条已实际注入，已计入下方记忆数量
     </div>`;
+}
+
+function renderMemoryInjectionNote(result) {
+    if (result?.memoryNotInjectedCount > 0) return `<div class="bb-hit-eternal-note">记忆候选 ${result.memoryCandidateCount} 条，实际注入 ${result.hits.length} 条；${result.memoryNotInjectedCount} 条未进入本轮预算，可调高注入预算。</div>`;
+    if (result && !result.hits?.length) return '<div class="bb-hit-eternal-note">本轮确实未注入记忆条目：没有符合当前分类、状态或检索阈值的候选。</div>';
+    return '';
 }
 
 function getMilestoneHitGroups(result = lastRetrievalResult) {
@@ -4132,6 +4159,7 @@ async function renderHubHitList(listEl, chatId) {
 
     listEl.innerHTML = [
         renderEternalInjectionNote(result.eternalInjectedCount),
+        renderMemoryInjectionNote(result),
         renderHitGroup('记忆', 'fa-brain', `${result.hits?.length || 0}条`, memoryHtml),
         renderHitGroup('NPC', 'fa-user', `${result.npcHits?.length || 0}条`, npcHtml),
         renderHitGroup('物品', 'fa-box', `${result.itemHits?.length || 0}条`, itemHtml),
@@ -4589,7 +4617,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.4.6 初始化开始...');
+    console.log('[BB-Memory] v9.4.7 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -4785,7 +4813,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.4.6 初始化完成');
+    console.log('[BB-Memory] v9.4.7 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
@@ -4979,17 +5007,7 @@ function updateSidebarHitList() {
     const tsEl = document.getElementById('bb_hit_timestamp');
     if (!listEl) return;
 
-    const hasAny = result && (
-        (result.hits && result.hits.length) ||
-        (result.eternalInjectedCount > 0) ||
-        (result.npcHits && result.npcHits.length) ||
-        (result.itemHits && result.itemHits.length) ||
-        (result.milestoneHits && ((getMilestoneHitGroups(result).foreshadow.length || 0) + getMilestoneHitGroups(result).ongoing.length + getMilestoneHitGroups(result).ended.length)) ||
-        (Array.isArray(result.timelineHits) && result.timelineHits.length) ||
-        (result.mapHits && result.mapHits.length)
-    );
-
-    if (!hasAny) {
+    if (!result) {
         listEl.innerHTML = '<div style="opacity:0.4;text-align:center;font-size:0.8em;">暂无命中</div>';
         return;
     }
@@ -5067,6 +5085,7 @@ function updateSidebarHitList() {
 
     listEl.innerHTML = [
         renderEternalInjectionNote(result.eternalInjectedCount),
+        renderMemoryInjectionNote(result),
         renderHitGroup('记忆', 'fa-brain', `${result.hits?.length || 0}条`, memoryHtml),
         renderHitGroup('NPC', 'fa-user', `${result.npcHits?.length || 0}条`, npcHtml),
         renderHitGroup('物品', 'fa-box', `${result.itemHits?.length || 0}条`, itemHtml),

@@ -24,6 +24,7 @@ import {
 } from './prompt-templates.js';
 import { hydrateCollectionEmbeddings, hydrateMapEmbeddings } from './vector-store.js';
 import { filterIgnoredIssues, resetIgnoredIssues } from './maintenance-state.js';
+import { mountInTopLayer, removeTopLayerElement } from './ui-top-layer.js';
 
 // ═══════════════════════════════════════════════════════════
 //  工具函数
@@ -702,7 +703,7 @@ export async function runHealthCheck(chatId) {
 /**
  * 生成问题类型的操作按钮（不包含事件绑定，由调用方绑定）
  */
-function getActionButtonsForIssue(issue) {
+export function getActionButtonsForIssue(issue) {
     const buttons = [];
     const colorMap = {
         keep: '#4caf50',
@@ -743,7 +744,7 @@ function getActionButtonsForIssue(issue) {
             btn('忽略', 'ignore');
             break;
         case 'embedding_isolated':
-            btn('重新向量化', 're_embed', '#2196f3');
+            btn('重新生成向量', 're_embed', '#2196f3');
             btn('删除', 'delete', '#f44336');
             btn('忽略', 'ignore');
             break;
@@ -755,7 +756,7 @@ function getActionButtonsForIssue(issue) {
             btn('忽略', 'ignore');
             break;
         case 'missing_embedding':
-            btn('生成向量', 're_embed', '#2196f3');
+            btn('重新生成向量', 're_embed', '#2196f3');
             btn('删除', 'delete', '#f44336');
             btn('忽略', 'ignore');
             break;
@@ -956,13 +957,14 @@ function buildCategorySection(catKey, cat, chatId, callbacks) {
         const label = document.createElement('span');
         label.textContent = `${String(group[0].detail || group[0].type).replace(/（.*$/, '').slice(0, 36)} · ${group.length} 条`;
         bar.appendChild(label);
-        const actions = [{ op: 'ignore', label: '一键忽略' }];
-        if (['missing_embedding', 'embedding_isolated'].includes(group[0].type)) actions.unshift({ op: 're_embed', label: '一键重新生成向量' });
+        const actions = getActionButtonsForIssue(group[0]).filter(b => group.every(issue => getActionButtonsForIssue(issue).some(other => other.op === b.op)))
+            .map(b => ({ ...b, label: `一键${b.label}` }));
         for (const action of actions) {
             const btn = document.createElement('button');
             btn.className = 'menu_button'; btn.textContent = action.label;
             btn.addEventListener('click', async () => {
                 if (containerBusy(section)) return;
+                if (['delete', 'delete_b', 'thread_delete', 'merge'].includes(action.op) && !confirm(`确认对 ${group.length} 项执行「${action.label}」？`)) return;
                 const root = section.parentElement;
                 const statusHost = root.parentElement;
                 const disabled = [...root.querySelectorAll('button')].map(b => [b, b.disabled]);
@@ -1020,14 +1022,15 @@ function buildIssueRow(issue, chatId, callbacks) {
     const buttons = getActionButtonsForIssue(issue);
     for (const btnDef of buttons) {
         const btn = createActionButton(btnDef.label, btnDef.op, btnDef.color, async (op) => {
+            if (['delete', 'delete_b', 'thread_delete', 'merge'].includes(op) && !confirm(`确认${btnDef.label}此条目？`)) return;
             await withFeedback(btn, async () => {
-                if (['ignore', 're_embed'].includes(op)) {
+                {
                     const { executeMaintenanceBatch } = await import('./maintenance-actions.js');
                     const outcome = await executeMaintenanceBatch(chatId, [issue], op);
                     if (outcome.failed.length) throw new Error(outcome.failed[0].error);
                     if (outcome.cancelled) throw new Error('聊天已切换，操作已停止');
                     await callbacks.onRefresh?.();
-                } else await handleHealthAction(op, issue, chatId, callbacks, item);
+                }
             }, { successText: `${btnDef.label}完成` })();
         });
         actionDiv.appendChild(btn);
@@ -1041,6 +1044,24 @@ function buildIssueRow(issue, chatId, callbacks) {
 // ═══════════════════════════════════════════════════════════
 //  操作处理器
 // ═══════════════════════════════════════════════════════════
+
+export async function executeHealthMaintenanceAction(op, issue, chatId) {
+    if (String(getContext()?.chatId) !== String(chatId)) throw new Error('聊天已切换');
+    const verify = async (pillar, id, expected) => {
+        const loaders = { mem: getMemories, npc: getNpcProfiles, item: getItems, milestone: getMilestones, timeline: getTimeline,
+            map: async chat => (await import('./map-store.js')).getLocations(chat) };
+        const fresh = (await loaders[pillar]?.(chatId))?.find(e => e.id === id);
+        if (!fresh) throw new Error('条目已不存在，请重新体检');
+        if (fresh.memoryTier === 'eternal' || fresh.keepPermanent) throw new Error('永恒或永久保留条目不参与维护');
+        const { maintenanceFingerprint } = await import('./maintenance-state.js');
+        if (expected && maintenanceFingerprint({ entry: fresh }) !== maintenanceFingerprint({ entry: expected })) throw new Error('条目已变化，请重新体检');
+    };
+    if (issue.idA) { await verify('mem', issue.idA, issue.entryA); await verify('mem', issue.idB, issue.entryB); }
+    else if (issue.id && issue.entry) await verify(issue.type.startsWith('thread_') ? 'timeline' : issue.collection || 'mem', issue.id, issue.entry);
+    let applied = false;
+    await handleHealthAction(op, issue, chatId, {}, { remove() { applied = true; } });
+    if (!applied && op !== 'open_map') throw new Error('未应用操作（已取消或未选择有效内容），条目已保留');
+}
 
 async function handleHealthAction(op, issue, chatId, callbacks, rowEl) {
     const itemEl = rowEl;
@@ -1077,7 +1098,7 @@ async function handleHealthAction(op, issue, chatId, callbacks, rowEl) {
                     await onMessageReceived(floor);
                     notifyCallbacks(callbacks, `已触发第 ${floor} 层重新提取`);
                 } catch (e) {
-                    notifyCallbacks(callbacks, `重新提取失败: ${e.message}`);
+                    throw e;
                 }
             }
             itemEl.remove();
@@ -1108,6 +1129,7 @@ async function handleHealthAction(op, issue, chatId, callbacks, rowEl) {
                 notifyCallbacks(callbacks, `已合并: ${(issue.titleA || idA).slice(0, 20)} ← ${(issue.titleB || idB).slice(0, 20)}`);
             } catch (e) {
                 if (typeof toastr !== 'undefined') toastr.error('合并失败: ' + e.message);
+                throw e;
             }
             break;
         }
@@ -1118,6 +1140,7 @@ async function handleHealthAction(op, issue, chatId, callbacks, rowEl) {
                 notifyCallbacks(callbacks, `已删除: ${(issue.titleB || issue.idB).slice(0, 30)}`);
             } catch (e) {
                 if (typeof toastr !== 'undefined') toastr.error('删除失败: ' + e.message);
+                throw e;
             }
             break;
         }
@@ -1156,6 +1179,7 @@ async function handleHealthAction(op, issue, chatId, callbacks, rowEl) {
                 notifyCallbacks(callbacks, `已删除时间线: ${(issue.title || issue.id).slice(0, 30)}`);
             } catch (e) {
                 if (typeof toastr !== 'undefined') toastr.error('删除时间线失败: ' + e.message);
+                throw e;
             }
             break;
         }
@@ -1175,6 +1199,7 @@ async function handleHealthAction(op, issue, chatId, callbacks, rowEl) {
                 notifyCallbacks(callbacks, `时间线状态已修正为「${newStatus}」`);
             } catch (e) {
                 if (typeof toastr !== 'undefined') toastr.error('修正时间线状态失败: ' + e.message);
+                throw e;
             }
             break;
         }
@@ -1186,6 +1211,7 @@ async function handleHealthAction(op, issue, chatId, callbacks, rowEl) {
                 notifyCallbacks(callbacks, `时间线已标记为暂停: ${(issue.title || issue.id).slice(0, 30)}`);
             } catch (e) {
                 if (typeof toastr !== 'undefined') toastr.error('暂停时间线失败: ' + e.message);
+                throw e;
             }
             break;
         }
@@ -1201,6 +1227,7 @@ async function handleHealthAction(op, issue, chatId, callbacks, rowEl) {
                 await openMapView(chatId);
             } catch (e) {
                 if (typeof toastr !== 'undefined') toastr.error('打开地图失败: ' + e.message);
+                throw e;
             }
             break;
         }
@@ -1212,6 +1239,7 @@ async function handleHealthAction(op, issue, chatId, callbacks, rowEl) {
                 notifyCallbacks(callbacks, `已归档地点: ${(issue.title || issue.id).slice(0, 30)}`);
             } catch (e) {
                 if (typeof toastr !== 'undefined') toastr.error('归档地点失败: ' + e.message);
+                throw e;
             }
             break;
         }
@@ -1238,7 +1266,7 @@ async function handleAiTag(issue, chatId, itemEl, callbacks) {
             }
         );
 
-        const response = await callMainApi(prompt, { maxTokens: 80, temperature: 0.3 });
+        const response = await callMainApi(prompt, { maxTokens: 80, temperature: 0.3, systemPrompt: '只输出逗号分隔的标签词语。' });
         const suggestedTags = (response || '').split(/[,，、\n]/).map(t => t.trim()).filter(t => t.length >= 1 && t.length <= 10).slice(0, 6);
 
         if (suggestedTags.length === 0) {
@@ -1247,16 +1275,20 @@ async function handleAiTag(issue, chatId, itemEl, callbacks) {
         }
 
         // 弹出确认框让用户选择保留哪些
-        showTagConfirmDialog(suggestedTags, issue, chatId, itemEl, callbacks);
+        await showTagConfirmDialog(suggestedTags, issue, chatId, itemEl, callbacks);
     } catch (e) {
         console.warn('[BB-HealthCheck] AI标签建议失败:', e);
         if (typeof toastr !== 'undefined') toastr.error('AI标签建议失败: ' + e.message);
+                throw e;
     }
 }
 
 function showTagConfirmDialog(suggestedTags, issue, chatId, itemEl, callbacks) {
-    // 移除已有弹窗
-    document.querySelector('.bb-tag-confirm-overlay')?.remove();
+    return new Promise((resolve, reject) => {
+    if (document.querySelector('.bb-tag-confirm-overlay')) {
+        reject(new Error('请先处理已打开的标签建议'));
+        return;
+    }
 
     const overlay = document.createElement('div');
     overlay.className = 'bb-tag-confirm-overlay';
@@ -1295,14 +1327,16 @@ function showTagConfirmDialog(suggestedTags, issue, chatId, itemEl, callbacks) {
     }
 
     overlay.appendChild(dialog);
-    document.body.appendChild(overlay);
+    mountInTopLayer(overlay);
 
-    const close = () => overlay.remove();
+    const close = () => { removeTopLayerElement(overlay); resolve(); };
     dialog.querySelector('#bb-tag-cancel').addEventListener('click', close);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
     dialog.querySelector('#bb-tag-ok').addEventListener('click', async () => {
-        close();
+        removeTopLayerElement(overlay);
+        try {
+        if (String(getContext()?.chatId) !== String(chatId)) throw new Error('聊天已切换');
         if (selectedTags.size === 0) return;
         const mem = issue.entry;
         const existing = new Set((mem.tags || []).map(t => typeof t === 'string' ? t : t.name));
@@ -1313,6 +1347,9 @@ function showTagConfirmDialog(suggestedTags, issue, chatId, itemEl, callbacks) {
             itemEl.remove();
             notifyCallbacks(callbacks, `已添加标签: ${newTags.join(', ')}`);
         }
+        } catch (error) { reject(error); }
+        finally { resolve(); }
+    });
     });
 }
 

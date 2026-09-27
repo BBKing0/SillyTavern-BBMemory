@@ -174,6 +174,6 @@ await test('所有新增参数有默认值、导出键、设置填充和保存�
         assert.ok(Object.hasOwn(store.DEFAULT_SETTINGS, key)); assert.ok(index.includes(`'${key}'`));
         assert.ok(index.includes(`${key}: ['#bb_agent_${id}'`)); assert.ok(index.includes(`bindInput('#bb_agent_${id}', '${key}'`)); assert.ok(html.includes(`id="bb_agent_${id}"`));
     }
-    assert.equal(JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url))).version, '9.4.6');
+    assert.ok(JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url))).version.localeCompare('9.4.6', undefined, { numeric: true }) >= 0);
 });
 console.log(`v9.4.6: ${checks} regression groups passed (mocked API, no real chat data).`);

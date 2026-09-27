@@ -1,4 +1,4 @@
-/** v9.4.6 记忆管家面板：聊天内调查与建议选择执行。 */
+/** v9.4.7 记忆管家面板：聊天内调查与建议选择执行。 */
 import { runAgentQuery, executeAgentProposals, getAgentProposals, resetAgentSession } from './memory-agent-core.js';
 import { CORRECTION_LABELS } from './memory-correction.js';
 import { mountInTopLayer, removeTopLayerElement } from './ui-top-layer.js';
@@ -12,13 +12,13 @@ const showValue = value => value === undefined ? '（未设置）' : typeof valu
 
 export function openAgent(chatId) {
     const previous = document.querySelector('.bb-agent-overlay');
-    if (previous) { previous.querySelector('textarea')?.focus(); toast('记忆管家已经打开'); return; }
+    if (previous) { mountInTopLayer(previous); previous.querySelector('textarea')?.focus(); toast('记忆管家已经打开'); return; }
     const history = [];
     let working = false, controller;
     const overlay = document.createElement('div');
     overlay.className = 'bb-agent-overlay';
     overlay.innerHTML = `<div class="bb-agent-wrapper"><div class="bb-agent-panel">
-        <div class="bb-agent-header"><span class="bb-agent-title"><i class="fa-solid fa-robot"></i> 记忆管家 <em>v9.4.6</em></span>
+        <div class="bb-agent-header"><span class="bb-agent-title"><i class="fa-solid fa-robot"></i> 记忆管家 <em>v9.4.7</em></span>
             <div class="bb-agent-controls"><button class="menu_button" data-action="reset">重置对话</button><button class="menu_button" data-action="close" aria-label="关闭记忆管家">×</button></div></div>
         <div class="bb-agent-body" aria-live="polite"></div>
         <div class="bb-agent-proposals"></div>

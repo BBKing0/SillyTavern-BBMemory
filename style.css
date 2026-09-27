@@ -2235,6 +2235,7 @@
 
 /* v9.4.2: Popover API 把关键弹窗提升到浏览器 top layer，避免被 ST 移动端抽屉覆盖。 */
 .bb-native-top-layer[popover] {
+    inset: 0 !important;
     margin: 0 !important;
     border: 0 !important;
     padding: 0 !important;
@@ -2248,6 +2249,14 @@
     box-sizing: border-box !important;
     color: inherit;
 }
+
+/* closed popovers / hidden controls must not be resurrected by author display rules */
+.bb-native-top-layer[popover]:not(:popover-open) { display: none !important; }
+.bb-agent-overlay [hidden] { display: none !important; }
+.bb-agent-overlay:empty { display: none !important; }
+.bb-agent-overlay { box-sizing: border-box; }
+.bb-agent-wrapper { min-height: 0; }
+.bb-agent-panel { width: 100%; min-height: 0; }
 
 .bb-active-review-panel {
     width: min(44rem, calc(100vw - 1rem));
@@ -6202,6 +6211,29 @@
     .bb-rescue-ns-sum { margin-left: 0; }
 }
 /* v9.4.6 管家建议和批量维护 */
+/* v9.4.7 编辑器、小传与批量操作，在移动端换行并限制到视口内。 */
+.bb-curate-category-filter { display: flex; flex-shrink: 0; align-items: center; gap: .6rem; padding: .5rem 1rem; white-space: nowrap; }
+.bb-curate-category-filter select { min-width: 0; flex: 1; }
+.bb-active-review-tabs, .bb-active-review-toolbar, .bb-active-review-header, .bb-active-review-footer { flex-shrink: 0; }
+.bb-curate-category { display: inline-block; border-radius: .4rem; padding: .1rem .4rem; background: #6688aa33; font-size: .8em; }
+.bb-curate-editor { margin-top: .7rem; border: 1px solid var(--SmartThemeBorderColor, #555); padding: .5rem; border-radius: .4rem; }
+.bb-curate-editor summary { cursor: pointer; }
+.bb-curate-edit-field, .bb-biography-popup > label, .bb-biography-options label, .bb-v947-options label { display: flex; flex-direction: column; gap: .3rem; min-width: 0; margin-top: .5rem; }
+.bb-curate-edit-field textarea, .bb-biography-popup textarea, .bb-biography-popup select, .bb-biography-options input { width: 100%; box-sizing: border-box; min-width: 0; }
+.bb-curate-edit-field textarea { resize: vertical; white-space: pre-wrap; }
+.bb-biography-popup { width: min(44rem, 95vw); max-height: 94vh; max-height: 94dvh; overflow: auto; box-sizing: border-box; padding: 1rem; }
+.bb-biography-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
+.bb-biography-sources, .bb-biography-buttons { display: flex; gap: .7rem; flex-wrap: wrap; margin: .7rem 0; }
+.bb-biography-status, .bb-biography-count { font-size: .85em; margin-top: .5rem; overflow-wrap: anywhere; }
+.bb-maint-issue-item { flex-wrap: wrap; }
+.bb-maint-issue-item > div:last-child { flex-wrap: wrap; max-width: 100%; }
+.bb-v947-options { display: flex; flex-direction: column; gap: .5rem; margin-bottom: 1rem; }
+@media (max-width: 480px) {
+    .bb-biography-options { grid-template-columns: minmax(0, 1fr); }
+    .bb-biography-popup { max-height: 96dvh; padding: .7rem; }
+    .bb-curate-category-filter { flex-wrap: wrap; }
+    .bb-maint-issue-item > div:first-child { flex-basis: 100%; }
+}
 .bb-agent-controls, .bb-maint-batch-bar {
     display: flex;
     flex-wrap: wrap;
@@ -6213,7 +6245,7 @@
 .bb-maint-batch-result { white-space: pre-wrap; overflow-wrap: anywhere; padding: .6rem; font-size: .85em; }
 .bb-agent-msg { white-space: pre-wrap; flex-shrink: 0; }
 .bb-agent-body { min-height: 6em; }
-.bb-agent-proposals:empty { display: none; }
+.bb-agent-proposals:empty { display: none !important; border: 0; padding: 0; }
 .bb-agent-proposals { overflow: auto; max-height: 32vh; flex: 0 1 auto; padding: .7rem 1rem; border-top: 1px solid var(--SmartThemeBorderColor, #555); }
 .bb-agent-proposal { margin-top: .5rem; padding: .5rem; border: 1px solid var(--SmartThemeBorderColor, #555); border-radius: .4rem; overflow-wrap: anywhere; }
 .bb-agent-proposal summary { cursor: pointer; display: flex; align-items: flex-start; gap: .5rem; }

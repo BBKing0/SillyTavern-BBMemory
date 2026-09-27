@@ -6,6 +6,7 @@ import { scheduleDayKey } from './realtime-schedule.js';
 
 export const CORRECTION_LABELS = { npc: 'NPC', item: '物品', milestone: '里程碑', mem: '记忆', realtime: '实时/日程', timeline: '时间线', map: '地图', clue: '线索节点', connection: '线索连线' };
 export const CORRECTION_FIELDS = {
+    biography: '人物小传',
     name: '名称', title: '标题', role: '身份/职业', description: '描述', content: '正文', summary: '摘要', indexCard: '索引卡',
     personality: '性格', appearance: '外貌', status: '状态', location: '地点', owner: '持有者', significance: '意义/用途',
     event: '事件', impact: '影响', storyTime: '故事时间', subject: '主体', target: '对象', participants: '参与者',

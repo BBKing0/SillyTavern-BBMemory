@@ -43,6 +43,25 @@ const OLD_STORAGE_KEY = 'bb_memory_chat_';
 
 // ═══ 默认设置 ═══
 export const DEFAULT_SETTINGS = Object.freeze({
+    mapNeighborDepth: 2,
+    mapRootNeighborLimit: 3,
+    mapBranchLimit: 2,
+    mapDescriptionMaxChars: 60,
+    timelineCompressionEntryThreshold: 12,
+    timelineCompressionCharThreshold: 1800,
+    timelineCompressionTargetEntries: 6,
+    timelineCompressionContextChars: 60000,
+    timelineCompressionMaxTokens: 3000,
+    curationCategoryLimit: 5,
+    biographyApi: "main",
+    biographyUseWorldBook: false,
+    biographyUsePreset: false,
+    biographyUseMemory: true,
+    biographyWorldBooks: [],
+    biographyMaxChars: 1000,
+    biographyContextChars: 20000,
+    biographyMaxTokens: 2200,
+    timelineCompressionApi: 'main',
     enabled: true,
     injectionTemplate: '<BBMemory>\n{{memories}}\n</BBMemory>',
     // 检索
@@ -581,6 +600,7 @@ export async function addNpcProfile(chatId, data) {
         aliases: normalizeAliases(data.aliases),
         role: data.role || '',
         personality: data.personality || '',
+        biography: String(data.biography || ''),
         appearance: data.appearance || '',
         status: data.status || '',
         location: data.location || '',
@@ -1669,7 +1689,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.4.6',
+        version: '9.4.7',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2085,7 +2105,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
         realtime,
     };
     const backup = {
-        version: '9.4.6',
+        version: '9.4.7',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2875,7 +2895,7 @@ export async function exportMemories(chatId) {
     await normalizeDataEmbeddingsToRefs(chatId, data);
     const vectorPack = await buildVectorPack(chatId, data);
     return JSON.stringify({
-        version: '9.4.6',
+        version: '9.4.7',
         schema: 'bb-memory-vector-ref-v1',
         exportedAt: Date.now(),
         data: stripRuntimeEmbeddings(data),

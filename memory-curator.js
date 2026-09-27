@@ -42,6 +42,7 @@ import { mountInTopLayer } from './ui-top-layer.js';
 // ═══════════════════════════════════════════════════════════
 
 /** 整理师支持的柱。键名与 memory-agent.js / 设置项保持一致。 */
+import { mountCurationEditor, classifyCurationOps } from './curation-editor.js';
 export const CURATION_PILLARS = Object.freeze(['mem', 'npc', 'item', 'milestone', 'timeline']);
 
 /** 各柱参与相似度计算的字段，顺序即拼接顺序（名称类字段放前面）。 */
@@ -491,7 +492,7 @@ const PILLAR_WRITABLE_FIELDS = Object.freeze({
     mem: Object.freeze(['title', 'type', 'summary', 'content', 'verbatim', 'subject', 'target',
         'storyTime', 'importance', 'emotionalWeight', 'tags', 'truthStatus']),
     npc: Object.freeze(['name', 'aliases', 'role', 'personality', 'appearance', 'status',
-        'location', 'indexCard', 'relationships', 'tags']),
+        'location', 'indexCard', 'biography', 'relationships', 'tags']),
     item: Object.freeze(['name', 'aliases', 'owner', 'status', 'location', 'significance', 'tags']),
     milestone: Object.freeze(['storyTime', 'event', 'summary', 'participants', 'location',
         'status', 'impact', 'tags']),
@@ -585,7 +586,7 @@ export function buildCurationPrompt(groups, options = {}) {
         groupsText: formatGroupsForPrompt(groups),
         CONCRETE_TIME_RULE: getPromptTemplate(settings, 'extract.concreteTimeRule', DEFAULT_CONCRETE_TIME_RULE),
         calRef: calendar ? `\n## 世界日历参考\n${calendar}` : '',
-    });
+    }) + '\n每个操作另附 issueCategory（简短的问题类别，如时间缺失、重复总结、人物错误）。由你概括，尽量复用已有类别，每轮最多5个具体类别，多余归入“其他”。不要把类别写入条目内容。';
 }
 
 // ── 操作解析与校验（纯函数） ──
@@ -775,6 +776,7 @@ export function parseCurationOps(rawText, options = {}) {
             pillar,
             ids,
             reason: truncate(raw.reason || raw.why || '', 300),
+            issueCategory: truncate(raw.issueCategory || raw.categoryLabel || '其他', 16),
             notes,
             sourceEntries: targets.map(entry => snapshotEntryForReview(entry, pillar)),
         };
@@ -1094,7 +1096,7 @@ const CROSS_REF_FIELDS = Object.freeze({ mem: 'relatedMemoryIds', milestone: 're
  * 但范围必须包含 repairCrossReferences 会改到的条目——它们不在 op.ids 里，
  * 漏掉会导致撤销后交叉引用仍指向合并后的条目。
  */
-async function beginCurationSnapshot(chatId, ops, meta = {}) {
+export async function beginCurationSnapshot(chatId, ops, meta = {}) {
     const settings = meta.settings || getSettings();
     const idsByPillar = new Map();
     for (const op of ops) {
@@ -1142,7 +1144,7 @@ async function beginCurationSnapshot(chatId, ops, meta = {}) {
 }
 
 /** 应用结束后补写新建条目 id 与摘要（撤销时要把这些新条目删掉）。 */
-async function finalizeCurationSnapshot(chatId, snapshotId, patch = {}) {
+export async function finalizeCurationSnapshot(chatId, snapshotId, patch = {}) {
     if (!snapshotId) return;
     const stack = await readUndoStack(chatId);
     const record = stack.entries.find(entry => entry.id === snapshotId);
@@ -1267,6 +1269,7 @@ function buildMergePatch(op, keepEntry, absorbedEntries, pillar) {
             );
         }
         if (aliases.length) patch.aliases = aliases;
+        if (pillar === 'npc' && !patch.biography) patch.biography = keepEntry.biography || absorbedEntries.find(e => e.biography)?.biography || '';
     }
 
     if (pillar === 'mem') {
@@ -1358,6 +1361,16 @@ async function applySingleOp(chatId, op) {
     const crud = PILLAR_CRUD[pillar];
     if (!crud) throw new Error(`未知的数据柱：${op.pillar}`);
     const createdIds = [];
+    // 审核期间用户可能编辑原文；旧建议不能覆盖更新后的事实。
+    if (op.sourceEntries?.length) {
+        const current = await crud.get(chatId);
+        for (const source of op.sourceEntries) {
+            const fresh = current.find(entry => String(entry.id) === String(source.id));
+            if (!fresh || (PILLAR_WRITABLE_FIELDS[pillar] || []).some(key => JSON.stringify(source[key]) !== JSON.stringify(fresh[key]))) {
+                throw new Error('原条目已被其它操作修改，请重新生成建议');
+            }
+        }
+    }
 
     if (op.op === 'merge') {
         const entries = await crud.get(chatId);
@@ -1367,14 +1380,14 @@ async function applySingleOp(chatId, op) {
         const absorbed = op.removeIds.map(id => byId.get(String(id))).filter(Boolean);
         if (!absorbed.length) throw new Error('被合并的条目都已不存在');
 
-        await crud.update(chatId, keepEntry.id, buildMergePatch(op, keepEntry, absorbed, pillar));
+        await crud.update(chatId, keepEntry.id, { ...buildMergePatch(op, keepEntry, absorbed, pillar), embedding: null, embeddingRef: null });
         for (const entry of absorbed) await crud.remove(chatId, entry.id);
         const repaired = await repairCrossReferences(chatId, pillar, absorbed.map(e => e.id), keepEntry.id);
         return { createdIds, removedCount: absorbed.length, updatedCount: 1, repaired };
     }
 
     if (op.op === 'rewrite') {
-        const updated = await crud.update(chatId, op.ids[0], { ...op.result, curatedAt: Date.now() });
+        const updated = await crud.update(chatId, op.ids[0], { ...op.result, embedding: null, embeddingRef: null, curatedAt: Date.now() });
         if (!updated) throw new Error(`条目 ${op.ids[0]} 已不存在`);
         return { createdIds, removedCount: 0, updatedCount: 1, repaired: 0 };
     }
@@ -1385,7 +1398,7 @@ async function applySingleOp(chatId, op) {
         if (!original) throw new Error(`条目 ${op.ids[0]} 已不存在`);
         const snapshot = cloneForSnapshot(original);
         // 第一条原地改，其余新建，保证原 id 不失效（线索板等可能引用它）
-        await crud.update(chatId, original.id, { ...op.results[0], curatedAt: Date.now() });
+        await crud.update(chatId, original.id, { ...op.results[0], embedding: null, embeddingRef: null, curatedAt: Date.now() });
         for (const result of op.results.slice(1)) {
             const created = await crud.add(chatId, { ...carryOverFields(snapshot, pillar), ...result });
             if (created?.id) createdIds.push(created.id);
@@ -1475,6 +1488,8 @@ export async function applyCurationOps(chatId, ops, options = {}) {
             message: `正在应用 ${op.op}（${index}/${toApply.length}）`,
         });
         try {
+            const activeChatId = globalThis.SillyTavern?.getContext?.()?.chatId;
+            if (activeChatId != null && String(activeChatId) !== String(chatId)) throw new Error('聊天已切换，未继续写入');
             const outcome = await applySingleOp(chatId, op);
             counts[op.op] = (counts[op.op] || 0) + 1;
             result.removedCount += outcome.removedCount;
@@ -1957,14 +1972,15 @@ const OP_LABELS = Object.freeze({
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = String(text ?? '');
-    return div.innerHTML;
+    return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function showToast(msg, type = 'info') {
     try {
         const ctx = SillyTavern.getContext();
-        if (typeof ctx.toastr?.[type] === 'function') {
-            ctx.toastr[type](msg, '', { timeOut: type === 'error' ? 5000 : 3000 });
+        const toast = globalThis.toastr || ctx.toastr;
+        if (typeof toast?.[type] === 'function') {
+            toast[type](msg, '', { timeOut: type === 'error' ? 5000 : 3000 });
         }
     } catch { /* toastr 不可用时静默，调用方另有 activityLog */ }
     try { globalThis.bbMemoryRecordActivity?.(type, '全库整理', String(msg)); } catch { /* ignore */ }
@@ -1975,6 +1991,7 @@ const REVIEW_FIELD_LABELS = Object.freeze({
     verbatim: '人物原话', subject: '主体/说话者', target: '目标/对话对象', storyTime: '故事时间',
     importance: '重要性', emotionalWeight: '情感权重', truthStatus: '真值', tags: '标签',
     aliases: '别名', role: '身份', personality: '性格', appearance: '外貌', status: '状态',
+    biography: '人物小传',
     location: '位置', indexCard: '索引卡', relationships: '关系', owner: '持有者',
     significance: '意义/说明', participants: '参与者', event: '事件', impact: '影响',
     priority: '优先级', entries: '时间线节点', memoryTier: '记忆级别', npcTier: '角色级别',
@@ -2084,9 +2101,13 @@ export function openCurationReviewPanel(chatId, ops, options = {}) {
             return;
         }
 
-        document.getElementById('bb_curate_review_overlay')?.remove();
+        if (document.getElementById('bb_curate_review_overlay')) {
+            showToast('请先完成或关闭当前审核面板，再生成另一批建议', 'warning');
+            resolve({ confirmed: 0, rejected: list.length, applyResult: null, closed: true });
+            return;
+        }
         const state = list.map((op, index) => ({
-            ...op,
+            ...deepClone(op),
             _idx: index,
             // 高风险项默认不勾选：删除、以及系统标了风险的（缝合痕迹/信息量退化）
             selected: op.op !== 'delete' && !op.forceConfirm,
@@ -2096,6 +2117,8 @@ export function openCurationReviewPanel(chatId, ops, options = {}) {
             ...CURATION_WRITE_OPS.map(op => ({ key: op, label: OP_LABELS[op] })),
         ];
         let activeTab = 'all';
+        const categories = classifyCurationOps(state, getSettings().curationCategoryLimit);
+        let activeCategory = '';
         let busy = false;
 
         const overlay = document.createElement('div');
@@ -2105,12 +2128,13 @@ export function openCurationReviewPanel(chatId, ops, options = {}) {
             <div class="bb-active-review-panel">
                 <div class="bb-active-review-header">
                     <div>
-                        <div class="bb-active-review-title"><i class="fa-solid fa-wand-magic-sparkles"></i> 全库整理待确认</div>
-                        <div class="bb-active-review-subtitle">展开查看原条目和建议结果；未勾选的操作不会执行。</div>
+                        <div class="bb-active-review-title"><i class="fa-solid fa-wand-magic-sparkles"></i> ${escapeHtml(options.title || '全库整理待确认')}</div>
+                        <div class="bb-active-review-subtitle">查看原文，编辑建议结果后勾选应用；未勾选的操作不会执行。</div>
                     </div>
                     <button class="menu_button bb-active-review-close" type="button" title="关闭">×</button>
                 </div>
                 <div class="bb-active-review-tabs"></div>
+                <label class="bb-curate-category-filter">问题类别 <select class="bb-input"><option value="">全部类别</option>${categories.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}</select></label>
                 <div class="bb-active-review-toolbar">
                     <button class="menu_button" type="button" data-action="select_visible">全选当前</button>
                     <button class="menu_button" type="button" data-action="invert_visible">反选当前</button>
@@ -2129,7 +2153,7 @@ export function openCurationReviewPanel(chatId, ops, options = {}) {
         const statusEl = overlay.querySelector('.bb-active-review-status');
         const applyBtn = overlay.querySelector('[data-action="apply"]');
 
-        const visible = () => state.filter(op => activeTab === 'all' || op.op === activeTab);
+        const visible = () => state.filter(op => (activeTab === 'all' || op.op === activeTab) && (!activeCategory || op.issueCategory === activeCategory));
         const selectedCount = () => state.filter(op => op.selected).length;
 
         function render() {
@@ -2149,19 +2173,25 @@ export function openCurationReviewPanel(chatId, ops, options = {}) {
                     ? `<div class="bb-curate-warn"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(op.notes.join('；'))}</div>`
                     : '';
                 return `
-                    <label class="bb-active-review-item" data-idx="${op._idx}">
-                        <input type="checkbox" ${op.selected ? 'checked' : ''} />
+                    <div class="bb-active-review-item" data-idx="${op._idx}">
+                        <input class="bb-curate-select" aria-label="选择建议 ${op._idx + 1}" type="checkbox" ${op.selected ? 'checked' : ''} />
                         <div class="bb-active-review-item-body">
                             <div class="bb-active-review-item-head">
                                 <span class="bb-active-review-type">${escapeHtml(OP_LABELS[op.op] || op.op)} · ${escapeHtml(PILLAR_LABELS[normalizeCurationPillar(op.pillar)] || op.pillar)}</span>
                                 <span class="bb-active-review-source">${op.ids.length} 条</span>
                             </div>
                             <div class="bb-active-review-item-title">${escapeHtml(op.reason || '(AI 未给出理由)')}</div>
+                            <span class="bb-curate-category">${escapeHtml(op.issueCategory)}</span>
                             ${warn}
                             ${renderOpDetail(op)}
+                            ${op.result || op.results ? '<details class="bb-curate-editor"><summary>编辑建议内容</summary><div class="bb-curate-editor-fields"></div></details>' : ''}
                         </div>
-                    </label>`;
+                    </div>`;
             }).join('') : '<div class="bb-active-review-empty">这一类没有待确认操作。</div>';
+            listEl.querySelectorAll('[data-idx]').forEach(card => {
+                const host = card.querySelector('.bb-curate-editor-fields');
+                if (host) mountCurationEditor(host, state[Number(card.dataset.idx)], () => { statusEl.textContent = '建议已编辑，应用时将保存编辑后的内容'; });
+            });
             statusEl.textContent = `已选 ${selectedCount()} / ${state.length}`;
         }
 
@@ -2178,11 +2208,16 @@ export function openCurationReviewPanel(chatId, ops, options = {}) {
         });
 
         listEl.addEventListener('change', (event) => {
+            if (!event.target.classList.contains('bb-curate-select')) return;
             const item = event.target.closest('[data-idx]');
             if (!item || busy) return;
             const op = state[Number(item.dataset.idx)];
             if (op) op.selected = event.target.checked;
             statusEl.textContent = `已选 ${selectedCount()} / ${state.length}`;
+        });
+        overlay.querySelector('.bb-curate-category-filter select').addEventListener('change', event => {
+            if (busy) return;
+            activeCategory = event.target.value; render();
         });
 
         overlay.querySelector('.bb-active-review-toolbar').addEventListener('click', (event) => {
@@ -2214,11 +2249,28 @@ export function openCurationReviewPanel(chatId, ops, options = {}) {
                 return;
             }
             busy = true;
-            overlay.querySelectorAll('button, input').forEach(el => { el.disabled = true; });
+            overlay.querySelectorAll('button, input, textarea, select').forEach(el => { el.disabled = true; });
             applyBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在应用...';
             try {
+                if (String(globalThis.SillyTavern?.getContext?.()?.chatId) !== String(chatId)) throw new Error('聊天已切换，请回到原聊天再应用');
+                for (const op of chosen) {
+                    const checked = parseCurationOps(JSON.stringify({ ops: [op] }), { groups: [{ pillar: op.pillar, entries: op.sourceEntries }] });
+                    if (checked.rejected.length) throw new Error(checked.rejected.map(r => r.reason).join('；'));
+                    const results = op.results || (op.result ? [op.result] : []);
+                    for (const result of results) for (const [key, value] of Object.entries(result)) {
+                        if (typeof value === 'string' && !value.trim()) throw new Error(`建议字段 ${key} 不能为空；请补全后应用`);
+                        if (typeof value === 'number' && !Number.isFinite(value)) throw new Error(`建议字段 ${key} 不是有效数字`);
+                        if (['importance', 'emotionalWeight'].includes(key) && (value < 0 || value > 1)) throw new Error(`${key} 必须在 0 到 1 之间`);
+                        if (key === 'biography' && Array.from(value).length > 1000) throw new Error('人物小传不能超过1000字');
+                        const enums = { truthStatus: ['true','false','unknown','rumor','misleading','secret_true'], priority: ['high','medium','low'] };
+                        if (key === 'type') enums.type = op.pillar === 'timeline' ? ['plot','emotional','side','world'] : op.pillar === 'mem' ? ['event','emotion','habit','fact'] : null;
+                        if (key === 'status') enums.status = { timeline: ['ongoing','paused','ended','resident'], item: ['held','used','lost','destroyed'], milestone: ['ongoing','ended','foreshadow'] }[op.pillar];
+                        if (enums[key] && !enums[key].includes(value)) throw new Error(`${key} 的值无效：${value}`);
+                    }
+                    if (options.validateOp) options.validateOp(op);
+                }
                 // 用户已在此确认，写库时按 auto 走，避免再次进入确认循环
-                const applyResult = await applyCurationOps(chatId, chosen, {
+                const applyResult = await (options.apply || applyCurationOps)(chatId, chosen, {
                     settings: options.settings,
                     forceAuth: 'auto',
                     source: 'confirm',
@@ -2232,7 +2284,8 @@ export function openCurationReviewPanel(chatId, ops, options = {}) {
                 finish({ confirmed: chosen.length, rejected: state.length - chosen.length, applyResult });
             } catch (e) {
                 busy = false;
-                overlay.querySelectorAll('button, input').forEach(el => { el.disabled = false; });
+                statusEl.textContent = `应用失败：${e.message}`;
+                overlay.querySelectorAll('button, input, textarea, select').forEach(el => { el.disabled = false; });
                 applyBtn.textContent = '应用选中';
                 showToast(`应用失败：${e.message}`, 'error');
             }

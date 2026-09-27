@@ -478,10 +478,11 @@ export function mergeExpandedRelevantResults(memories, queryText, relevantResult
     }
 
     merged.sort((a, b) => b.score - a.score);
-    const ceiling = Math.min(maxResults + Math.ceil(maxResults * 0.3), merged.length);
+    const limit = Math.max(0, Number(maxResults) || 10);
+    const ceiling = limit + Math.ceil(limit * 0.3);
     const residents = merged.filter(r => isResidentEntry(r.memory));
     const rest = merged.filter(r => !isResidentEntry(r.memory));
-    return [...residents, ...rest.slice(0, Math.max(0, ceiling - residents.length))];
+    return [...residents, ...rest.slice(0, ceiling)];
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -563,6 +564,10 @@ export function getItemsForInjection(items, queryText, queryEmbedding = null) {
             hits.push(cloneForInjection(item, 'full', 'hit'));
             continue;
         }
+        if (isResidentEntry(item) || item.keepPermanent) {
+            frequent.push(cloneForInjection(item, 'index', 'resident_index'));
+            continue;
+        }
         if ((Number(item.hitCount) || 0) >= hitThreshold) {
             frequent.push(cloneForInjection(item, 'index', 'frequent_index'));
             continue;
@@ -588,7 +593,8 @@ export function getItemsForInjection(items, queryText, queryEmbedding = null) {
         if (distinct.some(existing => entityNameSimilarity('item', candidate, existing) >= 0.94)) continue;
         distinct.push(candidate);
     }
-    const selected = distinct.slice(0, max);
+    const residents = distinct.filter(item => isResidentEntry(item) || item.keepPermanent);
+    const selected = [...residents, ...distinct.filter(item => !isResidentEntry(item) && !item.keepPermanent)].slice(0, max);
 
     // 最终展示以“持有人 > 地点 > 未归属”为主键，同一人的物品保持连续，避免 121212 交错。
     const groupKey = item => normalizeIdentityText(item.owner)
@@ -801,11 +807,6 @@ function formatMemoryLine(m, chatLength = 0, level = 'L2', settings = getSetting
     return `[${date}]${String(content || '').trim()}\n（${speaker}→${listener}）${dialogue}`;
 }
 
-function formatMapEdgeMeta(edge) {
-    const meta = [edge.distance, edge.pathType, edge.difficulty && edge.difficulty !== 'normal' ? edge.difficulty : ''].filter(Boolean);
-    return meta.length ? `(${meta.join('/')})` : '';
-}
-
 function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 800, queryEmbedding = null) {
     if (!mapData || typeof mapData !== 'object' || Object.keys(mapData.locations || {}).length === 0) {
         return { lines: [], blocks: [], tokens: 0, truncated: false, ids: [] };
@@ -817,14 +818,8 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
     const locById = new Map(locs.map(loc => [loc.id, loc]));
     const incoming = new Map(locs.map(loc => [loc.id, []]));
     const children = new Map(locs.map(loc => [loc.id, []]));
-    const regionGroups = new Map();
     for (const loc of locs) {
         if (loc.parentId && children.has(loc.parentId)) children.get(loc.parentId).push(loc);
-        const regionKey = String(loc.region || '').trim().toLowerCase();
-        if (regionKey) {
-            if (!regionGroups.has(regionKey)) regionGroups.set(regionKey, []);
-            regionGroups.get(regionKey).push(loc);
-        }
         for (const edge of (loc.edges || [])) {
             if (incoming.has(edge.toId)) incoming.get(edge.toId).push({ ...edge, fromId: loc.id });
         }
@@ -836,12 +831,7 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
     const locMatchesQuery = (loc) => {
         if (embeddingSimilarity(loc, queryEmbedding) >= 0.62) return true;
         if (!queryTokens.length) return false;
-        const neighborNames = [
-            ...(loc.edges || []).map(e => locById.get(e.toId)?.name || ''),
-            ...(incoming.get(loc.id) || []).map(e => locById.get(e.fromId)?.name || ''),
-            ...(children.get(loc.id) || []).map(child => child.name || ''),
-        ];
-        const text = [loc.name, loc.region, loc.description, loc.realWorldRef, ...neighborNames]
+        const text = [loc.name, loc.description, loc.realWorldRef]
             .filter(Boolean).join(' ').toLowerCase();
         return queryTokens.some(token => text.includes(token));
     };
@@ -876,19 +866,46 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
         if (selectedMap.size >= maxLocations) break;
         addSelected(loc, isResidentEntry(loc) ? 'resident' : (locMatchesQuery(loc) ? 'hit' : 'fallback'));
     }
-    for (const loc of baseMatches) {
-        if (selectedMap.size >= maxLocations) break;
-        const neighbors = [
-            loc.parentId ? locById.get(loc.parentId) : null,
-            ...(children.get(loc.id) || []),
-            ...(loc.edges || []).map(e => locById.get(e.toId)),
-            ...(incoming.get(loc.id) || []).map(e => locById.get(e.fromId)),
-            ...(regionGroups.get(String(loc.region || '').trim().toLowerCase()) || []).filter(other => other.id !== loc.id),
-        ].filter(Boolean);
-        for (const neighbor of neighbors) {
-            if (selectedMap.size >= maxLocations) break;
-            const sameRegion = neighbor.region && loc.region && String(neighbor.region).trim().toLowerCase() === String(loc.region).trim().toLowerCase();
-            addSelected(neighbor, sameRegion ? 'same_region' : 'nearby');
+    const maxHops = clampIntSetting(settings.mapNeighborDepth, 0, 4, 2);
+    const rootLimit = clampIntSetting(settings.mapRootNeighborLimit, 0, 12, 3);
+    const branchLimit = clampIntSetting(settings.mapBranchLimit, 0, 8, 2);
+    const queue = baseMatches.map(loc => ({ loc, depth: 0 }));
+    const traversed = new Set(baseMatches.map(loc => loc.id));
+    const links = new Map();
+    const recordedLinks = new Set();
+    for (let q = 0; q < queue.length; q++) {
+        const { loc, depth } = queue[q];
+        if (depth >= maxHops) continue;
+        const candidates = [
+            ...(loc.edges || []).map(edge => ({ loc: locById.get(edge.toId), edge, kind: 'out' })),
+            ...(incoming.get(loc.id) || []).map(edge => ({ loc: locById.get(edge.fromId), edge, kind: 'in' })),
+            ...(children.get(loc.id) || []).map(child => ({ loc: child, kind: 'child' })),
+            { loc: locById.get(loc.parentId), kind: 'parent' },
+        ].filter(c => c.loc && c.loc.id !== loc.id);
+        const neighbors = new Map();
+        for (const candidate of candidates) {
+            const previous = neighbors.get(candidate.loc.id);
+            if (!previous) neighbors.set(candidate.loc.id, candidate);
+            else if (previous.kind === 'out' && candidate.kind === 'in') previous.kind = 'both';
+        }
+        const unique = [...neighbors.values()];
+        // 图上的跳数定义“最近”；同跳数优先当前命中地点，其次保留地图路线顺序。
+        unique.sort((a, b) => Number(locMatchesQuery(b.loc)) - Number(locMatchesQuery(a.loc)));
+        let used = 0;
+        for (const candidate of unique) {
+            const linkKey = [loc.id, candidate.loc.id].sort().join(':');
+            if (recordedLinks.has(linkKey)) continue;
+            if (traversed.has(candidate.loc.id)) {
+                if (depth !== 0 || !['out', 'both'].includes(candidate.kind) || used >= rootLimit) continue;
+                if (!links.has(loc.id)) links.set(loc.id, []);
+                links.get(loc.id).push(candidate); recordedLinks.add(linkKey); used++; continue;
+            }
+            if (used >= (depth === 0 ? rootLimit : branchLimit) || selectedMap.size >= maxLocations) break;
+            used++; traversed.add(candidate.loc.id); addSelected(candidate.loc, 'nearby');
+            if (!links.has(loc.id)) links.set(loc.id, []);
+            links.get(loc.id).push(candidate);
+            recordedLinks.add(linkKey);
+            queue.push({ loc: candidate.loc, depth: depth + 1 });
         }
     }
 
@@ -903,42 +920,19 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
     const blocks = [];
     let tokens = 0;
 
-    const chainFor = (loc) => {
-        const prev = (incoming.get(loc.id) || [])[0];
-        const next = (loc.edges || []).find(e => locById.has(e.toId));
-        const names = [];
-        if (prev) names.push(locById.get(prev.fromId)?.name || prev.fromId);
-        names.push(loc.name || loc.id);
-        if (next) names.push(locById.get(next.toId)?.name || next.toId);
-        return names.length > 1 ? names.join(' → ') : '';
-    };
-
     for (const loc of selected) {
-        const parent = loc.parentId ? locById.get(loc.parentId) : null;
-        const outEdges = (loc.edges || []).filter(e => locById.has(e.toId)).slice(0, 3);
-        const inEdges = (incoming.get(loc.id) || []).slice(0, 3);
-        const childNames = (children.get(loc.id) || []).slice(0, 4).map(child => child.name || child.id);
-        const sameRegionNames = (regionGroups.get(String(loc.region || '').trim().toLowerCase()) || [])
-            .filter(other => other.id !== loc.id)
-            .slice(0, 5)
-            .map(other => other.name || other.id);
         const parts = [`-${loc.name || loc.id}`];
-        if (loc.region) parts.push(`区域:${loc.region}`);
-        if (parent) parts.push(`父地点:${parent.name || parent.id}`);
-        if (loc.description) parts.push(`说明:${loc.description.slice(0, 80)}`);
-        if (loc.realWorldRef) parts.push(`现实参考:${loc.realWorldRef}`);
+        const isRoot = loc._bbMapInjectReason !== 'nearby';
+        if (isRoot && loc.region) parts.push(`区域:${loc.region}`);
+        const descriptionMax = clampIntSetting(settings.mapDescriptionMaxChars, 0, 500, 60);
+        if (isRoot && loc.description && descriptionMax) parts.push(`说明:${loc.description.slice(0, descriptionMax)}`);
+        if (isRoot && loc.realWorldRef) parts.push(`现实参考:${loc.realWorldRef}`);
 
         const relationLines = [];
-        if (outEdges.length) {
-            relationLines.push('  可前往: ' + outEdges.map(e => `${locById.get(e.toId)?.name || e.toId}${formatMapEdgeMeta(e)}`).join('；'));
+        for (const link of links.get(loc.id) || []) {
+            const arrow = { out: '→', in: '←', both: '↔', child: '包含', parent: '隶属' }[link.kind];
+            relationLines.push(`  ${arrow} ${link.loc.name || link.loc.id}`);
         }
-        if (inEdges.length) {
-            relationLines.push('  入口来源: ' + inEdges.map(e => `${locById.get(e.fromId)?.name || e.fromId}${formatMapEdgeMeta(e)}`).join('；'));
-        }
-        if (childNames.length) relationLines.push('  子地点: ' + childNames.join('、'));
-        if (sameRegionNames.length) relationLines.push('  同区域地点: ' + sameRegionNames.join('、'));
-        const chain = chainFor(loc);
-        if (chain) relationLines.push('  局部空间链: ' + chain);
 
         const line = [parts.join(' | '), ...relationLines].join('\n');
         const lt = estimateTokens(line);
@@ -946,6 +940,7 @@ function buildMapContextLines(mapData, settings, queryText = '', tokenBudget = 8
         blocks.push({
             text: line,
             id: loc.id,
+            ids: [loc.id, ...(links.get(loc.id) || []).map(link => link.loc.id)],
             resident: isResidentEntry(loc),
             reason: loc._bbMapInjectReason || '',
         });
@@ -1029,6 +1024,7 @@ function makeBudgetItem(text, options = {}) {
         priority: Number.isFinite(options.priority) ? options.priority : 2,
         collection: options.collection || '',
         id: options.id || '',
+        ids: options.ids || [],
         flagKey: options.flagKey || '',
     };
 }
@@ -1328,7 +1324,7 @@ function buildInjectionStats(selectedItems) {
         else if (item.collection === 'timeline') addUnique('timeline', item.id, 'timelineIds', 'timelineCount');
         else if (item.collection === 'mem') addUnique('mem', item.id, 'memoryIds', 'memoryCount');
         else if (item.collection === 'thread') addUnique('thread', item.id, 'threadIds', 'threadCount');
-        else if (item.collection === 'map') addUnique('map', item.id, 'mapLocationIds', 'mapCount');
+        else if (item.collection === 'map') for (const id of new Set([item.id, ...(item.ids || [])])) addUnique('map', id, 'mapLocationIds', 'mapCount');
         // v9.3.3 实时记忆按分类计数（一个注入项 = 一个 kind 分组）
         else if (item.collection === 'realtime') addUnique('realtime', item.id, 'realtimeKinds', 'realtimeCount');
     }
@@ -1451,6 +1447,7 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, milestone
             'map',
             mapContext.lines[0] || getInjectionHeader(activeSettings, 'map') || DEFAULT_INJECTION_SECTION_HEADERS.map,
             mapContext.blocks.map(block => makeBudgetItem(block.text, {
+                ids: block.ids,
                 resident: block.resident,
                 priority: block.resident ? 0 : (block.reason === 'hit' ? 1 : 2),
                 collection: 'map',
