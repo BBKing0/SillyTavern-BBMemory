@@ -10,18 +10,9 @@ import {
     getNpcProfiles, getItems, getMilestones, getTimeline, getMemories,
     updateNpcProfile, updateItem, updateMilestone, updateMemory,
     removeNpcProfile, removeItem, removeMilestone, removeMemory,
-    saveTimeline,
-    getCalendarDescription,
 } from './memory-store.js';
-import { callCustomApi, callMainApi } from './auto-generator.js';
 import { filterIgnoredIssues } from './maintenance-state.js';
 import { timelineTextSize } from './timeline-compression.js';
-import {
-    DEFAULT_CONCRETE_TIME_RULE,
-    DEFAULT_THREAD_SUMMARY_PROMPT,
-    fillPromptTemplate,
-    getPromptTemplate,
-} from './prompt-templates.js';
 
 // ═══════════════════════════════════════════════════════════
 //  维护状态
@@ -339,122 +330,8 @@ export async function restoreMemory(chatId, memoryId) {
  * 读取所有里程碑 + 现有时间线，让 LLM 输出更新后的时间线列表
  */
 export async function regenerateThreadSummary(chatId, options = {}) {
-    if ((await getTimeline(chatId)).some(t => t.entries?.length && !t.archived && t.status !== 'archived')) {
-        const { reviewTimelineCompression } = await import('./timeline-compression.js');
-        return reviewTimelineCompression(chatId, options);
-    }
-    const milestones = await getMilestones(chatId);
-    const existingTimeline = await getTimeline(chatId);
-    const settings = getSettings();
-
-    // 将里程碑按重要性排序：ongoing + foreshadow 优先，ended 次之
-    const sorted = [...milestones].sort((a, b) => {
-        const scoreA = (a.status === 'ongoing' || a.status === 'foreshadow' ? 2 : a.status === 'ended' ? 1 : 0);
-        const scoreB = (b.status === 'ongoing' || b.status === 'foreshadow' ? 2 : b.status === 'ended' ? 1 : 0);
-        if (scoreA !== scoreB) return scoreB - scoreA;
-        return (b.storyTimeSort ?? 0) - (a.storyTimeSort ?? 0);
-    });
-
-    // 取最近的重要条目（最多 30 条，避免 prompt 太长）
-    const recentEntries = sorted.slice(0, 30);
-
-    // 构建里程碑文本
-    const entriesText = recentEntries.map((t, i) =>
-        `${i + 1}. [${t.storyTime || '?'}] ${t.event} (${t.status || 'ongoing'})\n   ${t.summary}${t.impact ? ' // 影响: ' + t.impact : ''}`
-    ).join('\n');
-
-    // 构建已有时间线文本
-    const timelineText = existingTimeline.length > 0
-        ? existingTimeline.map(t => {
-            const entries = (t.entries || []).map(e => `  ${e.period || ''} ${e.event || ''} [${e.status || ''}]`).join('\n');
-            return `- [${t.id}] ${t.name} (type:${t.type}, status:${t.status}, priority:${t.priority})${t.parentThreadId ? ', parent:' + t.parentThreadId : ''}\n${entries || '  (无条目)'}`;
-        }).join('\n')
-        : '(无已有时间线)';
-
-    const maxActive = options.maxActiveTimeline ?? options.maxActiveThreads ?? settings.maxActiveTimeline ?? settings.maxActiveThreads ?? 5;
-    const calDesc2 = (await getCalendarDescription(chatId))?.trim();
-    const calRef2 = calDesc2
-        ? `\n**世界历法参考**：${calDesc2}\n（仅用于推断和整理故事时间，无需计算天数）\n` : '';
-
-    const prompt = fillPromptTemplate(
-        getPromptTemplate(settings, 'maintenance.threadSummary', DEFAULT_THREAD_SUMMARY_PROMPT),
-        {
-            calRef: calRef2,
-            CONCRETE_TIME_RULE: getPromptTemplate(settings, 'extract.concreteTimeRule', DEFAULT_CONCRETE_TIME_RULE),
-            entriesText: entriesText || '(无)',
-            threadsText: timelineText,
-            timelineText,
-            maxActive,
-        }
-    ) || `你是一个故事时间线组织助手。根据里程碑和已有时间线，重新整理故事时间线。${calRef2}
-
-═══════════════════════════════════════════════════════
-## 里程碑（按重要性排序）
-═══════════════════════════════════════════════════════
-${entriesText || '(无)'}
-
-═══════════════════════════════════════════════════════
-## 已有时间线
-═══════════════════════════════════════════════════════
-${timelineText}
-
-═══════════════════════════════════════════════════════
-## 任务
-═══════════════════════════════════════════════════════
-
-根据里程碑，重新整理为命名时间线。每条时间线是一条持续存在的故事线索。
-
-规则：
-1. 每条时间线有独立的 name（如"第一幕·战前"、"感情线·charA"、"支线·寻找圣剑"）
-2. 将相关的里程碑归入对应时间线的 entries 中
-3. 合并同类项——时间相近、主题相同的事件合并为一条 entry
-4. 保持活跃时间线在 ${maxActive} 条以内（resident 不计入）
-5. 已结束的时间线标记 status:"ended"（不注入，但可被向量检索）
-6. 重要的、贯穿始终的时间线标记 status:"resident"（永远注入）
-7. 时间线类型 type: plot(主线剧情) / emotional(感情线) / side(支线) / world(世界观)
-
-返回纯JSON对象（不要markdown代码块）：
-{"timeline":[{"id":"保留已有ID或生成新ID","name":"时间线名","type":"plot|emotional|side|world","status":"ongoing|ended|paused|resident","priority":"high|medium|low","parentThreadId":null或父时间线ID,"entries":[{"refId":"可选的里程碑ID","period":"时间区间","event":"事件描述","status":"ongoing|ended|milestone"}]}]}
-只输出JSON。`;
-
-    let responseText;
-    try {
-        if (settings.autoGenMode === 'custom' && settings.autoGenEndpoint) {
-            responseText = await callCustomApi(prompt);
-        } else {
-            responseText = await callMainApi(prompt);
-        }
-    } catch (e) {
-        console.warn('[BB-Memory] 时间线总结生成API调用失败:', e.message);
-        return { timelineCount: 0, threadCount: 0, error: e.message };
-    }
-
-    try {
-        let text = responseText.trim();
-        text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-        const match = text.match(/\{[\s\S]*\}/);
-        if (!match) {
-            console.warn('[BB-Memory] 时间线总结响应未找到JSON');
-            return { timelineCount: 0, threadCount: 0, error: 'No JSON found in response' };
-        }
-        const parsed = JSON.parse(match[0]);
-        const newTimeline = Array.isArray(parsed.timeline) ? parsed.timeline : (Array.isArray(parsed.threads) ? parsed.threads : []);
-
-        // 保留已有时间线的 id 和 createdAt
-        for (const nt of newTimeline) {
-            const existing = existingTimeline.find(t => t.id === nt.id);
-            if (existing) {
-                nt.createdAt = existing.createdAt;
-            }
-            nt.updatedAt = Date.now();
-        }
-
-        const { reviewTimelineRegeneration } = await import('./timeline-compression.js');
-        return await reviewTimelineRegeneration(chatId, newTimeline, existingTimeline);
-    } catch (e) {
-        console.warn('[BB-Memory] 时间线总结JSON解析失败:', e.message);
-        return { timelineCount: 0, threadCount: 0, error: e.message };
-    }
+    const { reviewJointSummary } = await import('./story-summary.js');
+    return reviewJointSummary(chatId, options);
 }
 
 export const regenerateTimelineSummary = regenerateThreadSummary;

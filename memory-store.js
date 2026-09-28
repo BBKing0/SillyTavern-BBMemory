@@ -62,6 +62,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     biographyContextChars: 20000,
     biographyMaxTokens: 2200,
     timelineCompressionApi: 'main',
+    timelineSummaryTarget: 'timeline', // timeline | milestone | both；上下文始终联合读取
     enabled: true,
     injectionTemplate: '<BBMemory>\n{{memories}}\n</BBMemory>',
     // 检索
@@ -179,7 +180,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     realtimeSceneChangeSettle: true,   // 场景切换时结算上一场景的条目
     realtimeInjectionMax: 15,          // 注入条数硬上限
     realtimeInjectionTokenCap: 300,    // 注入 token 硬上限（不依赖全局预算，必须自带）
-    realtimePromotionMode: 'auto',     // 'auto' 直接写入长期库 | 'confirm' 确认后写入
+    realtimePromotionMode: 'disabled', // 仅兼容旧配置；v9.4.8 写入层强制禁止晋升
     realtimeSettleMode: 'auto',        // 'auto' 自动结算 | 'manual' 仅手动结算
     // v9.4.3 全库整理：只允许用户主动启动，所有建议进入审核窗口。
     fullCurationMode: 'duplicates',  // 'duplicates' 疑似重复 | 'all' 全部条目质量审查
@@ -1689,7 +1690,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.4.7',
+        version: '9.4.8',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2105,7 +2106,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
         realtime,
     };
     const backup = {
-        version: '9.4.7',
+        version: '9.4.8',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2895,7 +2896,7 @@ export async function exportMemories(chatId) {
     await normalizeDataEmbeddingsToRefs(chatId, data);
     const vectorPack = await buildVectorPack(chatId, data);
     return JSON.stringify({
-        version: '9.4.7',
+        version: '9.4.8',
         schema: 'bb-memory-vector-ref-v1',
         exportedAt: Date.now(),
         data: stripRuntimeEmbeddings(data),

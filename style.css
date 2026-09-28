@@ -6218,10 +6218,22 @@
 .bb-curate-category { display: inline-block; border-radius: .4rem; padding: .1rem .4rem; background: #6688aa33; font-size: .8em; }
 .bb-curate-editor { margin-top: .7rem; border: 1px solid var(--SmartThemeBorderColor, #555); padding: .5rem; border-radius: .4rem; }
 .bb-curate-editor summary { cursor: pointer; }
-.bb-curate-edit-field, .bb-biography-popup > label, .bb-biography-options label, .bb-v947-options label { display: flex; flex-direction: column; gap: .3rem; min-width: 0; margin-top: .5rem; }
+.bb-curate-edit-field, .bb-biography-body > label, .bb-biography-options label, .bb-v947-options label { display: flex; flex-direction: column; gap: .3rem; min-width: 0; margin-top: .5rem; }
 .bb-curate-edit-field textarea, .bb-biography-popup textarea, .bb-biography-popup select, .bb-biography-options input { width: 100%; box-sizing: border-box; min-width: 0; }
 .bb-curate-edit-field textarea { resize: vertical; white-space: pre-wrap; }
-.bb-biography-popup { width: min(44rem, 95vw); max-height: 94vh; max-height: 94dvh; overflow: auto; box-sizing: border-box; padding: 1rem; }
+.bb-form-overlay .bb-biography-popup { width: min(44rem, 95vw); max-height: 92vh !important; max-height: 92dvh !important; overflow: hidden; box-sizing: border-box; padding: 1rem; min-height: 0; }
+.bb-biography-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; padding: 0 .3rem; }
+.bb-biography-popup > h3, .bb-biography-buttons { flex: 0 0 auto; }
+.bb-form-overlay .bb-organization-popup { width: min(54rem, 96vw); max-width: 54rem; max-height: 92dvh !important; min-height: 0; overflow: hidden; }
+.bb-organization-tabs, .bb-organization-actions { display: flex; flex-wrap: wrap; gap: .5rem; padding: .6rem; flex: 0 0 auto; }
+.bb-organization-tabs button { flex: 1 1 auto; }
+.bb-organization-tabs [aria-selected="true"] { border-color: var(--SmartThemeQuoteColor, #8fc5c0); background: rgba(100, 170, 170, .18); }
+.bb-organization-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; flex: 1 1 auto; padding: 1rem; }
+.bb-organization-body [hidden] { display: none !important; }
+.bb-organization-summary { display: flex; flex-direction: column; gap: .8rem; margin-top: 1rem; }
+.bb-organization-summary label { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+.bb-organization-summary .bb-input { min-width: 0; max-width: 100%; flex: 1 1 12rem; }
+.bb-organization-status { flex: 0 0 auto; padding: .75rem 1rem; overflow-wrap: anywhere; border-top: 1px solid var(--SmartThemeBorderColor, #444); }
 .bb-biography-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
 .bb-biography-sources, .bb-biography-buttons { display: flex; gap: .7rem; flex-wrap: wrap; margin: .7rem 0; }
 .bb-biography-status, .bb-biography-count { font-size: .85em; margin-top: .5rem; overflow-wrap: anywhere; }

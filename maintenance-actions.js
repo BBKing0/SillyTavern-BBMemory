@@ -112,7 +112,11 @@ export async function executeMaintenanceBatch(chatId, issues, op, { onProgress, 
             const { reviewTimelineCompression } = await import('./timeline-compression.js');
             const review = await reviewTimelineCompression(chatId, { ids: unique.map(i => i.id), signal, onProgress: message => onProgress?.(0, unique.length, { ...result, message }) });
             result.succeeded = unique.filter(i => review.appliedIds.includes(i.id));
-            result.cancelled = result.succeeded.length < unique.length;
+            result.summary = review.summary;
+            result.cancelled = !review.applyResult && review.confirmed === 0;
+            result.failed = (review.applyResult?.failed || []).map(failure => ({
+                issue: unique.find(i => failure.ids?.includes(i.id)) || { id:failure.ids?.[0] || '' }, error:failure.error,
+            }));
             return result;
         }
         if (op === 'ignore' && !signal?.aborted && String(globalThis.SillyTavern?.getContext?.()?.chatId) === String(chatId)) {
@@ -130,7 +134,7 @@ export async function executeMaintenanceBatch(chatId, issues, op, { onProgress, 
         }
         return result;
     } finally {
-        addMaintenanceResolved(chatId, { details: [`${MAINTENANCE_OP_LABELS[op] || op}：成功 ${result.succeeded.length}，失败 ${result.failed.length}${result.cancelled ? '，已停止' : ''}`] }, result.succeeded.length);
+        addMaintenanceResolved(chatId, { details: [result.summary || `${MAINTENANCE_OP_LABELS[op] || op}：成功 ${result.succeeded.length}，失败 ${result.failed.length}${result.cancelled ? '，已停止' : ''}`] }, result.succeeded.length);
         running.delete(chatId);
     }
 }

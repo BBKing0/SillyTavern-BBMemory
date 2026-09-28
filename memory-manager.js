@@ -41,7 +41,7 @@ const MANAGER_FORM_POPUP_Z = 2147483001;
 
 function closeManagerFormOverlays() {
     document.querySelectorAll('.bb-manager-form-overlay, .bb-form-overlay, .bb-thread-form-overlay')
-        .forEach(removeTopLayerElement);
+        .forEach(element => { if (!element.classList.contains('bb-organization-overlay')) removeTopLayerElement(element); });
 }
 
 function applyManagerFormLayer(formOverlay) {
@@ -59,7 +59,7 @@ function applyManagerFormLayer(formOverlay) {
     }
 }
 
-function createManagerFormOverlay(extraClass = '') {
+export function createManagerFormOverlay(extraClass = '') {
     closeManagerFormOverlays();
     const formOverlay = document.createElement('div');
     formOverlay.className = ['bb-form-overlay', 'bb-manager-form-overlay', extraClass].filter(Boolean).join(' ');
@@ -124,6 +124,10 @@ export async function openMemoryManager(chatId) {
     document.body.appendChild(overlay);
 
     bindManagerEvents(overlay, chatId);
+    overlay.querySelector('[data-action="organization"]').onclick = async () => {
+        try { const { openMemoryOrganization } = await import('./memory-organization.js'); openMemoryOrganization(chatId); }
+        catch (error) { showToast(error.message, 'error'); }
+    };
     updateCurrentSlotBar(overlay, chatId);
 }
 
@@ -167,7 +171,7 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) 
             <button class="bb-mgr-tab" data-tab="realtime">
                 <i class="fa-solid fa-bolt"></i> 实时
             </button>
-            <button class="bb-mgr-tab" data-tab="correction"><i class="fa-solid fa-pen-to-square"></i> 纠错</button>
+            <button class="menu_button" data-action="organization"><i class="fa-solid fa-broom"></i> 记忆整理</button>
             <button class="bb-mgr-tab" data-tab="dashboard">
                 <i class="fa-solid fa-gauge-high"></i> 仪表盘
             </button>
@@ -292,7 +296,7 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) 
             </div>
         </div>
 
-        <div class="bb-mgr-panel" data-panel="correction" style="display:none;"><div id="bb_correction_panel" class="bb-correction-panel"></div></div>
+
         <!-- 仪表盘标签页 -->
         <div class="bb-mgr-panel" data-panel="dashboard" style="display:none;">
             <div id="bb_dashboard_content">
@@ -641,14 +645,6 @@ function bindManagerEvents(overlay, chatId) {
                 await renderThreadPanel(overlay, chatId);
             } else if (panelName === 'realtime') {
                 await renderRealtimePanel(overlay, chatId);
-            } else if (panelName === 'correction') {
-                try {
-                    const { renderCorrectionPanel } = await import('./memory-correction-ui.js');
-                    renderCorrectionPanel(overlay.querySelector('#bb_correction_panel'), chatId, {
-                        createForm: createManagerFormOverlay, toast: showToast,
-                        onChange: () => rerenderManagerList(overlay, chatId),
-                    });
-                } catch (error) { showToast(`打开记忆纠错失败：${error.message}`, 'error'); }
             } else if (panelName === 'categories') {
                 await renderCategoriesPanel(overlay, chatId);
             } else if (panelName === 'warehouse') {
@@ -1644,7 +1640,7 @@ function buildRealtimeManagerItem(entry) {
             <span class="bb-item-badge" style="color:${state.color};border-color:${state.color}66;background:${state.color}18;">
                 ${escapeHtml(state.label)}
             </span>
-            ${promoted ? '<span class="bb-item-badge" style="color:#ba68c8;border-color:#ba68c866;background:#ba68c818;">已晋升</span>' : ''}
+            ${promoted ? '<span class="bb-item-badge" style="color:#ba68c8;border-color:#ba68c866;background:#ba68c818;">历史晋升</span>' : ''}
             <span class="bb-realtime-floor">${escapeHtml(realtimeFloorLabel(entry))}</span>
         </div>
         <div class="bb-realtime-text">${escapeHtml(entry.text)}</div>
@@ -1654,7 +1650,6 @@ function buildRealtimeManagerItem(entry) {
         </div>
         <div class="bb-realtime-actions">
             <button class="menu_button bb-rt-edit" data-id="${escapeAttr(entry.id)}"><i class="fa-solid fa-pen"></i> 编辑</button>
-            ${!promoted && entry.kind !== 'schedule' ? `<button class="menu_button bb-rt-promote" data-id="${escapeAttr(entry.id)}"><i class="fa-solid fa-arrow-up"></i> 手动晋升</button>` : ''}
             ${entry.settleState !== 'settled'
                 ? `<button class="menu_button bb-rt-discard" data-id="${escapeAttr(entry.id)}"><i class="fa-solid fa-box-archive"></i> 留档</button>`
                 : (!promoted ? `<button class="menu_button bb-rt-reactivate" data-id="${escapeAttr(entry.id)}"><i class="fa-solid fa-rotate-left"></i> 恢复生效</button>` : '')}
@@ -1686,7 +1681,7 @@ async function renderRealtimePanel(overlay, chatId) {
             <div class="bb-realtime-toolbar">
                 <div>
                     <strong><i class="fa-solid fa-bolt"></i> 实时细节与日程</strong>
-                    <div class="bb-realtime-summary">生效 ${counts.active} · 待结算 ${counts.pending} · 已结算 ${counts.settled}</div>
+                    <div class="bb-realtime-summary">生效 ${counts.active} · 待留档（不注入）${counts.pending} · 已结算 ${counts.settled}</div>
                 </div>
                 <div class="bb-realtime-toolbar-actions">
                     <select class="bb-input" id="bb_rt_state_filter" aria-label="按状态筛选">
@@ -1725,7 +1720,7 @@ async function renderRealtimePanel(overlay, chatId) {
             const original = btn.innerHTML;
             btn.disabled = true;
             btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 结算中...';
-            showToast('正在结算实时场景细节...', 'info');
+            showToast('正在本地留档实时场景细节...', 'info');
             try {
                 const { settleRealtimeMemories } = await import('./realtime-memory.js');
                 const currentFloor = entries.reduce((max, e) => Math.max(max, Number(e.lastSeenFloor) || 0), 0);
@@ -1758,10 +1753,6 @@ async function renderRealtimePanel(overlay, chatId) {
             const entry = entries.find(item => String(item.id) === String(btn.dataset.id));
             if (entry) showRealtimeEditForm(overlay, chatId, entry);
         }));
-        panel.querySelectorAll('.bb-rt-promote').forEach(btn => btn.addEventListener('click', () => {
-            const entry = entries.find(item => String(item.id) === String(btn.dataset.id));
-            if (entry) showRealtimePromoteForm(overlay, chatId, entry);
-        }));
         panel.querySelectorAll('.bb-rt-discard').forEach(btn => btn.addEventListener('click', async () => {
             const ok = await confirmManagerAction('留档实时记忆', '留档后该细节将停止注入，但仍可在此恢复。是否继续？');
             if (!ok) return;
@@ -1775,7 +1766,8 @@ async function renderRealtimePanel(overlay, chatId) {
         panel.querySelectorAll('.bb-rt-reactivate').forEach(btn => btn.addEventListener('click', async () => {
             btn.disabled = true;
             try {
-                await updateRealtimeMemory(chatId, btn.dataset.id, { settleState: 'active', settleReason: '', promotedTo: null });
+                const { reactivateRealtimeMemory } = await import('./realtime-memory.js');
+                await reactivateRealtimeMemory(chatId, btn.dataset.id);
                 showToast('该细节已恢复生效', 'success');
                 await renderRealtimePanel(overlay, chatId);
             } catch (error) { showToast(`恢复失败: ${error.message}`, 'error'); btn.disabled = false; }
@@ -1829,52 +1821,6 @@ function showRealtimeEditForm(managerOverlay, chatId, entry) {
             showToast('实时记忆已更新', 'success');
             await renderRealtimePanel(managerOverlay, chatId);
         } catch (error) { showToast(`保存失败: ${error.message}`, 'error'); btn.disabled = false; btn.innerHTML = '保存'; }
-    });
-}
-
-function showRealtimePromoteForm(managerOverlay, chatId, entry) {
-    const formOverlay = createManagerFormOverlay('bb-realtime-form-overlay');
-    formOverlay.innerHTML = `<div class="bb-mem-form-popup">
-        <div class="bb-mem-form-header"><h3><i class="fa-solid fa-arrow-up"></i> 手动晋升到长期库</h3><span class="bb-mem-form-close">&times;</span></div>
-        <div class="bb-mem-form-body">
-            <div class="bb-realtime-source-preview">${escapeHtml(entry.text)}</div>
-            <div class="bb-mem-form-group"><label>目标柱</label><select class="bb-input" id="bb_rt_promote_pillar">
-                <option value="mem">记忆条目</option><option value="milestone">里程碑</option><option value="npc">NPC 档案</option><option value="item">物品</option>
-            </select></div>
-            <div class="bb-mem-form-group"><label>名称 / 标题（NPC、物品必填）</label><input class="bb-input" id="bb_rt_promote_name" placeholder="留空时使用细节内容生成标题"></div>
-            <div class="bb-mem-form-group"><label>整理后的长期描述</label><textarea class="bb-input" id="bb_rt_promote_content" rows="4">${escapeHtml(entry.text)}</textarea></div>
-        </div>
-        <div class="bb-mem-form-footer"><button class="menu_button" id="bb_rt_promote_cancel">取消</button><button class="menu_button" id="bb_rt_promote_save"><i class="fa-solid fa-arrow-up"></i> 晋升并留档</button></div>
-    </div>`;
-    const close = () => formOverlay.remove();
-    formOverlay.querySelector('.bb-mem-form-close')?.addEventListener('click', close);
-    formOverlay.querySelector('#bb_rt_promote_cancel')?.addEventListener('click', close);
-    formOverlay.querySelector('#bb_rt_promote_save')?.addEventListener('click', async (event) => {
-        const pillar = formOverlay.querySelector('#bb_rt_promote_pillar')?.value || 'mem';
-        const name = formOverlay.querySelector('#bb_rt_promote_name')?.value.trim() || '';
-        const content = formOverlay.querySelector('#bb_rt_promote_content')?.value.trim() || entry.text;
-        if ((pillar === 'npc' || pillar === 'item') && !name) { showToast('晋升 NPC 或物品时必须填写名称', 'warning'); return; }
-        const fields = pillar === 'npc'
-            ? { name, role: content, indexCard: content }
-            : pillar === 'item'
-                ? { name, significance: content, status: 'held', location: entry.location || '' }
-                : pillar === 'milestone'
-                    ? { event: name || content, summary: content, storyTime: entry.storyTime || '', location: entry.location || '' }
-                    : { title: name || content.slice(0, 30), content, summary: content, type: 'fact', storyTime: entry.storyTime || '' };
-        const btn = event.currentTarget;
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 晋升中...';
-        showToast('正在把实时细节晋升到长期库...', 'info');
-        try {
-            const { applySettleDecisions } = await import('./realtime-memory.js');
-            const result = await applySettleDecisions(chatId, [{ id: entry.id, action: 'promote', pillar, fields, entry, reason: '用户手动晋升' }], [], {
-                currentFloor: entry.lastSeenFloor,
-            });
-            if (!result.ok || result.failed.length) throw new Error(result.failed[0]?.error || result.summary || '晋升失败');
-            close();
-            showToast(result.summary || '实时记忆已晋升', 'success');
-            await renderRealtimePanel(managerOverlay, chatId);
-        } catch (error) { showToast(`晋升失败: ${error.message}`, 'error'); btn.disabled = false; btn.innerHTML = '晋升并留档'; }
     });
 }
 
@@ -2598,6 +2544,7 @@ async function renderThreadPanel(overlay, chatId) {
                 const { regenerateThreadSummary } = await import('./memory-maintainer.js');
                 const result = await regenerateThreadSummary(chatId);
                 if (result.error) throw new Error(result.error);
+                showToast(result.summary || '总结完成', 'info');
                 await renderThreadPanel(overlay, chatId);
             } catch (e) {
                 showToast(`故事线生成失败：${e.message}`, 'error');
@@ -2735,7 +2682,8 @@ async function renderThreadPanel(overlay, chatId) {
             const { regenerateThreadSummary } = await import('./memory-maintainer.js');
             const result = await regenerateThreadSummary(chatId);
             if (result.error) throw new Error(result.error);
-            if (result.threadCount > 0) {
+                showToast(result.summary || '总结完成', 'info');
+            if (result.threadCount > 0 || result.milestoneCount > 0) {
                 await renderThreadPanel(overlay, chatId);
             } else {
                 btn.disabled = false;

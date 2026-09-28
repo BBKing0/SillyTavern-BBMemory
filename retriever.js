@@ -1,3 +1,4 @@
+import { planSettlement } from './realtime-lifecycle.js';
 /**
  * retriever.js —— BB-Memory v9.4.5 检索与注入系统
  *
@@ -1194,17 +1195,19 @@ function formatRealtimeGroups(entries) {
  * （retriever 的 unlimited 判定），漏掉这层上限会让长会话的注入无声膨胀。
  *
  * 过滤规则：已结算（settled）或已晋升（promotedTo）的不注入——前者已退场，
- * 后者内容已进长期库，再注入就是重复。待结算（pending_settle）仍注入，
- * 这样结算失败时细节不会凭空消失。
+ * 后者内容已进长期库，再注入就是重复。待留档（pending_settle）也停止注入，避免到期细节继续影响后文。
  */
 export function getRealtimeForInjection(entries, settings) {
     const activeSettings = settings || getSettings();
     const empty = { lines: [], totalCount: 0, injectedCount: 0, tokenEstimate: 0, truncated: false, enabled: false };
     if (!activeSettings.realtimeEnabled) return empty;
 
+    const chatLength = globalThis.SillyTavern?.getContext?.()?.chat?.length;
+    const expired = new Set(planSettlement(entries, Number.isFinite(chatLength) ? chatLength - 1 : NaN, activeSettings).marks.map(e => e.id));
     const rawPool = (Array.isArray(entries) ? entries : []).filter(entry =>
         entry && entry.kind !== 'schedule' && String(entry.text || '').trim()
-        && entry.settleState !== 'settled'
+        && entry.settleState === 'active'
+        && !expired.has(entry.id)
         && !entry.promotedTo);
     const scheduleDays = activeSettings.realtimeScheduleEnabled === false ? [] : getScheduleDays(entries, activeSettings);
     if (!rawPool.length && !scheduleDays.length) return { ...empty, enabled: true };

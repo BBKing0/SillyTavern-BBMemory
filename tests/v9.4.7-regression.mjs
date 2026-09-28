@@ -136,8 +136,9 @@ await test('人物小传保存字段可导入导出且不覆盖NPC身份',async(
  const exported=await store.exportMemories(ctx.chatId);assert.ok(JSON.stringify(exported).includes('一页旧书'));
  await store.updateNpcProfile(ctx.chatId,n.id,{biography:'半页旧书'});const fresh=(await store.getNpcProfiles(ctx.chatId)).find(x=>x.id===n.id);assert.equal(fresh.role,'老师');
 });
-await test('v9.4.7版本与新参数具备存储、导出、UI绑定',async()=>{
- assert.equal(JSON.parse(readFileSync(new URL('../manifest.json',import.meta.url))).version,'9.4.7');
+await test('v9.4.7新增参数仍具备存储、导出、UI绑定',async()=>{
+ const version=JSON.parse(readFileSync(new URL('../manifest.json',import.meta.url))).version;
+ assert.equal(JSON.parse(await store.exportMemories(ctx.chatId)).version,version);
  const index=readFileSync(new URL('../index.js',import.meta.url),'utf8');
  for(const key of ['mapNeighborDepth','mapRootNeighborLimit','mapBranchLimit','mapDescriptionMaxChars','timelineCompressionEntryThreshold','timelineCompressionCharThreshold','timelineCompressionTargetEntries','timelineCompressionContextChars','timelineCompressionMaxTokens','timelineCompressionApi','curationCategoryLimit']){
   assert.ok(Object.hasOwn(store.DEFAULT_SETTINGS,key));assert.ok(index.includes(`'${key}'`));assert.ok(index.includes(`${key}: ['#`));

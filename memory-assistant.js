@@ -5,6 +5,7 @@
  */
 
 import { realtimeFloorLabel, getScheduleDays } from './realtime-schedule.js';
+import { planSettlement } from './realtime-lifecycle.js';
 import {
     MEMORY_TYPES,
     REALTIME_KINDS,
@@ -51,9 +52,11 @@ export async function openAssistant(chatId, initialTab = 'dashboard') {
 }
 
 function selectCurrentRealtimeEntries(entries, settings) {
+    const floor = (globalThis.SillyTavern?.getContext?.()?.chat?.length ?? 0) - 1;
+    const expired = new Set(planSettlement(entries, floor, settings).marks.map(e => e.id));
     const unresolved = (Array.isArray(entries) ? entries : [])
         .filter(entry => entry && entry.kind !== 'schedule' && String(entry.text || '').trim()
-            && entry.settleState !== 'settled' && !entry.promotedTo)
+            && entry.settleState === 'active' && !expired.has(entry.id) && !entry.promotedTo)
         .sort((a, b) => Number(b.lastSeenFloor ?? b.createdFloor ?? -1) - Number(a.lastSeenFloor ?? a.createdFloor ?? -1));
     if (!unresolved.length) return [];
     const currentSceneKey = String(unresolved[0].sceneKey || '').trim();

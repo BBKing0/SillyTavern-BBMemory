@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.4.7</b>
+            <b>BB-Memory v9.4.8</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -38,8 +38,8 @@
                 <button id="bb_memory_help_btn" class="menu_button" title="打开 BB-Memory 使用说明">
                     <i class="fa-solid fa-circle-question"></i> 使用说明
                 </button>
-                <button id="bb_memory_maintenance_btn" class="menu_button" title="打开记忆维护面板（等级/状态管理）">
-                    <i class="fa-solid fa-broom"></i> 记忆维护
+                <button id="bb_memory_maintenance_btn" class="menu_button" title="打开记忆整理（全库整理、纠错、维护）">
+                    <i class="fa-solid fa-broom"></i> 记忆整理
                 </button>
             </div>
 
@@ -75,23 +75,13 @@
                 </button>
             </div>
 
-            <!-- 快捷按钮 行4：v9.4.3 全库整理 -->
-            <div class="bb-mem-sidebar-buttons">
-                <button id="bb_curate_full_btn" class="menu_button" title="全库整理——可选择疑似重复整理或全部条目审查，所有结果先由你确认">
-                    <i class="fa-solid fa-magnifying-glass-chart"></i> 全库整理
-                </button>
-                <button id="bb_curate_undo_btn" class="menu_button" title="撤销上次全库整理，逐字段还原到整理前">
-                    <i class="fa-solid fa-rotate-left"></i> 撤销整理
-                </button>
-            </div>
-            <div id="bb_curate_status" style="font-size:0.7em;opacity:0.6;margin-bottom:6px;"></div>
 
             <!-- 快捷按钮 行5：v9.3.3 实时记忆（第五柱） -->
             <div class="bb-mem-sidebar-buttons">
-                <button id="bb_realtime_settle_btn" class="menu_button" title="立即结算——把当前场景细节交给 AI 判定：晋升长期库 / 留档 / 延期">
+                <button id="bb_realtime_settle_btn" class="menu_button" title="立即结算——本地留档当前场景细节，停止临时注入，不写入长期库">
                     <i class="fa-solid fa-flag-checkered"></i> 立即结算
                 </button>
-                <button id="bb_realtime_undo_btn" class="menu_button" title="撤销上次结算，撤回晋升条目并还原实时记忆">
+                <button id="bb_realtime_undo_btn" class="menu_button" title="撤销上次结算，还原实时细节；旧版快照兼容撤回当时的晋升">
                     <i class="fa-solid fa-rotate-left"></i> 撤销结算
                 </button>
             </div>
@@ -500,7 +490,7 @@
                     <div style="font-size:0.72em;opacity:0.6;line-height:1.5;margin-bottom:6px;">
                         检索由最后一条用户消息驱动，问句里没有「车」字，「坐公交车来电影院」就永远进不了注入，后文于是写出「开车回家」。
                         这一柱专收「交通约束、携带物、异常痕迹、未完成事项」这类当下细节，<b>不做向量、不参与检索、无条件注入</b>——
-                        正是这个绕过检索的性质解决了长线逻辑断裂。场景结束时再逐条判定晋升长期库还是留档。
+                        正是这个绕过检索的性质解决了长线逻辑断裂。仅作临时细节提醒，不晋升长期库；过期后停止注入并留档。
                     </div>
 
                     <label class="checkbox_label" style="margin: 8px 0;">
@@ -534,10 +524,11 @@
                     <label>故事线事件数提醒阈值<input id="bb_timeline_compression_entry_threshold" type="number" class="bb-input" min="2" max="1000" value="12" /></label>
                     <label>故事线字符数提醒阈值<input id="bb_timeline_compression_char_threshold" type="number" class="bb-input" min="100" max="100000" value="1800" /></label>
                     <label>压缩目标事件数<input id="bb_timeline_compression_target_entries" type="number" class="bb-input" min="1" max="100" value="6" /></label>
-                    <label>单条故事线压缩输入上限<input id="bb_timeline_compression_context_chars" type="number" class="bb-input" min="2000" max="500000" value="60000" /></label>
+                    <label>时间线 + 里程碑联合输入上限<input id="bb_timeline_compression_context_chars" type="number" class="bb-input" min="2000" max="500000" value="60000" /></label>
                     <label>故事线压缩输出 token 上限<input id="bb_timeline_compression_max_tokens" type="number" class="bb-input" min="256" max="32000" value="3000" /></label>
                     <label>全库整理最多问题类别（另加其他）<input id="bb_curation_category_limit" type="number" class="bb-input" min="1" max="5" value="5" /></label>
-                        <label>故事线压缩 API<select id="bb_timeline_compression_api" class="bb-input"><option value="main">主 API</option><option value="custom">副 API</option></select></label>
+                        <label>允许修改<select id="bb_timeline_summary_target" class="bb-input"><option value="timeline">只修改时间线</option><option value="milestone">只修改里程碑</option><option value="both">时间线和里程碑都修改</option></select></label>
+                        <label>联合总结 API<select id="bb_timeline_compression_api" class="bb-input"><option value="main">主 API</option><option value="custom">副 API</option></select></label>
                         <small>地图按图上最近的连接展开；同区域地点不自动扩展。故事线达到任一阈值会提醒，压缩建议需编辑确认后保存。人物小传在 NPC 条目中生成。</small>
                     </div>
                         <label>每次调查最多轮数<input id="bb_agent_max_rounds" type="number" class="bb-input" min="1" max="30" value="8" /></label>
@@ -549,7 +540,7 @@
                         <small class="bb-mem-hint">使用副 API 调查当前聊天全库，包含归档和暂停分类。建议显示原值及改动，选择执行后才写入。大库可调高轮数或继续追问；重置只清空对话与待执行建议。</small>
                     </div>
                     <div class="bb-mem-sidebar-section">
-                        <label>记忆纠错（记忆管理 → 纠错）</label>
+                        <label>记忆纠错（记忆整理 → 纠错）</label>
                         <label class="checkbox_label"><input id="bb_correction_fuzzy_enabled" type="checkbox" /><span>中文片段宽匹配（减少漏检）</span></label>
                         <label class="checkbox_label"><input id="bb_correction_related_enabled" type="checkbox" /><span>扩展引用关联条目</span></label>
                         <label>每页候选条数<input id="bb_correction_page_size" type="number" class="bb-input" min="1" max="100" value="30" /></label>
@@ -611,7 +602,7 @@
                     </div>
 
                     <div style="font-size:0.72em;opacity:0.55;margin:8px 0 2px;">
-                        结算：场景过去后逐条判定去向。<b>晋升</b>写进长期库，<b>留档</b>不再注入但数据保留，<b>延期</b>继续生效。
+                        实时细节仅作临时提醒，不晋升长期库。场景切换、到期或超容量后停止注入，结算在本地留档，无需 API；可手动恢复或撤销。
                     </div>
 
                     <label class="checkbox_label" style="margin: 8px 0;">
@@ -633,25 +624,16 @@
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_realtime_settled_retention_floors">已结算保留楼层</label>
-                        <small class="bb-mem-hint">已回收/已晋升的实时细节只保留最近 N 层（默认5），更早的会物理删除；设 0 表示结算后即可清理，撤销快照仍按原设置保留。</small>
+                        <small class="bb-mem-hint">已留档的实时细节（含旧版晋升记录）只保留最近 N 层（默认5），更早的会物理删除；设 0 表示结算后即可清理，撤销快照仍按原设置保留。</small>
                         <input id="bb_realtime_settled_retention_floors" type="number" class="bb-input" min="0" max="500" value="5" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_realtime_settle_mode">结算时机</label>
-                        <small class="bb-mem-hint">自动模式在触发条件满足时直接调 API 结算；手动模式只标记待结算，等你点「立即结算」。</small>
+                        <small class="bb-mem-hint">自动模式本地留档；手动模式标记待留档并立即停止注入，等你点「立即结算」。两种模式都不调用 API、不写长期库。</small>
                         <select id="bb_realtime_settle_mode" class="bb-input" style="width:100%;">
                             <option value="auto">自动结算（默认）</option>
                             <option value="manual">仅手动结算</option>
-                        </select>
-                    </div>
-
-                    <div class="bb-mem-sidebar-section">
-                        <label for="bb_realtime_promotion_mode">晋升写入方式</label>
-                        <small class="bb-mem-hint">晋升会往长期库写新条目。选<b>确认后写入</b>时会先弹面板让你逐条勾选。留档与延期不受此设置影响。</small>
-                        <select id="bb_realtime_promotion_mode" class="bb-input" style="width:100%;">
-                            <option value="auto">直接写入（默认）</option>
-                            <option value="confirm">确认后写入</option>
                         </select>
                     </div>
 

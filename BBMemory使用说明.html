@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>BB-Memory v9.3.3 使用说明</title>
+  <title>BB-Memory v9.4.8 使用说明</title>
   <style>
     :root {
       color-scheme: light;
@@ -417,13 +417,19 @@
 </head>
 <body>
 <main>
+  <section class="panel">
+    <h2>v9.4.8 使用入口与变化</h2>
+    <p>悬浮球原“记忆维护”位置现在是“记忆整理”，集中全库整理、纠错、记忆维护。人物小传可在手机端滚动，底部生成、保存、关闭按钮保持可达。</p>
+    <p>记忆整理 → 记忆维护 → 时间线与里程碑联合总结：两类资料一起发送给 AI，可选只修改里程碑、只修改时间线或都修改。日期与日期区间保留，省略无必要的小时和分钟；例如123年1月1日10点简化为123年1月1日，连续多日相同行动可写123年1月1日-5日。先编辑、勾选建议再应用，取消不改库，在全库整理栏目可以撤销最近一次整理或总结。</p>
+    <p>实时细节只作临时提醒，不晋升长期库。到期、超容量或换场景后停止注入，本地结算留档无需 AI；日程仍按独立天数窗口注入。旧版已经晋升的长期条目不会自动删除。</p>
+  </section>
   <div class="hero">
     <header class="hero-card">
-      <p class="eyebrow">BB-Memory v9.3.3</p>
+      <p class="eyebrow">BB-Memory v9.4.8</p>
       <h1>使用说明</h1>
       <p class="lead">BB-Memory 是 SillyTavern 的浏览器端长期记忆扩展。它会把角色扮演里的 NPC、物品、里程碑、时间线、地点、线索、普通记忆和短期场景细节整理成结构化数据，并在生成回复前注入给 AI。</p>
       <div class="meta-row">
-        <span class="pill">适用版本 v9.3.3</span>
+        <span class="pill">适用版本 v9.4.8</span>
         <span class="pill">纯前端扩展</span>
         <span class="pill">无构建步骤</span>
         <span class="pill">数据主要保存在浏览器 IndexedDB</span>
@@ -433,7 +439,7 @@
     <aside class="mock-wrap" aria-label="BB-Memory 在 SillyTavern 扩展设置中的示意图">
       <div class="mock-window">
         <div class="mock-top">
-          <span>BB-Memory v9.3.3</span>
+          <span>BB-Memory v9.4.8</span>
           <span class="soft">扩展设置抽屉</span>
         </div>
         <div class="mock-body">
@@ -447,7 +453,7 @@
             <div class="mock-btn">初始化记忆</div>
             <div class="mock-btn">记忆管理</div>
             <div class="mock-btn">使用说明</div>
-            <div class="mock-btn">记忆维护</div>
+            <div class="mock-btn">记忆整理</div>
           </div>
           <div class="mock-buttons">
             <div class="mock-btn hot">手动提取</div>
@@ -486,7 +492,7 @@
     <div class="two-col">
       <div class="panel">
         <ol class="steps">
-          <li><span>在 SillyTavern 进入任意角色聊天，打开右侧扩展设置，展开 <strong>BB-Memory v9.3.3</strong>，确认“启用 BB-Memory”已勾选。</span></li>
+          <li><span>在 SillyTavern 进入任意角色聊天，打开右侧扩展设置，展开 <strong>BB-Memory v9.4.8</strong>，确认“启用 BB-Memory”已勾选。</span></li>
           <li><span>如果是旧聊天或已有存档，先点 <strong>手动提取</strong>，可以输入楼层范围，例如 <code>0-80</code>；留空会提取最近 8 轮。</span></li>
           <li><span>如果是新角色长篇开局，建议先用 <code>tools/bbmemory-initializer.html</code> 外置工具从角色卡、世界书和聊天记录生成导入 JSON，再到“记忆管理”里导入。</span></li>
           <li><span>正常聊天时，BB-Memory 会在生成前检索相关记忆。命中的内容会显示在“命中条目”和悬浮按钮的命中视图里。</span></li>
@@ -495,7 +501,7 @@
       </div>
       <div class="panel">
         <h3>推荐默认用法</h3>
-        <p class="muted">不确定怎么调设置时，可以先只配置 AI 提取 API，然后使用默认阈值。v9.3.3 会保留原有增量去重，并用链式聚类整理渐进细化型重复；拆分和删除默认必须确认。</p>
+        <p class="muted">不确定怎么调设置时，可以先只配置 AI 提取 API，然后使用默认阈值。v9.4.8 会保留原有增量去重，并用链式聚类整理渐进细化型重复；拆分和删除默认必须确认。</p>
         <div class="tag-list">
           <span class="tag">手动提取先跑一遍</span>
           <span class="tag">半自动确认更稳</span>
@@ -526,7 +532,7 @@
             <tr><td>7. 保存或等待确认</td><td>主动确认模式会先进入候选审核；半自动和全自动会直接保存。保存时 NPC、物品、里程碑、地点、时间线走 upsert，普通记忆按去重逻辑处理。</td><td>提取确认模式、确认通知方式</td></tr>
             <tr><td>8. 标记楼层</td><td>成功保存后，用户楼层、AI 楼层和开场白上下文会标记为已提取，并按显示模式隐藏或显示。失败时楼层保留为待处理，悬浮菜单可重试。</td><td>楼层可见、调试日志</td></tr>
             <tr><td>9. 并行抓取场景细节</td><td>主提取同时对该层 AI 回复做轻量细节抓取，保存交通、衣着、在场者等第五柱内容；副调用失败不会污染主提取状态。</td><td>实时记忆、抓取范围</td></tr>
-            <tr><td>10. 后台整理与维护</td><td>新增计数达标后，AI 整理师在后台聚类重复候选；时间线总结也会按原设置刷新。</td><td>AI 记忆整理、时间线总结</td></tr>
+            <tr><td>10. 后台整理与维护</td><td>全库整理由用户主动启动并审核；时间线总结按设置生成可审核的联合建议。</td><td>AI 记忆整理、时间线总结</td></tr>
           </tbody>
         </table>
         <div class="note">默认“上下文保留窗口”为 3。由于最新 AI 回复会额外保留给用户检查，通常到第 5 条 AI 回复出现后，最早的一组用户 + AI 回复才会开始自动提取；之后每新增一条 AI 回复，就会继续把更早的一组送入队列。</div>
@@ -612,7 +618,7 @@
             <tr><td>启用语义去重</td><td>影响保存新普通记忆时是否做相似合并。</td><td>关闭后相似记忆会更容易并存，需要人工体检。</td></tr>
             <tr><td>启用线索板注入</td><td>决定玩家推理是否进入生成 prompt。</td><td>关闭后线索板仍保存，但 AI 不会看到。</td></tr>
             <tr><td>启用时间线总结</td><td>决定持续叙事线是否注入，以及自动提取后是否尝试后台刷新。</td><td>关闭后只靠里程碑和普通记忆维持长篇脉络。</td></tr>
-            <tr><td>启用 AI 记忆整理</td><td>决定新增计数达标后是否在后台聚类整理重复组。</td><td>关闭后仍保留增量去重，也可手动全库整理。</td></tr>
+            <tr><td>启用 AI 记忆整理</td><td>从记忆整理栏目主动选择疑似重复或全部条目审查。</td><td>所有写入建议须在预览中确认。</td></tr>
             <tr><td>启用实时记忆</td><td>决定是否抓取、注入并自动结算当前场景细节。</td><td>关闭后已有第五柱数据保留，但不再抓取或注入。</td></tr>
             <tr><td>Token 预算模式</td><td>决定常驻内容是否可以超出总预算。</td><td>严格总量更省上下文，但可能截掉一些常驻信息。</td></tr>
           </tbody>
@@ -630,15 +636,15 @@
       </div>
       <div class="card">
         <h3>记忆管理</h3>
-        <p>打开完整管理器，包含记忆列表、实时记忆、存档槽、时间线、仪表盘、分类、归档仓库。实时页可编辑、晋升、留档/恢复、立即结算和撤销。</p>
+        <p>打开完整管理器，包含记忆列表、实时记忆、存档槽、时间线、仪表盘、分类、归档仓库。实时页可编辑、留档/恢复、立即结算和撤销；细节不再晋升。</p>
       </div>
       <div class="card">
         <h3>使用说明</h3>
         <p>打开当前页面。用户不知道按钮在哪里时，优先看本页顶部的面板示意图。</p>
       </div>
       <div class="card">
-        <h3>记忆维护</h3>
-        <p>检查积灰物品、状态变化、可压缩里程碑、低优先级 NPC 等，按建议保留、升格、降格、压缩或删除。</p>
+        <h3>记忆整理</h3>
+        <p>集中全库整理、纠错、记忆维护。维护中可检查积灰物品、状态变化等，或联合总结时间线与里程碑。</p>
       </div>
       <div class="card">
         <h3>手动提取</h3>
@@ -712,7 +718,7 @@
       </div>
       <div class="card">
         <h3>实时记忆（第五柱）</h3>
-        <p>保存交通、衣着、座位、在场者、临时偏好和随手物位置。它不做向量检索，会在仍生效时无条件注入；结算后可晋升长期库或留档。</p>
+        <p>保存交通、衣着、座位、在场者、临时偏好和随手物位置。它不做向量检索，会在仍生效时无条件注入；到期后停止注入，本地结算留档，不晋升长期库。</p>
       </div>
       <div class="card">
         <h3>地图与线索板</h3>
@@ -857,10 +863,10 @@
             <tr><td>注入条数 / token 上限</td><td>第五柱独立于长期预算的双硬上限。</td><td>默认 15 / 300；不要取消上限。</td></tr>
             <tr><td>TTL / 生效容量 / 场景切换</td><td>三类自动待结算触发器。</td><td>默认 12 层 / 40 条 / 开启。</td></tr>
             <tr><td>结算时机</td><td>自动调 API，或只标待结算并等“立即结算”。</td><td>API 不稳定时选手动。</td></tr>
-            <tr><td>晋升写入方式</td><td>AI 判断有长期价值时直接写入，或写入前确认。</td><td>风险敏感时选确认。</td></tr>
+            <tr><td>临时提醒</td><td>实时细节不晋升长期库，结算仅本地留档。</td><td>已晋升的旧版长期条目保留。</td></tr>
           </tbody>
         </table>
-        <div class="note">结算里的 discard 只把条目标为“已结算”并停止注入，不会立即删除。未晋升留档超过容量上限两倍后，系统才机械修剪最旧部分。</div>
+        <div class="note">结算把临时细节标为已结算；留档按设置的保留楼层窗口清理。设为0时可立即清理，撤销快照仍保留。待留档细节也停止注入，日程不参与细节过期清理。</div>
       </div>
     </details>
 
@@ -998,7 +1004,7 @@
     <div class="note danger">任何删除、清空、加载存档、批量归档、Agent 写操作前，都建议先导出 JSON 或执行备份。BB-Memory 会尽量给出确认和 toast，但用户侧备份仍是最稳的保险。</div>
   </section>
 
-  <p class="footer">BB-Memory v9.3.3 使用说明。最后更新：2026-08-31。</p>
+  <p class="footer">BB-Memory v9.4.8 使用说明。最后更新：2026-09-28。</p>
 </main>
 </body>
 </html>

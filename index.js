@@ -1,5 +1,6 @@
+import { openMemoryOrganization, configureMemoryOrganization } from './memory-organization.js';
 /**
- * index.js —— BB-Memory v9.4.7 主入口
+ * index.js —— BB-Memory v9.4.8 主入口
  *
  * 五柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目 / 实时记忆。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -58,7 +59,6 @@ import {
     DEFAULT_CURATE_REVIEW_PROMPT,
     DEFAULT_HEALTH_TAG_PROMPT,
     DEFAULT_REALTIME_DETAIL_EXTRACT_PROMPT,
-    DEFAULT_REALTIME_SETTLE_PROMPT,
     DEFAULT_THREAD_SUMMARY_PROMPT,
     getPromptTemplate,
     getPromptTemplates,
@@ -116,7 +116,7 @@ let chatSwitchSuppressDeletesUntil = 0;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.4.7';
+const SETTINGS_EXPORT_VERSION = '9.4.8';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
@@ -137,7 +137,7 @@ const SETTINGS_EXPORT_KEYS = [
     'hitScoreDemoteThreshold', 'entityTierPromoteThreshold', 'entityTierDemoteThreshold',
     'maintenanceMode', 'maintenanceMemThreshold', 'maintenanceNpcThreshold', 'maintenanceItemThreshold', 'itemDustyMissRounds',
     'agentMaxRounds', 'agentPageSize', 'agentDetailChars', 'agentHistoryMessages', 'agentTimeoutSeconds', 'agentMaxTokens',
-    'mapNeighborDepth', 'mapRootNeighborLimit', 'mapBranchLimit', 'mapDescriptionMaxChars', 'timelineCompressionEntryThreshold', 'timelineCompressionCharThreshold', 'timelineCompressionTargetEntries', 'timelineCompressionContextChars', 'timelineCompressionMaxTokens', 'curationCategoryLimit', 'biographyApi', 'biographyUseWorldBook', 'biographyUsePreset', 'biographyUseMemory', 'biographyWorldBooks', 'biographyMaxChars', 'biographyContextChars', 'biographyMaxTokens', 'timelineCompressionApi',
+    'mapNeighborDepth', 'mapRootNeighborLimit', 'mapBranchLimit', 'mapDescriptionMaxChars', 'timelineCompressionEntryThreshold', 'timelineCompressionCharThreshold', 'timelineCompressionTargetEntries', 'timelineCompressionContextChars', 'timelineCompressionMaxTokens', 'curationCategoryLimit', 'biographyApi', 'biographyUseWorldBook', 'biographyUsePreset', 'biographyUseMemory', 'biographyWorldBooks', 'biographyMaxChars', 'biographyContextChars', 'biographyMaxTokens', 'timelineCompressionApi', 'timelineSummaryTarget',
     'healthCheckDuplicateThreshold', 'healthCheckIsolationThreshold', 'healthCheckStaleDays',
     'healthCheckStaleHitThreshold', 'healthCheckThreadStaleDays', 'healthCheckClueStaleDays',
     // v9.4.3 全库整理（旧 aiCurate* 保留导入兼容）
@@ -183,6 +183,7 @@ const SETTING_CONTROL_BINDINGS = {
     timelineCompressionMaxTokens: ['#bb_timeline_compression_max_tokens', 'value'],
     curationCategoryLimit: ['#bb_curation_category_limit', 'value'],
     timelineCompressionApi: ['#bb_timeline_compression_api', 'value'],
+    timelineSummaryTarget: ['#bb_timeline_summary_target', 'value'],
     clueBoardInjectionEnabled: ['#bb_clue_board_injection_enabled', 'checkbox'],
     autoBackupEnabled: ['#bb_auto_backup_enabled', 'checkbox'],
     autoGenMode: ['#bb_auto_gen_mode', 'value'],
@@ -275,7 +276,6 @@ const SETTING_CONTROL_BINDINGS = {
     realtimeSceneChangeSettle: ['#bb_realtime_scene_change_settle', 'checkbox'],
     realtimeInjectionMax: ['#bb_realtime_injection_max', 'value'],
     realtimeInjectionTokenCap: ['#bb_realtime_injection_token_cap', 'value'],
-    realtimePromotionMode: ['#bb_realtime_promotion_mode', 'value'],
     realtimeSettleMode: ['#bb_realtime_settle_mode', 'value'],
     injectionTemplate: ['#bb_injection_template', 'value'],
     autoGenEndpoint: ['#bb_auto_gen_endpoint', 'value'],
@@ -369,7 +369,7 @@ function getPromptTemplateDefinitions() {
             key: 'maintenance.threadSummary',
             title: '时间线总结提示',
             category: '维护/总结',
-            description: '点击刷新时间线总结时使用，把里程碑整理为命名时间线。',
+            description: '联合读取时间线与里程碑，按用户选择只改时间线、只改里程碑或都修改，保留日期与日期区间。',
             defaultValue: DEFAULT_THREAD_SUMMARY_PROMPT,
         },
         {
@@ -404,15 +404,6 @@ function getPromptTemplateDefinitions() {
             description: '每层与主提取并行发起的轻量抓取提示词，只抓影响后续因果和行动的逻辑事实，排除普通外貌、表情和环境渲染，并记录每日行动日程。'
                 + '可用占位符：{{maxDetails}} {{location}} {{storyTime}} {{aiMessage}}；现有槽位与分类上限会由系统强制追加。',
             defaultValue: DEFAULT_REALTIME_DETAIL_EXTRACT_PROMPT,
-        },
-        {
-            // v9.3.3 场景结算。定义内联在这里，让 realtime-memory.js 保持懒加载。
-            key: 'realtime.settle',
-            title: '实时记忆场景结算',
-            category: '实时记忆',
-            description: '场景结束时判定每条临时细节的去向：晋升长期库 / 留档不注入 / 延长有效期。'
-                + '可用占位符：{{location}} {{storyTime}} {{settleReason}} {{librarySummary}} {{pendingText}}。',
-            defaultValue: DEFAULT_REALTIME_SETTLE_PROMPT,
         },
         ...getAutoGeneratorPromptTemplates(),
         ...getRetrieverPromptTemplates(),
@@ -2222,6 +2213,7 @@ function bindSidebarEvents() {
     bindInput('#bb_timeline_compression_max_tokens', 'timelineCompressionMaxTokens', 'number');
     bindInput('#bb_curation_category_limit', 'curationCategoryLimit', 'number');
     bindSelect('#bb_timeline_compression_api', 'timelineCompressionApi');
+    bindSelect('#bb_timeline_summary_target', 'timelineSummaryTarget');
     bindInput('#bb_health_check_duplicate_threshold', 'healthCheckDuplicateThreshold', 'number');
     bindInput('#bb_health_check_isolation_threshold', 'healthCheckIsolationThreshold', 'number');
     bindInput('#bb_health_check_stale_days', 'healthCheckStaleDays', 'number');
@@ -2285,7 +2277,6 @@ function bindSidebarEvents() {
     bindCheckbox('#bb_realtime_scene_change_settle', 'realtimeSceneChangeSettle');
     bindInput('#bb_realtime_injection_max', 'realtimeInjectionMax', 'number');
     bindInput('#bb_realtime_injection_token_cap', 'realtimeInjectionTokenCap', 'number');
-    bindSelect('#bb_realtime_promotion_mode', 'realtimePromotionMode');
     bindSelect('#bb_realtime_settle_mode', 'realtimeSettleMode');
     document.querySelector('#bb_realtime_settled_retention_floors')?.addEventListener('change', async () => {
         const chatId = getChatId();
@@ -2441,19 +2432,10 @@ function bindSidebarEvents() {
         cycleExtractedVisibility();
     });
 
-    // v5.5: 记忆维护按钮
-    document.querySelector('#bb_memory_maintenance_btn')?.addEventListener('click', async () => {
+    document.querySelector('#bb_memory_maintenance_btn')?.addEventListener('click', () => {
         const chatId = getChatId();
-        if (!chatId) return;
-        try {
-            const result = await checkMaintenanceNeeded(chatId);
-            showMaintenancePopup(chatId, result);
-        } catch (e) {
-            console.warn('[BB-Memory] 维护检查异常:', e.message);
-            showToast('维护检查出错: ' + e.message, 'error');
-            // 仍然打开面板（空数据模式）
-            showMaintenancePopup(chatId, { issues: [], issueCount: 0, totalItems: 0, needed: false });
-        }
+        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        openMemoryOrganization(chatId);
     });
     // v9.2.0 刷新时间线总结
     document.querySelector('#bb_thread_refresh_btn')?.addEventListener('click', async () => {
@@ -2463,10 +2445,10 @@ function bindSidebarEvents() {
         try {
             const result = await regenerateThreadSummary(chatId);
             if (result.error) throw new Error(result.error);
-            if (result.threadCount > 0) {
-                showToast(`时间线总结完成：${result.timelineCount || result.threadCount} 条时间线`, 'success');
+            if (result.threadCount > 0 || result.milestoneCount > 0) {
+                showToast(result.summary || `时间线总结完成：${result.timelineCount || result.threadCount} 条时间线`, 'success');
             } else {
-                showToast('时间线总结完成：本轮无需更新', 'info');
+                showToast(result.summary || '本轮无需更新', 'info');
             }
         } catch (e) {
             console.warn('[BB-Memory] 时间线总结失败:', e.message);
@@ -3390,6 +3372,16 @@ function withFeedback(btn, fn, { loadingText, successText, errorText } = {}) {
         .catch(e => { if (errorText) showToast(`${errorText}: ${e.message}`, 'error'); else showToast(e.message, 'error'); restore(); throw e; });
 }
 
+configureMemoryOrganization({
+    curation: () => handleFullCuration(),
+    undo: () => handleCurateUndo(),
+    maintenance: async chatId => {
+        showToast('正在检查记忆…', 'info');
+        const result = await checkMaintenanceNeeded(chatId);
+        showMaintenancePopup(chatId, result);
+    },
+});
+
 // ═══ 记忆维护面板 ═══
 
 function showMaintenancePopup(chatId, result) {
@@ -3553,7 +3545,7 @@ function showMaintenancePopup(chatId, result) {
                             const { executeMaintenanceBatch } = await import('./maintenance-actions.js');
                             const outcome = await executeMaintenanceBatch(chatId, [{ ...iss, source: 'pending', id: item.id, entry: item }], op);
                             if (outcome.failed.length) throw new Error(outcome.failed[0].error);
-                            if (!outcome.succeeded.length) { showToast('未应用修改，原条目保留', 'info'); return; }
+                            if (!outcome.succeeded.length) { showToast(outcome.summary || '未应用修改，原条目保留', 'info'); return; }
                             itemDiv.remove();
                             // 同步移除 result.issues 中的对应项
                             const idx = result.issues.findIndex(i => i.item.id === item.id && i.collection === iss.collection && i.type === iss.type);
@@ -3598,7 +3590,7 @@ function showMaintenancePopup(chatId, result) {
                         const done = new Set(outcome.succeeded.map(issue => `${issue.type}:${issue.collection}:${issue.id}`));
                         for (let i = issues.length - 1; i >= 0; i--) if (done.has(`${issues[i].type}:${issues[i].collection}:${issues[i].item.id}`)) issues.splice(i, 1);
                         renderPending(); refreshBadges();
-                        const message = `${label}：成功 ${outcome.succeeded.length}，失败 ${outcome.failed.length}${outcome.cancelled ? '，已停止' : ''}`;
+                        const message = outcome.summary || `${label}：成功 ${outcome.succeeded.length}，失败 ${outcome.failed.length}${outcome.cancelled ? '，已停止' : ''}`;
                         const feedback = document.createElement('div'); feedback.className = 'bb-maint-batch-result';
                         feedback.textContent = [message, ...outcome.failed.map(f => `${f.issue.item?.name || f.issue.item?.title || f.issue.id}：${f.error}`)].join('\n');
                         body.prepend(feedback); showToast(message, outcome.failed.length ? 'warning' : 'success');
@@ -3770,18 +3762,11 @@ function registerSlashCommands() {
         openSlotRescuePanel().catch(e => showToast(`打开存档救援失败: ${e.message}`, 'error'));
     }, '打开存档救援 — 找回因角色下标变化而失联的历史存档');
 
-    addCmd('bb-maintenance', async () => {
+    addCmd('bb-maintenance', () => {
         const chatId = getChatId();
-        if (!chatId) return;
-        try {
-            const result = await checkMaintenanceNeeded(chatId);
-            showMaintenancePopup(chatId, result);
-        } catch (e) {
-            console.warn('[BB-Memory] 维护检查异常:', e.message);
-            showToast('维护检查出错: ' + e.message, 'error');
-            showMaintenancePopup(chatId, { issues: [], issueCount: 0, totalItems: 0, needed: false });
-        }
-    }, '打开记忆维护面板');
+        if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+        openMemoryOrganization(chatId);
+    }, '打开记忆整理（全库整理、纠错、维护）');
 
     addCmd('bb-clear', async () => {
         const chatId = getChatId();
@@ -4215,7 +4200,7 @@ function injectFloatingHub() {
             </div>
             <div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_maintenance">
                 <i class="fa-solid fa-toolbox"></i>
-                <span>记忆维护</span>
+                <span>记忆整理</span>
             </div>
             <div class="bb-floating-menu-item bb-floating-menu-action" data-action="open_clue_board">
                 <i class="fa-solid fa-magnifying-glass"></i>
@@ -4428,7 +4413,7 @@ async function refreshFloatingHubData() {
             const entries = chatId && settings.realtimeEnabled !== false ? await getRealtimeMemories(chatId) : [];
             const visibleCount = getRealtimeForInjection(entries, settings).totalCount;
             realtimeCount.textContent = String(visibleCount);
-            realtimeCount.title = `当前有 ${visibleCount} 条实时场景细节会参与注入或等待结算`;
+            realtimeCount.title = `当前有 ${visibleCount} 条临时细节正在生效或等待留档`;
         } catch {
             realtimeCount.textContent = '-';
         }
@@ -4578,14 +4563,8 @@ async function handleFloatingMenuAction(action) {
             break;
         }
         case 'open_maintenance': {
-            if (!chatId) return;
-            try {
-                const result = await checkMaintenanceNeeded(chatId);
-                showMaintenancePopup(chatId, result);
-            } catch (e) {
-                console.warn('[BB-Memory] 维护检查异常:', e.message);
-                showMaintenancePopup(chatId, { issues: [], issueCount: 0, totalItems: 0, needed: false });
-            }
+            if (!chatId) { showToast('请先进入角色对话', 'warning'); return; }
+            openMemoryOrganization(chatId);
             break;
         }
         case 'toggle_hit_list': {
@@ -4617,7 +4596,7 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.4.7 初始化开始...');
+    console.log('[BB-Memory] v9.4.8 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -4813,7 +4792,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.4.7 初始化完成');
+    console.log('[BB-Memory] v9.4.8 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
@@ -5417,7 +5396,7 @@ async function refreshRealtimeStatus() {
         const promoted = entries.filter(e => e.promotedTo).length;
         const { getRealtimeForInjection } = await import('./retriever.js');
         const preview = getRealtimeForInjection(entries, s);
-        setRealtimeStatus(`实时记忆：生效 ${active} / 待结算 ${pending} / 已晋升 ${promoted}`
+        setRealtimeStatus(`实时细节：生效 ${active} / 待留档（不注入）${pending} / 历史晋升 ${promoted}`
             + `，本轮注入 ${preview.injectedCount} 条（~${preview.tokenEstimate} tokens）`
             + (preview.truncated ? '，已截断' : ''));
     } catch { setRealtimeStatus(''); }

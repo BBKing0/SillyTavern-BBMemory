@@ -1,3 +1,5 @@
+import { isSceneChanged, deriveSceneState, planSettlement } from './realtime-lifecycle.js';
+export { isSceneChanged, deriveSceneState, planSettlement } from './realtime-lifecycle.js';
 /**
  * realtime-memory.js — BB-Memory v9.4.5 实时记忆（第五柱）
  *
@@ -9,7 +11,7 @@
  * 正是这个「绕过检索」的性质解决了长线逻辑断裂。
  *
  * 生命周期：抓取 → 无条件注入 → 结算（场景切换 / TTL / 容量 / 手动）。
- * 结算时逐条判定晋升长期库、判定无长期价值、或延长有效期。
+ * 到期停止注入，结算本地留档；不再晋升长期库。旧快照仍可撤销。
  */
 
 import {
@@ -67,40 +69,13 @@ export function computeSceneKey(location, storyTime) {
 }
 
 /** 场景是否发生切换。任一侧未知时一律判为「没切换」。 */
-export function isSceneChanged(prevKey, nextKey) {
-    const a = String(prevKey || '').trim();
-    const b = String(nextKey || '').trim();
-    if (!a || !b) return false;
-    return a !== b;
-}
+
 
 /**
  * 从现有条目反推当前场景状态，避免额外开一份存储。
  * 取 lastSeenFloor 最大的未结算条目所在场景。
  */
-export function deriveSceneState(entries) {
-    const pool = (Array.isArray(entries) ? entries : []).filter(e =>
-        e && e.kind !== 'schedule' && e.settleState !== 'settled');
-    if (!pool.length) return { sceneKey: '', location: '', storyTime: '', floors: [] };
-    const newest = pool.reduce((best, entry) => {
-        const a = Number(entry.lastSeenFloor ?? -1);
-        const b = Number(best.lastSeenFloor ?? -1);
-        if (a > b) return entry;
-        if (a === b && Number(entry.createdAt || 0) > Number(best.createdAt || 0)) return entry;
-        return best;
-    });
-    const sceneKey = String(newest.sceneKey || '');
-    const sameScene = pool.filter(e => String(e.sceneKey || '') === sceneKey);
-    const floors = [...new Set(sameScene
-        .map(e => Number(e.createdFloor))
-        .filter(n => Number.isFinite(n) && n >= 0))].sort((a, b) => a - b);
-    return {
-        sceneKey,
-        location: newest.location || '',
-        storyTime: newest.storyTime || '',
-        floors,
-    };
-}
+
 
 // ═══════════════════════════════════════════════════════════
 //  抓取范围控制（纯函数）
@@ -678,50 +653,7 @@ function cloneForSnapshot(value) {
  *  - ttl：距上次被提及已过 realtimeTtlFloors 层
  *  - capacity：剩下的活跃条目仍超过 realtimeMaxEntries，最旧的先出
  */
-export function planSettlement(entries, currentFloor, settings = {}) {
-    const all = Array.isArray(entries) ? entries.filter(Boolean) : [];
-    const pool = all.filter(e => e.kind !== 'schedule' && e.settleState === 'active');
-    if (!pool.length) return { marks: [], byReason: {}, activeCount: 0 };
 
-    const floor = Number(currentFloor);
-    const ttl = clampInt(settings.realtimeTtlFloors, 0, 500, 12);
-    const maxEntries = clampInt(settings.realtimeMaxEntries, 0, 500, 40);
-    const sceneChangeEnabled = settings.realtimeSceneChangeSettle !== false;
-
-    // 当前场景 = 最新未结算条目所在场景
-    const currentScene = deriveSceneState(all).sceneKey;
-
-    const marks = new Map();
-    const mark = (entry, reason) => {
-        if (!marks.has(entry.id)) marks.set(entry.id, { id: entry.id, reason });
-    };
-
-    if (sceneChangeEnabled && currentScene) {
-        for (const entry of pool) {
-            if (isSceneChanged(entry.sceneKey, currentScene)) mark(entry, 'scene_change');
-        }
-    }
-    if (ttl > 0 && Number.isFinite(floor)) {
-        for (const entry of pool) {
-            const seen = Number(entry.lastSeenFloor ?? entry.createdFloor ?? -1);
-            if (Number.isFinite(seen) && seen >= 0 && floor - seen >= ttl) mark(entry, 'ttl');
-        }
-    }
-    if (maxEntries > 0) {
-        const stillActive = pool.filter(entry => !marks.has(entry.id));
-        const overflow = stillActive.length - maxEntries;
-        if (overflow > 0) {
-            const oldestFirst = stillActive.slice().sort((a, b) =>
-                (Number(a.lastSeenFloor ?? -1) - Number(b.lastSeenFloor ?? -1))
-                || (Number(a.createdAt || 0) - Number(b.createdAt || 0)));
-            for (const entry of oldestFirst.slice(0, overflow)) mark(entry, 'capacity');
-        }
-    }
-
-    const byReason = {};
-    for (const item of marks.values()) byReason[item.reason] = (byReason[item.reason] || 0) + 1;
-    return { marks: [...marks.values()], byReason, activeCount: pool.length };
-}
 
 /**
  * 已结算留档的修剪计划（纯函数）。
@@ -804,6 +736,21 @@ export async function markAllPendingSettle(chatId) {
     const ids = entries.filter(e => e.kind !== 'schedule' && e.settleState === 'active').map(e => e.id);
     if (!ids.length) return 0;
     return updateRealtimeMemories(chatId, ids, { settleState: 'pending_settle', settleReason: 'manual' });
+}
+
+/** 用户恢复临时提醒时，从当前楼层重新计时，来源楼层保持原样。 */
+export async function reactivateRealtimeMemory(chatId, id) {
+    if (String(SillyTavern.getContext().chatId) !== String(chatId)) throw new Error('聊天已切换，请重新打开实时细节');
+    const entries = await getRealtimeMemories(chatId);
+    const entry = entries.find(e => e.id === id);
+    if (!entry || entry.promotedTo) throw new Error('该细节不存在或属于旧版晋升记录');
+    const patch = { settleState:'active', settleReason:'', promotedTo:null };
+    if (entry.kind !== 'schedule') {
+        patch.lastSeenFloor = Math.max(0, (SillyTavern.getContext().chat?.length || 0) - 1);
+        const scene = deriveSceneState(entries.filter(e => e.id !== id && e.settleState === 'active'));
+        if (scene.sceneKey) patch.sceneKey = scene.sceneKey;
+    }
+    return updateRealtimeMemory(chatId, id, patch);
 }
 
 // ── 结算提示词 ──
@@ -1086,6 +1033,13 @@ export async function applySettleDecisions(chatId, decisions, missing = [], opti
         failed: [], summary: '', createdRefs: [], pruned: 0, cleanupError: '',
     };
     const list = (Array.isArray(decisions) ? decisions : []).filter(Boolean);
+    // v9.4.8 实时细节只作为临时提醒；旧设置、旧调用方也不能绕过写入边界。
+    if (list.some(decision => decision.action === 'promote')) {
+        result.ok = false;
+        result.summary = '实时细节仅作临时提醒，不再晋升到长期库';
+        result.failed = list.filter(d => d.action === 'promote').map(d => ({ id:d.id, action:d.action, error:result.summary }));
+        return result;
+    }
     const keepIds = new Set((Array.isArray(missing) ? missing : []).map(String));
     if (!list.length && !keepIds.size) {
         result.summary = '无待结算条目';
@@ -1098,7 +1052,8 @@ export async function applySettleDecisions(chatId, decisions, missing = [], opti
             // 它们的 settleState / lastSeenFloor 也会变，只快照 decisions 会漏掉整轮 keep 的还原能力。
             const affected = new Set([...list.map(d => String(d.id)), ...keepIds]);
             const current = await getRealtimeMemories(chatId);
-            const snapshotEntries = current.filter(entry => affected.has(String(entry.id)));
+            const snapshotEntries = current.filter(entry => affected.has(String(entry.id)))
+                .map(entry => options.beforeSettlement?.find(before => before.id === entry.id) || entry);
             result.snapshotId = await beginSettleSnapshot(chatId, snapshotEntries, settings);
         } catch (e) {
             // 晋升会写长期库，没有回退网就不动手
@@ -1176,6 +1131,7 @@ export async function applySettleDecisions(chatId, decisions, missing = [], opti
     if (result.cleanupError) parts.push('过期留档清理将在下次重试');
     if (result.failed.length) parts.push(`${result.failed.length} 条失败`);
     result.summary = parts.join('，') || '无改动';
+    result.ok = result.failed.length === 0;
 
     if (result.snapshotId) {
         await finalizeSettleSnapshot(chatId, result.snapshotId, {
@@ -1271,6 +1227,7 @@ export async function settleRealtimeMemories(chatId, options = {}) {
     settlementInFlight = true;
     try {
         options.onProgress?.({ phase: 'check', message: '正在检查待结算条目...' });
+        const beforeSettlement = await getRealtimeMemories(chatId);
         if (options.manual) await markAllPendingSettle(chatId);
         else await checkSettlement(chatId, options.currentFloor, { settings });
 
@@ -1283,85 +1240,14 @@ export async function settleRealtimeMemories(chatId, options = {}) {
             return report;
         }
 
-        options.onProgress?.({ phase: 'ai', message: `正在结算 ${pending.length} 条场景细节...` });
-
-        let api;
-        try {
-            api = pickApi(settings, options.apiMode);
-        } catch (e) {
-            report.error = e.message;
-            report.summary = e.message;
-            return report;
-        }
-        report.apiMode = api.mode;
-
-        const [npc, items, memories, milestones] = await Promise.all([
-            getNpcProfiles(chatId), getItems(chatId), getMemories(chatId), getMilestones(chatId),
-        ]);
-        const scene = deriveSceneState(entries);
-        const prompt = buildSettlePrompt(pending, {
-            settings,
-            location: scene.location,
-            storyTime: scene.storyTime,
-            librarySummary: buildLibrarySummary({ npc, items, memories, milestones }),
-        });
-
-        const startedAt = Date.now();
-        let rawText = '';
-        try {
-            rawText = await api.call(prompt, { isMerged: true });
-        } catch (e) {
-            report.durationMs = Date.now() - startedAt;
-            report.error = `结算 API 调用失败：${e.message}`;
-            report.summary = report.error;
-            return report;
-        }
-        report.durationMs = Date.now() - startedAt;
-
-        const parsed = parseSettleDecisions(rawText, { pending });
-        report.decisions = parsed.decisions;
-        report.rejected = parsed.rejected;
-        report.missing = parsed.missing;
-
-        // 解析全军覆没时不动数据：条目留在 pending，注入照旧生效，下次还能重试
-        if (!parsed.decisions.length) {
-            report.ok = true;
-            report.summary = parsed.rejected.length
-                ? `AI 返回的 ${parsed.rejected.length} 条决定全部被拦截，条目保持待结算`
-                : 'AI 未给出任何决定，条目保持待结算';
-            if (settings.debugLogging) console.warn('[BB-Memory] 结算被拦截:', parsed.rejected);
-            return report;
-        }
-
-        // realtimePromotionMode='confirm'：晋升要写长期库，先让用户逐条过一眼。
-        // 未勾选的转为 keep 而不是 discard——用户拒绝的是「晋升」这个动作，不是这条事实。
-        let decisions = parsed.decisions;
-        const extraKeep = [];
-        const promotions = decisions.filter(d => d.action === 'promote');
-        if (promotions.length && String(settings.realtimePromotionMode || 'auto') === 'confirm'
-            && options.review !== false && typeof document !== 'undefined') {
-            options.onProgress?.({ phase: 'review', message: `${promotions.length} 条晋升待确认` });
-            const verdict = await openPromotionReviewPanel(promotions, { settings });
-            const declinedIds = new Set(verdict.declined.map(d => String(d.id)));
-            decisions = decisions.filter(d => !declinedIds.has(String(d.id)));
-            extraKeep.push(...declinedIds);
-            report.declinedPromotions = verdict.declined.length;
-        }
-
-        report.applyResult = await applySettleDecisions(chatId, decisions, [...parsed.missing, ...extraKeep], {
-            settings,
-            currentFloor: options.currentFloor,
-            onProgress: options.onProgress,
+        // 临时细节按触发条件本地留档，不请求AI、不读取或写入长期库。
+        options.onProgress?.({ phase: 'settle', message: `正在留档 ${pending.length} 条临时细节…` });
+        report.decisions = pending.map(entry => ({ id:entry.id, action:'discard', entry, reason:entry.settleReason || 'manual' }));
+        report.applyResult = await applySettleDecisions(chatId, report.decisions, [], {
+            settings, currentFloor:options.currentFloor, onProgress:options.onProgress, beforeSettlement,
         });
         report.ok = report.applyResult.ok;
-        report.summary = report.applyResult.summary
-            + (report.declinedPromotions ? `，${report.declinedPromotions} 条晋升被你拒绝（已保留为场景细节）` : '')
-            + (parsed.rejected.length ? `，${parsed.rejected.length} 条决定被拦截` : '')
-            + (parsed.missing.length ? `，${parsed.missing.length} 条 AI 漏判已按延期处理` : '');
-
-        if (settings.debugLogging) {
-            console.log(`[BB-Memory] 实时记忆结算：${report.summary}（${api.mode} API，${report.durationMs}ms）`);
-        }
+        report.summary = report.applyResult.summary;
         return report;
     } catch (e) {
         report.error = e.message;

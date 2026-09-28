@@ -84,7 +84,7 @@ export async function openNpcBiography(chatId, npcId, onSaved) {
     if (!npc) throw new Error('NPC 已不存在');
     const settings = getSettings(), ctx = SillyTavern.getContext();
     const overlay = document.createElement('div'); overlay.className = 'bb-form-overlay bb-biography-overlay';
-    overlay.innerHTML = `<div class="bb-mem-form-popup bb-biography-popup"><h3></h3>
+    overlay.innerHTML = `<div class="bb-mem-form-popup bb-biography-popup"><h3></h3><div class="bb-mem-form-body bb-biography-body">
         <div class="bb-biography-options"><label>生成 API <select class="bb-input" data-setting="biographyApi"><option value="main">主 API</option><option value="custom">副 API</option></select></label>
         <label>字数上限（≤1000）<input class="bb-input" type="number" min="100" max="1000" data-setting="biographyMaxChars"></label>
         <label>每个来源字符上限<input class="bb-input" type="number" min="1000" max="200000" data-setting="biographyContextChars"></label>
@@ -94,7 +94,7 @@ export async function openNpcBiography(chatId, npcId, onSaved) {
         <label>补充信息 / 想展现的侧面（可留空直接生成）<textarea class="bb-input bb-biography-instruction" rows="3"></textarea></label>
         <div class="bb-biography-status" role="status"></div>
         <label>小传草稿（可编辑）<textarea class="bb-input bb-biography-draft" rows="10"></textarea></label><div class="bb-biography-count"></div>
-        <div class="bb-biography-buttons"><button class="menu_button" data-action="generate">生成小传</button><button class="menu_button" data-action="save">保存小传</button><button class="menu_button" data-action="close">关闭</button></div></div>`;
+        </div><div class="bb-biography-buttons"><button class="menu_button" data-action="generate">生成小传</button><button class="menu_button" data-action="save">保存小传</button><button class="menu_button" data-action="close">关闭</button></div></div>`;
     overlay.querySelector('h3').textContent = `${npc.name} · 人物小传`;
     for (const input of overlay.querySelectorAll('[data-setting]')) {
         if (input.type === 'checkbox') input.checked = !!settings[input.dataset.setting];

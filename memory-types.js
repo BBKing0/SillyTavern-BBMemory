@@ -133,7 +133,7 @@ export function normalizeRealtimeKind(value) {
 /** 实时记忆的结算状态。 */
 export const REALTIME_SETTLE_STATES = Object.freeze({
     active:         { id: 'active',         label: '生效中', color: '#4caf50' },
-    pending_settle: { id: 'pending_settle', label: '待结算', color: '#ff9800' },
+    pending_settle: { id: 'pending_settle', label: '待留档', color: '#ff9800' },
     settled:        { id: 'settled',        label: '已结算', color: '#9e9e9e' },
 });
 
