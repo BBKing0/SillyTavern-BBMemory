@@ -1,3 +1,4 @@
+import { getUserLocalForage } from './user-storage.js';
 import { isSceneChanged, deriveSceneState, planSettlement } from './realtime-lifecycle.js';
 export { isSceneChanged, deriveSceneState, planSettlement } from './realtime-lifecycle.js';
 /**
@@ -632,12 +633,7 @@ export function isSettlementRunning() {
 }
 
 function getLocalForage() {
-    try {
-        const ctx = SillyTavern.getContext();
-        return ctx?.libs?.localforage || globalThis.localforage || globalThis.SillyTavern?.libs?.localforage;
-    } catch {
-        return globalThis.localforage || null;
-    }
+    return getUserLocalForage();
 }
 
 function cloneForSnapshot(value) {

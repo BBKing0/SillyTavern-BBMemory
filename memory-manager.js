@@ -20,7 +20,7 @@ import {
     getCloudVectorSlot, pushSlotVectorsToCloud, pullCloudVectors, getSlotOwnerChatId,
 } from './memory-slots.js';
 import { realtimeFloorLabel, getScheduleDays, scheduleDayKey } from './realtime-schedule.js';
-import { simpleSearch } from './retriever.js';
+import { initializeUserStorage } from './user-storage.js';
 import {
     MEMORY_TYPES, TRUTH_STATUS, HIDDEN_NOTE_TYPES, TIMELINE_STATUS, ITEM_STATUS,
     REALTIME_KINDS, REALTIME_SETTLE_STATES,
@@ -104,6 +104,8 @@ async function confirmManagerAction(title, message) {
 // ═══ 入口 ═══
 
 export async function openMemoryManager(chatId) {
+    await initializeUserStorage({ verify:true });
+    activeFilter = 'all';
     const existing = document.querySelector('.bb-mem-overlay');
     if (existing) existing.remove();
 
@@ -200,6 +202,8 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) 
             <div class="bb-mem-toolbar">
                 <input type="text" class="bb-mem-search bb-input" placeholder="搜索..." id="bb_mgr_search" />
                 <select id="bb_mgr_sort" class="bb-input" style="width:auto;min-width:120px;">
+                    <option value="importance_desc">重要性 ↓</option>
+                    <option value="importance_asc">重要性 ↑</option>
                     <option value="created_desc" selected>创建时间 ↓</option>
                     <option value="created_asc">创建时间 ↑</option>
                     <option value="updated_desc">修改时间 ↓</option>
@@ -212,6 +216,11 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) 
                 </button>
             </div>
 
+            <div class="bb-mem-importance-filters">
+                <label>记忆等级 <select id="bb_mgr_tier" class="bb-input"><option value="all">全部等级</option><option value="transient">瞬时 / 模糊</option><option value="stable">稳定</option><option value="core">核心</option><option value="eternal">永恒</option></select></label>
+                <label>重要性至少 <input id="bb_mgr_importance" class="bb-input" type="number" min="0" max="100" value="0" step="1" /> %</label>
+                <small>百分比筛选仅适用于记忆条目；等级可与类型、搜索叠加。</small>
+            </div>
             <div class="bb-mem-type-filters" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;">
                 <button class="menu_button bb-mem-type-filter active" data-type="all">
                     <i class="fa-solid fa-layer-group"></i> 全部
@@ -664,21 +673,13 @@ function bindManagerEvents(overlay, chatId) {
     });
 
     // 搜索
-    overlay.querySelector('#bb_mgr_search')?.addEventListener('input', async (e) => {
-        const query = e.target.value.trim();
-        if (!query) {
-            activeFilter = overlay.querySelector('.bb-mem-type-filter.active')?.dataset?.type || 'all';
-            await rerenderManagerList(overlay, chatId);
-        } else {
-            const results = simpleSearch(await getMemories(chatId), query, 100);
-            const listEl = overlay.querySelector('#bb_mgr_list');
-            if (listEl) {
-                listEl.innerHTML = results.length
-                    ? results.map(m => buildEntryItemHTML({ ...m, _pillar: 'mem' })).join('')
-                    : '<div class="bb-mem-empty">未找到匹配的记忆</div>';
-            }
-        }
-    });
+    overlay.querySelector('#bb_mgr_search')?.addEventListener('input', () => rerenderManagerList(overlay, chatId));
+    for (const selector of ['#bb_mgr_tier', '#bb_mgr_importance']) {
+        overlay.querySelector(selector)?.addEventListener('change', event => {
+            if (!event.target.checkValidity()) { event.target.reportValidity(); return; }
+            rerenderManagerList(overlay, chatId);
+        });
+    }
 
     // 排序
     overlay.querySelector('#bb_mgr_sort')?.addEventListener('change', async () => {
@@ -1903,6 +1904,7 @@ async function renderSlotsPanel(overlay, chatId, cachedData = null) {
         }
 
         slotsEl.innerHTML = `
+            <div class="bb-slots-info bb-summary-notice">当前账号：<strong>${escapeHtml((await initializeUserStorage()).handle)}</strong>。存档、记忆和向量按账号独立保存于本浏览器；云端备份在该账号聊天文件中。v9.4.8 及更早的本地数据没有账号归属，现已隔离保留，不自动认领。旧数据请从本账号可信的 JSON 导出文件导入，或使用 /bb-restore 恢复该账号聊天备份。</div>
             <div class="bb-slots-info">
                 <i class="fa-solid fa-circle-info"></i>
                 记忆 <strong>${memories.length}</strong> 条 · NPC ${npc.length} / 物品 ${items.length} / 里程碑 ${timeline.length} · 云端索引 ${remoteSlotCount} 个 · 角色ID: ${escapeHtml(charId)}
@@ -3048,6 +3050,14 @@ function showThreadEntryEditForm(overlay, chatId, thread, entryIdx) {
     });
 }
 
+export function managerMemoryTier(entry) {
+    if (entry.keepPermanent) return 'eternal';
+    if (entry.memoryTier) return entry.memoryTier;
+    if (entry.resident) return 'core';
+    if (entry._pillar === 'milestone') return entry.injectionMode === 'vector' ? 'stable' : 'eternal';
+    return 'stable';
+}
+
 async function rerenderManagerList(overlay, chatId, cachedData = null) {
     const [npc, items, timeline, memories] = cachedData
         ? [cachedData.npc || [], cachedData.items || [], cachedData.timeline || [], cachedData.memories || []]
@@ -3084,11 +3094,23 @@ async function rerenderManagerList(overlay, chatId, cachedData = null) {
     if (activeFilter && activeFilter !== 'all') {
         allEntries = allEntries.filter(e => e._pillar === activeFilter);
     }
+    const tier = overlay.querySelector('#bb_mgr_tier')?.value || 'all';
+    const importance = Math.max(0, Math.min(100, Number(overlay.querySelector('#bb_mgr_importance')?.value) || 0)) / 100;
+    allEntries = allEntries.filter(e => (tier === 'all' || managerMemoryTier(e) === tier)
+        && (!importance || (e._pillar === 'mem' && (e.importance ?? 0.5) >= importance)));
+    const query = overlay.querySelector('#bb_mgr_search')?.value.trim().toLocaleLowerCase();
+    if (query) allEntries = allEntries.filter(e => [e.name,e.title,e.content,e.summary,e.event,e.description,...(e.tags || []).map(t => typeof t === 'string' ? t : t.name)].some(value => String(value || '').toLocaleLowerCase().includes(query)));
 
     // 排序
     const sortEl = overlay.querySelector('#bb_mgr_sort');
     const sortMode = sortEl ? sortEl.value : 'created_desc';
     allEntries.sort((a, b) => {
+        if (sortMode.startsWith('importance')) {
+            const score = e => e._pillar === 'mem' ? (e.importance ?? 0.5) : -1;
+            if (a._pillar !== 'mem' && b._pillar === 'mem') return 1;
+            if (b._pillar !== 'mem' && a._pillar === 'mem') return -1;
+            return sortMode.endsWith('asc') ? score(a) - score(b) : score(b) - score(a);
+        }
         if (sortMode.startsWith('floor')) {
             // 楼层排序：无 sourceFloor 的排最后，旧聊天记忆(-1)在正序时排倒数第二
             const aFloor = typeof a.sourceFloor === 'number' ? a.sourceFloor : -999;
@@ -3102,7 +3124,7 @@ async function rerenderManagerList(overlay, chatId, cachedData = null) {
 
     const statsEl = overlay.querySelector('.bb-mem-stats');
     if (statsEl) {
-        statsEl.innerHTML = `<strong>${memories.length}</strong> 条记忆 · NPC ${npc.length} / 物品 ${items.length} / 里程碑 ${timeline.length}`;
+        statsEl.innerHTML = `当前匹配 <strong>${allEntries.length}</strong> 条 · 记忆总计 ${memories.length} · NPC ${npc.length} / 物品 ${items.length} / 里程碑 ${timeline.length}`;
     }
 
     const listEl = overlay.querySelector('#bb_mgr_list');

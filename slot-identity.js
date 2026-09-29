@@ -1,3 +1,4 @@
+import { getUserLocalForage } from './user-storage.js';
 /**
  * slot-identity.js —— BB-Memory 存档身份与救援 (v9.3.1)
  *
@@ -40,8 +41,7 @@ function getCtx() {
 }
 
 function getLF() {
-    const ctx = getCtx();
-    return ctx?.libs?.localforage || globalThis.localforage || globalThis.SillyTavern?.libs?.localforage;
+    return getUserLocalForage();
 }
 
 // ═══════════════════════════════════════════════════════════

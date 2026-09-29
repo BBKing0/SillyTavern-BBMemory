@@ -1,3 +1,4 @@
+import { userStorageKey } from './user-storage.js';
 /**
  * memory-maintainer.js —— BB-Memory v5.0 记忆维护系统
  *
@@ -30,6 +31,7 @@ export const MEMORY_STATUS = Object.freeze({
 let maintenanceCache = {};
 
 function getCache(chatId) {
+    chatId = userStorageKey(chatId);
     if (!maintenanceCache[chatId]) {
         maintenanceCache[chatId] = { pending: [], resolved: [], lastCheck: 0 };
     }
@@ -339,7 +341,7 @@ export const regenerateTimelineSummary = regenerateThreadSummary;
 // ═══ 已维护记录 ═══
 
 export function getMaintenanceResolved(chatId) {
-    const key = `bb_maint_resolved_${chatId}`;
+    const key = userStorageKey(`bb_maint_resolved_${chatId}`);
     try {
         const raw = sessionStorage.getItem(key);
         if (!raw) return [];
@@ -355,12 +357,12 @@ export function getMaintenanceResolved(chatId) {
 }
 
 export function clearMaintenanceResolved(chatId) {
-    const key = `bb_maint_resolved_${chatId}`;
+    const key = userStorageKey(`bb_maint_resolved_${chatId}`);
     try { sessionStorage.removeItem(key); } catch { /* ignore */ }
 }
 
 export function addMaintenanceResolved(chatId, results, actionsCount = 0) {
-    const key = `bb_maint_resolved_${chatId}`;
+    const key = userStorageKey(`bb_maint_resolved_${chatId}`);
     try {
         const existing = getMaintenanceResolved(chatId);
         existing.push({

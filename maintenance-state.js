@@ -1,3 +1,4 @@
+import { getUserLocalForage } from './user-storage.js';
 /** v9.4.6：按聊天保存忽略项；条目内容变化后自动重新提示。 */
 import { cyrb53Hash } from './message-state.js';
 
@@ -19,7 +20,7 @@ export function maintenanceFingerprint(issue) {
 
 async function storage(chatId) {
     const ctx = globalThis.SillyTavern?.getContext?.();
-    const lf = ctx?.libs?.localforage || globalThis.SillyTavern?.libs?.localforage;
+    const lf = getUserLocalForage();
     if (!lf) throw new Error('维护记录存储不可用');
     const key = `bb_maintenance_ignored_chat_${chatId}`;
     const cloud = String(ctx?.chatId) === String(chatId) ? ctx.chatMetadata?.bb_memory_maintenance_ignored : null;

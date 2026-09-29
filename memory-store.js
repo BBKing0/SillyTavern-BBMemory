@@ -1,3 +1,4 @@
+import { getUserLocalForage, initializeUserStorage } from './user-storage.js';
 /**
  * memory-store.js —— BB-Memory v5.0 数据持久化层
  *
@@ -49,9 +50,12 @@ export const DEFAULT_SETTINGS = Object.freeze({
     mapDescriptionMaxChars: 60,
     timelineCompressionEntryThreshold: 12,
     timelineCompressionCharThreshold: 1800,
-    timelineCompressionTargetEntries: 6,
     timelineCompressionContextChars: 60000,
-    timelineCompressionMaxTokens: 3000,
+    timelineCompressionMaxTokens: 64000,
+    timelineSummarySegmentChars: 16000,
+    timelineSummaryParallel: 2,
+    timelineSummarySplitRetries: 2,
+    timelineSummaryTimeoutSeconds: 180,
     curationCategoryLimit: 5,
     biographyApi: "main",
     biographyUseWorldBook: false,
@@ -243,8 +247,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
 // ═══ SillyTavern 接口 ═══
 
 function getLocalForage() {
-    const ctx = SillyTavern.getContext();
-    return ctx?.libs?.localforage || globalThis.localforage || globalThis.SillyTavern?.libs?.localforage;
+    return getUserLocalForage();
 }
 
 function getContext() {
@@ -259,6 +262,12 @@ export function getSettings() {
         extensionSettings[MODULE_NAME] = structuredClone(DEFAULT_SETTINGS);
     }
     const s = extensionSettings[MODULE_NAME];
+    // 只升级旧默认输出预算，保留用户自定义值；旧目标事件数字段停止使用。
+    if (!s.jointSummaryV949) {
+        if (s.timelineCompressionMaxTokens === 3000) s.timelineCompressionMaxTokens = 64000;
+        delete s.timelineCompressionTargetEntries;
+        s.jointSummaryV949 = true;
+    }
     const hadMilestoneVectorMax = Object.prototype.hasOwnProperty.call(s, 'milestoneVectorMax');
     const hadMaxActiveTimeline = Object.prototype.hasOwnProperty.call(s, 'maxActiveTimeline');
     // 合并新默认值
@@ -1686,11 +1695,12 @@ export async function clearAllData(chatId) {
         lf.removeItem('bb_memory_exchanges_' + chatId),
         lf.removeItem('bb_curate_undo_' + chatId),          // v9.3.3 整理撤销快照
         lf.removeItem('bb_rt_settle_undo_' + chatId),       // v9.3.3 结算撤销快照
+        lf.removeItem('bb_joint_summary_draft_chat_' + chatId), // v9.4.9 待审核草稿
     ]);
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.4.8',
+        version: '9.4.9',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -1959,7 +1969,6 @@ export async function getMemoryStats(chatId) {
 // ═══════════════════════════════════════════════════════════
 
 const BACKUP_METADATA_KEY = 'bb_memory_v5_backup';
-const LEGACY_SLOT_DATA_PREFIX = 'bb_memory_slot_data_';
 const MIN_CHAT_METADATA_BACKUP_KB = 128;
 const MAX_CHAT_METADATA_BACKUP_KB = 8192;
 
@@ -2021,28 +2030,9 @@ function countBackupEmbeddings(backup) {
     return count;
 }
 
-function isLegacySlotDataKey(key) {
-    if (!key.startsWith(LEGACY_SLOT_DATA_PREFIX)) return false;
-    const rest = key.slice(LEGACY_SLOT_DATA_PREFIX.length);
-    return !rest.includes('__');
-}
-
-function purgeLegacySlotDataFromChatMetadata(ctx) {
-    if (!ctx?.chatMetadata) return { removed: 0, size: 0 };
-    let removed = 0;
-    let size = 0;
-    for (const key of Object.keys(ctx.chatMetadata)) {
-        if (!isLegacySlotDataKey(key)) continue;
-        const raw = ctx.chatMetadata[key];
-        size += typeof raw === 'string' ? raw.length : 0;
-        delete ctx.chatMetadata[key];
-        removed++;
-    }
-    return { removed, size };
-}
-
 async function saveChatMetadata(ctx) {
     if (!ctx) return false;
+    await initializeUserStorage({ verify:true });
     if (typeof ctx.saveMetadataDebounced === 'function') {
         ctx.saveMetadataDebounced();
         return true;
@@ -2063,18 +2053,9 @@ async function saveChatMetadata(ctx) {
 }
 
 export async function cleanupChatMetadataBloat() {
-    const ctx = getContext();
-    const cleanup = purgeLegacySlotDataFromChatMetadata(ctx);
-    const backup = ctx.chatMetadata?.[BACKUP_METADATA_KEY];
-    const limit = getChatMetadataBackupLimit();
-    if (typeof backup === 'string' && backup.length > limit) {
-        cleanup.removed++;
-        cleanup.size += backup.length;
-        cleanup.backupRemoved = true;
-        delete ctx.chatMetadata[BACKUP_METADATA_KEY];
-    }
-    if (cleanup.removed > 0) await saveChatMetadata(ctx);
-    return cleanup;
+    // v9.4.9 账号隔离升级后，聊天备份可能是唯一可确认归属的旧资料。
+    // 启动不能以体积优化为由删除它们，用户恢复/新备份走各自显式流程。
+    return { removed:0, size:0 };
 }
 
 export async function exportMemoriesToChatMetadata(chatId, options = {}) {
@@ -2106,7 +2087,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
         realtime,
     };
     const backup = {
-        version: '9.4.8',
+        version: '9.4.9',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2119,13 +2100,15 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
     const ctx = getContext();
 
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
-    const cleanup = purgeLegacySlotDataFromChatMetadata(ctx);
+    const cleanup = { removed:0, size:0 };
     const limit = getChatMetadataBackupLimit();
     const count = countBackupEntries(backup);
 
+    if (!count && ctx.chatMetadata[BACKUP_METADATA_KEY]) {
+        return { count, size:json.length, limit, skipped:true, reason:'empty-local-data', cleanup, embeddingsIncluded:false, embeddingCount:0 };
+    }
+
     if (json.length > limit) {
-        if (ctx.chatMetadata[BACKUP_METADATA_KEY]) delete ctx.chatMetadata[BACKUP_METADATA_KEY];
-        await saveChatMetadata(ctx);
         return {
             count,
             size: json.length,
@@ -2896,7 +2879,7 @@ export async function exportMemories(chatId) {
     await normalizeDataEmbeddingsToRefs(chatId, data);
     const vectorPack = await buildVectorPack(chatId, data);
     return JSON.stringify({
-        version: '9.4.8',
+        version: '9.4.9',
         schema: 'bb-memory-vector-ref-v1',
         exportedAt: Date.now(),
         data: stripRuntimeEmbeddings(data),

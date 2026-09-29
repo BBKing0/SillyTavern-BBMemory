@@ -6233,7 +6233,13 @@
 .bb-organization-summary { display: flex; flex-direction: column; gap: .8rem; margin-top: 1rem; }
 .bb-organization-summary label { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
 .bb-organization-summary .bb-input { min-width: 0; max-width: 100%; flex: 1 1 12rem; }
-.bb-organization-status { flex: 0 0 auto; padding: .75rem 1rem; overflow-wrap: anywhere; border-top: 1px solid var(--SmartThemeBorderColor, #444); }
+.bb-organization-status { flex: 0 0 auto; max-height: 22vh; overflow-y: auto; padding: .75rem 1rem; overflow-wrap: anywhere; border-top: 1px solid var(--SmartThemeBorderColor, #444); }
+.bb-summary-notice { padding: .7em; border-left: .25em solid #e8ad55; background: #e8ad5514; }
+.bb-mem-importance-filters { display:flex; flex-wrap:wrap; gap:.5em; align-items:center; margin:.6em 0; }
+.bb-mem-importance-filters label { display:flex; align-items:center; gap:.4em; min-width:0; white-space:nowrap; }
+.bb-mem-importance-filters select { width:auto; max-width:100%; }
+.bb-mem-importance-filters input { width:5em; }
+.bb-mem-importance-filters small { flex-basis:100%; opacity:.75; }
 .bb-biography-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
 .bb-biography-sources, .bb-biography-buttons { display: flex; gap: .7rem; flex-wrap: wrap; margin: .7rem 0; }
 .bb-biography-status, .bb-biography-count { font-size: .85em; margin-top: .5rem; overflow-wrap: anywhere; }

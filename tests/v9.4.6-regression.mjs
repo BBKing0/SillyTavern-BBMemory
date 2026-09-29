@@ -12,6 +12,7 @@ const state = await import('../maintenance-state.js');
 store.updateSettings({ autoBackupEnabled: false, autoGenEndpoint: 'https://mock.invalid', autoGenApiKey: '', embeddingEnabled: true, embeddingEndpoint: 'https://mock.invalid', agentPageSize: 2 });
 let responses = [], requests = [], embeddingFailures = false, embeddingHook;
 globalThis.fetch = async (url, options) => {
+    if (url === '/api/users/me') return {ok:true,json:async()=>({handle:'test946',created:1})};
     const body = JSON.parse(options.body); requests.push(body);
     if (body.input) {
         await embeddingHook?.(body);

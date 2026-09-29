@@ -735,11 +735,14 @@ export async function callCustomApi(prompt, options = {}) {
             temperature: 0.3,
             ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
         }),
-    }, 60000);
+    }, options.timeoutMs || 60000);
 
     if (!response.ok) throw new Error(`API 请求失败: ${response.status} ${response.statusText}`);
     const data = await response.json();
     if (data.choices && data.choices[0]) {
+        if (options.rejectTruncated && ['length', 'max_tokens'].includes(data.choices[0].finish_reason)) {
+            throw new Error('模型输出达到 token 上限，未接收截断的总结');
+        }
         return data.choices[0].message?.content || data.choices[0].text || '';
     }
     return data.content || data.text || JSON.stringify(data);

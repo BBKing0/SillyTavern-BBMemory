@@ -1,3 +1,4 @@
+import { userStorageKey } from './user-storage.js';
 /**
  * map-view.js —— BB-Memory v8.8.4 地图视图
  * 双模式：2D空间视图(Canvas+CSS) + 列表视图
@@ -49,7 +50,7 @@ function getRegionColor(region) {
 
 function loadMapUiPref() {
     try {
-        const raw = localStorage.getItem(MAP_UI_PREF_KEY);
+        const raw = localStorage.getItem(userStorageKey(MAP_UI_PREF_KEY));
         const parsed = raw ? JSON.parse(raw) : null;
         return parsed && typeof parsed === 'object' ? parsed : {};
     } catch {
@@ -59,7 +60,7 @@ function loadMapUiPref() {
 
 function saveMapUiPref(patch) {
     try {
-        localStorage.setItem(MAP_UI_PREF_KEY, JSON.stringify({ ...loadMapUiPref(), ...patch }));
+        localStorage.setItem(userStorageKey(MAP_UI_PREF_KEY), JSON.stringify({ ...loadMapUiPref(), ...patch }));
     } catch { /* ignore */ }
 }
 

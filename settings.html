@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.4.8</b>
+            <b>BB-Memory v9.4.9</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -523,9 +523,12 @@
                     <label>地图起点描述字数<input id="bb_map_description_max_chars" type="number" class="bb-input" min="0" max="500" value="60" /></label>
                     <label>故事线事件数提醒阈值<input id="bb_timeline_compression_entry_threshold" type="number" class="bb-input" min="2" max="1000" value="12" /></label>
                     <label>故事线字符数提醒阈值<input id="bb_timeline_compression_char_threshold" type="number" class="bb-input" min="100" max="100000" value="1800" /></label>
-                    <label>压缩目标事件数<input id="bb_timeline_compression_target_entries" type="number" class="bb-input" min="1" max="100" value="6" /></label>
-                    <label>时间线 + 里程碑联合输入上限<input id="bb_timeline_compression_context_chars" type="number" class="bb-input" min="2000" max="500000" value="60000" /></label>
-                    <label>故事线压缩输出 token 上限<input id="bb_timeline_compression_max_tokens" type="number" class="bb-input" min="256" max="32000" value="3000" /></label>
+                    <label>故事分段规划每批输入字符上限<input id="bb_timeline_compression_context_chars" type="number" class="bb-input" min="2000" max="500000" value="60000" /></label>
+                    <label>联合总结每次输出 token 上限<input id="bb_timeline_compression_max_tokens" type="number" class="bb-input" min="256" value="64000" /></label>
+                    <label>总结每段输入字符上限<input id="bb_timeline_summary_segment_chars" type="number" class="bb-input" min="2000" max="500000" value="16000" /></label>
+                    <label>总结并行请求数<input id="bb_timeline_summary_parallel" type="number" class="bb-input" min="1" max="8" value="2" /></label>
+                    <label>失败拆分重试层数<input id="bb_timeline_summary_split_retries" type="number" class="bb-input" min="0" max="5" value="2" /></label>
+                    <label>总结副 API 超时（秒）<input id="bb_timeline_summary_timeout_seconds" type="number" class="bb-input" min="30" max="900" value="180" /></label>
                     <label>全库整理最多问题类别（另加其他）<input id="bb_curation_category_limit" type="number" class="bb-input" min="1" max="5" value="5" /></label>
                         <label>允许修改<select id="bb_timeline_summary_target" class="bb-input"><option value="timeline">只修改时间线</option><option value="milestone">只修改里程碑</option><option value="both">时间线和里程碑都修改</option></select></label>
                         <label>联合总结 API<select id="bb_timeline_compression_api" class="bb-input"><option value="main">主 API</option><option value="custom">副 API</option></select></label>

@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { userStorageKey } from '../user-storage.js';
 const data = new Map();
 const lf = { async getItem(k) { return structuredClone(data.get(k) ?? null); }, async setItem(k,v) { data.set(k,structuredClone(v)); return v; }, async removeItem(k) { data.delete(k); } };
 const extensionSettings = {};
 let apiResponse = '', calls = 0, lastPrompt = '';
 const ctx = { libs: {localforage:lf}, extensionSettings, chat:[], chatId:'test945', characterId:0, chatMetadata:{}, saveSettingsDebounced(){}, async generateRaw({prompt}) { calls++; lastPrompt=prompt; return apiResponse; } };
 globalThis.SillyTavern = {getContext:()=>ctx}; globalThis.window=globalThis;
+globalThis.fetch = async url => { assert.equal(url, '/api/users/me'); return {ok:true,json:async()=>({handle:'test945',created:1})}; };
 const s = await import('../memory-store.js');
 const rt = await import('../realtime-memory.js');
 const sc = await import('../realtime-schedule.js');
@@ -41,13 +43,13 @@ await s.updateRealtimeMemory('test945',saved[0].id,{settleState:'settled'});
 check('日程留档不被楼层修剪',()=>assert.deepEqual(rt.planSettledPrune([{...saved[0],settleState:'settled'}],900,{realtimeSettledRetentionFloors:0}),[]));
 await s.updateRealtimeMemory('test945',saved[0].id,{settleState:'active'});
 await s.addRealtimeMemory('test945',{kind:'object',text:'A带着历史书',createdFloor:305,sourceFloor:305});
-await lf.setItem('bb_rt_settle_undo_test945',{entries:[{id:'undo1',before:[{...saved[0],createdFloor:300,lastSeenFloor:305,sourceFloor:305}],promoted:[]}]});
+await lf.setItem(userStorageKey('bb_rt_settle_undo_test945'),{entries:[{id:'undo1',before:[{...saved[0],createdFloor:300,lastSeenFloor:305,sourceFloor:305}],promoted:[]}]});
 const refresh=await s.refreshAllSourceFloors('test945');
 entries=await s.getRealtimeMemories('test945');
 check('换楼清理全部实时楼层',()=>{ assert.equal(refresh.realtime,3); for(const e of entries) { assert.equal(e.sourceFloor,-1); assert.equal(e.createdFloor,-1); assert.equal(e.lastSeenFloor,-1); assert.equal(sc.realtimeFloorLabel(e),'旧聊天'); } });
 const undone=await rt.undoLastSettlement('test945');
 check('换楼后撤销结算不复活旧楼层',()=>assert.equal(undone.ok,true));
-check('撤销快照仍是旧聊天',()=>assert.equal(data.get('bb_rt_chat_test945').find(e=>e.id===saved[0].id).createdFloor,-1));
+check('撤销快照仍是旧聊天',()=>assert.equal(data.get(userStorageKey('bb_rt_chat_test945')).find(e=>e.id===saved[0].id).createdFloor,-1));
 const inject=ret.getRealtimeForInjection(entries,{...settings,realtimeInjectionMax:1,realtimeInjectionTokenCap:1});
 check('补记上午行动按时段插入，不排到晚饭后',()=>{ const list=[{...saved[0],text:'晚上，A回家',actionOrder:2000},{...saved[0],text:'上午，A上课',actionOrder:3000}]; assert.equal(sc.getScheduleDays(list)[0].entries[0].text,'上午，A上课'); });
 check('日程使用独立预算且排在逻辑细节前',()=>{assert.equal(inject.lines[0].kind,'schedule'); assert.ok(inject.lines[0].text.indexOf('上午')<inject.lines[0].text.indexOf('中午')); assert.ok(inject.lines.some(l=>l.kind==='object'));});
@@ -100,6 +102,6 @@ check('纠错只改所选字段，清除过时向量',()=>{assert.equal(correcte
 await assert.rejects(()=>correction.saveCorrection('test945',editRow,{role:'作家'}),/其它操作/); checks++; console.log('PASS 并发编辑拒绝覆盖更新过的字段');
 const dayRow=(await correction.loadCorrectionRows('test945')).find(r=>r.entry.kind==='schedule');
 await correction.saveCorrection('test945',dayRow,{dayLabel:'第六天'});
-check('纠错日程日期同步日期键',()=>assert.equal(data.get('bb_rt_chat_test945').find(e=>e.id===dayRow.entry.id).dayKey,sc.scheduleDayKey('第六天')));
+check('纠错日程日期同步日期键',()=>assert.equal(data.get(userStorageKey('bb_rt_chat_test945')).find(e=>e.id===dayRow.entry.id).dayKey,sc.scheduleDayKey('第六天')));
 console.log(`v9.4.5: ${checks} checks passed; API calls were mocked (${calls}).`);
 

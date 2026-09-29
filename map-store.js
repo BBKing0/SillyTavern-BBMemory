@@ -1,3 +1,4 @@
+import { getUserLocalForage } from './user-storage.js';
 /**
  * map-store.js —— BB-Memory v8.7.0 地图记忆数据层（第5支柱）
  *
@@ -14,11 +15,7 @@ const SOURCE_ROLLBACK_KEY = '_bbmemSourceRollback';
 
 // ═══ SillyTavern 接口 ═══
 function getLocalForage() {
-    try {
-        return window.SillyTavern.getContext().libs.localforage;
-    } catch {
-        return window.localforage;
-    }
+    return getUserLocalForage();
 }
 
 function generateId() {

@@ -1,3 +1,4 @@
+import { getUserLocalForage } from './user-storage.js';
 /**
  * memory-curator.js — BB-Memory v9.4.5 全库记忆整理
  *
@@ -1016,12 +1017,7 @@ const PILLAR_CRUD = Object.freeze({
 const MERGE_UNION_TAG_FIELDS = Object.freeze(['tags']);
 
 function getLocalForage() {
-    try {
-        const ctx = SillyTavern.getContext();
-        return ctx?.libs?.localforage || globalThis.localforage || globalThis.SillyTavern?.libs?.localforage;
-    } catch {
-        return globalThis.localforage || null;
-    }
+    return getUserLocalForage();
 }
 
 function deepClone(value) {
@@ -2110,7 +2106,7 @@ export function openCurationReviewPanel(chatId, ops, options = {}) {
             ...deepClone(op),
             _idx: index,
             // 高风险项默认不勾选：删除、以及系统标了风险的（缝合痕迹/信息量退化）
-            selected: op.op !== 'delete' && !op.forceConfirm,
+            selected: typeof op.selected === 'boolean' ? op.selected : op.op !== 'delete' && !op.forceConfirm,
         }));
         const tabs = [
             { key: 'all', label: '全部' },
@@ -2129,7 +2125,7 @@ export function openCurationReviewPanel(chatId, ops, options = {}) {
                 <div class="bb-active-review-header">
                     <div>
                         <div class="bb-active-review-title"><i class="fa-solid fa-wand-magic-sparkles"></i> ${escapeHtml(options.title || '全库整理待确认')}</div>
-                        <div class="bb-active-review-subtitle">查看原文，编辑建议结果后勾选应用；未勾选的操作不会执行。</div>
+                        <div class="bb-active-review-subtitle">${escapeHtml(options.subtitle || '查看原文，编辑建议结果后勾选应用；未勾选的操作不会执行。')}</div>
                     </div>
                     <button class="menu_button bb-active-review-close" type="button" title="关闭">×</button>
                 </div>
@@ -2143,6 +2139,7 @@ export function openCurationReviewPanel(chatId, ops, options = {}) {
                 <div class="bb-active-review-list"></div>
                 <div class="bb-active-review-footer">
                     <button class="menu_button danger" type="button" data-action="reject">全部拒绝</button>
+                    ${options.saveDraft ? '<button class="menu_button" type="button" data-action="save_draft">保存草稿，稍后审核</button>' : ''}
                     <button class="menu_button" type="button" data-action="apply">应用选中</button>
                 </div>
             </div>`;
@@ -2197,7 +2194,7 @@ export function openCurationReviewPanel(chatId, ops, options = {}) {
 
         function finish(payload) {
             overlay.remove();
-            resolve(payload);
+            resolve({ ...payload, draftOps:state.map(({ _idx, ...op }) => op) });
         }
 
         tabEl.addEventListener('click', (event) => {
@@ -2236,6 +2233,22 @@ export function openCurationReviewPanel(chatId, ops, options = {}) {
         overlay.querySelector('.bb-active-review-footer').addEventListener('click', async (event) => {
             const action = event.target.closest('[data-action]')?.dataset.action;
             if (!action || busy) return;
+            if (action === 'save_draft' && options.saveDraft) {
+                busy = true;
+                overlay.querySelectorAll('button, input, textarea, select').forEach(el => { el.disabled = true; });
+                statusEl.textContent = '正在保存草稿…';
+                try {
+                    if (String(SillyTavern.getContext().chatId) !== String(chatId)) throw new Error('聊天已切换，请回到原聊天再保存草稿');
+                    await options.saveDraft(state.map(({ _idx, ...op }) => op));
+                    showToast(`已保存 ${state.length} 项建议草稿`, 'success');
+                    finish({ savedDraft:true, confirmed:0, rejected:0, applyResult:null });
+                } catch (error) {
+                    statusEl.textContent = `草稿保存失败：${error.message}`;
+                    showToast(statusEl.textContent, 'error');
+                    overlay.querySelectorAll('button, input, textarea, select').forEach(el => { el.disabled = false; });
+                } finally { busy = false; }
+                return;
+            }
             if (action === 'reject') {
                 showToast(`已拒绝 ${state.length} 项整理操作`, 'info');
                 finish({ confirmed: 0, rejected: state.length, applyResult: null });

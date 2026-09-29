@@ -1,3 +1,4 @@
+import { getUserLocalForage, initializeUserStorage } from './user-storage.js';
 /**
  * memory-slots.js —— BB-Memory 存档槽管理
  *
@@ -28,8 +29,7 @@ import {
 // ═══ localforage 访问 ═══
 
 function getLocalForage() {
-    const ctx = SillyTavern.getContext();
-    return ctx?.libs?.localforage || globalThis.localforage || globalThis.SillyTavern?.libs?.localforage;
+    return getUserLocalForage();
 }
 
 // ═══ 存储键 ═══
@@ -910,6 +910,7 @@ function getSTContext() {
 
 async function saveChatMeta(ctx) {
     if (!ctx) return false;
+    await initializeUserStorage({ verify:true });
     let requested = false;
     if (typeof ctx.saveMetadataDebounced === 'function') {
         ctx.saveMetadataDebounced();

@@ -30,13 +30,19 @@ export function openMemoryOrganization(chatId) {
                 <p>检查条目健康、维护等级和状态，或联合总结时间线与里程碑。</p>
                 <button class="menu_button" data-action="maintenance">打开维护与体检</button>
                 <div class="bb-organization-summary">
-                    <h4>时间线与里程碑联合总结</h4><p>始终发送两类完整资料；只保存所选范围内、经你确认的建议。保留日期与日期区间，省略无必要的时刻。</p>
+                    <h4>时间线与里程碑联合总结</h4><p>AI 先读取上下文确认故事分段，再按段并行总结对应时间线与里程碑。保留日期与日期区间，省略无必要的时刻；事件数量由实际情节决定。</p>
+                    <p class="bb-summary-notice">为避免记忆混乱，开始总结后会保持在此页面，暂时无法关闭或切换栏目。请等待生成完成；结果会自动保存为草稿，可编辑、采纳，或保存后稍后继续审核。已采纳内容也可在记忆管理中再次修改。</p>
                     <label>允许修改 <select class="bb-input" data-setting="timelineSummaryTarget">${Object.entries(SUMMARY_TARGETS).map(([key,label]) => `<option value="${key}">${label}</option>`).join('')}</select></label>
                     <label>生成 API <select class="bb-input" data-setting="timelineCompressionApi"><option value="main">主 API</option><option value="custom">副 API</option></select></label>
-                    <label>每条时间线目标事件数<input class="bb-input" type="number" min="1" max="100" data-setting="timelineCompressionTargetEntries"></label>
-                    <label>联合输入字符上限<input class="bb-input" type="number" min="2000" max="500000" data-setting="timelineCompressionContextChars"></label>
-                    <label>输出 token 上限<input class="bb-input" type="number" min="256" max="32000" data-setting="timelineCompressionMaxTokens"></label>
+                    <label>规划每批输入字符上限<input class="bb-input" type="number" min="2000" max="500000" data-setting="timelineCompressionContextChars"></label>
+                    <label>总结每段输入字符上限<input class="bb-input" type="number" min="2000" max="500000" data-setting="timelineSummarySegmentChars"></label>
+                    <label>并行请求数<input class="bb-input" type="number" min="1" max="8" data-setting="timelineSummaryParallel"></label>
+                    <label>每次输出 token 上限<input class="bb-input" type="number" min="256" data-setting="timelineCompressionMaxTokens"></label>
+                    <p>输出预算默认 64000，包含模型可能消耗的思考 token；请按模型能力调整。输出截断时自动拆小输入重试，失败片段不会覆盖原文。</p>
+                    <label>失败拆分重试层数<input class="bb-input" type="number" min="0" max="5" data-setting="timelineSummarySplitRetries"></label>
+                    <label>副 API 每次超时（秒）<input class="bb-input" type="number" min="30" max="900" data-setting="timelineSummaryTimeoutSeconds"></label>
                     <button class="menu_button" data-action="summary">生成联合总结建议</button>
+                    <button class="menu_button" data-action="resume_summary">继续上次总结草稿</button>
                 </div>
             </section>
         </div><div class="bb-organization-status" role="status" aria-live="polite">请选择整理功能</div>
@@ -83,9 +89,9 @@ export function openMemoryOrganization(chatId) {
         const original = button.textContent;
         setBusy(true); button.textContent = '处理中…'; status.textContent = '正在处理…';
         try {
-            if (action === 'summary') {
+            if (action === 'summary' || action === 'resume_summary') {
                 if (![...overlay.querySelectorAll('[data-setting]')].every(el => el.checkValidity())) throw new Error('请检查总结参数的范围');
-                const result = await reviewJointSummary(chatId, { onProgress:message => { status.textContent = message; } });
+                const result = await reviewJointSummary(chatId, { resume:action === 'resume_summary', onProgress:message => { status.textContent = message; } });
                 status.textContent = result.summary; toast(result.summary, 'info');
             } else {
                 if (!handlers[action]) throw new Error('整理入口尚未初始化，请刷新 ST 后重试');

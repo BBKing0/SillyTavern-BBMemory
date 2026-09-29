@@ -1,3 +1,4 @@
+import { getUserLocalForage } from './user-storage.js';
 /**
  * clue-board.js —— BB-Memory v8.8.4 线索板系统
  *
@@ -24,8 +25,7 @@ import {
 const CLUE_BOARD_KEY = 'bb_clue_board_';
 
 function getLocalForage() {
-    const ctx = SillyTavern.getContext();
-    return ctx?.libs?.localforage || globalThis.localforage || globalThis.SillyTavern?.libs?.localforage;
+    return getUserLocalForage();
 }
 
 function generateId() {

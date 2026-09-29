@@ -4,9 +4,9 @@
     "js": "index.js",
     "css": "style.css",
     "author": "BB-Memory Dev",
-    "version": "9.4.8",
+    "version": "9.4.9",
     "homePage": "https://github.com/BBKing0/SillyTavern-BBMemory",
     "auto_update": true,
     "generate_interceptor": "bbMemoryInterceptor",
-    "description": "Smart long-term memory extension v9.4.8 - unified memory organization, joint timeline summaries and temporary realtime details"
+    "description": "Smart long-term memory extension v9.4.9 - account-isolated storage, staged story summaries with saved drafts and importance filters"
 }

@@ -1,6 +1,7 @@
+import { userStorageKey, initializeUserStorage, watchUserSession } from './user-storage.js';
 import { openMemoryOrganization, configureMemoryOrganization } from './memory-organization.js';
 /**
- * index.js —— BB-Memory v9.4.8 主入口
+ * index.js —— BB-Memory v9.4.9 主入口
  *
  * 五柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目 / 实时记忆。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -137,7 +138,7 @@ const SETTINGS_EXPORT_KEYS = [
     'hitScoreDemoteThreshold', 'entityTierPromoteThreshold', 'entityTierDemoteThreshold',
     'maintenanceMode', 'maintenanceMemThreshold', 'maintenanceNpcThreshold', 'maintenanceItemThreshold', 'itemDustyMissRounds',
     'agentMaxRounds', 'agentPageSize', 'agentDetailChars', 'agentHistoryMessages', 'agentTimeoutSeconds', 'agentMaxTokens',
-    'mapNeighborDepth', 'mapRootNeighborLimit', 'mapBranchLimit', 'mapDescriptionMaxChars', 'timelineCompressionEntryThreshold', 'timelineCompressionCharThreshold', 'timelineCompressionTargetEntries', 'timelineCompressionContextChars', 'timelineCompressionMaxTokens', 'curationCategoryLimit', 'biographyApi', 'biographyUseWorldBook', 'biographyUsePreset', 'biographyUseMemory', 'biographyWorldBooks', 'biographyMaxChars', 'biographyContextChars', 'biographyMaxTokens', 'timelineCompressionApi', 'timelineSummaryTarget',
+    'mapNeighborDepth', 'mapRootNeighborLimit', 'mapBranchLimit', 'mapDescriptionMaxChars', 'timelineCompressionEntryThreshold', 'timelineCompressionCharThreshold', 'timelineCompressionContextChars', 'timelineCompressionMaxTokens', 'timelineSummarySegmentChars', 'timelineSummaryParallel', 'timelineSummarySplitRetries', 'timelineSummaryTimeoutSeconds', 'curationCategoryLimit', 'biographyApi', 'biographyUseWorldBook', 'biographyUsePreset', 'biographyUseMemory', 'biographyWorldBooks', 'biographyMaxChars', 'biographyContextChars', 'biographyMaxTokens', 'timelineCompressionApi', 'timelineSummaryTarget',
     'healthCheckDuplicateThreshold', 'healthCheckIsolationThreshold', 'healthCheckStaleDays',
     'healthCheckStaleHitThreshold', 'healthCheckThreadStaleDays', 'healthCheckClueStaleDays',
     // v9.4.3 全库整理（旧 aiCurate* 保留导入兼容）
@@ -178,9 +179,12 @@ const SETTING_CONTROL_BINDINGS = {
     mapDescriptionMaxChars: ['#bb_map_description_max_chars', 'value'],
     timelineCompressionEntryThreshold: ['#bb_timeline_compression_entry_threshold', 'value'],
     timelineCompressionCharThreshold: ['#bb_timeline_compression_char_threshold', 'value'],
-    timelineCompressionTargetEntries: ['#bb_timeline_compression_target_entries', 'value'],
     timelineCompressionContextChars: ['#bb_timeline_compression_context_chars', 'value'],
     timelineCompressionMaxTokens: ['#bb_timeline_compression_max_tokens', 'value'],
+    timelineSummarySegmentChars: ['#bb_timeline_summary_segment_chars', 'value'],
+    timelineSummaryParallel: ['#bb_timeline_summary_parallel', 'value'],
+    timelineSummarySplitRetries: ['#bb_timeline_summary_split_retries', 'value'],
+    timelineSummaryTimeoutSeconds: ['#bb_timeline_summary_timeout_seconds', 'value'],
     curationCategoryLimit: ['#bb_curation_category_limit', 'value'],
     timelineCompressionApi: ['#bb_timeline_compression_api', 'value'],
     timelineSummaryTarget: ['#bb_timeline_summary_target', 'value'],
@@ -1117,7 +1121,7 @@ function isPromptDefinitionCustomized(def, settings = getSettings()) {
 
 function getPromptOpenState() {
     try {
-        const raw = localStorage.getItem('bb_memory_prompt_template_open');
+        const raw = localStorage.getItem(userStorageKey('bb_memory_prompt_template_open'));
         const parsed = raw ? JSON.parse(raw) : {};
         return parsed && typeof parsed === 'object' ? parsed : {};
     } catch { return {}; }
@@ -1127,7 +1131,7 @@ function setPromptOpenState(key, open) {
     try {
         const state = getPromptOpenState();
         state[key] = !!open;
-        localStorage.setItem('bb_memory_prompt_template_open', JSON.stringify(state));
+        localStorage.setItem(userStorageKey('bb_memory_prompt_template_open'), JSON.stringify(state));
     } catch { /* ignore */ }
 }
 
@@ -2208,9 +2212,12 @@ function bindSidebarEvents() {
     bindInput('#bb_map_description_max_chars', 'mapDescriptionMaxChars', 'number');
     bindInput('#bb_timeline_compression_entry_threshold', 'timelineCompressionEntryThreshold', 'number');
     bindInput('#bb_timeline_compression_char_threshold', 'timelineCompressionCharThreshold', 'number');
-    bindInput('#bb_timeline_compression_target_entries', 'timelineCompressionTargetEntries', 'number');
     bindInput('#bb_timeline_compression_context_chars', 'timelineCompressionContextChars', 'number');
     bindInput('#bb_timeline_compression_max_tokens', 'timelineCompressionMaxTokens', 'number');
+    bindInput('#bb_timeline_summary_segment_chars', 'timelineSummarySegmentChars', 'number');
+    bindInput('#bb_timeline_summary_parallel', 'timelineSummaryParallel', 'number');
+    bindInput('#bb_timeline_summary_split_retries', 'timelineSummarySplitRetries', 'number');
+    bindInput('#bb_timeline_summary_timeout_seconds', 'timelineSummaryTimeoutSeconds', 'number');
     bindInput('#bb_curation_category_limit', 'curationCategoryLimit', 'number');
     bindSelect('#bb_timeline_compression_api', 'timelineCompressionApi');
     bindSelect('#bb_timeline_summary_target', 'timelineSummaryTarget');
@@ -2351,7 +2358,7 @@ function bindSidebarEvents() {
         try {
             const result = await exportMemoriesToChatMetadata(chatId);
             if (result.skipped) {
-                showToast(`备份已跳过：${(result.size / 1024).toFixed(1)}KB 超过上限 ${(result.limit / 1024).toFixed(0)}KB，请提高上限或使用本地 JSON 导出`, 'warning');
+                showToast(result.reason === 'empty-local-data' ? '本账号本地库为空，已保留现有聊天备份；请先恢复或导入数据' : `备份已跳过：${(result.size / 1024).toFixed(1)}KB 超过上限 ${(result.limit / 1024).toFixed(0)}KB，请提高上限或使用本地 JSON 导出`, 'warning');
             } else {
                 showToast(`备份完成：${result.count} 条文本/引用 (${(result.size / 1024).toFixed(1)}KB) → 已保存到服务器；向量请在存档页使用云端向量槽同步`, 'success');
             }
@@ -3730,7 +3737,7 @@ function registerSlashCommands() {
         if (!chatId) return;
         const result = await exportMemoriesToChatMetadata(chatId);
         if (result.skipped) {
-            showToast(`备份已跳过：${(result.size / 1024).toFixed(1)}KB 超过上限 ${(result.limit / 1024).toFixed(0)}KB，请使用本地 JSON 导出`, 'warning');
+            showToast(result.reason === 'empty-local-data' ? '本账号本地库为空，已保留现有聊天备份；请先恢复或导入数据' : `备份已跳过：${(result.size / 1024).toFixed(1)}KB 超过上限 ${(result.limit / 1024).toFixed(0)}KB，请使用本地 JSON 导出`, 'warning');
         } else {
             showToast(`备份完成：${result.count} 条文本/引用 (${(result.size / 1024).toFixed(1)}KB)，不内联向量`, 'success');
         }
@@ -4596,7 +4603,9 @@ async function handleFloatingMenuAction(action) {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    console.log('[BB-Memory] v9.4.8 初始化开始...');
+    try { await initializeUserStorage(); watchUserSession(); }
+    catch (error) { showToast(error.message, 'error'); _bbInitCalled = false; return; }
+    console.log('[BB-Memory] v9.4.9 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -4792,7 +4801,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.4.8 初始化完成');
+    console.log('[BB-Memory] v9.4.9 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆

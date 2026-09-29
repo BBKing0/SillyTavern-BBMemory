@@ -1,3 +1,4 @@
+import { getUserLocalForage } from './user-storage.js';
 /**
  * vector-store.js — compressed embedding storage for BB-Memory v9.3.3.
  *
@@ -15,8 +16,7 @@ function getContextSafe() {
 }
 
 function getLocalForage() {
-    const ctx = getContextSafe();
-    return ctx?.libs?.localforage || globalThis.localforage || globalThis.SillyTavern?.libs?.localforage;
+    return getUserLocalForage();
 }
 
 function getSettingsSafe() {

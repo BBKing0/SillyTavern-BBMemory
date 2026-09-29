@@ -1,3 +1,4 @@
+import { getUserLocalForage } from './user-storage.js';
 /**
  * message-state.js —— BB-Memory 的"消息管理员"（消息稳定化机制）
  *
@@ -36,8 +37,7 @@ function getChatId() {
 }
 
 function getLocalForage() {
-    const ctx = getContext();
-    return ctx?.libs?.localforage || globalThis.localforage || globalThis.SillyTavern?.libs?.localforage;
+    return getUserLocalForage();
 }
 
 function saveChat() {
