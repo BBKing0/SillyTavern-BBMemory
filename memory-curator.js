@@ -493,10 +493,10 @@ const PILLAR_WRITABLE_FIELDS = Object.freeze({
     mem: Object.freeze(['title', 'type', 'summary', 'content', 'verbatim', 'subject', 'target',
         'storyTime', 'importance', 'emotionalWeight', 'tags', 'truthStatus']),
     npc: Object.freeze(['name', 'aliases', 'role', 'personality', 'appearance', 'status',
-        'location', 'indexCard', 'biography', 'relationships', 'tags']),
-    item: Object.freeze(['name', 'aliases', 'owner', 'status', 'location', 'significance', 'tags']),
+        'location', 'storyTime', 'indexCard', 'biography', 'relationships', 'tags']),
+    item: Object.freeze(['name', 'aliases', 'owner', 'status', 'quantity', 'location', 'storyTime', 'significance', 'tags']),
     milestone: Object.freeze(['storyTime', 'event', 'summary', 'participants', 'location',
-        'status', 'impact', 'tags']),
+        'status', 'impact', 'tags', 'timelineId']),
     timeline: Object.freeze(['name', 'type', 'status', 'priority', 'summary', 'entries']),
 });
 
@@ -650,7 +650,10 @@ function sanitizeResult(raw, pillar) {
         if (!Object.prototype.hasOwnProperty.call(raw, field)) continue;
         const value = raw[field];
         if (value == null) continue;
-        if (field === 'importance' || field === 'emotionalWeight') {
+        if (field === 'quantity') {
+            const n = Number(value);
+            if (Number.isFinite(n)) out.quantity = Math.max(0, n);
+        } else if (field === 'importance' || field === 'emotionalWeight') {
             const n = Number(value);
             if (Number.isFinite(n)) out[field] = Math.max(0, Math.min(1, n));
         } else if (field === 'tags') {
@@ -658,17 +661,21 @@ function sanitizeResult(raw, pillar) {
                 .map(t => (typeof t === 'string' ? t.trim() : (t?.name ? String(t.name).trim() : '')))
                 .filter(Boolean)
                 .map(name => ({ name, weight: 0.6 }));
-            if (tags.length) out.tags = tags;
+            out.tags = tags;
         } else if (field === 'aliases' || field === 'participants') {
             const list = (Array.isArray(value) ? value : String(value).split(/[,，、]/))
                 .map(v => (typeof v === 'string' ? v.trim() : String(v?.name || '').trim()))
                 .filter(Boolean);
-            if (list.length) out[field] = list;
-        } else if (field === 'relationships' || field === 'entries') {
+            out[field] = list;
+        } else if (field === 'relationships') {
+            if (Array.isArray(value)) out.relationships = value
+                .map(v => typeof v === 'string' ? v.trim() : v)
+                .filter(v => v && (typeof v === 'string' || typeof v === 'object'));
+        } else if (field === 'entries') {
             if (Array.isArray(value) && value.length) out[field] = value.filter(v => v && typeof v === 'object');
         } else if (typeof value === 'string') {
             const text = value.trim();
-            if (text) out[field] = text;
+            if (text || ['timelineId', 'storyTime', 'owner', 'location', 'verbatim', 'subject', 'target'].includes(field)) out[field] = text;
         } else if (typeof value === 'number' || typeof value === 'boolean') {
             out[field] = value;
         }
@@ -1101,6 +1108,14 @@ export async function beginCurationSnapshot(chatId, ops, meta = {}) {
         for (const id of op.ids) idsByPillar.get(pillar).add(String(id));
     }
 
+    const removedTimelineIds = new Set(ops.filter(op => op.pillar === 'timeline')
+        .flatMap(op => op.op === 'delete' ? op.ids : op.op === 'merge' ? op.removeIds : []).map(String));
+    if (removedTimelineIds.size) {
+        const linked = (await getMilestones(chatId)).filter(entry => removedTimelineIds.has(String(entry.timelineId)));
+        if (linked.length && !idsByPillar.has('milestone')) idsByPillar.set('milestone', new Set());
+        for (const entry of linked) idsByPillar.get('milestone').add(String(entry.id));
+    }
+
     const before = {};
     for (const [pillar, ids] of idsByPillar) {
         const crud = PILLAR_CRUD[pillar];
@@ -1323,6 +1338,7 @@ function carryOverFields(original, pillar) {
     }
     if (pillar === 'milestone') {
         carried.storyTime = original.storyTime || '';
+        carried.timelineId = original.timelineId || '';
         carried.isActive = original.isActive !== false;
     }
     return carried;
@@ -1333,6 +1349,16 @@ function carryOverFields(original, pillar) {
  * （entity-tiers.js 的 expandEntityMemories 会读 relatedMemoryIds）。这里重映射或摘掉。
  */
 async function repairCrossReferences(chatId, pillar, removedIds, replacementId) {
+    if (pillar === 'timeline' && removedIds.length) {
+        const removed = new Set(removedIds.map(String));
+        let repaired = 0;
+        for (const entry of await getMilestones(chatId)) {
+            if (!removed.has(String(entry.timelineId))) continue;
+            await updateMilestone(chatId, entry.id, { timelineId: replacementId || '' });
+            repaired++;
+        }
+        return repaired;
+    }
     const field = CROSS_REF_FIELDS[pillar];
     if (!field || !removedIds.length) return 0;
     const crud = PILLAR_CRUD[pillar];
@@ -1356,13 +1382,20 @@ async function applySingleOp(chatId, op) {
     const pillar = normalizeCurationPillar(op.pillar);
     const crud = PILLAR_CRUD[pillar];
     if (!crud) throw new Error(`未知的数据柱：${op.pillar}`);
+    if (pillar === 'milestone' && op.result?.timelineId) {
+        if (!(await getTimeline(chatId)).some(entry => entry.id === op.result.timelineId && !entry.archived && entry.status !== 'archived')) {
+            throw new Error('里程碑标签引用的时间线已不存在，请重新选择');
+        }
+    }
     const createdIds = [];
     // 审核期间用户可能编辑原文；旧建议不能覆盖更新后的事实。
     if (op.sourceEntries?.length) {
         const current = await crud.get(chatId);
         for (const source of op.sourceEntries) {
             const fresh = current.find(entry => String(entry.id) === String(source.id));
-            if (!fresh || (PILLAR_WRITABLE_FIELDS[pillar] || []).some(key => JSON.stringify(source[key]) !== JSON.stringify(fresh[key]))) {
+            if (!fresh || (PILLAR_WRITABLE_FIELDS[pillar] || []).some(key => key === 'timelineId'
+                ? String(source[key] || '') !== String(fresh[key] || '')
+                : JSON.stringify(source[key]) !== JSON.stringify(fresh[key]))) {
                 throw new Error('原条目已被其它操作修改，请重新生成建议');
             }
         }
@@ -1486,6 +1519,7 @@ export async function applyCurationOps(chatId, ops, options = {}) {
         try {
             const activeChatId = globalThis.SillyTavern?.getContext?.()?.chatId;
             if (activeChatId != null && String(activeChatId) !== String(chatId)) throw new Error('聊天已切换，未继续写入');
+            await options.validateOp?.(op);
             const outcome = await applySingleOp(chatId, op);
             counts[op.op] = (counts[op.op] || 0) + 1;
             result.removedCount += outcome.removedCount;
@@ -2271,9 +2305,12 @@ export function openCurationReviewPanel(chatId, ops, options = {}) {
                     if (checked.rejected.length) throw new Error(checked.rejected.map(r => r.reason).join('；'));
                     const results = op.results || (op.result ? [op.result] : []);
                     for (const result of results) for (const [key, value] of Object.entries(result)) {
-                        if (typeof value === 'string' && !value.trim()) throw new Error(`建议字段 ${key} 不能为空；请补全后应用`);
+                        if (typeof value === 'string' && !value.trim() && ['name', 'title', 'event', 'content'].includes(key)) {
+                            throw new Error(`建议字段 ${key} 不能为空；请补全后应用`);
+                        }
                         if (typeof value === 'number' && !Number.isFinite(value)) throw new Error(`建议字段 ${key} 不是有效数字`);
                         if (['importance', 'emotionalWeight'].includes(key) && (value < 0 || value > 1)) throw new Error(`${key} 必须在 0 到 1 之间`);
+                        if (key === 'quantity' && value < 0) throw new Error('物品数量不能小于0');
                         if (key === 'biography' && Array.from(value).length > 1000) throw new Error('人物小传不能超过1000字');
                         const enums = { truthStatus: ['true','false','unknown','rumor','misleading','secret_true'], priority: ['high','medium','low'] };
                         if (key === 'type') enums.type = op.pillar === 'timeline' ? ['plot','emotional','side','world'] : op.pillar === 'mem' ? ['event','emotion','habit','fact'] : null;

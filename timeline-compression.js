@@ -10,7 +10,7 @@ export function validateTimelineDraft(result) {
 }
 export async function generateTimelineCompression(chatId, ids, options = {}) {
     const { generateJointSummary } = await import('./story-summary.js');
-    try { return await generateJointSummary(chatId, { ...options, ids }); }
+    try { return await generateJointSummary(chatId, { ...options, ids, scope:'all_threads', target:'timeline' }); }
     catch (error) { return { ops: [], failures: [error.message] }; }
 }
 export async function reviewTimelineCompression(chatId, options = {}) {

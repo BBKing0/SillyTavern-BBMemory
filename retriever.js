@@ -29,6 +29,7 @@ import {
 } from './memory-store.js';
 import { fillPromptTemplate, getPromptTemplate } from './prompt-templates.js';
 import { entityNameSimilarity, normalizeIdentityText } from './dedup-engine.js';
+import { isDailyMemory } from './memory-tags.js';
 
 // ═══════════════════════════════════════════════════════════
 //  评分权重（4 维）
@@ -388,7 +389,7 @@ export function calculateMemoryScore(memory, query, context = {}, queryEmbedding
         weightTotal += weight;
     }
     const normalized = weightTotal > 0 ? weightedSum / weightTotal : 0;
-    const total = Math.min(1.0, normalized);
+    const total = Math.min(1.0, normalized) * dailyScoreMultiplier(memory);
 
     return { total, breakdown: dims };
 }
@@ -397,7 +398,18 @@ export function calculateMemoryScore(memory, query, context = {}, queryEmbedding
 //  注入等级选择
 // ═══════════════════════════════════════════════════════════
 
-export function chooseInjectionLevel(memory, score, queryMatched = false) {
+function dailyScoreMultiplier(memory) {
+    if (!isDailyMemory(memory)) return 1;
+    const value = Number(getSettings().dailyMemoryScoreMultiplier);
+    return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0.35;
+}
+
+export function chooseInjectionLevel(memory, score, queryMatched = false, similarity = 0) {
+    if (isDailyMemory(memory)) {
+        const value = Number(getSettings().dailyMemoryFullSimilarity);
+        const threshold = Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0.95;
+        return similarity > 0 && similarity >= threshold ? 'L3' : 'L2';
+    }
     if (memory.memoryTier === 'transient') return 'L2';
     if (memory.memoryTier === 'eternal' || memory.memoryTier === 'core') return 'L4';
     if (score >= 0.55 || (memory.verbatim && queryMatched)) return 'L3';
@@ -441,7 +453,7 @@ export function getRelevantMemories(memories, queryText, options = {}) {
     for (const memory of candidates) {
         const queryMatched = memoryMatchesQueryEntities(memory, queryText);
         const { total, breakdown } = calculateMemoryScore(memory, queryText, {}, queryEmbedding);
-        const fuseBoost = fuseBoostMap.get(memory.id) || 0;
+        const fuseBoost = (fuseBoostMap.get(memory.id) || 0) * dailyScoreMultiplier(memory);
         let finalScore = Math.min(1.0, total + fuseBoost);
         finalScore = Math.min(1.0, finalScore * tierScoreMultiplier(memory, queryMatched));
 
@@ -450,7 +462,7 @@ export function getRelevantMemories(memories, queryText, options = {}) {
                 memory,
                 score: finalScore,
                 breakdown,
-                level: chooseInjectionLevel(memory, finalScore, queryMatched),
+                level: chooseInjectionLevel(memory, finalScore, queryMatched, breakdown.embedding),
             });
         }
     }
@@ -469,20 +481,20 @@ export function mergeExpandedRelevantResults(memories, queryText, relevantResult
     for (const m of expanded) {
         const queryMatched = true;
         const { total } = calculateMemoryScore(m, queryText, {}, queryEmbedding);
-        let score = Math.min(1.0, Math.max(total, 0.55));
+        let score = Math.min(1.0, Math.max(total, 0.55 * dailyScoreMultiplier(m)));
         score = Math.min(1.0, score * tierScoreMultiplier(m, queryMatched));
         merged.push({
             memory: m,
             score,
-            level: chooseInjectionLevel(m, score, queryMatched),
+            level: chooseInjectionLevel(m, score, queryMatched, embeddingSimilarity(m, queryEmbedding)),
         });
     }
 
     merged.sort((a, b) => b.score - a.score);
     const limit = Math.max(0, Number(maxResults) || 10);
     const ceiling = limit + Math.ceil(limit * 0.3);
-    const residents = merged.filter(r => isResidentEntry(r.memory));
-    const rest = merged.filter(r => !isResidentEntry(r.memory));
+    const residents = merged.filter(r => !isDailyMemory(r.memory) && isResidentEntry(r.memory));
+    const rest = merged.filter(r => isDailyMemory(r.memory) || !isResidentEntry(r.memory));
     return [...residents, ...rest.slice(0, ceiling)];
 }
 
@@ -773,13 +785,16 @@ function isRecentSourceMemory(m, chatLength = 0, settings = getSettings()) {
 }
 
 function formatMemoryLine(m, chatLength = 0, level = 'L2', settings = getSettings()) {
-    const isResident = isResidentEntry(m);
-    const isFuzzy = m.memoryTier === 'transient' && !isResident;
+    const daily = isDailyMemory(m);
+    const isResident = !daily && isResidentEntry(m);
+    const isFuzzy = !daily && m.memoryTier === 'transient' && !isResident;
     const recentFull = isRecentSourceMemory(m, chatLength, settings);
-    const shouldUseFull = !isFuzzy && (isResident || recentFull || level === 'L3' || level === 'L4');
+    const shouldUseFull = daily ? level === 'L3' : !isFuzzy && (isResident || recentFull || level === 'L3' || level === 'L4');
     let content = '';
 
-    if (isFuzzy) {
+    if (daily && !shouldUseFull) {
+        content = m.summary || buildDefaultIndexCard(m) || String(m.content || '').slice(0, 120);
+    } else if (isFuzzy) {
         content = m.summary || buildDefaultIndexCard(m) || (m.content || '').slice(0, 120);
     } else if (level === 'L1' && !shouldUseFull) {
         content = buildDefaultIndexCard(m);
@@ -791,7 +806,7 @@ function formatMemoryLine(m, chatLength = 0, level = 'L2', settings = getSetting
         content = m.content || m.summary;
     }
     const date = String(m.storyTime || m.date || m.time || '时间未明').trim();
-    const dialogue = String(m.verbatim || '').trim();
+    const dialogue = daily && !shouldUseFull ? '' : String(m.verbatim || '').trim();
     if (!dialogue) return `[${date}]${String(content || '').trim()}`;
 
     const participants = Array.isArray(m.participants)
@@ -1011,6 +1026,7 @@ function priorityForTimelineEntry(entry) {
 }
 
 function priorityForMemory(memory) {
+    if (isDailyMemory(memory)) return 3;
     if (isResidentEntry(memory)) return 0;
     if (hasClueOrForeshadowSignal(memory)) return 1;
     return 2;
@@ -1423,13 +1439,16 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, milestone
         for (const result of relevantResults) {
             const memory = result?.memory;
             if (!memory) continue;
-            const resident = isResidentEntry(memory);
+            const resident = !isDailyMemory(memory) && isResidentEntry(memory);
             if (!resident) {
                 if (nonResidentCount >= maxMemories) continue;
                 nonResidentCount++;
             }
             displayIndex++;
-            const line = `${displayIndex}.${formatMemoryLine(memory, chatLength, result.level, activeSettings)}`;
+            const level = isDailyMemory(memory)
+                ? chooseInjectionLevel(memory, result.score, false, embeddingSimilarity(memory, queryEmbedding))
+                : result.level;
+            const line = `${displayIndex}.${formatMemoryLine(memory, chatLength, level, activeSettings)}`;
             memoryItems.push(makeBudgetItem(line, {
                 resident,
                 priority: priorityForMemory(memory),
@@ -1560,6 +1579,7 @@ export function simpleSearch(items, queryText, maxResults = 100) {
  */
 export function getResidentMemories(memories) {
     return memories.filter(m =>
+        !isDailyMemory(m) &&
         (m.memoryTier === 'core' || m.memoryTier === 'eternal') &&
         !isArchived(m) && m.status !== 'deleted' && matchesActiveCategory(m)
     );

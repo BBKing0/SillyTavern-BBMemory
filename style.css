@@ -6310,3 +6310,43 @@
     .bb-correction-form .bb-mem-form-popup { width:96vw; max-height:90dvh; }
 }
 .bb-realtime-schedule-action { display:block; line-height:1.55; margin:0.3em 0; white-space:normal; overflow-wrap:anywhere; }
+
+/* v9.5.0 事件时间、里程碑归属与分线总结 */
+.bb-mgr-tabs > [data-action="organization"] { flex:0 0 auto; min-width:max-content; white-space:nowrap; }
+.bb-event-time-label { display:block; font-size:.85em; }
+.bb-daily-tag-toggle { display:flex; align-items:center; gap:.4em; font-size:.85em; margin-bottom:.6em; }
+.bb-daily-tag-toggle input { width:auto; margin:0; }
+.bb-milestone-timeline-badge { background:var(--SmartThemeBlurTintColor,transparent); color:inherit; cursor:pointer; max-width:14em; overflow-wrap:anywhere; white-space:normal; }
+.bb-timeline-assignment-popup,.bb-thread-summary-popup { width:min(92vw,36rem); max-height:85dvh; display:flex; flex-direction:column; }
+.bb-timeline-assignment-popup .bb-mem-form-header,.bb-thread-summary-popup .bb-mem-form-header { display:flex; align-items:center; justify-content:space-between; gap:.5em; }
+.bb-timeline-assignment-popup .bb-mem-form-header h3,.bb-thread-summary-popup .bb-mem-form-header h3 { font-size:1.1em; min-width:0; overflow-wrap:anywhere; margin:0; }
+.bb-timeline-assignment-popup .bb-mem-form-body,.bb-thread-summary-popup .bb-mem-form-body { min-height:0; overflow:auto; }
+.bb-timeline-assignment-popup label,.bb-thread-summary-popup label { display:flex; flex-direction:column; gap:.4em; margin-bottom:.8em; }
+.bb-timeline-assignment-popup select,.bb-thread-summary-popup select { width:100%; min-width:0; }
+.bb-timeline-assignment-popup .bb-mem-form-footer,.bb-thread-summary-popup .bb-mem-form-footer { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:.5em; }
+.bb-milestone-assignment-count,.bb-timeline-assignment-status,.bb-summary-form-status,.bb-thread-summary-status { font-size:.85em; overflow-wrap:anywhere; }
+.bb-thread-summary-status:not(:empty) { margin-bottom:.8em; }
+.bb-thread-panel-toolbar,.bb-milestone-batch-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:.5em; margin-bottom:.75em; }
+.bb-thread-panel-toolbar > span { margin-right:auto; }
+.bb-milestone-batch-toolbar label { display:flex; align-items:center; gap:.3em; white-space:nowrap; }
+.bb-milestone-batch-toolbar input,.bb-thread-milestone-cb { width:1em; height:1em; margin:0; flex:0 0 auto; }
+.bb-milestone-batch-toolbar select { flex:1 1 10em; min-width:0; width:auto; }
+.bb-milestone-batch-toolbar > span { font-size:.8em; }
+.bb-thread-detail-assign { flex:0 1 auto; max-width:15em; white-space:normal; overflow-wrap:anywhere; }
+@media (max-width:480px) {
+    .bb-thread-panel-toolbar { gap:.4em; }
+    .bb-mem-item > div:first-child { flex-wrap:wrap; gap:.35em .45em; }
+    .bb-mem-item > div:first-child > strong { order:1; flex:1 1 60% !important; min-width:60%; max-width:100%; overflow-wrap:anywhere; }
+    .bb-mem-item > div:first-child > .bb-mem-item-type { order:2; }
+    .bb-mem-item > div:first-child > span:not(.bb-mem-item-type) { order:3; flex:1 1 100%; flex-shrink:1 !important; flex-wrap:wrap; min-width:0; }
+    .bb-mem-item > div:first-child > span:not(.bb-mem-item-type) > * { min-width:0; max-width:100%; overflow-wrap:anywhere; white-space:normal; }
+    .bb-thread-panel-toolbar button { font-size:.8em; }
+    .bb-milestone-batch-toolbar { font-size:.85em; }
+    .bb-milestone-batch-toolbar > button { flex:1 1 12em; }
+    .bb-thread-detail-item { flex-wrap:wrap; gap:.4em; }
+    .bb-thread-detail-item .bb-thread-detail-event { flex:1 1 60%; min-width:0; overflow-wrap:anywhere; white-space:normal; }
+    .bb-thread-detail-item .bb-thread-detail-time { max-width:45%; overflow-wrap:anywhere; }
+    .bb-thread-detail-assign { max-width:75%; }
+    .bb-thread-detail-edit { visibility:visible; }
+    .bb-timeline-assignment-popup,.bb-thread-summary-popup { width:94vw; max-height:90dvh; }
+}

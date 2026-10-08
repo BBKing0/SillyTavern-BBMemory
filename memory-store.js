@@ -66,7 +66,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
     biographyContextChars: 20000,
     biographyMaxTokens: 2200,
     timelineCompressionApi: 'main',
-    timelineSummaryTarget: 'timeline', // timeline | milestone | both；上下文始终联合读取
+    timelineSummaryTarget: 'both', // timeline | milestone | both
+    timelineSummaryScope: 'all_with_milestones',
+    timelineSummaryReminderExchanges: 5,
+    timelineSummaryTimelineId: '',
     enabled: true,
     injectionTemplate: '<BBMemory>\n{{memories}}\n</BBMemory>',
     // 检索
@@ -102,6 +105,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
     extractionConfirmMode: 'semi', // 'active' | 'semi' | 'auto'
     activeConfirmStyle: 'popup',   // 'popup' | 'toast'
     contextWindowExchanges: 3,
+    extractionUpdateConfirm: true,
+    extractionRecentMemoryCount: 5,
+    dailyMemoryScoreMultiplier: 0.35,
+    dailyMemoryFullSimilarity: 0.95,
     batchExtractionCount: 2,         // v8.0.0 每次并行请求的 exchange 数
     sourceRollbackFloorWindow: 10,   // 更新回滚快照保留的最近楼层数
     extractedMsgDisplay: 'hidden', // 'hidden' | 'transparent' | 'visible'
@@ -132,6 +139,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     dedupTimeConflictScope: 'date',
     // 故事时间
     calendarDescription: '',
+    eventTimeOrder: '',
     // 升降格与维护
     diversityLimitPerTag: 5,       // 同一标签最多 N 条 core
     promotionCooldownRounds: 15,   // 升格冷却轮数
@@ -331,6 +339,7 @@ function normalizeMilestoneEntry(entry = {}) {
     if (!entry || typeof entry !== 'object') return entry;
     return {
         ...entry,
+        timelineId: typeof entry.timelineId === 'string' ? entry.timelineId : '',
         injectionMode: entry.injectionMode === 'vector' ? 'vector' : 'resident',
     };
 }
@@ -609,6 +618,7 @@ export async function addNpcProfile(chatId, data) {
         name: data.name || '',
         aliases: normalizeAliases(data.aliases),
         role: data.role || '',
+        storyTime: data.storyTime || '',
         personality: data.personality || '',
         biography: String(data.biography || ''),
         appearance: data.appearance || '',
@@ -705,8 +715,10 @@ export async function addItem(chatId, data) {
         name: data.name || '',
         aliases: normalizeAliases(data.aliases),
         owner: data.owner || '',
+        storyTime: data.storyTime || '',
         location: data.location || '',       // v8.7.0 物品所在地点
         status: data.status || 'held',       // held | used | lost | destroyed
+        quantity: Number.isFinite(Number(data.quantity)) ? Math.max(0, Number(data.quantity)) : 1,
         significance: data.significance || '',
         embedding: data.embedding ?? null,
         keepPermanent: data.keepPermanent || false,
@@ -796,6 +808,7 @@ export async function addMilestone(chatId, data) {
         id: generateId(),
         storyTime: data.storyTime || '',
         storyTimeSort: data.storyTimeSort ?? null,
+        timelineId: typeof data.timelineId === 'string' ? data.timelineId : '',
         event: data.event || '',
         summary: data.summary || '',
         participants: Array.isArray(data.participants) ? data.participants : [],
@@ -860,6 +873,7 @@ export async function updateMilestone(chatId, id, patch) {
     const { id: _id, createdAt: _ca, ...safe } = patch;
     Object.assign(entry, safe);
     entry.injectionMode = entry.injectionMode === 'vector' ? 'vector' : 'resident';
+    entry.timelineId = typeof entry.timelineId === 'string' ? entry.timelineId : '';
     entry.updatedAt = Date.now();
     if (typeof patch.isActive === 'boolean' && !patch.isActive) {
         entry.isActive = false;
@@ -1696,11 +1710,12 @@ export async function clearAllData(chatId) {
         lf.removeItem('bb_curate_undo_' + chatId),          // v9.3.3 整理撤销快照
         lf.removeItem('bb_rt_settle_undo_' + chatId),       // v9.3.3 结算撤销快照
         lf.removeItem('bb_joint_summary_draft_chat_' + chatId), // v9.4.9 待审核草稿
+        lf.removeItem('bb_extraction_update_drafts_chat_' + chatId), // v9.5.0 提取变更待审核草稿
     ]);
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.4.9',
+        version: '9.5.0',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2087,7 +2102,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
         realtime,
     };
     const backup = {
-        version: '9.4.9',
+        version: '9.5.0',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2367,6 +2382,15 @@ async function restoreBackupPayload(chatId, backup) {
         return timeline;
     });
     if (idMaps.timeline?.size > 0) {
+        const milestones = await getMilestones(chatId);
+        let labelsChanged = false;
+        for (const entry of milestones) {
+            if (entry.timelineId && idMaps.timeline.has(entry.timelineId)) {
+                const mapped = idMaps.timeline.get(entry.timelineId);
+                if (mapped !== entry.timelineId) { entry.timelineId = mapped; labelsChanged = true; }
+            }
+        }
+        if (labelsChanged) await saveCollection('milestone', chatId, milestones);
         const timeline = await getTimeline(chatId);
         let changed = false;
         for (const item of timeline) {
@@ -2879,7 +2903,7 @@ export async function exportMemories(chatId) {
     await normalizeDataEmbeddingsToRefs(chatId, data);
     const vectorPack = await buildVectorPack(chatId, data);
     return JSON.stringify({
-        version: '9.4.9',
+        version: '9.5.0',
         schema: 'bb-memory-vector-ref-v1',
         exportedAt: Date.now(),
         data: stripRuntimeEmbeddings(data),

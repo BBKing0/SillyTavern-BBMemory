@@ -110,7 +110,7 @@ export async function executeMaintenanceBatch(chatId, issues, op, { onProgress, 
         onProgress?.(0, unique.length, result);
         if (op === 'compress_thread') {
             const { reviewTimelineCompression } = await import('./timeline-compression.js');
-            const review = await reviewTimelineCompression(chatId, { ids: unique.map(i => i.id), signal, onProgress: message => onProgress?.(0, unique.length, { ...result, message }) });
+            const review = await reviewTimelineCompression(chatId, { ids: unique.map(i => i.id), scope:'all_threads', target:'timeline', signal, onProgress: message => onProgress?.(0, unique.length, { ...result, message }) });
             result.succeeded = unique.filter(i => review.appliedIds.includes(i.id));
             result.summary = review.summary;
             result.cancelled = !review.applyResult && review.confirmed === 0;

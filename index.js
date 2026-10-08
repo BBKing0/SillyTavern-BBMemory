@@ -1,7 +1,8 @@
 import { userStorageKey, initializeUserStorage, watchUserSession } from './user-storage.js';
 import { openMemoryOrganization, configureMemoryOrganization } from './memory-organization.js';
+import { captureInjectionContext, initInjectionContextTracking } from './extraction-context.js';
 /**
- * index.js —— BB-Memory v9.4.9 主入口
+ * index.js —— BB-Memory v9.5.0 主入口
  *
  * 五柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目 / 实时记忆。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -117,9 +118,10 @@ let chatSwitchSuppressDeletesUntil = 0;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.4.8';
+const SETTINGS_EXPORT_VERSION = '9.5.0';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
+    'extractionUpdateConfirm', 'extractionRecentMemoryCount', 'dailyMemoryScoreMultiplier', 'dailyMemoryFullSimilarity', 'eventTimeOrder', 'timelineSummaryScope', 'timelineSummaryTimelineId', 'timelineSummaryReminderExchanges',
     'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
     'npcInjectionMax', 'itemInjectionMax', 'entityDetailInjectionMaxChars',
     'itemResidentHitCountThreshold', 'itemFallbackInjectionProbability', 'itemFallbackInjectionMax',
@@ -166,6 +168,12 @@ const SETTINGS_EXPORT_KEYS = [
 ];
 
 const SETTING_CONTROL_BINDINGS = {
+    extractionUpdateConfirm: ['#bb_extraction_update_confirm', 'checkbox'],
+    extractionRecentMemoryCount: ['#bb_extraction_recent_memory_count', 'value'],
+    timelineSummaryReminderExchanges: ['#bb_timeline_summary_reminder_exchanges', 'value'],
+    dailyMemoryScoreMultiplier: ['#bb_daily_memory_score_multiplier', 'value'],
+    dailyMemoryFullSimilarity: ['#bb_daily_memory_full_similarity', 'value'],
+    eventTimeOrder: ['#bb_event_time_order', 'value'],
     enabled: ['#bb_memory_enabled', 'checkbox'],
     autoGenEnabled: ['#bb_auto_gen_enabled', 'checkbox'],
     embeddingEnabled: ['#bb_embedding_enabled', 'checkbox'],
@@ -443,7 +451,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     if (type === 'quiet') return chat;
 
     const settings = getSettings();
-    if (!settings.enabled) { clearInjection(); return chat; }
+    if (!settings.enabled) { clearGenerationInjection(chat); return chat; }
 
     const ctx = SillyTavern.getContext();
     const chatId = ctx.chatId || (ctx.chat?.[0]?.chatId) || null;
@@ -509,7 +517,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     const hasRealtimeData = Array.isArray(realtimeAll) && realtimeAll.length > 0;
     const hasData = npc.length + items.length + milestones.length + memories.length + timeline.length > 0
         || hasMapData || hasClueData || hasRealtimeData;
-    if (!hasData) { clearInjection(); return chat; }
+    if (!hasData) { clearGenerationInjection(chat); return chat; }
 
     try {
         await Promise.all([
@@ -663,6 +671,23 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     const injectedItems = injectedItemIds ? itemsForInjection.filter(i => injectedItemIds.has(String(i.id))) : itemsForInjection;
     const filterMilestoneHits = (entries) => injectedMilestoneIds ? entries.filter(t => injectedMilestoneIds.has(String(t.id))) : entries;
     const filterTimelineHits = (entries) => injectedTimelineIds ? entries.filter(t => injectedTimelineIds.has(String(t.id))) : entries;
+    const contextUser = [...(ctx.chat || [])].reverse().find(message => message?.is_user && String(message.mes || '').trim() === userMessage) || hitFrameMsg;
+    if (contextUser) {
+        captureInjectionContext(chatId, contextUser, {
+            npc: injectedNpcs,
+            item: injectedItems,
+            mem: injectedMerged.map(r => r.memory),
+            milestone: filterMilestoneHits([...milestoneForInjection.foreshadow, ...milestoneForInjection.ongoing, ...milestoneForInjection.ended]),
+            timeline: filterTimelineHits(timelineForInjection.timeline || timelineForInjection.threads || []),
+            location: (stats.mapLocationIds || []).map(id => mapData?.locations?.[id]).filter(Boolean),
+        }, { generationType: type });
+        const save = ctx.saveChatConditional || ctx.saveChatDebounced || ctx.saveChat;
+        if (typeof save === 'function') {
+            try { await save.call(ctx); } catch (error) {
+                showToast(`注入上下文保存失败：${error.message || error}`, 'warning');
+            }
+        }
+    }
 
     const memoryHitRecords = injectedMerged.map(r => ({
         id: r.memory.id,
@@ -723,6 +748,20 @@ function clearInjection() {
         ctx.setExtensionPrompt(REALTIME_INJECTION_KEY, '', POSITION_IN_CHAT, 0, false, ROLE_SYSTEM);
     } catch { /* ignore */ }
 }
+
+function clearGenerationInjection(chat) {
+    const ctx = SillyTavern.getContext();
+    const message = [...(ctx.chat || chat || [])].reverse().find(entry => entry?.is_user);
+    if (message && ctx.chatId) captureInjectionContext(ctx.chatId, message, {});
+    clearInjection();
+}
+
+globalThis.bbMemoryNotifyStorySummaryDue = (chatId) => {
+    if (String(getChatId()) !== String(chatId)) return;
+    const message = '时间线与里程碑已积累新内容，可在记忆整理的记忆维护页选择范围并生成总结建议';
+    showToast(message, 'info');
+    recordActivity('info', '故事总结提醒', message);
+};
 
 function mergeResidentMemoryResults(residentMems, relevantResults) {
     const byId = new Map();
@@ -1720,18 +1759,19 @@ function buildManualRangeContext(ctx, rangeStr = '') {
 }
 
 function emptyExtractionResult() {
-    return { npc: 0, items: 0, milestones: 0, timeline: 0, threads: 0, locations: 0, memories: 0 };
+    return { npc: 0, items: 0, milestones: 0, timeline: 0, threads: 0, locations: 0, memories: 0, pendingUpdates: 0, appliedUpdates: 0 };
 }
 
 function mergeExtractionResult(total, next = {}) {
-    for (const key of ['npc', 'items', 'milestones', 'timeline', 'threads', 'locations', 'memories']) {
+    for (const key of ['npc', 'items', 'milestones', 'timeline', 'threads', 'locations', 'memories', 'pendingUpdates', 'appliedUpdates']) {
         total[key] = (total[key] || 0) + (Number(next[key]) || 0);
     }
     return total;
 }
 
 function formatExtractionResultSummary(results = {}) {
-    return `NPC ${results.npc || 0} / 物品 ${results.items || 0} / 里程碑 ${results.milestones || 0} / 时间线 ${results.timeline || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories || 0}`;
+    const updates = results.pendingUpdates ? ` / 变更待确认 ${results.pendingUpdates}` : results.appliedUpdates ? ` / 已应用变更 ${results.appliedUpdates}` : '';
+    return `NPC ${results.npc || 0} / 物品 ${results.items || 0} / 里程碑 ${results.milestones || 0} / 时间线 ${results.timeline || 0} / 地点 ${results.locations || 0} / 记忆 ${results.memories || 0}${updates}`;
 }
 
 async function handleSwitchFloorExtraction(chatId, request = {}) {
@@ -2325,6 +2365,25 @@ function bindSidebarEvents() {
     bindInput('#bb_embedding_endpoint', 'embeddingEndpoint', 'string');
     bindInput('#bb_embedding_api_key', 'embeddingApiKey', 'string');
     bindInput('#bb_embedding_model', 'embeddingModel', 'string');
+    bindCheckbox('#bb_extraction_update_confirm', 'extractionUpdateConfirm');
+    bindInput('#bb_extraction_recent_memory_count', 'extractionRecentMemoryCount', 'number');
+    bindInput('#bb_timeline_summary_reminder_exchanges', 'timelineSummaryReminderExchanges', 'number');
+    bindInput('#bb_daily_memory_score_multiplier', 'dailyMemoryScoreMultiplier', 'number');
+    bindInput('#bb_daily_memory_full_similarity', 'dailyMemoryFullSimilarity', 'number');
+    bindInput('#bb_event_time_order', 'eventTimeOrder', 'string');
+    document.querySelector('#bb_extraction_review_updates_btn')?.addEventListener('click', async function () {
+        const chatId = getChatId();
+        if (!chatId) { showToast('请先打开聊天', 'warning'); return; }
+        this.disabled = true;
+        const original = this.innerHTML;
+        this.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在读取待审核变更';
+        try {
+            const { reviewPendingExtractionUpdates } = await import('./extraction-updates.js');
+            const result = await reviewPendingExtractionUpdates(chatId);
+            showToast(result.summary || '审核结束', 'info');
+        } catch (error) { showToast(`提取变更审核失败：${error.message}`, 'error'); }
+        finally { this.disabled = false; this.innerHTML = original; }
+    });
     bindInput('#bb_merge_similarity_threshold', 'mergeSimilarityThreshold', 'number');
     bindInput('#bb_reduce_similarity_threshold', 'reduceSimilarityThreshold', 'number');
     bindInput('#bb_entity_merge_similarity_threshold', 'entityMergeSimilarityThreshold', 'number');
@@ -2448,19 +2507,8 @@ function bindSidebarEvents() {
     document.querySelector('#bb_thread_refresh_btn')?.addEventListener('click', async () => {
         const chatId = getChatId();
         if (!chatId) return;
-        showToast('正在生成时间线总结...', 'info');
-        try {
-            const result = await regenerateThreadSummary(chatId);
-            if (result.error) throw new Error(result.error);
-            if (result.threadCount > 0 || result.milestoneCount > 0) {
-                showToast(result.summary || `时间线总结完成：${result.timelineCount || result.threadCount} 条时间线`, 'success');
-            } else {
-                showToast(result.summary || '本轮无需更新', 'info');
-            }
-        } catch (e) {
-            console.warn('[BB-Memory] 时间线总结失败:', e.message);
-            showToast('时间线总结失败: ' + e.message, 'error');
-        }
+        openMemoryOrganization(chatId, { initialTab: 'maintenance' });
+        showToast('请选择时间线与里程碑总结范围', 'info');
     });
     // v7.9.0 换楼刷新（从悬浮窗移到侧边栏）
     document.querySelector('#bb_floor_refresh_btn')?.addEventListener('click', handleFloorRefresh);
@@ -4605,10 +4653,11 @@ async function handleFloatingMenuAction(action) {
 async function init() {
     try { await initializeUserStorage(); watchUserSession(); }
     catch (error) { showToast(error.message, 'error'); _bbInitCalled = false; return; }
-    console.log('[BB-Memory] v9.4.9 初始化开始...');
+    console.log('[BB-Memory] v9.5.0 初始化开始...');
 
     // 确保默认设置
     getSettings();
+    initInjectionContextTracking();
     applyExtractedVisibilityClass();
     lastObservedChatId = getChatId();
     lastObservedCharId = getCharacterId();
@@ -4801,7 +4850,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.4.9 初始化完成');
+    console.log('[BB-Memory] v9.5.0 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆

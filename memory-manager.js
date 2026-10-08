@@ -30,6 +30,7 @@ import { attachEntryEmbedding } from './auto-generator.js';
 import { markExchangeExtracted, hideExchange, unmarkExchangeProcessed, getExtractionFloorStatus } from './message-state.js';
 import { fuzzyMemory, archiveMemory, restoreMemory } from './memory-maintainer.js';
 import { mountInTopLayer, removeTopLayerElement } from './ui-top-layer.js';
+import { compareEntriesByEventTime } from './event-time.js';
 
 // ═══ 全局状态 ═══
 let activeFilter = 'all';
@@ -116,13 +117,13 @@ export async function openMemoryManager(chatId) {
         mapLocations = await getLocations(chatId);
     } catch { /* ignore */ }
 
-    const [npc, items, timeline, memories] = await Promise.all([
-        getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
+    const [npc, items, timeline, memories, threads] = await Promise.all([
+        getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId), getTimelineThreads(chatId),
     ]);
 
     const overlay = document.createElement('div');
     overlay.className = 'bb-mem-overlay';
-    overlay.innerHTML = buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId);
+    overlay.innerHTML = buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId, threads);
     document.body.appendChild(overlay);
 
     bindManagerEvents(overlay, chatId);
@@ -135,11 +136,11 @@ export async function openMemoryManager(chatId) {
 
 // ═══ HTML 构建 ═══
 
-function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) {
+function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId, threads = []) {
     const allEntries = [
         ...npc.map(e => ({ ...e, _pillar: 'npc' })),
         ...items.map(e => ({ ...e, _pillar: 'item' })),
-        ...timeline.map(e => ({ ...e, _pillar: 'milestone' })),
+        ...timeline.map(e => ({ ...e, _pillar: 'milestone', _timelineName: milestoneTimelineName(e, threads) })),
         ...memories.map(e => ({ ...e, _pillar: 'mem' })),
         ...(mapLocations || []).map(e => ({ ...e, _pillar: 'map', title: e.name, content: e.description, name: e.name })),
     ];
@@ -210,6 +211,8 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) 
                     <option value="updated_asc">修改时间 ↑</option>
                     <option value="floor_desc">楼层 ↓</option>
                     <option value="floor_asc">楼层 ↑</option>
+                    <option value="event_time_asc">事件时间 ↑</option>
+                    <option value="event_time_desc">事件时间 ↓</option>
                 </select>
                 <button class="menu_button bb-mem-toolbar-btn" id="bb_mgr_add">
                     <i class="fa-solid fa-plus"></i> 添加
@@ -258,6 +261,9 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId) 
                         </button>
                         <button class="menu_button" id="bb_batch_fuzzy" style="display:block;width:100%;text-align:left;margin:1px 0;" disabled>
                             <i class="fa-solid fa-cloud"></i> 模糊化选中
+                        </button>
+                        <button class="menu_button" id="bb_batch_timeline" style="display:block;width:100%;text-align:left;margin:1px 0;" disabled>
+                            <i class="fa-solid fa-timeline"></i> 设置里程碑时间线
                         </button>
                     </div>
                 </div>
@@ -343,7 +349,7 @@ function buildEntryItemHTML(e) {
         map:      { icon: 'fa-map',          label: '地图',  color: '#4fc3f7' },
     }[pillar] || { icon: 'fa-circle', label: pillar, color: '#888' };
 
-    const title = e.title || e.name || (e.content || e.description || '').slice(0, 40) || '(无标题)';
+    const title = e.title || e.name || (e.content || e.description || e.event || '').slice(0, 40) || '(无标题)';
     // 模糊记忆默认显示 summary，其他显示 content
     const isFuzzy = pillar === 'mem' && e.memoryTier === 'transient';
     const desc = isFuzzy
@@ -375,6 +381,7 @@ function buildEntryItemHTML(e) {
             : { label: '永恒·常驻', color: '#ff9800' };
         statusBadges += `<span class="bb-item-badge" style="background:${milestoneTier.color}22;color:${milestoneTier.color};border:1px solid ${milestoneTier.color}44;">${milestoneTier.label}</span>`;
         if (e.storyTime) statusBadges += `<span style="font-size:0.75em;opacity:0.5;">${escapeHtml(e.storyTime)}</span>`;
+        statusBadges += `<button class="bb-milestone-timeline-badge bb-item-badge" data-id="${escapeAttr(e.id)}" title="设置所属时间线"><i class="fa-solid fa-timeline"></i> ${escapeHtml(e._timelineName || '其他 / 无标签')}</button>`;
     } else if (pillar === 'map') {
         if (e.memoryTier === 'core' || e.memoryTier === 'eternal' || e.keepPermanent || e.resident) {
             statusBadges += '<span class="bb-item-badge" style="background:#ff980022;color:#ffb74d;border:1px solid #ff980044;">常驻</span>';
@@ -549,6 +556,96 @@ function escapeAttr(text) {
 
 function normalizeManagerPillar(pillar) {
     return pillar === 'timeline' ? 'milestone' : (pillar || 'mem');
+}
+
+function milestoneTimelineName(entry, threads) {
+    return threads.find(thread => thread.id === entry.timelineId)?.name || '';
+}
+
+function buildTimelineOptions(threads, selected = '') {
+    return '<option value="">其他 / 无标签</option>' + threads.map(thread =>
+        `<option value="${escapeAttr(thread.id)}" ${thread.id === selected ? 'selected' : ''}>${escapeHtml(thread.name || '未命名时间线')}${thread.status === 'archived' ? '（已归档）' : ''}</option>`).join('');
+}
+
+function mountAdditionalEntryFields(formOverlay, chatId, pillar, prefill = null) {
+    if (pillar !== 'map' && !formOverlay.querySelector('.bb-f-storyTime')) {
+        const titleInput = formOverlay.querySelector('.bb-f-title, .bb-f-name');
+        titleInput?.insertAdjacentHTML('afterend', '<label class="bb-event-time-label">事件时间</label><input class="bb-input bb-f-storyTime" placeholder="如：第三纪元120年2月9日" style="width:100%;margin-bottom:8px;" />');
+        formOverlay.querySelector('.bb-f-storyTime').value = prefill?.storyTime || '';
+    }
+    if (pillar === 'mem' && !formOverlay.querySelector('.bb-f-daily')) {
+        const tagsInput = formOverlay.querySelector('.bb-f-tags');
+        tagsInput?.insertAdjacentHTML('afterend', '<label class="bb-daily-tag-toggle"><input type="checkbox" class="bb-f-daily" /> 日常</label>');
+        const checkbox = formOverlay.querySelector('.bb-f-daily');
+        const sync = () => { checkbox.checked = tagsInput.value.split(/[,，]/).some(tag => tag.trim() === '日常'); };
+        sync();
+        tagsInput.addEventListener('input', sync);
+        checkbox.addEventListener('change', () => {
+            const tags = tagsInput.value.split(/[,，]/).map(tag => tag.trim()).filter(tag => tag && tag !== '日常');
+            if (checkbox.checked) tags.push('日常');
+            tagsInput.value = [...new Set(tags)].join(', ');
+        });
+    }
+    if (normalizeManagerPillar(pillar) === 'milestone' && !formOverlay.querySelector('.bb-f-timelineId')) {
+        const timeInput = formOverlay.querySelector('.bb-f-storyTime');
+        const selected = prefill?.timelineId || '';
+        timeInput?.closest('div[style*="display:flex"]')?.insertAdjacentHTML('afterend', `<label class="bb-event-time-label">所属时间线</label><select class="bb-input bb-f-timelineId" style="width:100%;margin-bottom:8px;">${selected ? `<option value="${escapeAttr(selected)}">读取时间线...</option>` : '<option value="">其他 / 无标签</option>'}</select>`);
+        const select = formOverlay.querySelector('.bb-f-timelineId');
+        if (!select) return;
+        select.disabled = true;
+        getTimelineThreads(chatId).then(threads => {
+            if (!select.isConnected) return;
+            select.innerHTML = buildTimelineOptions(threads, selected);
+            select.disabled = false;
+        }).catch(error => {
+            showToast(`时间线读取失败：${error.message}`, 'error');
+        });
+    }
+}
+
+async function showMilestoneTimelineForm(overlay, chatId, ids) {
+    const selectedIds = [...new Set(ids)];
+    if (!selectedIds.length) { showToast('请先选择里程碑', 'warning'); return; }
+    try {
+        const [threads, milestones] = await Promise.all([getTimelineThreads(chatId), getTimeline(chatId)]);
+        const entries = milestones.filter(entry => selectedIds.includes(entry.id));
+        if (!entries.length) { showToast('未找到选中的里程碑', 'warning'); return; }
+        const selected = entries.every(entry => entry.timelineId === entries[0].timelineId) ? entries[0].timelineId : '';
+        const form = createManagerFormOverlay();
+        form.innerHTML = `<div class="bb-mem-form-popup bb-timeline-assignment-popup">
+            <div class="bb-mem-form-header"><h3><i class="fa-solid fa-timeline"></i> 设置里程碑时间线</h3><button class="menu_button" data-action="close" title="关闭"><i class="fa-solid fa-xmark"></i></button></div>
+            <div class="bb-mem-form-body"><label>所属时间线<select class="bb-input bb-assign-timeline">${buildTimelineOptions(threads, selected)}</select></label><div class="bb-milestone-assignment-count">已选 ${entries.length} 条里程碑</div><div class="bb-timeline-assignment-status" role="status"></div></div>
+            <div class="bb-mem-form-footer"><button class="menu_button" data-action="cancel">取消</button><button class="menu_button" data-action="save"><i class="fa-solid fa-check"></i> 保存</button></div>
+        </div>`;
+        applyManagerFormLayer(form);
+        const close = () => removeTopLayerElement(form);
+        form.querySelector('[data-action="close"]').onclick = close;
+        form.querySelector('[data-action="cancel"]').onclick = close;
+        form.addEventListener('click', event => { if (event.target === form) close(); });
+        form.querySelector('[data-action="save"]').onclick = async event => {
+            const button = event.currentTarget;
+            button.disabled = true;
+            const status = form.querySelector('.bb-timeline-assignment-status');
+            const timelineId = form.querySelector('.bb-assign-timeline').value;
+            let saved = 0;
+            try {
+                for (const entry of entries) {
+                    status.textContent = `正在保存 ${saved + 1} / ${entries.length}...`;
+                    const updated = await updateTimelineEntry(chatId, entry.id, { timelineId });
+                    if (!updated) throw new Error('里程碑已被删除，请刷新后重试');
+                    saved++;
+                }
+                close();
+                showToast(`已设置 ${saved} 条里程碑：${threads.find(thread => thread.id === timelineId)?.name || '其他 / 无标签'}`, 'success');
+                await rerenderManagerList(overlay, chatId);
+                if (overlay.querySelector('[data-panel="threads"]')?.style.display !== 'none') await renderThreadPanel(overlay, chatId);
+            } catch (error) {
+                status.textContent = `已保存 ${saved} / ${entries.length}；${error.message}`;
+                showToast(status.textContent, 'error');
+                button.disabled = false;
+            }
+        };
+    } catch (error) { showToast(`时间线读取失败：${error.message}`, 'error'); }
 }
 
 // v8.0.0 子条目辅助函数
@@ -805,6 +902,8 @@ function bindBatchEvents(overlay, chatId) {
             const btn = overlay.querySelector('#' + id);
             if (btn) btn.disabled = !hasSelection;
         });
+        const timelineButton = overlay.querySelector('#bb_batch_timeline');
+        if (timelineButton) timelineButton.disabled = ![...checked].some(cb => normalizeManagerPillar(cb.dataset.pillar) === 'milestone');
     };
 
     // 批量编辑开关
@@ -825,6 +924,7 @@ function bindBatchEvents(overlay, chatId) {
     overlay.addEventListener('change', (e) => {
         if (e.target.classList.contains('bb-mem-batch-cb')) updateUI();
     });
+    overlay.addEventListener('bb-manager-list-rendered', updateUI);
 
     overlay.querySelector('#bb_batch_select_all')?.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -905,6 +1005,13 @@ function bindBatchEvents(overlay, chatId) {
         updateUI();
     });
 
+    overlay.querySelector('#bb_batch_timeline')?.addEventListener('click', event => {
+        event.stopPropagation();
+        const ids = [...overlay.querySelectorAll('.bb-mem-batch-cb:checked')]
+            .filter(cb => normalizeManagerPillar(cb.dataset.pillar) === 'milestone').map(cb => cb.dataset.id);
+        showMilestoneTimelineForm(overlay, chatId, ids);
+    });
+
     // 初始化批量编辑按钮状态（修复初始 disabled 无法点击的问题）
     updateUI();
 }
@@ -912,6 +1019,12 @@ function bindBatchEvents(overlay, chatId) {
 // ═══ 条目操作 ═══
 
 function rebindItemActions(overlay, chatId) {
+    overlay.querySelectorAll('.bb-milestone-timeline-badge').forEach(button => {
+        button.addEventListener('click', event => {
+            event.stopPropagation();
+            showMilestoneTimelineForm(overlay, chatId, [button.dataset.id]);
+        });
+    });
     // 删除
     overlay.querySelectorAll('.bb-mem-delete').forEach(btn => {
         btn.addEventListener('click', async (e) => {
@@ -1202,6 +1315,7 @@ function showQuickAddForm(overlay, chatId) {
 
 function bindFormEvents(formOverlay, chatId, initialPillar) {
     let currentPillar = initialPillar;
+    mountAdditionalEntryFields(formOverlay, chatId, currentPillar);
 
     formOverlay.querySelector('.bb-form-close')?.addEventListener('click', () => formOverlay.remove());
     formOverlay.querySelector('.bb-form-cancel')?.addEventListener('click', () => formOverlay.remove());
@@ -1229,6 +1343,7 @@ function bindFormEvents(formOverlay, chatId, initialPillar) {
         const origHTML = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 保存中...';
         try {
             const data = collectFormData(formOverlay, currentPillar);
+            if (formOverlay.querySelector('.bb-f-timelineId')?.disabled) throw new Error('时间线尚未读取完成，请稍后重试');
             if (!data.name && !data.title) { showToast('请至少填写标题/名称', 'warning'); btn.disabled = false; btn.innerHTML = origHTML; return; }
             const prepared = await prepareManualEntryData(data, currentPillar);
             switch (currentPillar) {
@@ -1331,6 +1446,7 @@ function collectFormData(formEl, pillar) {
     switch (pillar) {
         case 'npc': return {
             name: g('bb-f-name'), aliases: g('bb-f-aliases').split(/[,，]/).map(s => s.trim()).filter(Boolean), role: g('bb-f-role'), personality: g('bb-f-personality'),
+            storyTime: g('bb-f-storyTime'),
             appearance: g('bb-f-appearance'), location: g('bb-f-location'),
             relationships: g('bb-f-relationships').split(/[,，]/).map(s => s.trim()).filter(Boolean),
             npcTier: formEl.querySelector('.bb-f-npcTier')?.value || 'minor', tags, source: 'manual',
@@ -1339,6 +1455,7 @@ function collectFormData(formEl, pillar) {
             const memoryTier = formEl.querySelector('.bb-f-memoryTier')?.value || 'stable';
             return {
                 name: g('bb-f-name'), aliases: g('bb-f-aliases').split(/[,，]/).map(s => s.trim()).filter(Boolean), owner: g('bb-f-owner'),
+                storyTime: g('bb-f-storyTime'),
                 location: g('bb-f-location'),
                 status: formEl.querySelector('.bb-f-status')?.value || 'held',
                 significance: g('bb-f-significance'),
@@ -1367,6 +1484,7 @@ function collectFormData(formEl, pillar) {
             const memoryTier = formEl.querySelector('.bb-f-memoryTier')?.value || 'stable';
             return {
                 title: g('bb-f-title'), storyTime: g('bb-f-storyTime'),
+                timelineId: g('bb-f-timelineId'),
                 status: formEl.querySelector('.bb-f-status')?.value || 'ongoing',
                 event: g('bb-f-event'), content: g('bb-f-event'),
                 participants: g('bb-f-participants').split(/[,，]/).map(s => s.trim()).filter(Boolean),
@@ -1379,6 +1497,7 @@ function collectFormData(formEl, pillar) {
         }
         case 'mem': default: return {
             title: g('bb-f-title'), type: formEl.querySelector('.bb-f-type')?.value || 'event',
+            storyTime: g('bb-f-storyTime'),
             content: g('bb-f-content'), summary: g('bb-f-summary'), verbatim: g('bb-f-verbatim'),
             subject: g('bb-f-subject'), target: g('bb-f-target'),
             memoryTier: formEl.querySelector('.bb-f-memoryTier')?.value || 'stable',
@@ -1544,7 +1663,7 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
                     setVal('bb-f-summary', prefill.summary);
                     setVal('bb-f-verbatim', prefill.verbatim);
                     setVal('bb-f-hiddenNotes', formatHiddenNotesForEditor(prefill.hiddenNotes));
-                    { const el = formOverlay.querySelector('.bb-f-importance'); if (el) { el.value = Math.round((prefill.importance || 0.5) * 100); el.dispatchEvent(new Event('input')); } }
+                    { const el = formOverlay.querySelector('.bb-f-importance'); if (el) { el.value = Math.round((prefill.importance ?? 0.5) * 100); el.dispatchEvent(new Event('input')); } }
                     { const el = formOverlay.querySelector('.bb-f-emotional'); if (el) { el.value = Math.round((prefill.emotionalWeight || 0) * 100); el.dispatchEvent(new Event('input')); } }
                     setCheck('bb-f-archived', prefill.archived || prefill.status === 'archived');
                     setVal('bb-f-tags', tagsStr);
@@ -1552,6 +1671,7 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
             }
         }
 
+        mountAdditionalEntryFields(formOverlay, chatId, pillar, prefill);
         bindFormEvents_inner(formOverlay, chatId, pillar, isEdit ? { id } : null);
     };
 
@@ -1567,6 +1687,7 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
 
 function bindFormEvents_inner(formOverlay, chatId, pillar, editInfo) {
     const isEdit = !!editInfo;
+    mountAdditionalEntryFields(formOverlay, chatId, pillar);
 
     formOverlay.querySelector('.bb-form-close')?.addEventListener('click', () => formOverlay.remove());
     formOverlay.querySelector('.bb-form-cancel')?.addEventListener('click', () => formOverlay.remove());
@@ -1592,6 +1713,7 @@ function bindFormEvents_inner(formOverlay, chatId, pillar, editInfo) {
         const origHTML = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 保存中...';
         try {
             const data = collectFormData(formOverlay, pillar);
+            if (formOverlay.querySelector('.bb-f-timelineId')?.disabled) throw new Error('时间线尚未读取完成，请稍后重试');
             if (!data.name && !data.title) { showToast('请至少填写标题/名称', 'warning'); btn.disabled = false; btn.innerHTML = origHTML; return; }
             const prepared = await prepareManualEntryData(data, pillar);
 
@@ -1623,6 +1745,7 @@ function bindFormEvents_inner(formOverlay, chatId, pillar, editInfo) {
             formOverlay.remove();
             const managerOverlay = document.querySelector('.bb-mem-overlay');
             if (managerOverlay) { await rerenderManagerList(managerOverlay, chatId); updateCurrentSlotBar(managerOverlay, chatId); }
+            if (managerOverlay && managerOverlay.querySelector('[data-panel="threads"]')?.style.display !== 'none' && normalizeManagerPillar(pillar) === 'milestone') await renderThreadPanel(managerOverlay, chatId);
         } catch (e) { showToast(`保存失败: ${e.message}`, 'error'); btn.disabled = false; btn.innerHTML = origHTML; }
     });
 }
@@ -2511,6 +2634,71 @@ async function updateCurrentSlotBar(overlay, chatId, cachedData = null) {
 //  v6.8.0 时间线线程面板
 // ═══════════════════════════════════════════════════════════
 
+function showThreadSummaryForm(overlay, chatId, threads) {
+    const settings = getSettings();
+    const scopes = {
+        selected_linked: '一条时间线及其对应里程碑',
+        selected_all: '一条时间线 + 所有里程碑',
+        all_threads: '所有时间线',
+        all_with_milestones: '所有时间线 + 所有里程碑',
+    };
+    const form = createManagerFormOverlay();
+    const defaultScope = scopes[settings.timelineSummaryScope] ? settings.timelineSummaryScope : 'all_with_milestones';
+    form.innerHTML = `<div class="bb-mem-form-popup bb-thread-summary-popup">
+        <div class="bb-mem-form-header"><h3><i class="fa-solid fa-wand-magic-sparkles"></i> 时间线 / 里程碑总结</h3><button class="menu_button" data-action="close" title="关闭"><i class="fa-solid fa-xmark"></i></button></div>
+        <div class="bb-mem-form-body">
+            <label>总结范围<select class="bb-input bb-summary-scope">${Object.entries(scopes).map(([value, label]) => `<option value="${value}" ${value === defaultScope ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+            <label class="bb-summary-timeline-label">时间线<select class="bb-input bb-summary-timeline">${threads.map(thread => `<option value="${escapeAttr(thread.id)}" ${thread.id === settings.timelineSummaryTimelineId ? 'selected' : ''}>${escapeHtml(thread.name || '未命名时间线')}</option>`).join('')}</select></label>
+            <div class="bb-summary-form-status" role="status"></div>
+        </div>
+        <div class="bb-mem-form-footer"><button class="menu_button" data-action="cancel">取消</button><button class="menu_button" data-action="generate"><i class="fa-solid fa-wand-magic-sparkles"></i> 生成总结建议</button></div>
+    </div>`;
+    applyManagerFormLayer(form);
+    const close = () => removeTopLayerElement(form);
+    form.querySelector('[data-action="close"]').onclick = close;
+    form.querySelector('[data-action="cancel"]').onclick = close;
+    form.addEventListener('click', event => { if (event.target === form) close(); });
+    const scopeSelect = form.querySelector('.bb-summary-scope');
+    const timelineSelect = form.querySelector('.bb-summary-timeline');
+    const updateScope = () => {
+        const single = scopeSelect.value.startsWith('selected_');
+        form.querySelector('.bb-summary-timeline-label').style.display = single ? '' : 'none';
+        form.querySelector('[data-action="generate"]').disabled = single && !threads.length;
+        form.querySelector('.bb-summary-form-status').textContent = single && !threads.length ? '暂无可选择的时间线' : '';
+    };
+    scopeSelect.onchange = updateScope;
+    updateScope();
+    form.querySelector('[data-action="generate"]').onclick = async () => {
+        const scope = scopeSelect.value;
+        const timelineId = timelineSelect.value || '';
+        if (scope.startsWith('selected_') && !timelineId) { showToast('请先选择时间线', 'warning'); return; }
+        updateSettings({ timelineSummaryScope: scope, timelineSummaryTimelineId: timelineId });
+        close();
+        const button = overlay.querySelector('#bb_thread_refresh_inline');
+        const status = overlay.querySelector('.bb-thread-summary-status');
+        const original = button?.innerHTML;
+        if (button) { button.disabled = true; button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 生成中...'; }
+        if (status) status.textContent = '正在准备总结范围...';
+        try {
+            const { regenerateThreadSummary } = await import('./memory-maintainer.js');
+            const result = await regenerateThreadSummary(chatId, { scope, timelineId, target: scope === 'all_threads' ? 'timeline' : 'both',
+                onProgress: message => { if (status?.isConnected) status.textContent = message; },
+            });
+            if (result.error) throw new Error(result.error);
+            showToast(result.summary || '总结完成', 'info');
+            await renderThreadPanel(overlay, chatId);
+            await rerenderManagerList(overlay, chatId);
+            const nextStatus = overlay.querySelector('.bb-thread-summary-status');
+            if (nextStatus) nextStatus.textContent = result.summary || '总结完成';
+        } catch (error) {
+            if (status?.isConnected) status.textContent = `总结失败：${error.message}`;
+            showToast(`总结失败：${error.message}`, 'error');
+        } finally {
+            if (button?.isConnected) { button.disabled = false; button.innerHTML = original; }
+        }
+    };
+}
+
 async function renderThreadPanel(overlay, chatId) {
     const panel = overlay.querySelector('#bb_thread_panel_content');
     if (!panel) return;
@@ -2521,57 +2709,22 @@ async function renderThreadPanel(overlay, chatId) {
     // v7.6.0 过滤已归档线程
     const activeThreads = threads.filter(t => t.status !== 'archived');
 
-    if (!activeThreads.length) {
-        panel.innerHTML = `
-            <div class="bb-thread-empty">
-                <i class="fa-solid fa-timeline" style="font-size:2em;opacity:0.3;"></i>
-                <p>暂无时间线</p>
-                <button class="menu_button" id="bb_thread_new_empty" style="margin-top:8px;background:#4caf50;color:#fff;margin-right:6px;">
-                    <i class="fa-solid fa-plus"></i> 新建时间线
-                </button>
-                <button class="menu_button" id="bb_thread_refresh_empty" style="margin-top:8px;">
-                    <i class="fa-solid fa-rotate"></i> 刷新时间线总结
-                </button>
-            </div>`;
-        // v7.5.0 空状态内联刷新按钮
-        // v7.9.0 空状态新建时间线
-        panel.querySelector('#bb_thread_new_empty')?.addEventListener('click', () => {
-            showThreadCreateForm(overlay, chatId);
-        });
-        panel.querySelector('#bb_thread_refresh_empty')?.addEventListener('click', async () => {
-            const btn = panel.querySelector('#bb_thread_refresh_empty');
-            btn.disabled = true;
-            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 生成中...';
-            try {
-                const { regenerateThreadSummary } = await import('./memory-maintainer.js');
-                const result = await regenerateThreadSummary(chatId);
-                if (result.error) throw new Error(result.error);
-                showToast(result.summary || '总结完成', 'info');
-                await renderThreadPanel(overlay, chatId);
-            } catch (e) {
-                showToast(`故事线生成失败：${e.message}`, 'error');
-                btn.disabled = false;
-                btn.innerHTML = '<i class="fa-solid fa-rotate"></i> 刷新时间线总结';
-            }
-        });
-        return;
-    }
-
     const statusLabel = { ongoing: '进行中', ended: '已结束', paused: '暂停', resident: '★常驻', archived: '已归档' };
     const statusIcon = { ongoing: '●', ended: '✓', paused: '⏸', resident: '★', archived: '📦' };
     const entryStatusIcon = { ongoing: '→', ended: '✓', milestone: '◆', paused: '⏸' };
     const typeLabel = { plot: '', emotional: '[感情]', side: '[支线]', world: '[世界]' };
 
     let html = `
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <div class="bb-thread-panel-toolbar">
             <span style="font-weight:bold;">${activeThreads.length} 条时间线</span>
             <button class="menu_button" id="bb_thread_new_btn" style="font-size:0.85em;background:#4caf50;color:#fff;">
                 <i class="fa-solid fa-plus"></i> 新建时间线
             </button>
             <button class="menu_button" id="bb_thread_refresh_inline" style="font-size:0.85em;">
-                <i class="fa-solid fa-rotate"></i> 刷新总结
+                <i class="fa-solid fa-wand-magic-sparkles"></i> 总结
             </button>
-        </div>`;
+        </div><div class="bb-thread-summary-status" role="status"></div>`;
+    if (!activeThreads.length) html += '<div class="bb-thread-empty"><i class="fa-solid fa-timeline"></i><p>暂无时间线</p></div>';
 
     for (let ti = 0; ti < activeThreads.length; ti++) {
         const thread = activeThreads[ti];
@@ -2639,14 +2792,8 @@ async function renderThreadPanel(overlay, chatId) {
 
     // v8.3.0 里程碑列表（默认展开，含时间线归属标记）
     const tlId = 'bb_thread_detail_timeline';
-    // 构建里程碑→时间线的映射
-    const entryThreadMap = new Map(); // entryId → thread name
-    for (const thread of activeThreads) {
-        for (const entry of (thread.entries || [])) {
-            if (entry.refId) entryThreadMap.set(entry.refId, thread.name);
-        }
-    }
-    const allTimelineEntries = [...timeline].sort((a, b) => (a.storyTimeSort ?? 0) - (b.storyTimeSort ?? 0));
+    const allTimelineEntries = timeline.filter(entry => !isArchived(entry)).sort((a, b) =>
+        compareEntriesByEventTime(a, b, { eraOrder: getSettings().eventTimeOrder }));
     if (allTimelineEntries.length) {
         html += `
         <div class="bb-thread-detail-section">
@@ -2654,13 +2801,20 @@ async function renderThreadPanel(overlay, chatId) {
                 <i class="fa-solid fa-chevron-down"></i>
                 里程碑列表 (${allTimelineEntries.length}条)
             </button>
+            <div class="bb-milestone-batch-toolbar">
+                <label><input type="checkbox" id="bb_thread_milestone_all" /> 全选</label>
+                <select class="bb-input" id="bb_thread_milestone_filter" aria-label="筛选里程碑时间线"><option value="all">所有时间线</option><option value="none">其他 / 无标签</option>${threads.map(thread => `<option value="${escapeAttr(thread.id)}">${escapeHtml(thread.name || '未命名时间线')}</option>`).join('')}</select>
+                <button class="menu_button" id="bb_thread_milestone_assign" disabled><i class="fa-solid fa-timeline"></i> 设置所属时间线</button>
+                <span id="bb_thread_milestone_selected" role="status">已选 0 条</span>
+            </div>
             <div class="bb-thread-detail-list" id="${tlId}_list">
                 ${allTimelineEntries.map(t => {
                     const tStatus = t.status === 'ongoing' ? '进行中' : t.status === 'ended' ? '已结束' : t.status === 'foreshadow' ? '伏笔' : t.status || '';
-                    const inThread = entryThreadMap.get(t.id);
-                    const threadTag = inThread ? `<span class="bb-thread-detail-thread" title="属于时间线: ${escapeAttr(inThread)}">▪ ${escapeHtml(inThread)}</span>` : '<span class="bb-thread-detail-thread" style="opacity:0.35;">未归入时间线</span>';
+                    const inThread = milestoneTimelineName(t, threads);
+                    const threadTag = `<button class="bb-thread-detail-thread bb-thread-detail-assign menu_button" data-id="${escapeAttr(t.id)}" title="设置所属时间线"><i class="fa-solid fa-timeline"></i> ${escapeHtml(inThread || '其他 / 无标签')}</button>`;
                     return `
-                    <div class="bb-thread-detail-item">
+                    <div class="bb-thread-detail-item" data-timeline-id="${inThread ? escapeAttr(t.timelineId) : ''}">
+                        <input type="checkbox" class="bb-thread-milestone-cb" data-id="${escapeAttr(t.id)}" aria-label="选择里程碑 ${escapeAttr(t.event || t.title || t.summary || '')}" />
                         <span class="bb-thread-detail-time">${escapeHtml(t.storyTime || '?')}</span>
                         <span class="bb-thread-detail-event">${escapeHtml(t.event || t.summary || '')}</span>
                         ${tStatus ? `<span class="bb-thread-detail-status">${escapeHtml(tStatus)}</span>` : ''}
@@ -2676,26 +2830,39 @@ async function renderThreadPanel(overlay, chatId) {
     panel.innerHTML = html;
 
     // 绑定刷新按钮
-    panel.querySelector('#bb_thread_refresh_inline')?.addEventListener('click', async () => {
-        const btn = panel.querySelector('#bb_thread_refresh_inline');
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 生成中...';
-        try {
-            const { regenerateThreadSummary } = await import('./memory-maintainer.js');
-            const result = await regenerateThreadSummary(chatId);
-            if (result.error) throw new Error(result.error);
-                showToast(result.summary || '总结完成', 'info');
-            if (result.threadCount > 0 || result.milestoneCount > 0) {
-                await renderThreadPanel(overlay, chatId);
-            } else {
-                btn.disabled = false;
-                btn.innerHTML = '<i class="fa-solid fa-rotate"></i> 刷新总结';
-            }
-        } catch (e) {
-            showToast(`故事线生成失败：${e.message}`, 'error');
-            btn.disabled = false;
-            btn.innerHTML = '<i class="fa-solid fa-rotate"></i> 刷新总结';
-        }
+    panel.querySelector('#bb_thread_refresh_inline')?.addEventListener('click', () => showThreadSummaryForm(overlay, chatId, activeThreads));
+
+    const milestoneBoxes = () => [...panel.querySelectorAll('.bb-thread-milestone-cb')];
+    const visibleBoxes = () => milestoneBoxes().filter(box => box.closest('.bb-thread-detail-item').style.display !== 'none');
+    const updateMilestoneSelection = () => {
+        const selected = milestoneBoxes().filter(box => box.checked);
+        const visible = visibleBoxes();
+        const all = panel.querySelector('#bb_thread_milestone_all');
+        if (all) { all.checked = visible.length > 0 && visible.every(box => box.checked); all.indeterminate = visible.some(box => box.checked) && !all.checked; }
+        const assign = panel.querySelector('#bb_thread_milestone_assign');
+        if (assign) assign.disabled = !selected.length;
+        const count = panel.querySelector('#bb_thread_milestone_selected');
+        if (count) count.textContent = `已选 ${selected.length} 条`;
+    };
+    panel.querySelector('#bb_thread_milestone_all')?.addEventListener('change', event => {
+        visibleBoxes().forEach(box => { box.checked = event.target.checked; });
+        updateMilestoneSelection();
+    });
+    milestoneBoxes().forEach(box => box.addEventListener('change', updateMilestoneSelection));
+    panel.querySelector('#bb_thread_milestone_filter')?.addEventListener('change', event => {
+        const value = event.target.value;
+        panel.querySelectorAll('.bb-thread-detail-item').forEach(row => {
+            const matches = value === 'all' || (value === 'none' ? !row.dataset.timelineId : row.dataset.timelineId === value);
+            row.style.display = matches ? '' : 'none';
+            if (!matches) row.querySelector('.bb-thread-milestone-cb').checked = false;
+        });
+        updateMilestoneSelection();
+    });
+    panel.querySelector('#bb_thread_milestone_assign')?.addEventListener('click', () => {
+        showMilestoneTimelineForm(overlay, chatId, milestoneBoxes().filter(box => box.checked).map(box => box.dataset.id));
+    });
+    panel.querySelectorAll('.bb-thread-detail-assign').forEach(button => {
+        button.addEventListener('click', () => showMilestoneTimelineForm(overlay, chatId, [button.dataset.id]));
     });
 
     // v7.9.0 新建线程
@@ -3064,6 +3231,7 @@ async function rerenderManagerList(overlay, chatId, cachedData = null) {
         : await Promise.all([
             getNpcProfiles(chatId), getItems(chatId), getTimeline(chatId), getMemories(chatId),
         ]);
+    const threads = cachedData?.threads || await getTimelineThreads(chatId);
 
     // v8.7.1 加载地图数据
     let mapLocations = [];
@@ -3082,7 +3250,7 @@ async function rerenderManagerList(overlay, chatId, cachedData = null) {
     let allEntries = [
         ...npc.map(e => ({ ...e, _pillar: 'npc' })),
         ...items.map(e => ({ ...e, _pillar: 'item' })),
-        ...timeline.map(e => ({ ...e, _pillar: 'milestone' })),
+        ...timeline.map(e => ({ ...e, _pillar: 'milestone', _timelineName: milestoneTimelineName(e, threads) })),
         ...memories.map(e => ({ ...e, _pillar: 'mem' })),
         ...(mapLocations || []).map(e => ({ ...e, _pillar: 'map', title: e.name, content: e.description, name: e.name })),
     ];
@@ -3105,6 +3273,9 @@ async function rerenderManagerList(overlay, chatId, cachedData = null) {
     const sortEl = overlay.querySelector('#bb_mgr_sort');
     const sortMode = sortEl ? sortEl.value : 'created_desc';
     allEntries.sort((a, b) => {
+        if (sortMode.startsWith('event_time')) return compareEntriesByEventTime(a, b, {
+            direction: sortMode.endsWith('desc') ? 'desc' : 'asc', eraOrder: getSettings().eventTimeOrder,
+        });
         if (sortMode.startsWith('importance')) {
             const score = e => e._pillar === 'mem' ? (e.importance ?? 0.5) : -1;
             if (a._pillar !== 'mem' && b._pillar === 'mem') return 1;
@@ -3135,6 +3306,7 @@ async function rerenderManagerList(overlay, chatId, cachedData = null) {
     }
 
     rebindItemActions(overlay, chatId);
+    overlay.dispatchEvent(new Event('bb-manager-list-rendered'));
 }
 
 // ═══ v7.5.0 归档仓库 ═══

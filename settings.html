@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.4.9</b>
+            <b>BB-Memory v9.5.0</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -466,7 +466,7 @@
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_dedup_time_conflict_scope">时间冲突判定粒度</label>
-                        <small class="bb-mem-hint">去重打分里"故事时间不同"的扣分粒度。按<b>日期</b>时，同一天内 12:01 与 12:05 不再扣 0.12（默认）；按<b>完整时间</b>是旧行为。</small>
+                        <small class="bb-mem-hint">用于手动全库整理的候选召回。按<b>日期</b>时，同一天内不视为日期冲突；不决定提取时的更新或合并。</small>
                         <select id="bb_dedup_time_conflict_scope" class="bb-input" style="width:100%;">
                             <option value="date">按日期（同一天内不扣分，默认）</option>
                             <option value="exact">按完整时间（旧行为）</option>
@@ -523,10 +523,10 @@
                     <label>地图起点描述字数<input id="bb_map_description_max_chars" type="number" class="bb-input" min="0" max="500" value="60" /></label>
                     <label>故事线事件数提醒阈值<input id="bb_timeline_compression_entry_threshold" type="number" class="bb-input" min="2" max="1000" value="12" /></label>
                     <label>故事线字符数提醒阈值<input id="bb_timeline_compression_char_threshold" type="number" class="bb-input" min="100" max="100000" value="1800" /></label>
-                    <label>故事分段规划每批输入字符上限<input id="bb_timeline_compression_context_chars" type="number" class="bb-input" min="2000" max="500000" value="60000" /></label>
+                    <label>故事总结提醒间隔（成功提取轮数）<input id="bb_timeline_summary_reminder_exchanges" type="number" class="bb-input" min="1" max="1000" value="5" /></label>
                     <label>联合总结每次输出 token 上限<input id="bb_timeline_compression_max_tokens" type="number" class="bb-input" min="256" value="64000" /></label>
                     <label>总结每段输入字符上限<input id="bb_timeline_summary_segment_chars" type="number" class="bb-input" min="2000" max="500000" value="16000" /></label>
-                    <label>总结并行请求数<input id="bb_timeline_summary_parallel" type="number" class="bb-input" min="1" max="8" value="2" /></label>
+                    <label>单条线内的分片并行数<input id="bb_timeline_summary_parallel" type="number" class="bb-input" min="1" max="8" value="2" /></label>
                     <label>失败拆分重试层数<input id="bb_timeline_summary_split_retries" type="number" class="bb-input" min="0" max="5" value="2" /></label>
                     <label>总结副 API 超时（秒）<input id="bb_timeline_summary_timeout_seconds" type="number" class="bb-input" min="30" max="900" value="180" /></label>
                     <label>全库整理最多问题类别（另加其他）<input id="bb_curation_category_limit" type="number" class="bb-input" min="1" max="5" value="5" /></label>
@@ -823,60 +823,17 @@
                         <i class="fa-solid fa-rotate"></i> 重建语义索引
                     </button>
 
-                    <label class="checkbox_label" style="margin: 8px 0;">
-                        <input id="bb_dedup_enabled" type="checkbox" checked />
-                        <span>启用语义去重</span>
-                    </label>
-
                     <div class="bb-mem-sidebar-section">
-                        <label for="bb_merge_similarity_threshold">自动合并相似度阈值</label>
-                        <small class="bb-mem-hint">相似度高于此值时优先合并为同一记忆（默认0.85）</small>
-                        <input id="bb_merge_similarity_threshold" type="number" class="bb-input" min="0.50" max="1.00" step="0.01" value="0.85" />
+                        <label class="checkbox_label"><input id="bb_extraction_update_confirm" type="checkbox" checked /><span>更新 / 合并 / 删除已有条目前确认</span></label>
+                        <label for="bb_extraction_recent_memory_count">额外发送最近记忆条数</label>
+                        <input id="bb_extraction_recent_memory_count" type="number" class="bb-input" min="0" max="100" step="1" value="5" />
+                        <button id="bb_extraction_review_updates_btn" class="menu_button"><i class="fa-solid fa-clipboard-check"></i> 提取变更审核</button>
                     </div>
-
                     <div class="bb-mem-sidebar-section">
-                        <label for="bb_reduce_similarity_threshold">降权相似度阈值</label>
-                        <small class="bb-mem-hint">相似度高于此值但未合并时降低重复候选优先级（默认0.60）</small>
-                        <input id="bb_reduce_similarity_threshold" type="number" class="bb-input" min="0.10" max="1.00" step="0.01" value="0.60" />
-                    </div>
-
-                    <label class="checkbox_label" style="margin: 8px 0;">
-                        <input id="bb_entity_dedup_enabled" type="checkbox" checked />
-                        <span>启用 NPC / 物品名称与别名去重</span>
-                    </label>
-
-                    <div class="bb-mem-sidebar-section">
-                        <label for="bb_entity_merge_similarity_threshold">实体自动合并阈值</label>
-                        <small class="bb-mem-hint">综合名称、别名、持有者、地点和向量判断；默认 0.90，越高越保守</small>
-                        <input id="bb_entity_merge_similarity_threshold" type="number" class="bb-input" min="0.60" max="1.00" step="0.01" value="0.90" />
-                    </div>
-
-                    <div class="bb-mem-sidebar-section">
-                        <label for="bb_entity_merge_summary_threshold">人物/物品合并压缩次数</label>
-                        <small class="bb-mem-hint">同一档案累计合并到此次数后交给副 API 去重重写；0 表示关闭自动压缩，默认 5。</small>
-                        <input id="bb_entity_merge_summary_threshold" type="number" class="bb-input" min="0" max="100" step="1" value="5" />
-                    </div>
-
-                    <div class="bb-mem-sidebar-section">
-                        <label for="bb_dedup_review_similarity_threshold">疑似重复提醒阈值</label>
-                        <small class="bb-mem-hint">达到该阈值但未自动合并时，按下方策略处理（默认 0.74）</small>
-                        <input id="bb_dedup_review_similarity_threshold" type="number" class="bb-input" min="0.50" max="0.99" step="0.01" value="0.74" />
-                    </div>
-
-                    <div class="bb-mem-sidebar-section">
-                        <label for="bb_dedup_ambiguous_action">疑似重复处理</label>
-                        <small class="bb-mem-hint">“保存并标记”最安全；激进合并可能误合并同类但不同的物品或事件</small>
-                        <select id="bb_dedup_ambiguous_action" class="bb-input">
-                            <option value="save_review">保存并标记待审核</option>
-                            <option value="merge">直接合并（激进）</option>
-                            <option value="skip">跳过新条目（严格）</option>
-                        </select>
-                    </div>
-
-                    <div class="bb-mem-sidebar-section">
-                        <label for="bb_dedup_known_entity_limit">提示词已有实体上限</label>
-                        <small class="bb-mem-hint">向 AI 提供多少个已有 NPC / 物品索引，帮助保持名称一致（默认 30）</small>
-                        <input id="bb_dedup_known_entity_limit" type="number" class="bb-input" min="0" max="100" step="1" value="30" />
+                        <label for="bb_daily_memory_score_multiplier">日常记忆注入权重倍数</label>
+                        <input id="bb_daily_memory_score_multiplier" type="number" class="bb-input" min="0" max="1" step="0.05" value="0.35" />
+                        <label for="bb_daily_memory_full_similarity">日常记忆完整注入向量阈值</label>
+                        <input id="bb_daily_memory_full_similarity" type="number" class="bb-input" min="0" max="1" step="0.01" value="0.95" />
                     </div>
 
                 </div>
@@ -894,6 +851,10 @@
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_calendar_description">日历描述 <small>描述你的奇幻世界日历规则</small></label>
                         <textarea id="bb_calendar_description" class="bb-input" rows="2" placeholder="留空使用默认时间推断..."></textarea>
+                    </div>
+                    <div class="bb-mem-sidebar-section">
+                        <label for="bb_event_time_order">事件时间纪元顺序（从早到晚，每行一个）</label>
+                        <textarea id="bb_event_time_order" class="bb-input" rows="3" placeholder="第一纪元&#10;第二纪元&#10;第三纪元"></textarea>
                     </div>
                 </div>
             </div>
