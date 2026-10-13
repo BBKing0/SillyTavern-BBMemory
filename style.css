@@ -6350,3 +6350,14 @@
     .bb-thread-detail-edit { visibility:visible; }
     .bb-timeline-assignment-popup,.bb-thread-summary-popup { width:94vw; max-height:90dvh; }
 }
+
+/* v9.5.1 时间线总结时间与标签 / 合并入口 */
+.bb-thread-last-summary { padding:.45em 1em; font-size:.8em; opacity:.75; overflow-wrap:anywhere; }
+.bb-thread-organization-help { font-size:.85em; line-height:1.5; overflow-wrap:anywhere; margin:.5em 0 .8em; }
+.bb-organization-summary-times { max-height:16vh; overflow:auto; font-size:.85em; line-height:1.6; margin-bottom:.8em; overflow-wrap:anywhere; }
+.bb-thread-panel-toolbar button { white-space:normal; overflow-wrap:anywhere; }
+@media (max-width:480px) {
+    .bb-thread-panel-toolbar > span { flex:1 1 100%; }
+    .bb-thread-panel-toolbar button { flex:1 1 45%; min-width:0; }
+    .bb-thread-last-summary { padding:.5em .7em; }
+}

@@ -25,7 +25,7 @@ import {
     getNpcProfiles, addNpcProfile, updateNpcProfile, removeNpcProfile,
     getItems, addItem, updateItem, removeItem,
     getMilestones, addMilestone, updateMilestone, removeMilestone,
-    getTimeline, upsertTimeline, removeTimeline,
+    getTimeline, upsertTimeline, removeTimeline, saveTimeline,
 } from './memory-store.js';
 import { mergeEntityAliases } from './dedup-engine.js';
 import { callCustomApi, callMainApi } from './auto-generator.js';
@@ -37,6 +37,7 @@ import {
     getPromptTemplate,
 } from './prompt-templates.js';
 import { mountInTopLayer } from './ui-top-layer.js';
+import { formatTimelineSummaryTime } from './timeline-display.js';
 
 // ═══════════════════════════════════════════════════════════
 //  柱定义与默认参数
@@ -885,7 +886,7 @@ function buildEntryLabels(entries, pillar) {
 
 const REVIEW_META_FIELDS = Object.freeze([
     'memoryTier', 'npcTier', 'itemTier', 'hitCount', 'sourceFloor', 'sourceExchange',
-    'createdAt', 'updatedAt', 'mergeCount', 'truthStatus',
+    'createdAt', 'updatedAt', 'mergeCount', 'truthStatus', 'lastSummarizedAt',
 ]);
 
 function snapshotEntryForReview(entry, pillar) {
@@ -1114,14 +1115,19 @@ export async function beginCurationSnapshot(chatId, ops, meta = {}) {
         const linked = (await getMilestones(chatId)).filter(entry => removedTimelineIds.has(String(entry.timelineId)));
         if (linked.length && !idsByPillar.has('milestone')) idsByPillar.set('milestone', new Set());
         for (const entry of linked) idsByPillar.get('milestone').add(String(entry.id));
+        // 合并时间线的父级引用一并更新并纳入撤销，避免留下已删除的父线 ID。
+        const childThreads = (await getTimeline(chatId)).filter(entry => removedTimelineIds.has(String(entry.parentThreadId)));
+        for (const entry of childThreads) idsByPillar.get('timeline').add(String(entry.id));
     }
 
     const before = {};
+    let timelineOrder = [];
     for (const [pillar, ids] of idsByPillar) {
         const crud = PILLAR_CRUD[pillar];
         if (!crud) continue;
         const entries = await crud.get(chatId);
         const list = Array.isArray(entries) ? entries : [];
+        if (pillar === 'timeline') timelineOrder = list.map(entry => String(entry.id));
         const capture = new Set(ids);
         const refField = CROSS_REF_FIELDS[pillar];
         if (refField) {
@@ -1143,6 +1149,7 @@ export async function beginCurationSnapshot(chatId, ops, meta = {}) {
         pillars: [...idsByPillar.keys()],
         ops: ops.map(op => ({ op: op.op, pillar: op.pillar, ids: op.ids, keepId: op.keepId || '', reason: op.reason || '' })),
         before,
+        timelineOrder,
         createdIds: {},
         summary: '',
         applied: 0,
@@ -1199,6 +1206,12 @@ export async function undoLastCuration(chatId, options = {}) {
             const result = await restoreEntriesVerbatim(chatId, normalizedPillar, entries, {
                 removeIds: record.createdIds?.[pillar] || [],
             });
+            if (normalizedPillar === 'timeline' && record.timelineOrder?.length) {
+                const ordered = new Map(record.timelineOrder.map((id,index) => [String(id),index]));
+                const restored = await getTimeline(chatId);
+                restored.sort((a,b) => (ordered.get(String(a.id)) ?? Infinity) - (ordered.get(String(b.id)) ?? Infinity));
+                await saveTimeline(chatId,restored);
+            }
             totals.restored += result.restored;
             totals.reinserted += result.reinserted;
             totals.removed += result.removed;
@@ -1207,8 +1220,9 @@ export async function undoLastCuration(chatId, options = {}) {
         }
     }
 
-    if (failures.length && !totals.restored && !totals.reinserted && !totals.removed) {
-        return { ok: false, error: `撤销失败：${failures.join('；')}` };
+    if (failures.length) {
+        // 部分柱失败也保留快照，修复存储问题后可继续重试恢复。
+        return { ok:false, error:`撤销未全部完成：${failures.join('；')}`, ...totals, snapshotId:record.id };
     }
 
     stack.entries.splice(index, 1);
@@ -1305,6 +1319,12 @@ function buildMergePatch(op, keepEntry, absorbedEntries, pillar) {
     }
 
     const allEntries = [keepEntry, ...absorbedEntries];
+    if (pillar === 'timeline') {
+        // 合并并非一次总结，继承来源最后总结时间，不能用当前时间冒充。
+        const summaryTimes = allEntries.map(entry => Number(entry.lastSummarizedAt)).filter(value => Number.isFinite(value) && value > 0);
+        patch.lastSummarizedAt = summaryTimes.length ? Math.max(...summaryTimes) : null;
+
+    }
     patch.hitCount = allEntries.reduce((sum, entry) => sum + (Number(entry.hitCount) || 0), 0);
     patch.hitScore = Math.max(...allEntries.map(entry => Number(entry.hitScore) || 0));
     patch.curatedAt = Date.now();
@@ -1357,6 +1377,10 @@ async function repairCrossReferences(chatId, pillar, removedIds, replacementId) 
             await updateMilestone(chatId, entry.id, { timelineId: replacementId || '' });
             repaired++;
         }
+        for (const entry of await getTimeline(chatId)) {
+            if (!removed.has(String(entry.parentThreadId))) continue;
+            await upsertTimeline(chatId, { id:entry.id, parentThreadId:entry.id === replacementId ? null : (replacementId || null) });
+        }
         return repaired;
     }
     const field = CROSS_REF_FIELDS[pillar];
@@ -1377,6 +1401,26 @@ async function repairCrossReferences(chatId, pillar, removedIds, replacementId) 
 }
 
 // ── 应用单个操作 ──
+
+/** 保留方沿原父级链寻找父线；重映射后会产生祖先环时退回根线。 */
+function mergedTimelineParent(keepEntry, absorbed, timeline) {
+    const removed = new Set(absorbed.map(entry => String(entry.id)));
+    const byId = new Map(timeline.map(entry => [String(entry.id),entry]));
+    let parent = keepEntry.parentThreadId || null;
+    const walked = new Set([String(keepEntry.id)]);
+    while (parent && removed.has(String(parent))) {
+        if (walked.has(String(parent))) return null;
+        walked.add(String(parent)); parent = byId.get(String(parent))?.parentThreadId || null;
+    }
+    // 外部父线可能原本是被吸收线的子线；父级重映射后不得指回保留方。
+    let cursor = parent; const ancestors = new Set();
+    while (cursor) {
+        const id = removed.has(String(cursor)) ? String(keepEntry.id) : String(cursor);
+        if (id === String(keepEntry.id) || ancestors.has(id)) return null;
+        ancestors.add(id); cursor = byId.get(id)?.parentThreadId || null;
+    }
+    return parent;
+}
 
 async function applySingleOp(chatId, op) {
     const pillar = normalizeCurationPillar(op.pillar);
@@ -1409,7 +1453,9 @@ async function applySingleOp(chatId, op) {
         const absorbed = op.removeIds.map(id => byId.get(String(id))).filter(Boolean);
         if (!absorbed.length) throw new Error('被合并的条目都已不存在');
 
-        await crud.update(chatId, keepEntry.id, { ...buildMergePatch(op, keepEntry, absorbed, pillar), embedding: null, embeddingRef: null });
+        const patch = buildMergePatch(op, keepEntry, absorbed, pillar);
+        if (pillar === 'timeline') patch.parentThreadId = mergedTimelineParent(keepEntry, absorbed, entries);
+        await crud.update(chatId, keepEntry.id, { ...patch, embedding: null, embeddingRef: null });
         for (const entry of absorbed) await crud.remove(chatId, entry.id);
         const repaired = await repairCrossReferences(chatId, pillar, absorbed.map(e => e.id), keepEntry.id);
         return { createdIds, removedCount: absorbed.length, updatedCount: 1, repaired };
@@ -2017,7 +2063,7 @@ function showToast(msg, type = 'info') {
 }
 
 const REVIEW_FIELD_LABELS = Object.freeze({
-    id: 'ID', title: '标题', name: '名称', type: '类型', summary: '摘要', content: '正文',
+    id: 'ID', title: '标题', name: '名称', type: '类型', summary: '摘要', content: '正文', timelineId: '所属时间线',
     verbatim: '人物原话', subject: '主体/说话者', target: '目标/对话对象', storyTime: '故事时间',
     importance: '重要性', emotionalWeight: '情感权重', truthStatus: '真值', tags: '标签',
     aliases: '别名', role: '身份', personality: '性格', appearance: '外貌', status: '状态',
@@ -2026,10 +2072,11 @@ const REVIEW_FIELD_LABELS = Object.freeze({
     significance: '意义/说明', participants: '参与者', event: '事件', impact: '影响',
     priority: '优先级', entries: '时间线节点', memoryTier: '记忆级别', npcTier: '角色级别',
     itemTier: '物品级别', hitCount: '命中次数', sourceFloor: '来源楼层', sourceExchange: '来源交换',
-    mergeCount: '合并次数', createdAt: '创建时间', updatedAt: '更新时间',
+    mergeCount: '合并次数', createdAt: '创建时间', updatedAt: '更新时间', lastSummarizedAt: '上次总结时间',
 });
 
 function formatReviewValue(value, field = '') {
+    if (field === 'lastSummarizedAt') return formatTimelineSummaryTime(value);
     if (value == null) return '';
     if ((field === 'createdAt' || field === 'updatedAt') && Number.isFinite(Number(value))) {
         try { return new Date(Number(value)).toLocaleString(); } catch { /* 保留原值 */ }
@@ -2053,7 +2100,7 @@ function renderReviewFields(entry, options = {}) {
         .map(([field, value]) => `
             <div class="bb-curate-field-row">
                 <span>${escapeHtml(REVIEW_FIELD_LABELS[field] || field)}</span>
-                <div>${escapeHtml(formatReviewValue(value, field))}</div>
+                <div>${escapeHtml(field === 'timelineId' && options.timelineChoices ? (options.timelineChoices.find(choice => choice.id === value)?.name || (value ? '已失效时间线' : '其他 / 无标签')) : formatReviewValue(value, field))}</div>
             </div>`).join('');
     const id = String(entry?.id || options.fallbackId || '').trim();
     const title = entry?.title || entry?.name || entry?.event || options.title || id || '未命名条目';
@@ -2073,12 +2120,12 @@ function renderOriginalEntries(op) {
     return `
         <details class="bb-curate-originals" open>
             <summary>原条目内容（${originals.length}）</summary>
-            <div class="bb-curate-original-list">${originals.map(entry => renderReviewFields(entry)).join('')}</div>
+            <div class="bb-curate-original-list">${originals.map(entry => renderReviewFields(entry, { timelineChoices:op.timelineChoices })).join('')}</div>
         </details>`;
 }
 
-function renderProposedResult(result, title) {
-    return renderReviewFields(result, { result: true, title });
+function renderProposedResult(result, title, timelineChoices) {
+    return renderReviewFields(result, { result: true, title, timelineChoices });
 }
 
 function renderOpDetail(op) {
@@ -2092,7 +2139,7 @@ function renderOpDetail(op) {
                 <div class="bb-curate-diff-row"><span class="bb-curate-diff-tag">保留</span>${escapeHtml(labelOf(op.keepId))}</div>
                 <div class="bb-curate-diff-row"><span class="bb-curate-diff-tag danger">吸收并删除</span><ul>${absorbed}</ul></div>
                 <div class="bb-curate-diff-row"><span class="bb-curate-diff-tag ok">重写为</span>
-                    <div>${renderProposedResult(op.result, '合并后的建议条目')}</div>
+                    <div>${renderProposedResult(op.result, '合并后的建议条目', op.timelineChoices)}</div>
                 </div>
             </div>`;
     }
@@ -2100,7 +2147,7 @@ function renderOpDetail(op) {
         return `${originals}
             <div class="bb-curate-diff">
                 <div class="bb-curate-diff-row"><span class="bb-curate-diff-tag ok">重写为</span>
-                    <div>${renderProposedResult(op.result, '重写后的建议条目')}</div>
+                    <div>${renderProposedResult(op.result, '重写后的建议条目', op.timelineChoices)}</div>
                 </div>
             </div>`;
     }
@@ -2221,7 +2268,17 @@ export function openCurationReviewPanel(chatId, ops, options = {}) {
             }).join('') : '<div class="bb-active-review-empty">这一类没有待确认操作。</div>';
             listEl.querySelectorAll('[data-idx]').forEach(card => {
                 const host = card.querySelector('.bb-curate-editor-fields');
-                if (host) mountCurationEditor(host, state[Number(card.dataset.idx)], () => { statusEl.textContent = '建议已编辑，应用时将保存编辑后的内容'; });
+                if (host) mountCurationEditor(host, state[Number(card.dataset.idx)], change => {
+                    const op = state[Number(card.dataset.idx)];
+                    if (change?.field === 'timelineId') {
+                        const preview = document.createElement('div'); preview.innerHTML = renderOpDetail(op);
+                        const diff = preview.querySelector('.bb-curate-diff');
+                        if (diff) card.querySelector('.bb-curate-diff')?.replaceWith(diff);
+                        const warning = card.querySelector('.bb-curate-warn');
+                        if (warning) warning.textContent = (op.notes || []).join('；');
+                    }
+                    statusEl.textContent = '建议已编辑，应用时将保存编辑后的内容';
+                });
             });
             statusEl.textContent = `已选 ${selectedCount()} / ${state.length}`;
         }

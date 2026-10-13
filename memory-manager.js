@@ -31,6 +31,7 @@ import { markExchangeExtracted, hideExchange, unmarkExchangeProcessed, getExtrac
 import { fuzzyMemory, archiveMemory, restoreMemory } from './memory-maintainer.js';
 import { mountInTopLayer, removeTopLayerElement } from './ui-top-layer.js';
 import { compareEntriesByEventTime } from './event-time.js';
+import { formatTimelineSummaryTime } from './timeline-display.js';
 
 // ═══ 全局状态 ═══
 let activeFilter = 'all';
@@ -128,7 +129,11 @@ export async function openMemoryManager(chatId) {
 
     bindManagerEvents(overlay, chatId);
     overlay.querySelector('[data-action="organization"]').onclick = async () => {
-        try { const { openMemoryOrganization } = await import('./memory-organization.js'); openMemoryOrganization(chatId); }
+        try { const { openMemoryOrganization } = await import('./memory-organization.js'); openMemoryOrganization(chatId, { onChange: async () => {
+            if (!overlay.isConnected || String(SillyTavern.getContext().chatId) !== String(chatId)) return;
+            await renderThreadPanel(overlay, chatId);
+            await rerenderManagerList(overlay, chatId);
+        } }); }
         catch (error) { showToast(error.message, 'error'); }
     };
     updateCurrentSlotBar(overlay, chatId);
@@ -2699,6 +2704,44 @@ function showThreadSummaryForm(overlay, chatId, threads) {
     };
 }
 
+async function runTimelineOrganization(overlay, chatId, button, options = {}) {
+    if (String(SillyTavern.getContext().chatId) !== String(chatId)) { showToast('聊天已切换，请重新打开管理器', 'warning'); return; }
+    const panel = overlay.querySelector('#bb_thread_panel_content');
+    if (panel.dataset.organizationBusy === 'true') return;
+    panel.dataset.organizationBusy = 'true';
+    const status = panel.querySelector('.bb-thread-summary-status');
+    const buttons = [...panel.querySelectorAll('.bb-thread-panel-toolbar button')];
+    const original = button.innerHTML;
+    buttons.forEach(item => { item.disabled = true; });
+    button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 处理中…';
+    if (status) status.textContent = options.undo ? '正在恢复上次整理快照…' : '正在读取时间线与里程碑…';
+    try {
+        let result;
+        if (options.undo) {
+            const { undoLastCuration } = await import('./memory-curator.js');
+            result = await undoLastCuration(chatId);
+            if (!result.ok) throw new Error(result.error || result.summary || '没有可撤销的整理记录');
+        } else {
+            const { reviewTimelineOrganization } = await import('./timeline-organization.js');
+            result = await reviewTimelineOrganization(chatId, { ...options, onProgress: message => { if (status?.isConnected) status.textContent = message; } });
+        }
+        const message = result.summary || result.applyResult?.summary || '审核结束';
+        showToast(message, 'info');
+        if (String(SillyTavern.getContext().chatId) !== String(chatId) || !overlay.isConnected) return;
+        await renderThreadPanel(overlay, chatId);
+        await rerenderManagerList(overlay, chatId);
+        const nextStatus = overlay.querySelector('.bb-thread-summary-status');
+        if (nextStatus) nextStatus.textContent = message;
+    } catch (error) {
+        if (status?.isConnected) status.textContent = '时间线整理失败：' + error.message;
+        showToast('时间线整理失败：' + error.message, 'error');
+    } finally {
+        delete panel.dataset.organizationBusy;
+        buttons.forEach(item => { if (item.isConnected) item.disabled = false; });
+        if (button.isConnected) button.innerHTML = original;
+    }
+}
+
 async function renderThreadPanel(overlay, chatId) {
     const panel = overlay.querySelector('#bb_thread_panel_content');
     if (!panel) return;
@@ -2707,7 +2750,7 @@ async function renderThreadPanel(overlay, chatId) {
     const timeline = await getTimeline(chatId);
 
     // v7.6.0 过滤已归档线程
-    const activeThreads = threads.filter(t => t.status !== 'archived');
+    const activeThreads = threads.filter(t => !isArchived(t));
 
     const statusLabel = { ongoing: '进行中', ended: '已结束', paused: '暂停', resident: '★常驻', archived: '已归档' };
     const statusIcon = { ongoing: '●', ended: '✓', paused: '⏸', resident: '★', archived: '📦' };
@@ -2723,7 +2766,11 @@ async function renderThreadPanel(overlay, chatId) {
             <button class="menu_button" id="bb_thread_refresh_inline" style="font-size:0.85em;">
                 <i class="fa-solid fa-wand-magic-sparkles"></i> 总结
             </button>
-        </div><div class="bb-thread-summary-status" role="status"></div>`;
+            <button class="menu_button" id="bb_thread_ai_tags"><i class="fa-solid fa-tags"></i> AI 安排标签</button>
+            <button class="menu_button" id="bb_thread_ai_merge"><i class="fa-solid fa-code-merge"></i> AI 合并时间线</button>
+            <button class="menu_button" id="bb_thread_organization_resume">继续标签 / 合并草稿</button>
+            <button class="menu_button" id="bb_thread_organization_undo">撤销上次整理 / 总结</button>
+        </div><p class="bb-thread-organization-help">AI 读取当前聊天全部时间线和里程碑（归档资料只读）。先审核、编辑并勾选建议，确认后保存；合并同步迁移所属时间线标签。</p><div class="bb-thread-summary-status" role="status" aria-live="polite"></div>`;
     if (!activeThreads.length) html += '<div class="bb-thread-empty"><i class="fa-solid fa-timeline"></i><p>暂无时间线</p></div>';
 
     for (let ti = 0; ti < activeThreads.length; ti++) {
@@ -2766,6 +2813,7 @@ async function renderThreadPanel(overlay, chatId) {
                     <button class="menu_button bb-thread-btn-delete" data-thread-idx="${ti}" title="删除时间线"><i class="fa-solid fa-trash"></i></button>
                 </div>
             </div>
+            <div class="bb-thread-last-summary"><i class="fa-regular fa-clock"></i> 上次总结时间：<span>${escapeHtml(formatTimelineSummaryTime(thread.lastSummarizedAt))}</span></div>
             <div class="bb-thread-entries" id="${cardId}_entries" style="${hasOngoing ? '' : 'display:none;'}">`;
 
         if (entries.length) {
@@ -2831,6 +2879,10 @@ async function renderThreadPanel(overlay, chatId) {
 
     // 绑定刷新按钮
     panel.querySelector('#bb_thread_refresh_inline')?.addEventListener('click', () => showThreadSummaryForm(overlay, chatId, activeThreads));
+    for (const [id, options] of [
+        ['bb_thread_ai_tags', { mode: 'tags' }], ['bb_thread_ai_merge', { mode: 'merge' }],
+        ['bb_thread_organization_resume', { resume: true }], ['bb_thread_organization_undo', { undo: true }],
+    ]) panel.querySelector('#' + id)?.addEventListener('click', event => runTimelineOrganization(overlay, chatId, event.currentTarget, options));
 
     const milestoneBoxes = () => [...panel.querySelectorAll('.bb-thread-milestone-cb')];
     const visibleBoxes = () => milestoneBoxes().filter(box => box.closest('.bb-thread-detail-item').style.display !== 'none');

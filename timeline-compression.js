@@ -44,6 +44,7 @@ export async function reviewTimelineRegeneration(chatId, drafts, original) {
             await saveTimeline(chat, [...current.filter(t => !ids.has(t.id)), ...chosen.map(op => ({
                 ...original.find(t => t.id === op.ids[0]), ...op.result, id: op.ids[0], embedding: null, embeddingRef: null,
                 createdAt: original.find(t => t.id === op.ids[0])?.createdAt || Date.now(), updatedAt: Date.now(),
+                lastSummarizedAt: Date.now(), // v9.5.1 兼容旧故事线生成入口，采纳后才标记
             }))]);
             return { applied: chosen, failed: [], summary, snapshotId };
         },

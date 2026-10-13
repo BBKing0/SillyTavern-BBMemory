@@ -1,7 +1,8 @@
-/** v9.5.0 记忆整理入口与逐线总结范围。 */
+/** v9.5.1 记忆整理入口、逐线总结与时间线标签 / 合并审核。 */
 import { getSettings, updateSettings, getTimeline } from './memory-store.js';
 import { mountInTopLayer, removeTopLayerElement } from './ui-top-layer.js';
 import { SUMMARY_TARGETS, SUMMARY_SCOPES, reviewJointSummary } from './story-summary.js';
+import { formatTimelineSummaryTime } from './timeline-display.js';
 
 let handlers = {};
 export function configureMemoryOrganization(actions) { handlers = actions; }
@@ -35,6 +36,7 @@ export function openMemoryOrganization(chatId, options = {}) {
                 <button class="menu_button" data-action="maintenance">打开维护与体检</button>
                 <div class="bb-organization-summary">
                     <h4>时间线 / 里程碑总结</h4>
+                    <div class="bb-organization-summary-times" aria-label="时间线上次总结时间"></div>
                     <label>资料范围 <select class="bb-input" data-setting="timelineSummaryScope">${Object.entries(SUMMARY_SCOPES).map(([key,label]) => `<option value="${key}">${label}</option>`).join('')}</select></label>
                     <label data-timeline-choice>时间线 <select class="bb-input" data-setting="timelineSummaryTimelineId"><option value="">正在读取…</option></select></label>
                     <label>允许修改 <select class="bb-input" data-setting="timelineSummaryTarget">${Object.entries(SUMMARY_TARGETS).map(([key,label]) => `<option value="${key}">${label}</option>`).join('')}</select></label>
@@ -47,6 +49,15 @@ export function openMemoryOrganization(chatId, options = {}) {
                     <label>副 API 每次超时（秒）<input class="bb-input" type="number" min="30" max="900" data-setting="timelineSummaryTimeoutSeconds"></label>
                     <button class="menu_button" data-action="summary">生成总结建议</button>
                     <button class="menu_button" data-action="resume_summary">继续上次总结草稿</button>
+                    <h4>时间线标签与合并</h4>
+                    <p>AI 读取当前聊天全部时间线和里程碑（归档资料只读），给无标签节点安排归属，或建议调整已有标签；合并相关时间线时同时迁移里程碑标签。建议均需审核，可编辑、勾选、保存草稿和撤销。</p>
+                    <label>标签 / 合并全库输入字符上限<input class="bb-input" type="number" min="2000" max="500000" data-setting="timelineCompressionContextChars"></label>
+                    <p>使用上方生成 API、输出 token 上限和超时设置。全库原文超过输入上限时会提示调整，不截断资料。</p>
+                    <div class="bb-organization-actions">
+                        <button class="menu_button" data-action="timeline_tags">AI 安排里程碑标签</button>
+                        <button class="menu_button" data-action="timeline_merge">AI 合并时间线</button>
+                        <button class="menu_button" data-action="resume_timeline_organization">继续标签 / 合并草稿</button>
+                    </div>
                 </div>
             </section>
         </div><div class="bb-organization-status" role="status" aria-live="polite">请选择整理功能</div>
@@ -80,6 +91,14 @@ export function openMemoryOrganization(chatId, options = {}) {
             if (!timeline.length) { const option = document.createElement('option'); option.value = ''; option.textContent = '暂无时间线'; timelineInput.append(option); }
             for (const thread of timeline) { const option = document.createElement('option'); option.value = thread.id; option.textContent = thread.name || '未命名时间线'; timelineInput.append(option); }
             if (timeline.some(t => t.id === selectedId)) timelineInput.value = selectedId;
+            const times = overlay.querySelector('.bb-organization-summary-times');
+            times.replaceChildren();
+            if (!timeline.length) times.textContent = '暂无时间线';
+            for (const thread of timeline) {
+                const row = document.createElement('div');
+                row.textContent = (thread.name || '未命名时间线') + ' · 上次总结时间：' + formatTimelineSummaryTime(thread.lastSummarizedAt);
+                times.append(row);
+            }
         } catch (error) { status.textContent = `读取时间线失败：${error.message}`; toast(status.textContent, 'error'); }
         finally { timelineLoading = false; updateScopeControls(); }
     };
@@ -113,9 +132,9 @@ export function openMemoryOrganization(chatId, options = {}) {
         const action = button.dataset.action;
         if (action === 'close') { close(); return; }
         if (String(SillyTavern.getContext().chatId) !== String(chatId)) { toast('聊天已切换，请重新打开记忆整理', 'warning'); return; }
-        if (action === 'summary') {
-            const invalid = [...overlay.querySelectorAll('[data-setting]')].find(el => !el.checkValidity());
-            if (invalid) { invalid.reportValidity(); status.textContent = '请检查总结参数的范围'; return; }
+        if (action === 'summary' || action === 'timeline_tags' || action === 'timeline_merge') {
+            const invalid = [...overlay.querySelectorAll('[data-setting]')].filter(el => action === 'summary' || el !== timelineInput).find(el => !el.checkValidity());
+            if (invalid) { invalid.reportValidity(); status.textContent = '请检查 AI 生成参数的范围'; return; }
             updateSettings({ timelineSummaryTimelineId:timelineInput.value });
         }
         const original = button.textContent;
@@ -124,6 +143,15 @@ export function openMemoryOrganization(chatId, options = {}) {
             if (action === 'summary' || action === 'resume_summary') {
                 const result = await reviewJointSummary(chatId, { resume:action === 'resume_summary', scope:scopeInput.value, timelineId:timelineInput.value, onProgress:message => { status.textContent = message; } });
                 status.textContent = result.summary; toast(result.summary, 'info');
+                await refreshTimelineChoices();
+                if (result.applyResult?.applied?.length) await options.onChange?.();
+            } else if (['timeline_tags', 'timeline_merge', 'resume_timeline_organization'].includes(action)) {
+                const { reviewTimelineOrganization } = await import('./timeline-organization.js');
+                const result = await reviewTimelineOrganization(chatId, { ...(action === 'resume_timeline_organization' ? { resume: true } : { mode: action === 'timeline_merge' ? 'merge' : 'tags' }), onProgress: message => { status.textContent = message; } });
+                status.textContent = result.summary || result.applyResult?.summary || '时间线整理审核已结束';
+                toast(status.textContent, 'info');
+                await refreshTimelineChoices();
+                if (result.applyResult?.applied?.length) await options.onChange?.();
             } else if (action === 'extraction_updates') {
                 const { reviewPendingExtractionUpdates } = await import('./extraction-updates.js');
                 const result = await reviewPendingExtractionUpdates(chatId);
@@ -133,6 +161,7 @@ export function openMemoryOrganization(chatId, options = {}) {
                 if (!handlers[action]) throw new Error('整理入口尚未初始化，请刷新 ST 后重试');
                 await handlers[action](chatId);
                 status.textContent = action === 'maintenance' ? '维护面板已打开' : overlay.querySelector('#bb_curate_status').textContent;
+                if (action === 'undo') { await refreshTimelineChoices(); await options.onChange?.(); }
             }
         } catch (error) { status.textContent = error.message; toast(error.message, 'error'); }
         finally { setBusy(false); button.textContent = original; }

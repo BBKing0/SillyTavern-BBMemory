@@ -1,4 +1,4 @@
-/** v9.5.0 按所选范围逐线总结，审核与撤销沿用整理器。 */
+/** v9.5.1 按所选范围逐线总结，采纳时记录现实时间，审核与撤销沿用整理器。 */
 import { getSettings, updateSettings, getTimeline, getMilestones, getCalendarDescription, upsertTimeline } from './memory-store.js';
 import { generateSummaryBatches, summarySources, milestoneTimelineId } from './story-summary-plan.js';
 import { getUserLocalForage, initializeUserStorage, userStorageKey } from './user-storage.js';
@@ -226,9 +226,16 @@ export async function applyJointSummary(chatId, ops, target, options = {}) {
     const snapshotId = await curator.beginCurationSnapshot(chatId, ops, { source: 'joint_summary' });
     const createdIds = { timeline: ops.filter(o => o.isNewTimeline).map(o => o.ids[0]) };
     await curator.finalizeCurationSnapshot(chatId, snapshotId, { createdIds });
-    const result = await curator.applyCurationOps(chatId, ops.filter(o => !o.isNewTimeline), { ...options, forceAuth:'auto', skipSnapshot:true });
-    for (const op of ops.filter(o => o.isNewTimeline)) {
-        try { alive(chatId); await upsertTimeline(chatId, { ...op.result, id:op.ids[0] }); result.applied.push(op); }
+    // 只在采纳阶段生成系统时间，并与摘要原子写入同一条记录；失败不留下伪总结时间。
+    const lastSummarizedAt = Date.now();
+    const accepted = ops.map(op => op.pillar === 'timeline'
+        ? { ...op, result:{ ...op.result, lastSummarizedAt } } : op);
+    const result = await curator.applyCurationOps(chatId, accepted.filter(o => !o.isNewTimeline), {
+        ...options, forceAuth:'auto', skipSnapshot:true,
+        validateOp:async op => { alive(chatId, options.signal); await options.validateOp?.(op); },
+    });
+    for (const op of accepted.filter(o => o.isNewTimeline)) {
+        try { alive(chatId, options.signal); await upsertTimeline(chatId, { ...op.result, id:op.ids[0] }); result.applied.push(op); }
         catch (error) { result.failed.push({ ...op, error:error.message }); }
     }
     result.snapshotId = snapshotId;

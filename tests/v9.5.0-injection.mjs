@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const currentVersion = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8')).version;
 const bank = new Map();
 const lf = {
     async getItem(k) { return structuredClone(bank.get(k) ?? null); },
@@ -37,7 +39,7 @@ const tl = await store.upsertTimeline('v950', { name: '北征' });
 await store.importMemories('v950', JSON.stringify({ version: '9.5.0', schema: 'bb-memory-vector-ref-v1', data: { milestones: [{ id: 'import-node', event: '出征', timelineId: 'external-timeline' }], timeline: [{ id: 'external-timeline', name: '北征', entries: [] }] } }));
 assert.equal((await store.getMilestones('v950'))[0].timelineId, tl.id);
 const exported = JSON.parse(await store.exportMemories('v950'));
-assert.equal(exported.version, '9.5.0');
+assert.equal(exported.version, currentVersion);
 assert.equal(exported.data.milestones[0].timelineId, tl.id);
 const curator = await import('../memory-curator.js');
 const second = await store.upsertTimeline('v950', { name: '南征', entries: [{ event: '南征开始' }] });

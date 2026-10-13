@@ -2,7 +2,7 @@ import { userStorageKey, initializeUserStorage, watchUserSession } from './user-
 import { openMemoryOrganization, configureMemoryOrganization } from './memory-organization.js';
 import { captureInjectionContext, initInjectionContextTracking } from './extraction-context.js';
 /**
- * index.js —— BB-Memory v9.5.0 主入口
+ * index.js —— BB-Memory v9.5.1 主入口
  *
  * 五柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目 / 实时记忆。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -118,7 +118,7 @@ let chatSwitchSuppressDeletesUntil = 0;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.5.0';
+const SETTINGS_EXPORT_VERSION = '9.5.1';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'extractionUpdateConfirm', 'extractionRecentMemoryCount', 'dailyMemoryScoreMultiplier', 'dailyMemoryFullSimilarity', 'eventTimeOrder', 'timelineSummaryScope', 'timelineSummaryTimelineId', 'timelineSummaryReminderExchanges',
@@ -4653,7 +4653,7 @@ async function handleFloatingMenuAction(action) {
 async function init() {
     try { await initializeUserStorage(); watchUserSession(); }
     catch (error) { showToast(error.message, 'error'); _bbInitCalled = false; return; }
-    console.log('[BB-Memory] v9.5.0 初始化开始...');
+    console.log('[BB-Memory] v9.5.1 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -4850,7 +4850,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.5.0 初始化完成');
+    console.log('[BB-Memory] v9.5.1 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆

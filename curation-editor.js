@@ -26,7 +26,29 @@ export function mountCurationEditor(host, op, onChange) {
             });
             wrapper.append(title, input); host.appendChild(wrapper);
         };
-        for (const [key, value] of Object.entries(result)) walk(value, result, key, CORRECTION_FIELDS[key] || key);
+        for (const [key, value] of Object.entries(result)) {
+            if (['entries', 'tags'].includes(key) && op.preserveTimelineEntries) continue;
+            if (key === 'timelineId' && Array.isArray(op.timelineChoices)) {
+                const wrapper = document.createElement('label'); wrapper.className = 'bb-curate-edit-field';
+                const title = document.createElement('span'); title.textContent = '所属时间线';
+                const input = document.createElement('select'); input.className = 'bb-input'; input.setAttribute('aria-label', '所属时间线');
+                for (const choice of [{ id: '', name: '其他 / 无标签' }, ...op.timelineChoices.filter(choice => choice.id)]) {
+                    const option = document.createElement('option'); option.value = choice.id; option.textContent = choice.name || choice.id; input.append(option);
+                }
+                input.value = value;
+                input.addEventListener('change', () => {
+                    result.timelineId = input.value; op._edited = true;
+                    if (op.organizationMode === 'tags') {
+                        const sourceId = op.sourceEntries?.[0]?.timelineId || '';
+                        const before = op.timelineChoices.find(choice => choice.id === sourceId)?.name || (sourceId ? '失效标签' : '未分配');
+                        const after = op.timelineChoices.find(choice => choice.id === input.value)?.name || '未分配';
+                        op.notes = ['时间线标签：' + before + ' → ' + after + '；只修改标签，里程碑原文保持不变', ...(op.notes || []).slice(1)];
+                    }
+                    onChange?.({ field: 'timelineId' });
+                });
+                wrapper.append(title, input); host.appendChild(wrapper);
+            } else walk(value, result, key, CORRECTION_FIELDS[key] || key);
+        }
     }
 }
 

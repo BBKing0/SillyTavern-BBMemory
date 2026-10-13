@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>BB-Memory v9.5.0 使用说明</title>
+  <title>BB-Memory v9.5.1 使用说明</title>
   <style>
     :root {
       color-scheme: light;
@@ -418,7 +418,11 @@
 <body>
 <main>
   <section class="panel">
-    <h2>v9.5.0 使用入口与变化</h2>
+    <h2>v9.5.1 使用入口与变化</h2>
+    <p>时间线卡片与记忆维护页显示<strong>上次总结时间</strong>：采纳总结后记录实际保存时间；只生成草稿或取消不会更新。旧资料显示“尚未总结”，这个时间不会注入角色对话上下文。</p>
+    <p><strong>AI 安排标签：</strong>管理器 → 时间线 → AI 安排标签，或记忆整理 → 记忆维护 → AI 安排里程碑标签。AI 读取当前聊天全部时间线及里程碑，建议给无标签节点安排归属、或调整已有归属。展开“编辑建议内容”，可用“所属时间线”下拉框修改目标，勾选后点击“应用选中”。</p>
+    <p><strong>AI 合并时间线：</strong>在同一入口点击 AI 合并时间线，审核保留的时间线、吸收的时间线、合并后名称与摘要及里程碑标签迁移。例如公园约定和公园游玩可合为公园之行，也可吸收到已有感情线。确认后保留全部原始事件、合并普通标签，并同步迁移里程碑所属时间线；取消不改原库。</p>
+    <p>标签和合并各自保留审核草稿，可从“继续标签 / 合并草稿”打开，或用“撤销上次整理 / 总结”恢复。归档资料供 AI 只读参考，合并时引用原线的归档里程碑标签同样迁移。生成 API、输出预算和超时沿用总结设置，输入字符上限在记忆维护页调整；超限时明确报错而不截断资料。</p>
     <p><strong>账号隐私：</strong>本地存档（包括 default）、记忆、向量及撤销记录按 ST 登录账号独立保存。设置由 ST 保存在当前账号设置中，云端备份属于当前账号聊天文件，本地存档在当前浏览器 IndexedDB 中。</p>
     <p><strong>旧数据：</strong>v9.4.8 及更早的本地键没有可靠账号归属，升级将其隔离并原样保留，不自动迁给当前账号，也不会在救援列表展示。请导入本账号可信的 JSON 文件，或用 /bb-restore 恢复当前账号聊天备份；不要清空站点数据。账号隔离防止扩展误读，不是浏览器加密隔离。</p>
     <p>记忆整理 → 记忆维护 → 联合总结：选择单线及对应里程碑、单线及全部里程碑、全部时间线、全部时间线及全部里程碑，按时间线分别生成建议；无标签节点归入其他。新内容达到阈值只提醒，用户主动点击才调用 AI。事件数量按情节决定；默认每次输出预算 64000，按模型能力调整。</p>
@@ -429,11 +433,11 @@
   </section>
   <div class="hero">
     <header class="hero-card">
-      <p class="eyebrow">BB-Memory v9.5.0</p>
+      <p class="eyebrow">BB-Memory v9.5.1</p>
       <h1>使用说明</h1>
       <p class="lead">BB-Memory 是 SillyTavern 的浏览器端长期记忆扩展。它会把角色扮演里的 NPC、物品、里程碑、时间线、地点、线索、普通记忆和短期场景细节整理成结构化数据，并在生成回复前注入给 AI。</p>
       <div class="meta-row">
-        <span class="pill">适用版本 v9.5.0</span>
+        <span class="pill">适用版本 v9.5.1</span>
         <span class="pill">纯前端扩展</span>
         <span class="pill">无构建步骤</span>
         <span class="pill">数据主要保存在浏览器 IndexedDB</span>
@@ -443,7 +447,7 @@
     <aside class="mock-wrap" aria-label="BB-Memory 在 SillyTavern 扩展设置中的示意图">
       <div class="mock-window">
         <div class="mock-top">
-          <span>BB-Memory v9.5.0</span>
+          <span>BB-Memory v9.5.1</span>
           <span class="soft">扩展设置抽屉</span>
         </div>
         <div class="mock-body">
@@ -496,7 +500,7 @@
     <div class="two-col">
       <div class="panel">
         <ol class="steps">
-          <li><span>在 SillyTavern 进入任意角色聊天，打开右侧扩展设置，展开 <strong>BB-Memory v9.5.0</strong>，确认“启用 BB-Memory”已勾选。</span></li>
+          <li><span>在 SillyTavern 进入任意角色聊天，打开右侧扩展设置，展开 <strong>BB-Memory v9.5.1</strong>，确认“启用 BB-Memory”已勾选。</span></li>
           <li><span>如果是旧聊天或已有存档，先点 <strong>手动提取</strong>，可以输入楼层范围，例如 <code>0-80</code>；留空会提取最近 8 轮。</span></li>
           <li><span>如果是新角色长篇开局，建议先用 <code>tools/bbmemory-initializer.html</code> 外置工具从角色卡、世界书和聊天记录生成导入 JSON，再到“记忆管理”里导入。</span></li>
           <li><span>正常聊天时，BB-Memory 会在生成前检索相关记忆。命中的内容会显示在“命中条目”和悬浮按钮的命中视图里。</span></li>
@@ -505,7 +509,7 @@
       </div>
       <div class="panel">
         <h3>推荐默认用法</h3>
-        <p class="muted">可以先配置 AI 提取 API，保持已有条目变更确认开启。v9.5.0 根据正文与窗口注入上下文提出变更，默认最近 5 条记忆作为补充；日常记忆默认以摘要参与注入。</p>
+        <p class="muted">可以先配置 AI 提取 API，保持已有条目变更确认开启。v9.5.1 根据正文与窗口注入上下文提出变更，默认最近 5 条记忆作为补充；日常记忆默认以摘要参与注入。</p>
         <div class="tag-list">
           <span class="tag">手动提取先跑一遍</span>
           <span class="tag">半自动确认更稳</span>
@@ -1008,7 +1012,7 @@
     <div class="note danger">任何删除、清空、加载存档、批量归档、Agent 写操作前，都建议先导出 JSON 或执行备份。BB-Memory 会尽量给出确认和 toast，但用户侧备份仍是最稳的保险。</div>
   </section>
 
-  <p class="footer">BB-Memory v9.5.0 使用说明。最后更新：2026-10-08。</p>
+  <p class="footer">BB-Memory v9.5.1 使用说明。最后更新：2026-10-13。</p>
 </main>
 </body>
 </html>

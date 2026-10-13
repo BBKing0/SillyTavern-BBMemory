@@ -344,6 +344,18 @@ function normalizeMilestoneEntry(entry = {}) {
     };
 }
 
+/** v9.5.1 现实总结时间只作维护元数据；旧数据不得借用 createdAt/updatedAt。 */
+function normalizeTimelineSummaryTime(value) {
+    const timestamp = Number(value);
+    return Number.isFinite(timestamp) && timestamp > 0 ? Math.trunc(timestamp) : null;
+}
+
+function normalizeTimelineEntry(entry) {
+    if (!entry || typeof entry !== 'object') return entry;
+    entry.lastSummarizedAt = normalizeTimelineSummaryTime(entry.lastSummarizedAt);
+    return entry;
+}
+
 function looksLikeLegacyMilestoneList(data) {
     if (!Array.isArray(data) || !data.length) return false;
     return data.some(entry =>
@@ -910,14 +922,14 @@ export const removeTimelineEntry = removeMilestone;
  * 获取所有时间线
  */
 export async function getTimeline(chatId) {
-    return loadCollection('timeline', chatId);
+    return (await loadCollection('timeline', chatId)).map(normalizeTimelineEntry);
 }
 
 /**
  * 保存时间线（全量替换）
  */
 export async function saveTimeline(chatId, timeline) {
-    await saveCollection('timeline', chatId, timeline);
+    await saveCollection('timeline', chatId, timeline.map(normalizeTimelineEntry));
     scheduleAutoBackup(chatId);
 }
 
@@ -935,6 +947,7 @@ export async function upsertTimeline(chatId, threadData) {
         if (existing) {
             threadData = attachSourceRollback(existing, threadData);
             const { id: _id, createdAt: _ca, ...safe } = threadData;
+            if (safe.lastSummarizedAt !== undefined) safe.lastSummarizedAt = normalizeTimelineSummaryTime(safe.lastSummarizedAt);
             Object.assign(existing, safe);
             existing.updatedAt = now;
             await saveTimeline(chatId, timeline);
@@ -950,6 +963,8 @@ export async function upsertTimeline(chatId, threadData) {
         priority: threadData.priority || 'medium', // high | medium | low
         parentThreadId: threadData.parentThreadId || null,
         summary: threadData.summary || '',        // v7.3.0 时间线一句话总结
+        lastSummarizedAt: normalizeTimelineSummaryTime(threadData.lastSummarizedAt), // v9.5.1 用户采纳总结时记录
+        tags: normalizeTags(threadData.tags || []), // v9.5.1 保留新建/合并时间线的已有标签
         entries: Array.isArray(threadData.entries) ? threadData.entries : [],
         embedding: threadData.embedding || null,
         createdAt: now,
@@ -1711,11 +1726,15 @@ export async function clearAllData(chatId) {
         lf.removeItem('bb_rt_settle_undo_' + chatId),       // v9.3.3 结算撤销快照
         lf.removeItem('bb_joint_summary_draft_chat_' + chatId), // v9.4.9 待审核草稿
         lf.removeItem('bb_extraction_update_drafts_chat_' + chatId), // v9.5.0 提取变更待审核草稿
+        lf.removeItem('bb_timeline_organization_draft_chat_' + chatId), // v9.5.1 兼容未分模式草稿
+        lf.removeItem('bb_timeline_organization_draft_chat_' + chatId + '_tags'),
+        lf.removeItem('bb_timeline_organization_draft_chat_' + chatId + '_merge'),
+        lf.removeItem('bb_timeline_organization_draft_latest_chat_' + chatId),
     ]);
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.5.0',
+        version: '9.5.1',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2102,7 +2121,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
         realtime,
     };
     const backup = {
-        version: '9.5.0',
+        version: '9.5.1',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2786,6 +2805,7 @@ function normalizeImportedEntry(type, raw, options = {}) {
         }
     } else if (type === 'threads' || type === 'timeline') {
         entry.entries = normalizeImportedThreadEntries(entry.entries);
+        entry.lastSummarizedAt = normalizeTimelineSummaryTime(entry.lastSummarizedAt);
     } else if (['npc', 'item', 'milestone'].includes(type)) {
         entry.memoryTier = normalizeStableTier(entry.memoryTier, forceStable);
         if (type === 'milestone') entry.injectionMode = entry.injectionMode === 'vector' ? 'vector' : 'resident';
@@ -2873,6 +2893,8 @@ function mergeImportedEntryInPlace(type, base, incoming, options = {}) {
             changed = true;
         }
     } else if (type === 'threads' || type === 'timeline') {
+        const lastSummarizedAt = Math.max(normalizeTimelineSummaryTime(base.lastSummarizedAt) || 0, normalized.lastSummarizedAt || 0) || null;
+        if (lastSummarizedAt !== base.lastSummarizedAt) { base.lastSummarizedAt = lastSummarizedAt; changed = true; }
         const entries = mergeUniqueObjects(base.entries, normalized.entries, e => `${e.period || ''}|${e.event || ''}|${e.status || ''}`);
         if (entries.length !== (base.entries || []).length) changed = true;
         base.entries = entries;
@@ -2903,7 +2925,7 @@ export async function exportMemories(chatId) {
     await normalizeDataEmbeddingsToRefs(chatId, data);
     const vectorPack = await buildVectorPack(chatId, data);
     return JSON.stringify({
-        version: '9.5.0',
+        version: '9.5.1',
         schema: 'bb-memory-vector-ref-v1',
         exportedAt: Date.now(),
         data: stripRuntimeEmbeddings(data),

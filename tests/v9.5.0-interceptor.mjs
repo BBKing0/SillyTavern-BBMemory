@@ -151,7 +151,7 @@ try {
             assert.deepEqual(await page.evaluate(key=>getSettings()[key],key),value);
         }
         await page.locator('#bb_export_extract_settings_btn').evaluate(el=>el.click());
-        const exported=await page.evaluate(()=>JSON.parse(settingsDownload.text));assert.equal(exported.version,'9.5.0');
+        const exported=await page.evaluate(()=>JSON.parse(settingsDownload.text));assert.equal(exported.version,JSON.parse(readFileSync(new URL('../manifest.json',import.meta.url),'utf8')).version);
         for(const [key,,,value] of controls)assert.deepEqual(exported.settings[key],value);
         assert.equal(exported.settings.timelineSummaryScope,'all_with_milestones');assert.ok(Object.hasOwn(exported.settings,'timelineSummaryTimelineId'));
         const imported={type:'bb-memory-settings',settings:{extractionUpdateConfirm:true,extractionRecentMemoryCount:0,timelineSummaryReminderExchanges:1,dailyMemoryScoreMultiplier:0,dailyMemoryFullSimilarity:1,eventTimeOrder:'太阳纪元\n银月纪元',timelineSummaryScope:'selected_all',timelineSummaryTimelineId:'chosen-line'}};
