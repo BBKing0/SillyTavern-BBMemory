@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+const version = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8')).version;
 
 const bank = new Map();
 const localforage = {
@@ -34,7 +37,7 @@ await test('旧设置自动补充默认值，新增设置限制枚举和数值�
     assert.equal(store.getSettings().eternalInjectionMode, 'matched');
     assert.equal(store.getSettings().eternalUnmatchedMode, 'none');
     assert.equal(store.getSettings().eternalMatchThreshold, 0.62);
-    assert.equal(store.getSettings().realtimeInjectionDepth, 2);
+    assert.equal(store.getSettings().realtimeInjectionDepth, 1);
     store.updateSettings({ eternalInjectionMode: 'invalid', eternalUnmatchedMode: 'invalid', eternalMatchThreshold: 2, realtimeInjectionDepth: 150 });
     assert.equal(store.getSettings().eternalInjectionMode, 'matched');
     assert.equal(store.getSettings().eternalUnmatchedMode, 'none');
@@ -47,17 +50,17 @@ await test('旧设置自动补充默认值，新增设置限制枚举和数值�
     assert.equal(store.getSettings().realtimeInjectionDepth, 1);
     store.updateSettings({ eternalMatchThreshold: 'bad', realtimeInjectionDepth: 'bad' });
     assert.equal(store.getSettings().eternalMatchThreshold, 0.62);
-    assert.equal(store.getSettings().realtimeInjectionDepth, 2);
+    assert.equal(store.getSettings().realtimeInjectionDepth, 1);
     for (const empty of [null, undefined, '', '  ']) {
         store.updateSettings({ eternalMatchThreshold: empty, realtimeInjectionDepth: empty });
         assert.equal(store.getSettings().eternalMatchThreshold, 0.62);
-        assert.equal(store.getSettings().realtimeInjectionDepth, 2);
+        assert.equal(store.getSettings().realtimeInjectionDepth, 1);
         // getSettings 也覆盖旧配置/外部设置直接赋值的读取路径。
         const settings = ctx.extensionSettings.bb_memory;
         settings.eternalMatchThreshold = empty;
         settings.realtimeInjectionDepth = empty;
         assert.equal(store.getSettings().eternalMatchThreshold, 0.62);
-        assert.equal(store.getSettings().realtimeInjectionDepth, 2);
+        assert.equal(store.getSettings().realtimeInjectionDepth, 1);
     }
 });
 
@@ -80,7 +83,7 @@ await test('新建和修改保留逐条优先级，缺省或非法值规范化�
 let exported;
 await test('JSON 导出导入往返全部优先级，重复导入保留当前用户选择', async () => {
     exported = JSON.parse(await store.exportMemories(ctx.chatId));
-    assert.equal(exported.version, '9.5.2');
+    assert.equal(exported.version, version);
     assert.deepEqual(exported.data.memories.map(memory => memory.eternalInjectionPriority), values);
     await store.importMemories('json952', JSON.stringify(exported));
     assert.deepEqual(await getPriorities('json952'), values);
@@ -108,7 +111,7 @@ await test('聊天服务器备份恢复保留全部优先级', async () => {
     const backupResult = await store.exportMemoriesToChatMetadata(ctx.chatId);
     assert.equal(backupResult.skipped, false);
     const backup = JSON.parse(ctx.chatMetadata.bb_memory_v5_backup);
-    assert.equal(backup.version, '9.5.2');
+    assert.equal(backup.version, version);
     assert.deepEqual(backup.data.memories.map(memory => memory.eternalInjectionPriority), values);
     const restored = await store.importMemoriesFromChatMetadata('metadata952');
     assert.equal(restored.restored, 3);

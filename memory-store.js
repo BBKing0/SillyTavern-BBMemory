@@ -196,7 +196,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     realtimeSceneChangeSettle: true,   // 场景切换时结算上一场景的条目
     realtimeInjectionMax: 15,          // 注入条数硬上限
     realtimeInjectionTokenCap: 300,    // 注入 token 硬上限（不依赖全局预算，必须自带）
-    realtimeInjectionDepth: 2,        // v9.5.2 默认比用户输入深一层；1=原位置，数值越大越靠前
+    realtimeInjectionDepth: 1,        // v9.5.3 上一条 AI → 实时细节 → 最新用户；数值越大越靠前
     realtimePromotionMode: 'disabled', // 仅兼容旧配置；v9.4.8 写入层强制禁止晋升
     realtimeSettleMode: 'auto',        // 'auto' 自动结算 | 'manual' 仅手动结算
     // v9.4.3 全库整理：只允许用户主动启动，所有建议进入审核窗口。
@@ -270,11 +270,19 @@ function getContext() {
 // ═══ 设置管理 ═══
 
 export function getSettings() {
-    const { extensionSettings } = getContext();
+    const ctx = getContext();
+    const { extensionSettings } = ctx;
     if (!extensionSettings[MODULE_NAME]) {
         extensionSettings[MODULE_NAME] = structuredClone(DEFAULT_SETTINGS);
     }
     const s = extensionSettings[MODULE_NAME];
+    // 一次性修正 v9.5.2 的默认深度；后续用户手动设置 2 不再被覆盖。
+    // 缺失字段由新默认补齐，其它有效自定义深度原样保留。
+    const migrateRealtimeDepth = s.realtimeDepthV953 !== true;
+    if (migrateRealtimeDepth) {
+        if (Number(s.realtimeInjectionDepth) === 2) s.realtimeInjectionDepth = DEFAULT_SETTINGS.realtimeInjectionDepth;
+        s.realtimeDepthV953 = true;
+    }
     // 只升级旧默认输出预算，保留用户自定义值；旧目标事件数字段停止使用。
     if (!s.jointSummaryV949) {
         if (s.timelineCompressionMaxTokens === 3000) s.timelineCompressionMaxTokens = 64000;
@@ -296,6 +304,7 @@ export function getSettings() {
         if (Number.isFinite(oldMax)) s.maxActiveTimeline = oldMax;
     }
     normalizeInjectionSettings(s);
+    if (migrateRealtimeDepth && typeof ctx.saveSettingsDebounced === 'function') ctx.saveSettingsDebounced();
     return s;
 }
 
@@ -1758,7 +1767,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.5.2',
+        version: '9.5.3',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2145,7 +2154,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
         realtime,
     };
     const backup = {
-        version: '9.5.2',
+        version: '9.5.3',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2955,7 +2964,7 @@ export async function exportMemories(chatId) {
     await normalizeDataEmbeddingsToRefs(chatId, data);
     const vectorPack = await buildVectorPack(chatId, data);
     return JSON.stringify({
-        version: '9.5.2',
+        version: '9.5.3',
         schema: 'bb-memory-vector-ref-v1',
         exportedAt: Date.now(),
         data: stripRuntimeEmbeddings(data),

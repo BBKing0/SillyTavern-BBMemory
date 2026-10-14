@@ -2,7 +2,7 @@ import { userStorageKey, initializeUserStorage, watchUserSession } from './user-
 import { openMemoryOrganization, configureMemoryOrganization } from './memory-organization.js';
 import { captureInjectionContext, initInjectionContextTracking } from './extraction-context.js';
 /**
- * index.js —— BB-Memory v9.5.2 主入口
+ * index.js —— BB-Memory v9.5.3 主入口
  *
  * 五柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目 / 实时记忆。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -106,12 +106,13 @@ function getLongTermInjectionDepth(chat) {
     return Math.min(MAX_IN_CHAT_DEPTH, Math.max(1, chatLength));
 }
 
-// ST 的 in-chat 深度越大，位置越靠前；默认比 v9.5.1 的 depth=1 再深一层。
+// ST 的 in-chat 深度按聊天消息计算，预设尾部不在此计数中。
+// depth=1 位于上一条 AI 回复之后、最新用户输入之前；越大越靠历史前方。
 // 短聊天不在这里缩小深度，ST 会把超出历史长度的位置放到历史顶部。
 function getRealtimeInjectionDepth(settings) {
     const configured = settings?.realtimeInjectionDepth;
-    const depth = configured == null || configured === '' ? 2 : Number(configured);
-    return Math.min(100, Math.max(1, Number.isFinite(depth) ? Math.floor(depth) : 2));
+    const depth = configured == null || configured === '' ? 1 : Number(configured);
+    return Math.min(100, Math.max(1, Number.isFinite(depth) ? Math.floor(depth) : 1));
 }
 
 // ═══ 全局状态 ═══
@@ -126,7 +127,7 @@ let chatSwitchSuppressDeletesUntil = 0;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.5.2';
+const SETTINGS_EXPORT_VERSION = '9.5.3';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'extractionUpdateConfirm', 'extractionRecentMemoryCount', 'dailyMemoryScoreMultiplier', 'dailyMemoryFullSimilarity', 'eventTimeOrder', 'timelineSummaryScope', 'timelineSummaryTimelineId', 'timelineSummaryReminderExchanges',
@@ -474,6 +475,16 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         worldRealWorldRef: getCharacterWorldRealWorldRef(settings),
     };
 
+    // ST 在拦截器之前过滤隐藏消息，再异步生成副本；期间旧轮提取可能完成。
+    // 这里只裁掉带完成/插件隐藏标记的生成副本。仅设 is_system 不会让
+    // Chat Completion 再次过滤；副本索引也不能用于修改原聊天楼层或 DOM。
+    for (let i = chat.length - 1; i >= 0; i--) {
+        const msg = chat[i];
+        const pluginHidden = msg?._bbmem_hideSource === 'plugin'
+            && (msg.is_system === true || msg._bbmem_autoHidden === true);
+        if (msg?._bbmem_extracted === true || pluginHidden) chat.splice(i, 1);
+    }
+
     // v8.2.1 检测重roll：chat 末尾已是 AI 消息 → 正在覆盖已有回复
     let isReroll = false;
     for (let i = chat.length - 1; i >= 0; i--) {
@@ -492,22 +503,6 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         }
     }
     if (!userMessage) { clearInjection(); return chat; }
-
-    // 2. 上下文隐藏安全网 —— 用 ST 原生 is_system 隐藏已提取消息
-    let hideChanged = false;
-    for (let i = 0; i < chat.length; i++) {
-        const msg = chat[i];
-        if (msg?._bbmem_extracted) {
-            hideChanged = setPluginHiddenState(msg, i, true) || hideChanged;
-        }
-    }
-    if (hideChanged) {
-        try {
-            if (typeof ctx.saveChatConditional === 'function') ctx.saveChatConditional();
-            else if (typeof ctx.saveChatDebounced === 'function') ctx.saveChatDebounced();
-            else if (typeof ctx.saveChat === 'function') ctx.saveChat();
-        } catch { /* ignore */ }
-    }
 
     // 3. 迁移检查
     if (!settings.migratedFromV4) {
@@ -666,8 +661,8 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
 
     if (realtimeText.trim()) {
         const realtimeInjectionText = `<BBMemory>\n${realtimeText.trim()}\n</BBMemory>`;
-        // v9.5.2 默认 depth=2：实时细节再向前移动一条聊天消息，给用户输入留在更下方。
-        // 保留独立的 system 注入，不调整用户消息或预设尾部本身的顺序。
+        // v9.5.3 默认 depth=1：上一条 AI → 实时细节 → 最新用户 → 预设尾部。
+        // 预设尾部由 ST 随后处理，不计入聊天深度；仅注册独立 system 注入。
         ctx.setExtensionPrompt(REALTIME_INJECTION_KEY, realtimeInjectionText, POSITION_IN_CHAT,
             getRealtimeInjectionDepth(injectionSettings), false, ROLE_SYSTEM);
     } else {
@@ -759,7 +754,7 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         }
     }
 
-    // ST 原生跳过 is_system 消息，已由 syncMessageVisibility 处理
+    // 原聊天隐藏由 syncMessageVisibility 处理，竞态产生的隐藏副本已在入口移除。
 
     return chat;
 };
@@ -4696,7 +4691,7 @@ async function handleFloatingMenuAction(action) {
 async function init() {
     try { await initializeUserStorage(); watchUserSession(); }
     catch (error) { showToast(error.message, 'error'); _bbInitCalled = false; return; }
-    console.log('[BB-Memory] v9.5.2 初始化开始...');
+    console.log('[BB-Memory] v9.5.3 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -4893,7 +4888,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.5.2 初始化完成');
+    console.log('[BB-Memory] v9.5.3 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆

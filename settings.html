@@ -1,7 +1,7 @@
 <div class="bb-memory-settings" id="bb_memory_root">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>BB-Memory v9.5.2</b>
+            <b>BB-Memory v9.5.3</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -619,8 +619,8 @@
 
                     <div class="bb-mem-sidebar-section">
                         <label for="bb_realtime_injection_depth">实时细节注入深度</label>
-                        <small class="bb-mem-hint">默认 2：实时细节 → 用户输入 → 预设尾部。1 为旧位置；数值越大，细节越靠前。实际顺序也受当前预设影响。</small>
-                        <input id="bb_realtime_injection_depth" type="number" class="bb-input" min="1" max="100" step="1" value="2" />
+                        <small class="bb-mem-hint">默认 1：上一条 AI 回复 → 实时细节 → 最新用户输入 → 预设尾部。深度只计算聊天消息；数值越大，细节越靠前。升级时旧值 2 会一次性修正为 1，其它自定义值保留。</small>
+                        <input id="bb_realtime_injection_depth" type="number" class="bb-input" min="1" max="100" step="1" value="1" />
                     </div>
 
                     <div class="bb-mem-sidebar-section">
