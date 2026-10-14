@@ -77,6 +77,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
     tokenBudgetMode: 'resident_unlimited', // 'resident_unlimited' | 'strict_total'
     maxResults: 10,
     minScoreThreshold: 0.05,
+    // v9.5.2 仅控制 Relevant_Memories 中的永恒记忆条目，其他柱沿用原规则。
+    eternalInjectionMode: 'matched', // 'matched' 相关时全文 | 'all' 全部全文 | 'priority' 逐条优先级
+    eternalUnmatchedMode: 'none',    // 'summary' 未命中摘要 | 'none' 未命中不注入（matched 模式）
+    eternalMatchThreshold: 0.62,     // 永恒记忆的语义相关阈值，独立于等级/重要性加分
     // v8.0.0 各柱注入上限（独立于 maxResults，后者仅控制记忆条目）
     npcInjectionMax: 8,
     itemInjectionMax: 5,
@@ -192,6 +196,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     realtimeSceneChangeSettle: true,   // 场景切换时结算上一场景的条目
     realtimeInjectionMax: 15,          // 注入条数硬上限
     realtimeInjectionTokenCap: 300,    // 注入 token 硬上限（不依赖全局预算，必须自带）
+    realtimeInjectionDepth: 2,        // v9.5.2 默认比用户输入深一层；1=原位置，数值越大越靠前
     realtimePromotionMode: 'disabled', // 仅兼容旧配置；v9.4.8 写入层强制禁止晋升
     realtimeSettleMode: 'auto',        // 'auto' 自动结算 | 'manual' 仅手动结算
     // v9.4.3 全库整理：只允许用户主动启动，所有建议进入审核窗口。
@@ -290,12 +295,14 @@ export function getSettings() {
         const oldMax = Number(s.maxActiveThreads);
         if (Number.isFinite(oldMax)) s.maxActiveTimeline = oldMax;
     }
+    normalizeInjectionSettings(s);
     return s;
 }
 
 export function updateSettings(patch) {
     const s = getSettings();
     Object.assign(s, patch);
+    normalizeInjectionSettings(s);
     const ctx = getContext();
     if (typeof ctx.saveSettingsDebounced === 'function') ctx.saveSettingsDebounced();
     return s;
@@ -315,6 +322,21 @@ function normalizeHitScore(value) {
 
 function defaultActiveTier(value) {
     return value || 'stable';
+}
+
+function normalizeEternalInjectionPriority(value) {
+    return ['always', 'summary', 'matched'].includes(value) ? value : 'matched';
+}
+
+function normalizeInjectionSettings(settings) {
+    if (!['matched', 'all', 'priority'].includes(settings.eternalInjectionMode)) settings.eternalInjectionMode = DEFAULT_SETTINGS.eternalInjectionMode;
+    if (!['summary', 'none'].includes(settings.eternalUnmatchedMode)) settings.eternalUnmatchedMode = DEFAULT_SETTINGS.eternalUnmatchedMode;
+    const thresholdInput = settings.eternalMatchThreshold;
+    const threshold = thresholdInput == null || (typeof thresholdInput === 'string' && !thresholdInput.trim()) ? NaN : Number(thresholdInput);
+    settings.eternalMatchThreshold = Number.isFinite(threshold) ? Math.max(0, Math.min(1, threshold)) : DEFAULT_SETTINGS.eternalMatchThreshold;
+    const depthInput = settings.realtimeInjectionDepth;
+    const depth = depthInput == null || (typeof depthInput === 'string' && !depthInput.trim()) ? NaN : Number(depthInput);
+    settings.realtimeInjectionDepth = Number.isFinite(depth) ? Math.max(1, Math.min(100, Math.trunc(depth))) : DEFAULT_SETTINGS.realtimeInjectionDepth;
 }
 
 function normalizeCollectionType(type) {
@@ -1035,6 +1057,7 @@ export async function addMemory(chatId, data) {
         hitCount: data.hitCount || 0,
         hitScore: normalizeHitScore(data.hitScore),
         memoryTier: defaultActiveTier(data.memoryTier),
+        eternalInjectionPriority: normalizeEternalInjectionPriority(data.eternalInjectionPriority),
         category: data.category || null,
         archived: data.archived || false,
         relatedMemoryIds: Array.isArray(data.relatedMemoryIds) ? data.relatedMemoryIds : [],
@@ -1066,6 +1089,7 @@ export async function updateMemory(chatId, id, patch) {
     patch = attachSourceRollback(entry, patch);
     const { id: _id, createdAt: _ca, ...safe } = patch;
     Object.assign(entry, safe);
+    entry.eternalInjectionPriority = normalizeEternalInjectionPriority(entry.eternalInjectionPriority);
     entry.updatedAt = Date.now();
     if (patch.importance !== undefined) {
         entry.importance = Math.max(0, Math.min(1, patch.importance));
@@ -1734,7 +1758,7 @@ export async function clearAllData(chatId) {
     const ctx = getContext();
     if (!ctx.chatMetadata) ctx.chatMetadata = {};
     ctx.chatMetadata[BACKUP_METADATA_KEY] = JSON.stringify({
-        version: '9.5.1',
+        version: '9.5.2',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2121,7 +2145,7 @@ export async function exportMemoriesToChatMetadata(chatId, options = {}) {
         realtime,
     };
     const backup = {
-        version: '9.5.1',
+        version: '9.5.2',
         schema: 'bb-memory-vector-ref-v1',
         timestamp: Date.now(),
         embeddingsIncluded: false,
@@ -2799,6 +2823,7 @@ function normalizeImportedEntry(type, raw, options = {}) {
         entry.content = (entry.content || entry.summary || entry.title || '').trim();
         entry.hiddenNotes = Array.isArray(entry.hiddenNotes) ? entry.hiddenNotes : [];
         entry.memoryTier = normalizeStableTier(entry.memoryTier || entry.tier, forceStable);
+        entry.eternalInjectionPriority = normalizeEternalInjectionPriority(entry.eternalInjectionPriority);
         if (forceStable) {
             if (entry.status === 'archived' && entry.archived !== true) entry.status = 'active';
             entry.archived = entry.archived === true ? true : false;
@@ -2872,6 +2897,11 @@ function mergeImportedEntryInPlace(type, base, incoming, options = {}) {
         changed = true;
     }
     if (type === 'mem') {
+        // 旧条目没有选择时接纳导入值；已有有效选择优先，重复/旧版导入不得重置用户设置。
+        if (!['always', 'summary', 'matched'].includes(base.eternalInjectionPriority)) {
+            base.eternalInjectionPriority = normalized.eternalInjectionPriority;
+            changed = true;
+        }
         if (tierRank(normalized.memoryTier) > tierRank(base.memoryTier)) {
             base.memoryTier = normalized.memoryTier;
             changed = true;
@@ -2925,7 +2955,7 @@ export async function exportMemories(chatId) {
     await normalizeDataEmbeddingsToRefs(chatId, data);
     const vectorPack = await buildVectorPack(chatId, data);
     return JSON.stringify({
-        version: '9.5.1',
+        version: '9.5.2',
         schema: 'bb-memory-vector-ref-v1',
         exportedAt: Date.now(),
         data: stripRuntimeEmbeddings(data),

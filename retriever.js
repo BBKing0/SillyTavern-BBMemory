@@ -311,6 +311,114 @@ function embeddingSimilarity(entry, queryEmbedding) {
     return cosineSimilarity(queryEmbedding, entry.embedding);
 }
 
+function eternalInjectionRule(memory, settings = getSettings()) {
+    if (settings.eternalInjectionMode === 'all') return 'always';
+    if (settings.eternalInjectionMode === 'priority') {
+        return ['always', 'summary', 'matched'].includes(memory.eternalInjectionPriority)
+            ? memory.eternalInjectionPriority : 'matched';
+    }
+    return settings.eternalUnmatchedMode === 'summary' ? 'summary' : 'matched';
+}
+
+function eternalMatchThreshold(settings) {
+    const value = Number(settings.eternalMatchThreshold);
+    return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0.62;
+}
+
+function eternalInjectionDecision(memory, matched, settings) {
+    const rule = eternalInjectionRule(memory, settings);
+    return {
+        matched,
+        resident: rule === 'always',
+        level: rule === 'always' || matched ? 'L3' : (rule === 'summary' ? 'L2' : null),
+    };
+}
+
+// 只用于永恒记忆的真实关键词证据；代词/提问词不能让整批历史正文误命中。
+const ETERNAL_MATCH_STOP_WORDS = new Set([
+    '我们', '你们', '他们', '她们', '它们', '咱们', '自己', '现在', '目前', '今天',
+    '什么', '怎么', '如何', '哪里', '为何', '是否', '这里', '那里', '这个', '那个',
+    '这些', '那些', '时候', '已经', '一起', '一直', '一下', '一些', '一个', '任何',
+    '可以', '应该', '可能', '继续', '然后', '但是', '因为', '所以', '还是', '就是',
+    '不是', '没有', '不会', '不要', '想要', '想起', '知道', '觉得', '告诉', '请问',
+    '好的', '好吧', '看看', '看到', '其实', '最近', 'the', 'and', 'or', 'we', 'us',
+    'our', 'you', 'your', 'they', 'their', 'them', 'he', 'she', 'it', 'its', 'is', 'am',
+    'are', 'was', 'were', 'be', 'been', 'do', 'does', 'did', 'for', 'with', 'from',
+    'of', 'to', 'in', 'on', 'at', 'as', 'have', 'has', 'had', 'can', 'could', 'would',
+    'should', 'will', 'just', 'then', 'than', 'let', 'lets', 'tell', 'please', 'about',
+    'this', 'that', 'these', 'those', 'here', 'there', 'now', 'what', 'who', 'whom',
+    'why', 'how', 'when', 'where', 'because', 'some', 'any', 'all', 'but', 'not', 'yes',
+]);
+
+/**
+ * 永恒记忆的保存层级与注入方式分离。命中只接受文本/实体或向量证据，
+ * 不接受层级、时效分或实体展开链路产生的分数加成。
+ * 非永恒及日常记忆返回 null；永恒未命中且不注入时 level 为 null。
+ */
+export function getEternalMemoryInjection(memory, queryText = '', queryEmbedding = null, settings = getSettings()) {
+    if (memory?.memoryTier !== 'eternal' || isDailyMemory(memory)) return null;
+    const query = String(queryText || '').trim();
+    let matched = false;
+    if (query) {
+        const similarity = embeddingSimilarity(memory, queryEmbedding);
+        matched = similarity > 0 && similarity >= eternalMatchThreshold(settings);
+        if (!matched) {
+            const entities = Array.isArray(memory.entities) ? memory.entities : [];
+            const tags = Array.isArray(memory.tags) ? memory.tags : [];
+            const keywords = Array.isArray(memory.keywords) ? memory.keywords : [];
+            const pool = [
+                memory.content, memory.title, memory.summary, memory.subject, memory.target,
+                ...keywords,
+                ...tags.map(tag => typeof tag === 'string' ? tag : tag?.name),
+                ...entities.map(entity => typeof entity === 'string' ? entity : entity?.name || entity?.value),
+            ].filter(Boolean).map(value => String(value).toLowerCase()).join(' ');
+            matched = extractEntityHints(query).some(hint => !ETERNAL_MATCH_STOP_WORDS.has(hint) && pool.includes(hint));
+        }
+    }
+    return eternalInjectionDecision(memory, matched, settings);
+}
+
+function isResidentMemory(memory, settings = getSettings()) {
+    if (!memory || isDailyMemory(memory)) return false;
+    if (memory.memoryTier === 'eternal') return eternalInjectionRule(memory, settings) === 'always';
+    return isResidentEntry(memory);
+}
+
+function normalizeRelevantMemoryResults(results, queryText, queryEmbedding, settings, sortScores = true) {
+    const seen = new Set();
+    const normalized = [];
+    for (const result of results || []) {
+        const memory = result?.memory;
+        if (!memory || isArchived(memory) || memory.memoryTier === 'archived' || memory.status === 'deleted' || !matchesActiveCategory(memory, settings)) continue;
+        if (memory.id && seen.has(memory.id)) continue;
+        const eternalInjection = getEternalMemoryInjection(memory, queryText, queryEmbedding, settings);
+        if (eternalInjection && !eternalInjection.level) continue;
+        if (memory.id) seen.add(memory.id);
+        normalized.push({
+            ...result,
+            level: eternalInjection?.level || result.level,
+            resident: isResidentMemory(memory, settings),
+            ...(eternalInjection ? { eternalInjection } : {}),
+        });
+    }
+    normalized.sort((a, b) => {
+        // 全文优先于未命中摘要；相同组内继续使用现有检索评分。
+        const rank = result => result.resident ? 0 : (result.eternalInjection?.level === 'L2' ? 2 : 1);
+        return rank(a) - rank(b) || (sortScores ? (b.score || 0) - (a.score || 0) : 0);
+    });
+    return normalized;
+}
+
+function limitRelevantMemoryResults(results, maxResults, ordinaryAllowance = 0) {
+    const value = Number(maxResults);
+    const limit = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 10;
+    const residents = results.filter(result => result.resident);
+    const nonResidents = results.filter(result => !result.resident);
+    // 没有按需永恒记忆的轮次保留原来的实体展开余量，避免改变普通记忆行为。
+    const ceiling = nonResidents.some(result => result.eternalInjection) ? limit : limit + ordinaryAllowance;
+    return [...residents, ...nonResidents.slice(0, ceiling)];
+}
+
 function entryTextMatches(entry, queryText, fields = [], queryEmbedding = null, semanticThreshold = 0.62) {
     if (!entry || !queryText?.trim()) return false;
     if (embeddingSimilarity(entry, queryEmbedding) >= semanticThreshold) return true;
@@ -404,14 +512,17 @@ function dailyScoreMultiplier(memory) {
     return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0.35;
 }
 
-export function chooseInjectionLevel(memory, score, queryMatched = false, similarity = 0) {
+export function chooseInjectionLevel(memory, score, queryMatched = false, similarity = 0, settings = getSettings()) {
     if (isDailyMemory(memory)) {
-        const value = Number(getSettings().dailyMemoryFullSimilarity);
+        const value = Number(settings.dailyMemoryFullSimilarity);
         const threshold = Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0.95;
         return similarity > 0 && similarity >= threshold ? 'L3' : 'L2';
     }
     if (memory.memoryTier === 'transient') return 'L2';
-    if (memory.memoryTier === 'eternal' || memory.memoryTier === 'core') return 'L4';
+    if (memory.memoryTier === 'eternal') {
+        return eternalInjectionDecision(memory, queryMatched || (similarity > 0 && similarity >= eternalMatchThreshold(settings)), settings).level;
+    }
+    if (memory.memoryTier === 'core') return 'L4';
     if (score >= 0.55 || (memory.verbatim && queryMatched)) return 'L3';
     if (score >= 0.30) return 'L2';
     return 'L1';
@@ -423,12 +534,15 @@ export function chooseInjectionLevel(memory, score, queryMatched = false, simila
 
 export function getRelevantMemories(memories, queryText, options = {}) {
     const {
-        maxResults = 10, minScore = 0.05, queryEmbedding = null,
+        maxResults = 10, minScore = 0.05, queryEmbedding = null, settings = getSettings(),
     } = options;
 
-    if (!memories.length || !queryText.trim()) return [];
+    if (!memories?.length) return [];
+    queryText = String(queryText || '').trim();
 
-    let candidates = memories.filter(m => !isArchived(m) && m.status !== 'deleted' && matchesActiveCategory(m));
+    let candidates = memories.filter(m => !isArchived(m) && m.memoryTier !== 'archived' && m.status !== 'deleted' && matchesActiveCategory(m, settings));
+    // 空查询不能算命中；明确选择常驻/未命中摘要的永恒记忆仍可进入候选。
+    if (!queryText) candidates = candidates.filter(m => getEternalMemoryInjection(m, '', null, settings)?.level);
 
     if (!candidates.length) return [];
 
@@ -451,51 +565,49 @@ export function getRelevantMemories(memories, queryText, options = {}) {
 
     const scored = [];
     for (const memory of candidates) {
-        const queryMatched = memoryMatchesQueryEntities(memory, queryText);
+        const eternalInjection = getEternalMemoryInjection(memory, queryText, queryEmbedding, settings);
+        if (eternalInjection && !eternalInjection.level) continue;
+        const queryMatched = eternalInjection ? eternalInjection.matched : memoryMatchesQueryEntities(memory, queryText);
         const { total, breakdown } = calculateMemoryScore(memory, queryText, {}, queryEmbedding);
         const fuseBoost = (fuseBoostMap.get(memory.id) || 0) * dailyScoreMultiplier(memory);
         let finalScore = Math.min(1.0, total + fuseBoost);
         finalScore = Math.min(1.0, finalScore * tierScoreMultiplier(memory, queryMatched));
 
-        if (finalScore >= minScore) {
+        if (eternalInjection || finalScore >= minScore) {
             scored.push({
                 memory,
                 score: finalScore,
                 breakdown,
-                level: chooseInjectionLevel(memory, finalScore, queryMatched, breakdown.embedding),
+                level: eternalInjection?.level || chooseInjectionLevel(memory, finalScore, queryMatched, breakdown.embedding, settings),
             });
         }
     }
 
-    scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, maxResults);
+    return limitRelevantMemoryResults(normalizeRelevantMemoryResults(scored, queryText, queryEmbedding, settings), maxResults);
 }
 
 /**
  * 实体展开：合并关联记忆
  */
-export function mergeExpandedRelevantResults(memories, queryText, relevantResults, excludeIds, expandLimit = 12, maxResults = 10, queryEmbedding = null) {
+export function mergeExpandedRelevantResults(memories, queryText, relevantResults, excludeIds, expandLimit = 12, maxResults = 10, queryEmbedding = null, settings = getSettings()) {
     const expanded = expandEntityMemories(memories, queryText, excludeIds, expandLimit);
     const merged = [...relevantResults];
 
     for (const m of expanded) {
-        const queryMatched = true;
+        const eternalInjection = getEternalMemoryInjection(m, queryText, queryEmbedding, settings);
+        if (eternalInjection && !eternalInjection.level) continue;
+        const queryMatched = eternalInjection ? eternalInjection.matched : true;
         const { total } = calculateMemoryScore(m, queryText, {}, queryEmbedding);
         let score = Math.min(1.0, Math.max(total, 0.55 * dailyScoreMultiplier(m)));
         score = Math.min(1.0, score * tierScoreMultiplier(m, queryMatched));
         merged.push({
             memory: m,
             score,
-            level: chooseInjectionLevel(m, score, queryMatched, embeddingSimilarity(m, queryEmbedding)),
+            level: eternalInjection?.level || chooseInjectionLevel(m, score, queryMatched, embeddingSimilarity(m, queryEmbedding), settings),
         });
     }
 
-    merged.sort((a, b) => b.score - a.score);
-    const limit = Math.max(0, Number(maxResults) || 10);
-    const ceiling = limit + Math.ceil(limit * 0.3);
-    const residents = merged.filter(r => !isDailyMemory(r.memory) && isResidentEntry(r.memory));
-    const rest = merged.filter(r => isDailyMemory(r.memory) || !isResidentEntry(r.memory));
-    return [...residents, ...rest.slice(0, ceiling)];
+    return limitRelevantMemoryResults(normalizeRelevantMemoryResults(merged, queryText, queryEmbedding, settings), maxResults, Math.ceil((Number(maxResults) || 10) * 0.3));
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -507,8 +619,7 @@ export function mergeExpandedRelevantResults(memories, queryText, relevantResult
  * activeCategory 为空时不过滤（显示全部）
  * activeCategory 有值时：只显示 category===null（通用）或 category===activeCategory（匹配分类）
  */
-function matchesActiveCategory(entry) {
-    const settings = getSettings();
+function matchesActiveCategory(entry, settings = getSettings()) {
     const enabled = settings.enabledCategories || {};
     const hasEnabled = Object.values(enabled).some(v => v === true);
     // 没有开启任何分类 → 显示全部
@@ -786,13 +897,15 @@ function isRecentSourceMemory(m, chatLength = 0, settings = getSettings()) {
 
 function formatMemoryLine(m, chatLength = 0, level = 'L2', settings = getSettings()) {
     const daily = isDailyMemory(m);
-    const isResident = !daily && isResidentEntry(m);
+    const eternal = !daily && m.memoryTier === 'eternal';
+    const isResident = isResidentMemory(m, settings);
     const isFuzzy = !daily && m.memoryTier === 'transient' && !isResident;
     const recentFull = isRecentSourceMemory(m, chatLength, settings);
-    const shouldUseFull = daily ? level === 'L3' : !isFuzzy && (isResident || recentFull || level === 'L3' || level === 'L4');
+    // 永恒摘要不能被“近期来源”或旧 resident 字段升级成全文。
+    const shouldUseFull = daily || eternal ? level === 'L3' : !isFuzzy && (isResident || recentFull || level === 'L3' || level === 'L4');
     let content = '';
 
-    if (daily && !shouldUseFull) {
+    if ((daily || eternal) && !shouldUseFull) {
         content = m.summary || buildDefaultIndexCard(m) || String(m.content || '').slice(0, 120);
     } else if (isFuzzy) {
         content = m.summary || buildDefaultIndexCard(m) || (m.content || '').slice(0, 120);
@@ -806,7 +919,7 @@ function formatMemoryLine(m, chatLength = 0, level = 'L2', settings = getSetting
         content = m.content || m.summary;
     }
     const date = String(m.storyTime || m.date || m.time || '时间未明').trim();
-    const dialogue = daily && !shouldUseFull ? '' : String(m.verbatim || '').trim();
+    const dialogue = (daily || eternal) && !shouldUseFull ? '' : String(m.verbatim || '').trim();
     if (!dialogue) return `[${date}]${String(content || '').trim()}`;
 
     const participants = Array.isArray(m.participants)
@@ -1025,9 +1138,10 @@ function priorityForTimelineEntry(entry) {
     return 2;
 }
 
-function priorityForMemory(memory) {
+function priorityForMemory(memory, level, settings = getSettings()) {
     if (isDailyMemory(memory)) return 3;
-    if (isResidentEntry(memory)) return 0;
+    if (isResidentMemory(memory, settings)) return 0;
+    if (memory.memoryTier === 'eternal') return level === 'L3' ? 1 : 3;
     if (hasClueOrForeshadowSignal(memory)) return 1;
     return 2;
 }
@@ -1043,6 +1157,7 @@ function makeBudgetItem(text, options = {}) {
         id: options.id || '',
         ids: options.ids || [],
         flagKey: options.flagKey || '',
+        memoryInjection: options.memoryInjection || null,
     };
 }
 
@@ -1313,6 +1428,7 @@ function buildInjectionStats(selectedItems) {
         milestoneIds: [],
         timelineIds: [],
         memoryIds: [],
+        memoryInjections: [],
         threadIds: [],
         mapLocationIds: [],
     };
@@ -1341,7 +1457,10 @@ function buildInjectionStats(selectedItems) {
         else if (item.collection === 'item') addUnique('item', item.id, 'itemIds', 'itemCount');
         else if (item.collection === 'milestone') addUnique('milestone', item.id, 'milestoneIds', 'milestoneCount');
         else if (item.collection === 'timeline') addUnique('timeline', item.id, 'timelineIds', 'timelineCount');
-        else if (item.collection === 'mem') addUnique('mem', item.id, 'memoryIds', 'memoryCount');
+        else if (item.collection === 'mem') {
+            if (item.id && !seen.mem.has(String(item.id)) && item.memoryInjection) stats.memoryInjections.push(item.memoryInjection);
+            addUnique('mem', item.id, 'memoryIds', 'memoryCount');
+        }
         else if (item.collection === 'thread') addUnique('thread', item.id, 'threadIds', 'threadCount');
         else if (item.collection === 'map') for (const id of new Set([item.id, ...(item.ids || [])])) addUnique('map', id, 'mapLocationIds', 'mapCount');
         // v9.3.3 实时记忆按分类计数（一个注入项 = 一个 kind 分组）
@@ -1432,28 +1551,33 @@ export async function buildMemoryInjectionPrompt({ npcProfiles, items, milestone
     }
 
     if (relevantResults?.length) {
-        const maxMemories = (activeSettings.maxResults || 10) + 4;
         const memoryItems = [];
-        let nonResidentCount = 0;
         let displayIndex = 0;
-        for (const result of relevantResults) {
+        const preparedResults = limitRelevantMemoryResults(
+            normalizeRelevantMemoryResults(relevantResults, queryText, queryEmbedding, activeSettings, false),
+            activeSettings.maxResults ?? 10,
+            4,
+        );
+        for (const result of preparedResults) {
             const memory = result?.memory;
             if (!memory) continue;
-            const resident = !isDailyMemory(memory) && isResidentEntry(memory);
-            if (!resident) {
-                if (nonResidentCount >= maxMemories) continue;
-                nonResidentCount++;
-            }
+            const resident = result.resident;
             displayIndex++;
-            const level = isDailyMemory(memory)
-                ? chooseInjectionLevel(memory, result.score, false, embeddingSimilarity(memory, queryEmbedding))
-                : result.level;
+            let level = result.level;
+            if (isDailyMemory(memory)) {
+                level = chooseInjectionLevel(memory, result.score, false, embeddingSimilarity(memory, queryEmbedding), activeSettings);
+            } else if (!result.eternalInjection) {
+                if (resident) level = 'L4';
+                else if (memory.memoryTier === 'transient') level = 'L2';
+                else if (isRecentSourceMemory(memory, chatLength, activeSettings)) level = 'L3';
+            }
             const line = `${displayIndex}.${formatMemoryLine(memory, chatLength, level, activeSettings)}`;
             memoryItems.push(makeBudgetItem(line, {
                 resident,
-                priority: priorityForMemory(memory),
+                priority: priorityForMemory(memory, level, activeSettings),
                 collection: 'mem',
                 id: memory.id,
+                memoryInjection: { id: String(memory.id), level, matched: result.eternalInjection?.matched ?? null },
             }));
         }
         budgetSections.push(makeBudgetSection(
@@ -1575,12 +1699,12 @@ export function simpleSearch(items, queryText, maxResults = 100) {
 }
 
 /**
- * getResidentMemories — v5 中 memoryTier=core/eternal 即为常驻
+ * 核心记忆保持常驻；永恒记忆仅在“全部全文”或单条“始终全文”时常驻。
  */
-export function getResidentMemories(memories) {
+export function getResidentMemories(memories, settings = getSettings()) {
     return memories.filter(m =>
         !isDailyMemory(m) &&
-        (m.memoryTier === 'core' || m.memoryTier === 'eternal') &&
-        !isArchived(m) && m.status !== 'deleted' && matchesActiveCategory(m)
+        (m.memoryTier === 'core' || (m.memoryTier === 'eternal' && isResidentMemory(m, settings))) &&
+        !isArchived(m) && m.status !== 'deleted' && matchesActiveCategory(m, settings)
     );
 }

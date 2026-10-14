@@ -2,7 +2,7 @@ import { userStorageKey, initializeUserStorage, watchUserSession } from './user-
 import { openMemoryOrganization, configureMemoryOrganization } from './memory-organization.js';
 import { captureInjectionContext, initInjectionContextTracking } from './extraction-context.js';
 /**
- * index.js —— BB-Memory v9.5.1 主入口
+ * index.js —— BB-Memory v9.5.2 主入口
  *
  * 五柱架构编排器：NPC档案 / 物品栏 / 里程碑 / 记忆条目 / 实时记忆。
  * 负责初始化、拦截器、UI、斜杠命令。
@@ -106,6 +106,14 @@ function getLongTermInjectionDepth(chat) {
     return Math.min(MAX_IN_CHAT_DEPTH, Math.max(1, chatLength));
 }
 
+// ST 的 in-chat 深度越大，位置越靠前；默认比 v9.5.1 的 depth=1 再深一层。
+// 短聊天不在这里缩小深度，ST 会把超出历史长度的位置放到历史顶部。
+function getRealtimeInjectionDepth(settings) {
+    const configured = settings?.realtimeInjectionDepth;
+    const depth = configured == null || configured === '' ? 2 : Number(configured);
+    return Math.min(100, Math.max(1, Number.isFinite(depth) ? Math.floor(depth) : 2));
+}
+
 // ═══ 全局状态 ═══
 let lastRetrievalResult = null;
 let settingsPanelMounted = false;
@@ -118,11 +126,12 @@ let chatSwitchSuppressDeletesUntil = 0;
 let sidebarRefreshTimer = null;
 const handledChatSwitchPrompts = new Set();
 
-const SETTINGS_EXPORT_VERSION = '9.5.1';
+const SETTINGS_EXPORT_VERSION = '9.5.2';
 const SETTINGS_EXPORT_KEYS = [
     'enabled',
     'extractionUpdateConfirm', 'extractionRecentMemoryCount', 'dailyMemoryScoreMultiplier', 'dailyMemoryFullSimilarity', 'eventTimeOrder', 'timelineSummaryScope', 'timelineSummaryTimelineId', 'timelineSummaryReminderExchanges',
     'injectionTemplate', 'tokenBudget', 'tokenBudgetMode', 'maxResults', 'minScoreThreshold', 'floorRecentWindow',
+    'eternalInjectionMode', 'eternalUnmatchedMode', 'eternalMatchThreshold',
     'npcInjectionMax', 'itemInjectionMax', 'entityDetailInjectionMaxChars',
     'itemResidentHitCountThreshold', 'itemFallbackInjectionProbability', 'itemFallbackInjectionMax',
     'milestoneVectorMax', 'milestoneDefaultInjectionMode',
@@ -160,7 +169,7 @@ const SETTINGS_EXPORT_KEYS = [
     'realtimePositionSlots', 'realtimeStateSlots', 'realtimeObjectSlots', 'realtimeTimeSlots',
     'realtimeEnvironmentSlots', 'realtimeDetailSlots',
     'realtimeTtlFloors', 'realtimeMaxEntries', 'realtimeSettledRetentionFloors',
-    'realtimeSceneChangeSettle', 'realtimeInjectionMax', 'realtimeInjectionTokenCap',
+    'realtimeSceneChangeSettle', 'realtimeInjectionDepth', 'realtimeInjectionMax', 'realtimeInjectionTokenCap',
     'realtimePromotionMode', 'realtimeSettleMode',
     'timelineSummaryEnabled', 'maxActiveTimeline', 'autoBackupEnabled', 'chatMetadataBackupMaxKb', 'cloudVectorSlotMaxKb',
     'apiProfiles', 'activeApiProfile', 'categories', 'enabledCategories',
@@ -212,6 +221,9 @@ const SETTING_CONTROL_BINDINGS = {
     maxResults: ['#bb_max_results', 'value'],
     minScoreThreshold: ['#bb_min_score_threshold', 'value'],
     floorRecentWindow: ['#bb_floor_recent_window', 'value'],
+    eternalInjectionMode: ['#bb_eternal_injection_mode', 'value'],
+    eternalUnmatchedMode: ['#bb_eternal_unmatched_mode', 'value'],
+    eternalMatchThreshold: ['#bb_eternal_match_threshold', 'value'],
     npcInjectionMax: ['#bb_npc_injection_max', 'value'],
     itemInjectionMax: ['#bb_item_injection_max', 'value'],
     entityDetailInjectionMaxChars: ['#bb_entity_detail_injection_max_chars', 'value'],
@@ -286,6 +298,7 @@ const SETTING_CONTROL_BINDINGS = {
     realtimeMaxEntries: ['#bb_realtime_max_entries', 'value'],
     realtimeSettledRetentionFloors: ['#bb_realtime_settled_retention_floors', 'value'],
     realtimeSceneChangeSettle: ['#bb_realtime_scene_change_settle', 'checkbox'],
+    realtimeInjectionDepth: ['#bb_realtime_injection_depth', 'value'],
     realtimeInjectionMax: ['#bb_realtime_injection_max', 'value'],
     realtimeInjectionTokenCap: ['#bb_realtime_injection_token_cap', 'value'],
     realtimeSettleMode: ['#bb_realtime_settle_mode', 'value'],
@@ -550,18 +563,19 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     const timelineForInjection = settings.timelineSummaryEnabled
         ? getTimelineForInjection(timeline, settings.maxActiveTimeline ?? settings.maxActiveThreads ?? 5)
         : { text: '', timeline: [], threads: [] };
-    const residentMems = getResidentMemories(memories);
+    const residentMems = getResidentMemories(memories, injectionSettings);
     const residentIds = new Set(residentMems.map(m => m.id));
     // v8.2.2 重roll 时扩大候选集 + 同分段局部 shuffle，保证质量不下降
     const relevantResults = getRelevantMemories(memories.filter(m => !residentIds.has(m.id)), userMessage, {
-        maxResults: isReroll ? (settings.maxResults || 10) + 3 : (settings.maxResults || 10),
-        minScore: settings.minScoreThreshold ?? 0.05,
+        maxResults: isReroll ? (injectionSettings.maxResults ?? 10) + 3 : (injectionSettings.maxResults ?? 10),
+        minScore: injectionSettings.minScoreThreshold ?? 0.05,
         queryEmbedding,
+        settings: injectionSettings,
     });
     const relevantWithResidents = mergeResidentMemoryResults(residentMems, relevantResults);
     const excludeIds = new Set([...npcForInjection.map(n => n.id), ...residentMems.map(m => m.id)]);
     for (const r of relevantWithResidents) excludeIds.add(r.memory.id);
-    const merged = mergeExpandedRelevantResults(memories, userMessage, relevantWithResidents, excludeIds, 12, settings.maxResults, queryEmbedding);
+    const merged = mergeExpandedRelevantResults(memories, userMessage, relevantWithResidents, excludeIds, 12, injectionSettings.maxResults, queryEmbedding, injectionSettings);
 
     // v8.2.2 重roll 时仅对 L2/L3 同分段做局部 swap（相邻分数互换），不全局洗牌
     if (isReroll && merged.length > 2) {
@@ -600,13 +614,19 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
     const injectedMilestoneIds = Array.isArray(stats.milestoneIds) ? new Set(stats.milestoneIds) : null;
     const injectedTimelineIds = Array.isArray(stats.timelineIds) ? new Set(stats.timelineIds) : null;
     const injectedMemoryIds = Array.isArray(stats.memoryIds) ? new Set(stats.memoryIds) : null;
+    const injectedMemoryDetails = new Map((stats.memoryInjections || []).map(entry => [String(entry.id), entry]));
     const hitRecords = [];
     for (const n of npcForInjection) if (!injectedNpcIds || injectedNpcIds.has(String(n.id))) hitRecords.push({ collection: 'npc', id: n.id });
     for (const i of itemsForInjection) if (!injectedItemIds || injectedItemIds.has(String(i.id))) hitRecords.push({ collection: 'item', id: i.id });
     for (const t of [...milestoneForInjection.foreshadow, ...milestoneForInjection.ongoing, ...milestoneForInjection.ended]) {
         if (!injectedMilestoneIds || injectedMilestoneIds.has(String(t.id))) hitRecords.push({ collection: 'milestone', id: t.id });
     }
-    for (const r of merged) if (!injectedMemoryIds || injectedMemoryIds.has(String(r.memory.id))) hitRecords.push({ collection: 'mem', id: r.memory.id });
+    for (const r of merged) {
+        // 未命中摘要只作上下文兜底，不能增加检索命中计数。
+        const actual = injectedMemoryDetails.get(String(r.memory.id)) || r.eternalInjection;
+        if (actual?.matched === false && (actual.level || r.level) === 'L2') continue;
+        if (!injectedMemoryIds || injectedMemoryIds.has(String(r.memory.id))) hitRecords.push({ collection: 'mem', id: r.memory.id });
+    }
     for (const id of stats.mapLocationIds || []) hitRecords.push({ collection: 'map', id });
     const hitFrameKey = buildHitFrameKey(chatId, userFloor, userMessage);
     const hitFrameMsg = userFloor >= 0 ? chat[userFloor] : null;
@@ -646,9 +666,10 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
 
     if (realtimeText.trim()) {
         const realtimeInjectionText = `<BBMemory>\n${realtimeText.trim()}\n</BBMemory>`;
-        // depth=1：夹在上一条 AI 回复与当前用户消息之间。这样既靠近当前场景，
-        // 又不会与聊天历史后的 system 预设尾部相邻并被合并成同一段。
-        ctx.setExtensionPrompt(REALTIME_INJECTION_KEY, realtimeInjectionText, POSITION_IN_CHAT, 1, false, ROLE_SYSTEM);
+        // v9.5.2 默认 depth=2：实时细节再向前移动一条聊天消息，给用户输入留在更下方。
+        // 保留独立的 system 注入，不调整用户消息或预设尾部本身的顺序。
+        ctx.setExtensionPrompt(REALTIME_INJECTION_KEY, realtimeInjectionText, POSITION_IN_CHAT,
+            getRealtimeInjectionDepth(injectionSettings), false, ROLE_SYSTEM);
     } else {
         ctx.setExtensionPrompt(REALTIME_INJECTION_KEY, '', POSITION_IN_CHAT, 0, false, ROLE_SYSTEM);
     }
@@ -694,10 +715,11 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         title: r.memory.title,
         type: r.memory.type,
         score: r.score,
-        level: r.level,
+        level: injectedMemoryDetails.get(String(r.memory.id))?.level || r.level,
         memoryTier: r.memory.memoryTier || '',
     }));
     const eternalInjectedCount = memoryHitRecords.filter(h => h.memoryTier === 'eternal').length;
+    const eternalSummaryCount = memoryHitRecords.filter(h => h.memoryTier === 'eternal' && h.level === 'L2').length;
 
     lastRetrievalResult = {
         chatId, timestamp: Date.now(),
@@ -707,6 +729,9 @@ globalThis.bbMemoryInterceptor = async function (chat, contextSize, abort, type)
         memoryNotInjectedCount: merged.length - memoryHitRecords.length,
         tokenBudget, truncated,
         eternalInjectedCount,
+        eternalSummaryCount,
+        eternalFullCount: eternalInjectedCount - eternalSummaryCount,
+        eternalInjectionMode: injectionSettings.eternalInjectionMode || 'matched',
         npcHits: injectedNpcs.map(n => ({ id: n.id, name: n.name, npcTier: n.npcTier })),
         itemHits: injectedItems.map(i => ({ id: i.id, name: i.name, itemTier: i.itemTier })),
         milestoneHits: {
@@ -767,7 +792,7 @@ function mergeResidentMemoryResults(residentMems, relevantResults) {
     const byId = new Map();
     for (const mem of residentMems || []) {
         if (!mem?.id) continue;
-        byId.set(mem.id, { memory: mem, score: 1.0, breakdown: { resident: 1 }, level: 'L4' });
+        byId.set(mem.id, { memory: mem, score: 1.0, breakdown: { resident: 1 }, level: mem.memoryTier === 'eternal' ? 'L3' : 'L4' });
     }
     for (const result of relevantResults || []) {
         const id = result?.memory?.id;
@@ -2215,6 +2240,16 @@ function bindSidebarEvents() {
     bindInput('#bb_max_results', 'maxResults', 'number');
     bindInput('#bb_min_score_threshold', 'minScoreThreshold', 'number');
     bindInput('#bb_floor_recent_window', 'floorRecentWindow', 'number');
+    bindSelect('#bb_eternal_injection_mode', 'eternalInjectionMode');
+    bindSelect('#bb_eternal_unmatched_mode', 'eternalUnmatchedMode');
+    bindInput('#bb_eternal_match_threshold', 'eternalMatchThreshold', 'number');
+    document.querySelector('#bb_eternal_match_threshold')?.addEventListener('change', function () {
+        if (!this.value.trim()) updateSettings({ eternalMatchThreshold: DEFAULT_SETTINGS.eternalMatchThreshold });
+        this.value = getSettings().eternalMatchThreshold;
+    });
+    for (const selector of ['#bb_eternal_injection_mode', '#bb_eternal_unmatched_mode']) {
+        document.querySelector(selector)?.addEventListener('change', () => showToast('永恒记忆注入策略已保存，下次生成生效', 'success'));
+    }
     bindInput('#bb_npc_injection_max', 'npcInjectionMax', 'number');
     bindInput('#bb_item_injection_max', 'itemInjectionMax', 'number');
     bindInput('#bb_entity_detail_injection_max_chars', 'entityDetailInjectionMaxChars', 'number');
@@ -2324,6 +2359,12 @@ function bindSidebarEvents() {
     bindCheckbox('#bb_realtime_scene_change_settle', 'realtimeSceneChangeSettle');
     bindInput('#bb_realtime_injection_max', 'realtimeInjectionMax', 'number');
     bindInput('#bb_realtime_injection_token_cap', 'realtimeInjectionTokenCap', 'number');
+    bindInput('#bb_realtime_injection_depth', 'realtimeInjectionDepth', 'number');
+    document.querySelector('#bb_realtime_injection_depth')?.addEventListener('change', function () {
+        if (!this.value.trim()) updateSettings({ realtimeInjectionDepth: DEFAULT_SETTINGS.realtimeInjectionDepth });
+        this.value = getSettings().realtimeInjectionDepth;
+        showToast(`实时细节注入深度已保存为 ${this.value}，下次生成生效`, 'success');
+    });
     bindSelect('#bb_realtime_settle_mode', 'realtimeSettleMode');
     document.querySelector('#bb_realtime_settled_retention_floors')?.addEventListener('change', async () => {
         const chatId = getChatId();
@@ -4088,11 +4129,13 @@ function renderHubHitItem(h, typeIcons, levelColors, dimmed) {
     </div>`;
 }
 
-function renderEternalInjectionNote(count) {
-    const n = Number(count || 0);
+function renderEternalInjectionNote(result) {
+    const n = Number(result?.eternalInjectedCount || 0);
     if (n <= 0) return '';
+    const summary = Number(result.eternalSummaryCount || 0);
+    const mode = { matched: '按命中', all: '全部全文', priority: '按条目优先级' }[result.eternalInjectionMode] || '按命中';
     return `<div class="bb-hit-eternal-note">
-        <i class="fa-solid fa-infinity"></i> 其中永恒记忆 ${n} 条已实际注入，已计入下方记忆数量
+        <i class="fa-solid fa-infinity"></i> 其中永恒记忆 ${n} 条已实际注入（全文 ${n - summary} / 摘要 ${summary}，${mode}），已计入下方记忆数量
     </div>`;
 }
 
@@ -4198,7 +4241,7 @@ async function renderHubHitList(listEl, chatId) {
         </div>`).join('');
 
     listEl.innerHTML = [
-        renderEternalInjectionNote(result.eternalInjectedCount),
+        renderEternalInjectionNote(result),
         renderMemoryInjectionNote(result),
         renderHitGroup('记忆', 'fa-brain', `${result.hits?.length || 0}条`, memoryHtml),
         renderHitGroup('NPC', 'fa-user', `${result.npcHits?.length || 0}条`, npcHtml),
@@ -4653,7 +4696,7 @@ async function handleFloatingMenuAction(action) {
 async function init() {
     try { await initializeUserStorage(); watchUserSession(); }
     catch (error) { showToast(error.message, 'error'); _bbInitCalled = false; return; }
-    console.log('[BB-Memory] v9.5.1 初始化开始...');
+    console.log('[BB-Memory] v9.5.2 初始化开始...');
 
     // 确保默认设置
     getSettings();
@@ -4850,7 +4893,7 @@ async function init() {
         refreshExtractionFloorStatus();
     }, 500);
 
-    console.log('[BB-Memory] v9.5.1 初始化完成');
+    console.log('[BB-Memory] v9.5.2 初始化完成');
 }
 
 // v6.1: MutationObserver 监听 .mes 删除事件 → 自动清理关联记忆
@@ -5121,7 +5164,7 @@ function updateSidebarHitList() {
         </div>`).join('');
 
     listEl.innerHTML = [
-        renderEternalInjectionNote(result.eternalInjectedCount),
+        renderEternalInjectionNote(result),
         renderMemoryInjectionNote(result),
         renderHitGroup('记忆', 'fa-brain', `${result.hits?.length || 0}条`, memoryHtml),
         renderHitGroup('NPC', 'fa-user', `${result.npcHits?.length || 0}条`, npcHtml),

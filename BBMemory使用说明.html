@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>BB-Memory v9.5.1 使用说明</title>
+  <title>BB-Memory v9.5.2 使用说明</title>
   <style>
     :root {
       color-scheme: light;
@@ -418,7 +418,11 @@
 <body>
 <main>
   <section class="panel">
-    <h2>v9.5.1 使用入口与变化</h2>
+    <h2>v9.5.2 使用入口与变化</h2>
+    <p><strong>实时细节位置：</strong>实时记忆设置 → 实时细节注入深度，默认从 1 改为 2，再向历史前移一层。发消息后在提示词预览核对“实时细节 → 用户输入 → 预设尾部”。深度可调整，短历史由 ST 放在顶部；不同预设的末端附加消息可能影响具体位置。</p>
+    <p><strong>永恒记忆注入：</strong>检索设置可选按命中、全部全文、按条目优先级。默认命中全文，未命中不注入；也可选择未命中摘要。命中依据文本 / 实体相关性或向量阈值，永恒等级本身不会算命中。</p>
+    <p><strong>逐条优先级：</strong>管理器 → 记忆条目 → 新建 / 编辑，可选始终全文、命中全文未命中摘要、仅命中全文。这些选择仅在按条目优先级模式生效，旧条目默认仅命中全文，导出、备份和存档保留选择。</p>
+    <p>命中全文与未命中摘要受最大检索数和 token 预算限制，命中全文优先；全部全文及逐条始终全文按常驻处理，严格总量模式仍可裁剪。永恒仍永久保存，日常标签沿用原摘要 / 极高向量匹配规则。命中面板显示本轮实际全文与摘要数量。</p>
     <p>时间线卡片与记忆维护页显示<strong>上次总结时间</strong>：采纳总结后记录实际保存时间；只生成草稿或取消不会更新。旧资料显示“尚未总结”，这个时间不会注入角色对话上下文。</p>
     <p><strong>AI 安排标签：</strong>管理器 → 时间线 → AI 安排标签，或记忆整理 → 记忆维护 → AI 安排里程碑标签。AI 读取当前聊天全部时间线及里程碑，建议给无标签节点安排归属、或调整已有归属。展开“编辑建议内容”，可用“所属时间线”下拉框修改目标，勾选后点击“应用选中”。</p>
     <p><strong>AI 合并时间线：</strong>在同一入口点击 AI 合并时间线，审核保留的时间线、吸收的时间线、合并后名称与摘要及里程碑标签迁移。例如公园约定和公园游玩可合为公园之行，也可吸收到已有感情线。确认后保留全部原始事件、合并普通标签，并同步迁移里程碑所属时间线；取消不改原库。</p>
@@ -433,11 +437,11 @@
   </section>
   <div class="hero">
     <header class="hero-card">
-      <p class="eyebrow">BB-Memory v9.5.1</p>
+      <p class="eyebrow">BB-Memory v9.5.2</p>
       <h1>使用说明</h1>
       <p class="lead">BB-Memory 是 SillyTavern 的浏览器端长期记忆扩展。它会把角色扮演里的 NPC、物品、里程碑、时间线、地点、线索、普通记忆和短期场景细节整理成结构化数据，并在生成回复前注入给 AI。</p>
       <div class="meta-row">
-        <span class="pill">适用版本 v9.5.1</span>
+        <span class="pill">适用版本 v9.5.2</span>
         <span class="pill">纯前端扩展</span>
         <span class="pill">无构建步骤</span>
         <span class="pill">数据主要保存在浏览器 IndexedDB</span>
@@ -447,7 +451,7 @@
     <aside class="mock-wrap" aria-label="BB-Memory 在 SillyTavern 扩展设置中的示意图">
       <div class="mock-window">
         <div class="mock-top">
-          <span>BB-Memory v9.5.1</span>
+          <span>BB-Memory v9.5.2</span>
           <span class="soft">扩展设置抽屉</span>
         </div>
         <div class="mock-body">
@@ -500,7 +504,7 @@
     <div class="two-col">
       <div class="panel">
         <ol class="steps">
-          <li><span>在 SillyTavern 进入任意角色聊天，打开右侧扩展设置，展开 <strong>BB-Memory v9.5.1</strong>，确认“启用 BB-Memory”已勾选。</span></li>
+          <li><span>在 SillyTavern 进入任意角色聊天，打开右侧扩展设置，展开 <strong>BB-Memory v9.5.2</strong>，确认“启用 BB-Memory”已勾选。</span></li>
           <li><span>如果是旧聊天或已有存档，先点 <strong>手动提取</strong>，可以输入楼层范围，例如 <code>0-80</code>；留空会提取最近 8 轮。</span></li>
           <li><span>如果是新角色长篇开局，建议先用 <code>tools/bbmemory-initializer.html</code> 外置工具从角色卡、世界书和聊天记录生成导入 JSON，再到“记忆管理”里导入。</span></li>
           <li><span>正常聊天时，BB-Memory 会在生成前检索相关记忆。命中的内容会显示在“命中条目”和悬浮按钮的命中视图里。</span></li>
@@ -509,7 +513,7 @@
       </div>
       <div class="panel">
         <h3>推荐默认用法</h3>
-        <p class="muted">可以先配置 AI 提取 API，保持已有条目变更确认开启。v9.5.1 根据正文与窗口注入上下文提出变更，默认最近 5 条记忆作为补充；日常记忆默认以摘要参与注入。</p>
+        <p class="muted">可以先配置 AI 提取 API，保持已有条目变更确认开启。v9.5.2 根据正文与窗口注入上下文提出变更，默认最近 5 条记忆作为补充；日常记忆默认以摘要参与注入。</p>
         <div class="tag-list">
           <span class="tag">手动提取先跑一遍</span>
           <span class="tag">半自动确认更稳</span>
@@ -602,7 +606,7 @@
             <tr><td>4. 计算查询向量</td><td>如果启用语义向量，会为用户最新消息请求一次 embedding；失败则降级为关键词检索。</td><td>启用语义向量检索</td></tr>
             <tr><td>5. 分支检索</td><td>NPC、物品、里程碑、时间线、地图、线索板、普通记忆分别检索和筛选。普通记忆综合关键词、embedding、近期性、层级分打分。</td><td>最大检索数、最低相关分、各类注入上限</td></tr>
             <tr><td>6. 实体展开</td><td>如果用户消息命中某个实体名，会额外拉出相关记忆，避免只注入实体卡而漏掉关联经历。</td><td>最大检索数、Token 预算</td></tr>
-            <tr><td>7. 长期预算裁剪</td><td>按 Token 预算和预算模式裁剪长期区块。核心、永恒、常驻内容优先保留。</td><td>Token 预算、Token 预算模式</td></tr>
+            <tr><td>7. 长期预算裁剪</td><td>按 Token 预算和预算模式裁剪长期区块。核心和配置为常驻全文的永恒内容优先保留。</td><td>Token 预算、Token 预算模式</td></tr>
             <tr><td>8. 追加实时细节</td><td>仍生效或待结算的第五柱绕过检索无条件追加，但严格受独立条数与 token 双上限保护。</td><td>实时注入上限</td></tr>
             <tr><td>9. 写入 SillyTavern prompt</td><td>用注入模板包裹整理后的内容，通过 <code>setExtensionPrompt</code> 写入生成上下文。</td><td>注入模板</td></tr>
             <tr><td>10. 记录命中</td><td>实际注入的长期条目会增加命中计数；实时记忆不参与向量命中或层级升降。</td><td>升级/降级阈值、多样性限制</td></tr>
@@ -892,7 +896,7 @@
             <tr><td>地图地点注入上限</td><td>命中地点及周边地点最多注入多少处。</td><td>地图大时保持默认或调小。</td></tr>
             <tr><td>启用线索板注入</td><td>把线索板上的活跃推理注入给 AI。</td><td>推理线进行中时开启；不想 AI 参考玩家猜测时关闭。</td></tr>
             <tr><td>Token 预算</td><td>本轮 BB-Memory 注入文本的预算参考值。</td><td>默认 800；上下文紧张时调低。</td></tr>
-            <tr><td>Token 预算模式</td><td><code>resident_unlimited</code> 允许核心/永恒/常驻超预算；<code>strict_total</code> 所有内容共享总预算。</td><td>日常用常驻不限；上下文爆满用严格总量。</td></tr>
+            <tr><td>Token 预算模式</td><td><code>resident_unlimited</code> 允许核心及配置为常驻全文的永恒超预算；<code>strict_total</code> 所有长期内容共享总预算。</td><td>日常用常驻不限；上下文爆满用严格总量。</td></tr>
             <tr><td>最低相关分</td><td>普通记忆低于该分数不会进入候选。</td><td>默认 0.05；误命中过多时调高。</td></tr>
             <tr><td>近楼层完整内容窗口</td><td>来源楼层在最近 N 楼内的记忆优先注入完整内容。</td><td>默认 6；想更简短可设 0。</td></tr>
             <tr><td>注入模板</td><td>控制最终注入外壳，<code>{{memories}}</code> 是记忆正文占位符。</td><td>不熟悉 prompt 时保持默认。</td></tr>
@@ -1012,7 +1016,7 @@
     <div class="note danger">任何删除、清空、加载存档、批量归档、Agent 写操作前，都建议先导出 JSON 或执行备份。BB-Memory 会尽量给出确认和 toast，但用户侧备份仍是最稳的保险。</div>
   </section>
 
-  <p class="footer">BB-Memory v9.5.1 使用说明。最后更新：2026-10-13。</p>
+  <p class="footer">BB-Memory v9.5.2 使用说明。最后更新：2026-10-14。</p>
 </main>
 </body>
 </html>

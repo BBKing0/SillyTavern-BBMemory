@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 const bank = new Map();
 let failTimelineWrite = false;
 const lf = {
@@ -112,7 +113,7 @@ await test('时间戳不进入角色上下文、总结原文或整理提示词',
 });
 await test('导出、服务器备份和导入保留时间；重复导入取最新有效时间',async()=>{
     const exported = JSON.parse(await store.exportMemories(ctx.chatId));
-    assert.equal(exported.version,'9.5.1');
+    assert.equal(exported.version,JSON.parse(readFileSync(new URL('../manifest.json',import.meta.url),'utf8')).version);
     assert.equal(exported.data.timeline[0].lastSummarizedAt,oldTime);
     await store.exportMemoriesToChatMetadata(ctx.chatId);
     const backup = JSON.parse(ctx.chatMetadata.bb_memory_v5_backup);

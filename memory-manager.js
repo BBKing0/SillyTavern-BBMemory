@@ -343,6 +343,31 @@ function buildManagerHTML(npc, items, timeline, memories, mapLocations, chatId, 
 // ═══ 批量编辑模式 ═══
 let batchMode = false;
 
+const ETERNAL_INJECTION_PRIORITIES = Object.freeze({
+    always: '始终全文',
+    summary: '命中全文，未命中摘要',
+    matched: '仅命中全文',
+});
+
+function buildEternalPriorityField() {
+    return `<div class="bb-f-eternal-priority-field" style="margin-bottom:0.6em;">
+        <label style="font-size:0.85em;">永恒记忆注入优先级</label>
+        <select class="bb-input bb-f-eternalInjectionPriority" style="width:100%;margin-bottom:0.35em;">
+            ${Object.entries(ETERNAL_INJECTION_PRIORITIES).map(([value, label]) => `<option value="${value}" ${value === 'matched' ? 'selected' : ''}>${label}</option>`).join('')}
+        </select>
+        <small class="bb-mem-hint">仅在设置的“永恒记忆注入方式”选择“逐条优先级”时生效；日常记忆仍沿用全文阈值。</small>
+    </div>`;
+}
+
+function bindEternalPriorityVisibility(formOverlay) {
+    const field = formOverlay.querySelector('.bb-f-eternal-priority-field');
+    const tier = formOverlay.querySelector('.bb-f-memoryTier');
+    if (!field || !tier) return;
+    const refresh = () => { field.hidden = tier.value !== 'eternal'; };
+    tier.addEventListener('change', refresh);
+    refresh();
+}
+
 function buildEntryItemHTML(e) {
     const pillar = normalizeManagerPillar(e._pillar);
     const pillarConfig = {
@@ -412,6 +437,11 @@ function buildEntryItemHTML(e) {
             if (currentTierIdx > 0) {
                 statusBadges += `<button class="bb-mem-tier-btn bb-mem-tier-down" data-id="${escapeHtml(e.id)}" title="降格" style="font-size:0.65em;padding:0 4px;line-height:1.4;cursor:pointer;opacity:0.5;"><i class="fa-solid fa-chevron-down"></i></button>`;
             }
+        }
+        if (e.memoryTier === 'eternal') {
+            const priority = ETERNAL_INJECTION_PRIORITIES[e.eternalInjectionPriority] || ETERNAL_INJECTION_PRIORITIES.matched;
+            const priorityEnabled = getSettings().eternalInjectionMode === 'priority';
+            statusBadges += `<span class="bb-item-badge bb-eternal-priority-badge" title="仅全局选择逐条优先级时生效；日常记忆仍沿用全文阈值" style="font-size:0.7em;white-space:normal;">${priority}${priorityEnabled ? '' : ' · 未启用'}</span>`;
         }
         const typeDef = MEMORY_TYPES[e.type];
         if (typeDef) statusBadges += `<span class="bb-item-badge" style="font-size:0.7em;">${typeDef.label}</span>`;
@@ -1277,6 +1307,7 @@ function showQuickAddForm(overlay, chatId) {
                     <div style="flex:1;"><label style="font-size:0.85em;">类型</label><select class="bb-input bb-f-type" style="width:100%;margin-bottom:8px;">${Object.values(MEMORY_TYPES).map(t => `<option value="${t.id}" ${t.id === 'event' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div>
                     <div style="flex:1;"><label style="font-size:0.85em;">等级</label><select class="bb-input bb-f-memoryTier" style="width:100%;margin-bottom:8px;"><option value="transient">模糊</option><option value="stable" selected>稳固</option><option value="core">核心</option><option value="eternal">永恒</option></select></div>
                 </div>
+                ${buildEternalPriorityField()}
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
                     <label style="font-size:0.85em;display:flex;align-items:center;gap:4px;cursor:pointer;">
                         <input type="checkbox" class="bb-f-archived" style="width:auto;margin:0;" />
@@ -1321,6 +1352,7 @@ function showQuickAddForm(overlay, chatId) {
 function bindFormEvents(formOverlay, chatId, initialPillar) {
     let currentPillar = initialPillar;
     mountAdditionalEntryFields(formOverlay, chatId, currentPillar);
+    bindEternalPriorityVisibility(formOverlay);
 
     formOverlay.querySelector('.bb-form-close')?.addEventListener('click', () => formOverlay.remove());
     formOverlay.querySelector('.bb-form-cancel')?.addEventListener('click', () => formOverlay.remove());
@@ -1431,6 +1463,7 @@ function buildPillarFormFields_inner(p) {
         case 'mem': default: return `
             <label style="font-size:0.85em;">标题 <span style="color:#f44336;">*</span></label><input class="bb-input bb-f-title" placeholder="记忆标题（3-8字）" style="width:100%;margin-bottom:8px;" />
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">类型</label><select class="bb-input bb-f-type" style="width:100%;margin-bottom:8px;">${Object.values(MEMORY_TYPES).map(t => `<option value="${t.id}" ${t.id === 'event' ? 'selected' : ''}>${t.label}</option>`).join('')}</select></div><div style="flex:1;"><label style="font-size:0.85em;">等级</label><select class="bb-input bb-f-memoryTier" style="width:100%;margin-bottom:8px;"><option value="transient">模糊</option><option value="stable" selected>稳固</option><option value="core">核心</option><option value="eternal">永恒</option></select></div></div>
+            ${buildEternalPriorityField()}
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"><label style="font-size:0.85em;display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="bb-f-archived" style="width:auto;margin:0;" /><i class="fa-solid fa-box-archive" style="opacity:0.5;"></i> 已归档</label></div>
             <div style="display:flex;gap:8px;"><div style="flex:1;"><label style="font-size:0.85em;">真值状态</label><select class="bb-input bb-f-truthStatus" style="width:100%;margin-bottom:8px;">${Object.entries(TRUTH_STATUS).map(([k,v]) => `<option value="${k}" ${k === 'true' ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div><div style="flex:1;"></div></div>
             <label style="font-size:0.85em;">内容</label><textarea class="bb-input bb-f-content" placeholder="记忆内容..." rows="3" style="width:100%;margin-bottom:8px;"></textarea>
@@ -1506,6 +1539,7 @@ function collectFormData(formEl, pillar) {
             content: g('bb-f-content'), summary: g('bb-f-summary'), verbatim: g('bb-f-verbatim'),
             subject: g('bb-f-subject'), target: g('bb-f-target'),
             memoryTier: formEl.querySelector('.bb-f-memoryTier')?.value || 'stable',
+            eternalInjectionPriority: formEl.querySelector('.bb-f-eternalInjectionPriority')?.value || 'matched',
             truthStatus: formEl.querySelector('.bb-f-truthStatus')?.value || 'true',
             hiddenNotes: parseHiddenNotesFromEditor(g('bb-f-hiddenNotes')),
             importance: parseInt(formEl.querySelector('.bb-f-importance')?.value || '50', 10) / 100,
@@ -1661,6 +1695,7 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
                     setVal('bb-f-title', prefill.title);
                     if (prefill.type) { const el = formOverlay.querySelector('.bb-f-type'); if (el) el.value = prefill.type; }
                     if (prefill.memoryTier) { const el = formOverlay.querySelector('.bb-f-memoryTier'); if (el) el.value = prefill.memoryTier; }
+                    setVal('bb-f-eternalInjectionPriority', ETERNAL_INJECTION_PRIORITIES[prefill.eternalInjectionPriority] ? prefill.eternalInjectionPriority : 'matched');
                     if (prefill.truthStatus) { const el = formOverlay.querySelector('.bb-f-truthStatus'); if (el) el.value = prefill.truthStatus; }
                     setVal('bb-f-content', prefill.content);
                     setVal('bb-f-subject', prefill.subject);
@@ -1693,6 +1728,7 @@ function _showQuickFormPopup(managerOverlay, chatId, { mode, id, pillar, prefill
 function bindFormEvents_inner(formOverlay, chatId, pillar, editInfo) {
     const isEdit = !!editInfo;
     mountAdditionalEntryFields(formOverlay, chatId, pillar);
+    bindEternalPriorityVisibility(formOverlay);
 
     formOverlay.querySelector('.bb-form-close')?.addEventListener('click', () => formOverlay.remove());
     formOverlay.querySelector('.bb-form-cancel')?.addEventListener('click', () => formOverlay.remove());
